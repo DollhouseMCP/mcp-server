@@ -217,9 +217,11 @@ class McpScannerCapacityTests(unittest.TestCase):
         header = tarfile.TarInfo("vulnerability.db"); header.size = 2541993984
         self.assertEqual(scanner.db_payload_header(header.tobuf()), 2541993984)
         header.size = 3 * scanner.GIB
-        with self.assertRaises(ValueError): scanner.db_payload_header(header.tobuf())
+        encoded_header = header.tobuf()
+        with self.assertRaises(ValueError): scanner.db_payload_header(encoded_header)
         header.size = 1024; header.name = "unexpected-payload"
-        with self.assertRaises(ValueError): scanner.db_payload_header(header.tobuf())
+        encoded_header = header.tobuf()
+        with self.assertRaises(ValueError): scanner.db_payload_header(encoded_header)
 
 class OwnedScannerCleanupTests(unittest.TestCase):
     def setUp(self):
@@ -291,10 +293,11 @@ class OwnedScannerOrchestrationTests(OwnedScannerCleanupTests):
                     raise AssertionError(label)
                 def process(command, timeout, *args, **kwargs):
                     events.append(command[1]); return (0, json.dumps([self.value]).encode(), b'', None) if command[1] == 'inspect' else (0, b'', b'', None)
+                reports = Path(directory); deadline = time.monotonic() + 240
                 with patch.object(scanner, 'bounded_process', side_effect=process):
                     with self.assertRaises((ValueError, KeyboardInterrupt, OSError)):
                         scanner.execute_owned_scanner(self.owner['name'], self.owner['nonce'], self.inputs, self.runner,
-                                                      run, Path(directory), {}, time.monotonic() + 240)
+                                                      run, reports, {}, deadline)
                 self.assertEqual(events, ['container-create', 'inspect', 'rm'])
                 self.assertEqual(json.loads((Path(directory) / 'scanner-cleanup.json').read_text())['status'], 'verified-owned-container-removed')
 
@@ -312,11 +315,12 @@ class OwnedScannerOrchestrationTests(OwnedScannerCleanupTests):
                     raise AssertionError(label)
                 def process(command, timeout, *args, **kwargs):
                     calls.append(command[1]); return (0, json.dumps([self.value]).encode(), b'', None) if command[1] == 'inspect' else (0, b'', b'', None)
+                reports = Path(directory); deadline = time.monotonic() + 240
                 with patch.object(scanner, 'bounded_process', side_effect=process):
                     if status == 0:
                         self.assertEqual(scanner.execute_owned_scanner(self.owner['name'], self.owner['nonce'], self.inputs, self.runner, run, Path(directory), {}, time.monotonic()+240), 0)
                     else:
-                        with self.assertRaises(ValueError): scanner.execute_owned_scanner(self.owner['name'], self.owner['nonce'], self.inputs, self.runner, run, Path(directory), {}, time.monotonic()+240)
+                        with self.assertRaises(ValueError): scanner.execute_owned_scanner(self.owner['name'], self.owner['nonce'], self.inputs, self.runner, run, reports, {}, deadline)
                 self.assertEqual(calls[-1], 'inspect' if receipt.startswith('b') else 'rm')
                 self.assertEqual('container-start' in calls, status == 0)
 
@@ -344,9 +348,10 @@ class OwnedScannerOrchestrationTests(OwnedScannerCleanupTests):
             if path.name == 'scanner-cleanup.json': raise OSError('full disk')
             return real_write(path, *args, **kwargs)
         with tempfile.TemporaryDirectory() as directory, patch.object(scanner, 'bounded_process', side_effect=process), patch.object(Path, 'write_text', write), patch.object(scanner.sys, 'stderr', new_callable=io.StringIO) as stderr:
+            reports = Path(directory); deadline = time.monotonic() + 240
             with self.assertRaises(OSError):
                 scanner.execute_owned_scanner(self.owner['name'], self.owner['nonce'], self.inputs, self.runner,
-                                              run, Path(directory), {}, time.monotonic() + 240)
+                                              run, reports, {}, deadline)
             self.assertEqual(events, ['inspect', 'rm'])
             self.assertIn('incomplete-summary-persistence', stderr.getvalue())
 

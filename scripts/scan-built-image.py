@@ -25,6 +25,12 @@ import urllib.request
 ARCHIVE_NAME = "grype_0.120.1_linux_amd64.tar.gz"
 ARCHIVE_URL = "https://github.com/anchore/grype/releases/download/v0.120.1/" + ARCHIVE_NAME
 ARCHIVE_SHA256 = "0a9ee97ef5ae2ee953b0a80098105052e846cdbe319a57d808b519c33cd1343d"
+GRYPE_HOST = "grype.anchore.io"
+WORK_DIR = "/work"
+GRYPE_CONFIG = "grype.yaml"
+DATABASE_ARCHIVE = "database.tar.zst"
+IMAGE_ARCHIVE = "image.tar"
+OFFLINE_RUNNER = "grype-offline-runner.mjs"
 
 
 def extract_verified_binary(archive, destination, expected_sha256=ARCHIVE_SHA256):
@@ -84,7 +90,7 @@ def validate_public_url(url, allowed_hosts=None):
     value = urllib.parse.urlsplit(url)
     if (value.scheme != "https" or value.port not in (None, 443) or value.username or
             value.password or value.hostname not in (allowed_hosts or
-            {"github.com", "release-assets.githubusercontent.com", "grype.anchore.io"})):
+            {"github.com", "release-assets.githubusercontent.com", GRYPE_HOST})):
         raise ValueError("Download redirects must remain on the bounded trusted HTTPS origins")
 
 
@@ -95,15 +101,14 @@ def download(url, destination, maximum, expected=None):
     count = 0
     started = time.monotonic()
     started_utc = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    hosts = {"grype.anchore.io"} if urllib.parse.urlsplit(url).hostname == "grype.anchore.io" else {"github.com", "release-assets.githubusercontent.com"}
-    with urllib.request.build_opener(TrustedRedirects(hosts)).open(request, timeout=30) as response:
-        with destination.open("wb") as output:
-            while chunk := response.read(1024 * 1024):
-                count += len(chunk)
-                if count > maximum or time.monotonic() - started > 180:
-                    raise ValueError("Download exceeds bounded size or time")
-                digest.update(chunk)
-                output.write(chunk)
+    hosts = {GRYPE_HOST} if urllib.parse.urlsplit(url).hostname == GRYPE_HOST else {"github.com", "release-assets.githubusercontent.com"}
+    with urllib.request.build_opener(TrustedRedirects(hosts)).open(request, timeout=30) as response, destination.open("wb") as output:
+        while chunk := response.read(1024 * 1024):
+            count += len(chunk)
+            if count > maximum or time.monotonic() - started > 180:
+                raise ValueError("Download exceeds bounded size or time")
+            digest.update(chunk)
+            output.write(chunk)
     if expected and digest.hexdigest() != expected:
         raise ValueError("Downloaded artifact does not match its reviewed checksum")
     return {"url": url, "sha256": digest.hexdigest(), "bytes": count,
@@ -171,18 +176,18 @@ def database_payload_bytes(archive):
 
 def isolated_container_command(name, inputs, runner, nonce=None):
     command = ["docker", "create", "--name", name, "--pull", "never", "--platform", "linux/amd64",
-               "--network", "none", "--read-only", "--no-healthcheck", "--workdir", "/work", "--cap-drop", "ALL",
+               "--network", "none", "--read-only", "--no-healthcheck", "--workdir", WORK_DIR, "--cap-drop", "ALL",
                "--security-opt", "no-new-privileges=true", "--user", "65532:65532",
                "--cpus", "2", "--memory", "8g", "--memory-swap", "8g", "--pids-limit", "64",
                "--tmpfs", "/work:rw,noexec,nosuid,nodev,size=6g,mode=1777",
                "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777"]
     if nonce is not None:
         command += ["--label", "org.dollhousemcp.scanner-owner=" + nonce]
-    for source, target in [("grype", "grype"), ("grype.yaml", "grype.yaml"),
-                           ("database.tar.zst", "database.tar.zst"), ("image.tar", "image.tar"),
-                           ("grype-offline-runner.mjs", "grype-offline-runner.mjs")]:
+    for source, target in [("grype", "grype"), (GRYPE_CONFIG, GRYPE_CONFIG),
+                           (DATABASE_ARCHIVE, DATABASE_ARCHIVE), (IMAGE_ARCHIVE, IMAGE_ARCHIVE),
+                           (OFFLINE_RUNNER, OFFLINE_RUNNER)]:
         command += ["--mount", f"type=bind,src={inputs / source},dst=/inputs/{target},readonly"]
-    env = scanner_environment({}, Path("/work"))
+    env = scanner_environment({}, Path(WORK_DIR))
     env.update(PATH="/usr/local/bin:/usr/bin:/bin", HOME="/work/home", TMPDIR="/work/tmp")
     return command + ["--entrypoint", "/usr/bin/env", runner["execution_reference"], "-i"] + [
         f"{key}={value}" for key, value in sorted(env.items())
@@ -192,10 +197,10 @@ def isolated_container_command(name, inputs, runner, nonce=None):
 def isolation_evidence(value, inputs, runner):
     host = value["HostConfig"]
     mounts = value["Mounts"]
-    targets = {"/inputs/" + name for name in ["grype", "grype.yaml", "database.tar.zst", "image.tar", "grype-offline-runner.mjs"]}
+    targets = {"/inputs/" + name for name in ["grype", GRYPE_CONFIG, DATABASE_ARCHIVE, IMAGE_ARCHIVE, OFFLINE_RUNNER]}
     plan = isolated_container_command("review-only", inputs, runner)
     expected_command = plan[plan.index(runner["execution_reference"]) + 1:]
-    expected_tmpfs = {"/work": "rw,noexec,nosuid,nodev,size=6g,mode=1777",
+    expected_tmpfs = {WORK_DIR: "rw,noexec,nosuid,nodev,size=6g,mode=1777",
                       "/tmp": "rw,noexec,nosuid,nodev,size=128m,mode=1777"}
     expected_manifest = runner.get("archive", {}).get("manifest_descriptor")
     actual_manifest = value.get("ImageManifestDescriptor")
@@ -209,7 +214,7 @@ def isolation_evidence(value, inputs, runner):
             host["MemorySwap"] != CONTAINER_MEMORY_BYTES or host["PidsLimit"] != 64 or
             host.get("Tmpfs") != expected_tmpfs or host.get("CapAdd") or
             host.get("PidMode") or host.get("Devices") or host.get("DeviceRequests") or
-            value["Config"]["WorkingDir"] != "/work" or
+            value["Config"]["WorkingDir"] != WORK_DIR or
             value["Config"].get("Healthcheck", {}).get("Test") != ["NONE"] or
             value["Config"]["Entrypoint"] != ["/usr/bin/env"] or value["Config"]["Cmd"] != expected_command or
             {m["Destination"] for m in mounts} != targets or len(mounts) != len(targets) or
@@ -257,37 +262,53 @@ def cleanup_owned_scanner(owner, inputs, runner, expected_id=None):
     return report
 
 
+def collect_process_chunk(event, chunk, ready, child, buffers, sink, count, maximum, stderr_maximum):
+    if not chunk:
+        ready.unregister(event.fileobj)
+    elif event.data == 1 and stderr_maximum is not None and len(buffers[1]) + len(chunk) > stderr_maximum:
+        child.kill(); return count, "stderr exceeds bounded capture size"
+    elif count + len(chunk) > maximum:
+        child.kill(); return count, "combined stdout/stderr exceeds bounded capture size"
+    else:
+        count += len(chunk)
+        if sink and event.data == 0: sink.write(chunk)
+        else: buffers[event.data].extend(chunk)
+    return count, None
+
+
 def bounded_process(command, timeout, maximum=64 * 1024 * 1024, stdout_path=None, stderr_maximum=None):
     buffers = [bytearray(), bytearray()]
     error = None; count = 0
     limit = time.monotonic() + timeout
-    with (stdout_path.open("wb") if stdout_path else contextlib.nullcontext(None)) as sink:
-        with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as child:
-            with selectors.DefaultSelector() as ready:
-                ready.register(child.stdout, selectors.EVENT_READ, 0)
-                ready.register(child.stderr, selectors.EVENT_READ, 1)
-                while ready.get_map():
-                    remaining = limit - time.monotonic()
-                    if remaining <= 0:
-                        error = "process deadline exceeded"; child.kill(); break
-                    for event, _ in ready.select(min(remaining, 1)):
-                        chunk = os.read(event.fd, 65536)
-                        if not chunk:
-                            ready.unregister(event.fileobj)
-                        elif event.data == 1 and stderr_maximum is not None and len(buffers[1]) + len(chunk) > stderr_maximum:
-                            error = "stderr exceeds bounded capture size"; child.kill(); break
-                        elif count + len(chunk) > maximum:
-                            error = "combined stdout/stderr exceeds bounded capture size"; child.kill(); break
-                        else:
-                            count += len(chunk)
-                            if sink and event.data == 0: sink.write(chunk)
-                            else: buffers[event.data].extend(chunk)
+    with (stdout_path.open("wb") if stdout_path else contextlib.nullcontext(None)) as sink, \
+            subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as child:
+        with selectors.DefaultSelector() as ready:
+            ready.register(child.stdout, selectors.EVENT_READ, 0)
+            ready.register(child.stderr, selectors.EVENT_READ, 1)
+            while ready.get_map():
+                remaining = limit - time.monotonic()
+                if remaining <= 0:
+                    error = "process deadline exceeded"; child.kill(); break
+                for event, _ in ready.select(min(remaining, 1)):
+                    chunk = os.read(event.fd, 65536)
+                    count, error = collect_process_chunk(event, chunk, ready, child, buffers, sink, count, maximum, stderr_maximum)
                     if error: break
-                try: child.wait(timeout=max(0.1, limit - time.monotonic()))
-                except subprocess.TimeoutExpired:
-                    error = "process deadline exceeded"; child.kill(); child.wait()
-            return (None if error else child.returncode, bytes(buffers[0]), bytes(buffers[1]), error)
+                if error: break
+            try: child.wait(timeout=max(0.1, limit - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                error = "process deadline exceeded"; child.kill(); child.wait()
+        return (None if error else child.returncode, bytes(buffers[0]), bytes(buffers[1]), error)
 
+
+def persist_scanner_envelope(stdout, status, reports):
+    envelope = json.loads(stdout)
+    if envelope.get("kind") != "grype-offline-envelope-v1" or envelope.get("exit_code") != status:
+        raise ValueError("Offline scanner output is missing or incomplete")
+    for filename, data in envelope["files"].items():
+        if not re.fullmatch(r"[a-z-]+[.](?:json|stdout|stderr)", filename) or not isinstance(data, str):
+            raise ValueError("Unexpected offline scanner output file")
+        (reports / filename).write_text(data)
+    return status if status in (0, 2) else 1
 
 def execute_owned_scanner(name, nonce, inputs, runner, run, reports, provenance, deadline):
     container = None
@@ -313,14 +334,7 @@ def execute_owned_scanner(name, nonce, inputs, runner, run, reports, provenance,
             raise ValueError("Scanner inspection ownership mismatch")
         provenance["isolation"] = isolation_evidence(inspected[0], inputs, runner)
         status, stdout = run(["docker", "start", "--attach", container], "container-start", 120)
-        envelope = json.loads(stdout)
-        if envelope.get("kind") != "grype-offline-envelope-v1" or envelope.get("exit_code") != status:
-            raise ValueError("Offline scanner output is missing or incomplete")
-        for filename, data in envelope["files"].items():
-            if not re.fullmatch(r"[a-z-]+[.](?:json|stdout|stderr)", filename) or not isinstance(data, str):
-                raise ValueError("Unexpected offline scanner output file")
-            (reports / filename).write_text(data)
-        return status if status in (0, 2) else 1
+        return persist_scanner_envelope(stdout, status, reports)
     finally:
         cleanup = cleanup_owned_scanner(owner, inputs, runner, container) if attempted else {"status": "not-attempted"}
         try:
@@ -338,6 +352,49 @@ def scanner_source_paths():
     root = Path(__file__).resolve().parent.parent
     return root, root / '.github/grype-image-scan.yaml', root / 'scripts/grype-offline-runner.mjs', root / '.github/grype-runner-reference'
 
+
+def select_scanner_target(supplied, args, source_root, approved_target, inspect_image):
+    retained = all(supplied)
+    if retained:
+        record, target_graph = validate_intake(args.retained_intake, args.intake_sha256, args.retained_archive,
+                                                args.scanner_head, args.scanner_tree, os.environ.get('GITHUB_SHA'), source_root, approved_target)
+        target = {"store_id": record['store_id'], "architecture": record['platform'].split('/')[1], "os": "linux"}
+        image_id = target['store_id']
+    else:
+        target = inspect_image("dollhousemcp:latest-linux-amd64", "target-inspect")
+        if not target or target["architecture"] != "amd64" or target["os"] != "linux":
+            raise ValueError("The exact job-built linux/amd64 target is unavailable")
+        image_id = target["store_id"]
+    return retained, target, image_id
+
+def prepare_offline_inputs(inputs, reports, scanner_config, offline_runner, runner_reference, run, inspect_image, save_verified):
+    binary_archive = inputs / ARCHIVE_NAME
+    binary_receipt = download(ARCHIVE_URL, binary_archive, 100 * 1024 * 1024, ARCHIVE_SHA256)
+    (reports / "scanner-download.json").write_text(json.dumps(binary_receipt, indent=2))
+    extract_verified_binary(binary_archive, inputs / "grype")
+    (inputs / "grype").chmod(0o555)
+    download(DB_MANIFEST_URL, reports / "database-manifest.json", 1024 * 1024)
+    manifest = json.loads((reports / "database-manifest.json").read_text())
+    url, checksum = database_manifest(manifest, datetime.datetime.now(datetime.timezone.utc))
+    db_receipt = download(url, inputs / DATABASE_ARCHIVE, 1024 * 1024 * 1024, checksum)
+    (reports / "database-download.json").write_text(json.dumps(db_receipt, indent=2))
+    status, _ = run(["/usr/bin/zstd", "--version"], "db-payload-tool-version", 5)
+    if status != 0: raise ValueError("Existing system zstd is unavailable; DB payload cannot be admitted")
+    payload = database_payload_bytes(inputs / DATABASE_ARCHIVE)
+    (reports / "database-payload-probe.json").write_text(json.dumps(payload, indent=2))
+    for source, target in [(scanner_config, GRYPE_CONFIG),
+                           (offline_runner, OFFLINE_RUNNER)]:
+        shutil.copyfile(source, inputs / target)
+    selected_runner = inspect_image(RUNNER_REF, "runner-inspect")
+    if selected_runner is None:
+        status, _ = run(["docker", "pull", "--platform", "linux/amd64", RUNNER_REF], "runner-pull", 120)
+        if status != 0: raise ValueError("Exact protected runner base is unavailable")
+        selected_runner = inspect_image(RUNNER_REF, "runner-inspect-after-pull")
+    if not selected_runner: raise ValueError("Unable to inspect exact runner reference")
+    runner_graph = save_verified(RUNNER_REF, selected_runner, "runner")
+    runner = verify_fixed_runner(runner_graph, runner_reference)
+    (reports / "runner-reference-identity.json").write_text(json.dumps(runner, indent=2))
+    return payload, binary_receipt, manifest, db_receipt, runner
 
 def main():
     source_root, scanner_config, offline_runner, runner_reference = scanner_source_paths()
@@ -386,17 +443,7 @@ def main():
         (reports / (label + "-selected.json")).write_text(json.dumps(selected, indent=2))
         return selected
 
-    retained = all(supplied)
-    if retained:
-        record, target_graph = validate_intake(args.retained_intake, args.intake_sha256, args.retained_archive,
-                                                args.scanner_head, args.scanner_tree, os.environ.get('GITHUB_SHA'), source_root, approved_target)
-        target = {"store_id": record['store_id'], "architecture": record['platform'].split('/')[1], "os": "linux"}
-        image_id = target['store_id']
-    else:
-        target = inspect_image("dollhousemcp:latest-linux-amd64", "target-inspect")
-        if not target or target["architecture"] != "amd64" or target["os"] != "linux":
-            raise ValueError("The exact job-built linux/amd64 target is unavailable")
-        image_id = target["store_id"]
+    retained, target, image_id = select_scanner_target(supplied, args, source_root, approved_target, inspect_image)
     memory = {line.split(":", 1)[0]: int(line.split()[1]) * 1024
               for line in Path("/proc/meminfo").read_text().splitlines() if line.startswith(("MemTotal:", "MemAvailable:"))}
     disk_free = shutil.disk_usage(root).free
@@ -409,7 +456,7 @@ def main():
     capacity_admission(TARGET_MAX_BYTES, memory["MemAvailable"], disk_free)
 
     def save_verified(reference, selected, label):
-        destination = inputs / ("image.tar" if label == "target" else "runner.tar")
+        destination = inputs / (IMAGE_ARCHIVE if label == "target" else "runner.tar")
         status, _ = run(["docker", "image", "save", reference], label + "-save", 180,
                         stdout_path=destination, maximum=TARGET_MAX_BYTES + 128 * 1024 ** 2)
         if status != 0:
@@ -427,8 +474,8 @@ def main():
         return evidence
 
     if retained:
-        shutil.copyfile(args.retained_archive, inputs / "image.tar")
-        record, target_graph = validate_intake(args.retained_intake, args.intake_sha256, inputs / "image.tar",
+        shutil.copyfile(args.retained_archive, inputs / IMAGE_ARCHIVE)
+        record, target_graph = validate_intake(args.retained_intake, args.intake_sha256, inputs / IMAGE_ARCHIVE,
                                                 args.scanner_head, args.scanner_tree, os.environ.get('GITHUB_SHA'), source_root, approved_target)
         (reports / "target-archive-identity.json").write_text(json.dumps(target_graph, indent=2))
     else:
@@ -436,35 +483,10 @@ def main():
     admission = capacity_admission(target_graph["unpacked_layer_bytes"], memory["MemAvailable"], shutil.disk_usage(root).free)
     admission["host_total_memory_bytes"] = memory["MemTotal"]
     (reports / "capacity-admission.json").write_text(json.dumps(admission, indent=2))
-    binary_archive = inputs / ARCHIVE_NAME
-    binary_receipt = download(ARCHIVE_URL, binary_archive, 100 * 1024 * 1024, ARCHIVE_SHA256)
-    (reports / "scanner-download.json").write_text(json.dumps(binary_receipt, indent=2))
-    extract_verified_binary(binary_archive, inputs / "grype")
-    (inputs / "grype").chmod(0o555)
-    download(DB_MANIFEST_URL, reports / "database-manifest.json", 1024 * 1024)
-    manifest = json.loads((reports / "database-manifest.json").read_text())
-    url, checksum = database_manifest(manifest, datetime.datetime.now(datetime.timezone.utc))
-    db_receipt = download(url, inputs / "database.tar.zst", 1024 * 1024 * 1024, checksum)
-    (reports / "database-download.json").write_text(json.dumps(db_receipt, indent=2))
-    status, _ = run(["/usr/bin/zstd", "--version"], "db-payload-tool-version", 5)
-    if status != 0: raise ValueError("Existing system zstd is unavailable; DB payload cannot be admitted")
-    payload = database_payload_bytes(inputs / "database.tar.zst")
-    (reports / "database-payload-probe.json").write_text(json.dumps(payload, indent=2))
-    for source, target in [(scanner_config, "grype.yaml"),
-                           (offline_runner, "grype-offline-runner.mjs")]:
-        shutil.copyfile(source, inputs / target)
-    selected_runner = inspect_image(RUNNER_REF, "runner-inspect")
-    if selected_runner is None:
-        status, _ = run(["docker", "pull", "--platform", "linux/amd64", RUNNER_REF], "runner-pull", 120)
-        if status != 0: raise ValueError("Exact protected runner base is unavailable")
-        selected_runner = inspect_image(RUNNER_REF, "runner-inspect-after-pull")
-    if not selected_runner: raise ValueError("Unable to inspect exact runner reference")
-    runner_graph = save_verified(RUNNER_REF, selected_runner, "runner")
-    runner = verify_fixed_runner(runner_graph, runner_reference)
-    (reports / "runner-reference-identity.json").write_text(json.dumps(runner, indent=2))
+    payload, binary_receipt, manifest, db_receipt, runner = prepare_offline_inputs(inputs, reports, scanner_config, offline_runner, runner_reference, run, inspect_image, save_verified)
     for path in inputs.iterdir():
         if path.name != "grype": path.chmod(0o444)
-    with (inputs / "image.tar").open("rb") as stream:
+    with (inputs / IMAGE_ARCHIVE).open("rb") as stream:
         image_archive_hash = hashlib.file_digest(stream, "sha256").hexdigest()
     provenance = {"capacity_admission": admission, "database_payload": payload, "scanner_archive": binary_receipt,
                   "database": {**db_receipt, "manifest": manifest}, "target": target_graph,

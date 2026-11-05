@@ -23,6 +23,9 @@ spec.loader.exec_module(scanner)
 # Hosted193d inventory:663 ELF files/196,374,524 bytes within existing scratch.
 # Admission count only; all process/time/output/scratch bounds remain unchanged.
 MAX_ELF_OBJECTS = 1024
+DEFAULT_PLATFORM = 'linux/amd64'
+RECEIPT_SUFFIX = '-receipt.json'
+ELF_INDEX = 'elf-index.json'
 
 # Trusted host Python only sets resource/env boundaries, then replaces itself
 # with trusted /usr/bin/readelf. No target executable, loader or ldd is run.
@@ -34,7 +37,7 @@ os.execve('/usr/bin/readelf',['/usr/bin/readelf']+sys.argv[2:],{'PATH':'/usr/bin
 """
 
 
-def create_command(name, store_id, nonce, platform='linux/amd64'):
+def create_command(name, store_id, nonce, platform=DEFAULT_PLATFORM):
     return ['docker', 'create', '--name', name, '--label', 'org.dollhousemcp.applicability-owner=' + nonce, '--pull', 'never', '--platform', platform,
             '--network', 'none', '--read-only', '--no-healthcheck', '--cap-drop', 'ALL',
             '--security-opt', 'no-new-privileges=true', '--user', '65532:65532',
@@ -100,7 +103,7 @@ def capture_elf_facts(elf, private, run, write, deadline):
         if value <= 0: raise ValueError('Total ELF phase deadline exceeded; unprocessed coverage UNKNOWN')
         return value
     results = [{'path': entry['path'], 'sha256': entry['sha256'],
-                'receipt': 'elf-' + str(number) + '-receipt.json',
+                'receipt': 'elf-' + str(number) + RECEIPT_SUFFIX,
                 'status': 'UNKNOWN-not-processed-or-bounded'}
                for number, entry in enumerate(elf[:MAX_ELF_OBJECTS])]
     index = {'objects': results, 'object_count': len(elf),
@@ -113,7 +116,7 @@ def capture_elf_facts(elf, private, run, write, deadline):
              'boundary': 'No ldd/loader execution. Dynamic symbols/DT_NEEDED do not prove static code absence or runtime resolution.'}
     # Persist before count/tool/deadline checks. A killed phase leaves a safe
     # UNKNOWN ledger; the earlier package/alias/archive facts stay independent.
-    write('elf-index.json', index)
+    write(ELF_INDEX, index)
     try:
         if len(elf) > MAX_ELF_OBJECTS:
             raise ValueError('Selected ELF object count exceeds ' + str(MAX_ELF_OBJECTS) + ' bound; unprocessed coverage UNKNOWN')
@@ -151,9 +154,131 @@ def capture_elf_facts(elf, private, run, write, deadline):
         index['unknown_count'] = len(elf) - sum(row['status'] == 'parsed-data' for row in results)
         # Replacement can fail closed on report exhaustion. The initial UNKNOWN
         # ledger is already retained; never overwrite a prior scan or hide gaps.
-        write('elf-index.json', index)
+        write(ELF_INDEX, index)
     return index
 
+
+def admit_capture_target(root, supplied, args, approved_target, run, write):
+    original = json.loads((root / 'reports/target-archive-identity.json').read_text())
+    archive = root / 'inputs/image.tar'
+    record = None
+    if all(supplied):
+        record, admitted_graph = validate_intake(args.retained_intake, args.intake_sha256, archive,
+                                                   args.scanner_head, args.scanner_tree, os.environ.get('GITHUB_SHA'), Path(__file__).resolve().parent.parent, approved_target)
+        if original != admitted_graph: raise ValueError('Stored archive identity differs from admitted graph')
+    status, raw = run(['docker', 'version', '--format', '{{json .Server}}'], 'engine-source-identity')
+    if status != 0: raise ValueError('Docker source identity unavailable')
+    engine = json.loads(raw)
+    if (engine.get('Version') != '29.4.2' or engine.get('GitCommit') not in
+            ['d329809', 'd3298094ac5111e5d67517a252d291d27543e408'] or
+            (engine.get('Os'), engine.get('Arch')) != ('linux', 'amd64')):
+        raise ValueError('Docker exporter source is not the exact reviewed engine; capture unavailable')
+
+    status, raw = run(['docker', 'image', 'inspect', original['store_id']], 'image-inspect', retain_stdout=False)
+    if status != 0: raise ValueError('Exact target is unavailable')
+    # Keep no image Env values. Full inspect bytes are private, not reported.
+    image = json.loads(raw)[0]
+    if image['Id'] != original['store_id'] or image.get('Config', {}).get('Volumes'):
+        raise ValueError('Image identity or declared-volume scope is unsupported')
+    source_label = image.get('Config', {}).get('Labels', {}).get('org.dollhousemcp.engine-proof-source')
+    if record and source_label != record['source']:
+        raise ValueError('Target source label differs from retained intake')
+    if not record and os.environ.get('GITHUB_SHA') and source_label != os.environ['GITHUB_SHA']:
+        raise ValueError('Target image source label differs from current qualification head')
+    archive = root / 'inputs/image.tar'
+    graph = verify_saved_image(archive, image['Id'], GIB, image.get('Descriptor'), platform=record['platform'] if record else DEFAULT_PLATFORM, expected_source=record['source'] if record else None)
+    if graph != original: raise ValueError('Typed archive identity changed before capture')
+    with archive.open('rb') as source:
+        archive_hash = hashlib.file_digest(source, 'sha256').hexdigest()
+    write('target-binding.json', {'graph': graph, 'image_archive_sha256': archive_hash,
+         'architecture': image.get('Architecture'), 'os': image.get('Os'),
+         'original_image_user': image.get('Config', {}).get('User'),
+         'source_label': image.get('Config', {}).get('Labels', {}).get('org.dollhousemcp.engine-proof-source'),
+         'job': {key: os.environ.get(key) for key in ['GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT']}})
+    if (image.get('Architecture'), image.get('Os')) != ((record['platform'].split('/')[1] if record else 'amd64'), 'linux'):
+        raise ValueError('Capture is qualified only for linux/amd64 target')
+    return record, graph, source_label
+
+def capture_export(container, graph, owner, private, run, write):
+    for phase in ['before-export', 'after-export']:
+        status, raw = run(['docker', 'inspect', container], phase, maximum=1024 * 1024, retain_stdout=False)
+        if status != 0: raise ValueError('Never-started container inspect failed')
+        value = json.loads(raw)[0]
+        if value['Id'] != container: raise ValueError('Container inspect identity mismatch')
+        write(phase + '-selected.json', validate_never_started(value, graph, owner))
+        if phase == 'before-export':
+            exported = private / 'final-rootfs.tar'
+            status, _ = run(['docker', 'export', container], 'container-export', 60,
+                            GIB + 128 * 1024 ** 2, exported)
+            if status != 0: raise ValueError('Bounded final-rootfs export failed')
+            exported.chmod(0o400)
+    return exported
+
+def export_owned_capture(root, private, graph, record, source_label, run, write, summary):
+    container = None
+    token = uuid.uuid4().hex
+    owner = {'name': 'beta-applicability-' + token[:12], 'nonce': token, 'source_label': source_label}
+    write('ownership-intent.json', {**owner, 'typed_store_id': graph['store_id'], 'creation_state': 'about-to-attempt',
+          'note': 'Persisted before create; not authority to remove without exact identity verification'})
+    create_attempted = False
+    try:
+        create_attempted = True  # Before child or receipt persistence can fail.
+        summary['create_attempted'] = True
+        status, raw = run(create_command(owner['name'], graph['store_id'], token, record['platform'] if record else DEFAULT_PLATFORM), 'container-create')
+        identifier = raw.decode().strip()
+        if len(identifier) != 64 or any(c not in '0123456789abcdef' for c in identifier):
+            raise ValueError('Invalid exact container ID; cleanup identity unavailable')
+        container = identifier
+        if status != 0: raise ValueError('Create returned an exact owned ID but unsuccessful receipt; cleanup required')
+        exported = capture_export(container, graph, owner, private, run, write)
+    finally:
+        if create_attempted:
+            # Inspect/validate/remove happens BEFORE any diagnostics write.
+            # A full disk or lost/malformed create output cannot bypass it.
+            cleanup = cleanup_owned_capture(owner, graph, container)
+            summary['cleanup'] = cleanup
+            write('container-cleanup.json', cleanup)
+            if cleanup['status'] != 'verified-owned-container-removed':
+                raise ValueError('Capture cleanup UNKNOWN; inspect retained exact ownership intent')
+    return exported, container
+
+def capture_inventory_facts(exported, private, graph, container, deadline, reports, raw_budget, summary, run, write):
+    with exported.open('rb') as source:
+        export_hash = hashlib.file_digest(source, 'sha256').hexdigest()
+    inventory = inventory_export(exported, private / 'selected-data', deadline=deadline)
+    write('filesystem-inventory.json', inventory)
+    entries = inventory['entries']
+    write('export-binding.json', {'sha256': export_hash, 'bytes': exported.stat().st_size,
+          'typed_target_store_id': graph['store_id'], 'container_id': container,
+          'trust_boundary': 'Reviewed Docker daemon materializes selected image filesystem; no candidate process started'})
+    write('predicate-surfaces.json', {
+        'privileged_metadata': [e for e in entries if e['mode'] & 0o6000 or e.get('capability_base64') is not None],
+        'named_tool_variants': [e for e in entries if any(Path(e['path']).name.startswith(name) for name in
+            ['infocmp', 'nsenter', 'mount', 'umount', 'getfacl', 'setfacl', 'chacl'])],
+        'perl_and_package_data': [e for e in entries if e.get('scratch_data') and e.get('format') != 'elf'],
+        'native_module_paths': [e for e in entries if e['path'].endswith('.node')],
+        'aliases': inventory['aliases'],
+        'limits': 'Names identify candidate surfaces only; full file hashes support independent renamed-copy/reference comparison. Missing caps, unparsed archives, modified/compiled copies and actual runtime callers stay UNKNOWN.'})
+    elf = [e for e in entries if e.get('format') == 'elf']
+    archives = [e for e in entries if e.get('format', '').endswith('archive-candidate')]
+    write('unresolved-archive-locations.json', {'archives': archives, 'status': 'UNKNOWN nested/packed contents not inspected'})
+    summary.update(export_sha256=export_hash, entry_count=len(entries), elf_count=len(elf),
+                   archive_candidate_count=len(archives))
+    # Only exact whitelisted public package/module data; never upload rootfs,
+    # ELF binaries, arbitrary application contents, image Env or credentials.
+    for entry in entries:
+        if entry.get('scratch_data') and entry.get('format') != 'elf':
+            path = Path(entry['scratch_data'])
+            if path.stat().st_size > raw_budget: raise ValueError('Raw metadata report exceeds cap')
+            data = path.read_bytes()
+            if sum(p.stat().st_size for p in reports.iterdir() if p.is_file()) + len(data) > raw_budget:
+                raise ValueError('Raw metadata aggregate exceeds report cap')
+            (reports / ('data-' + entry['sha256'] + '.raw')).write_bytes(data)
+    summary['public_metadata_capture'] = 'retained-before-ELF-phase'
+    summary['elf_coverage_file'] = ELF_INDEX
+    elf_index = capture_elf_facts(elf, private, run, write, deadline)
+    summary.update(status='facts-captured-with-explicit-unresolved-boundaries',
+                   elf_parse_unknown_count=elf_index['unknown_count'])
 
 def main():
     parser = argparse.ArgumentParser()
@@ -193,125 +318,18 @@ def main():
                    'finished_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
                    'exit_code': status, 'capture_error': error, 'timeout_seconds': actual_timeout,
                    'maximum_combined_bytes': maximum}
-        summary['receipts'][label] = {'file': label + '-receipt.json', 'exit_code': status, 'capture_error': error}
+        summary['receipts'][label] = {'file': label + RECEIPT_SUFFIX, 'exit_code': status, 'capture_error': error}
         for suffix, data in [('stdout', stdout), ('stderr', stderr)]:
             if suffix == 'stdout' and not retain_stdout: continue
             if sum(p.stat().st_size for p in reports.iterdir() if p.is_file()) + len(data) > raw_budget:
                 raise ValueError('Capture raw report budget exhausted')
             (reports / (label + '.' + suffix)).write_bytes(data)
-        write(label + '-receipt.json', receipt)
+        write(label + RECEIPT_SUFFIX, receipt)
         return status, stdout
     try:
-        original = json.loads((root / 'reports/target-archive-identity.json').read_text())
-        archive = root / 'inputs/image.tar'
-        record = None
-        if all(supplied):
-            record, admitted_graph = validate_intake(args.retained_intake, args.intake_sha256, archive,
-                                                       args.scanner_head, args.scanner_tree, os.environ.get('GITHUB_SHA'), Path(__file__).resolve().parent.parent, approved_target)
-            if original != admitted_graph: raise ValueError('Stored archive identity differs from admitted graph')
-        status, raw = run(['docker', 'version', '--format', '{{json .Server}}'], 'engine-source-identity')
-        if status != 0: raise ValueError('Docker source identity unavailable')
-        engine = json.loads(raw)
-        if (engine.get('Version') != '29.4.2' or engine.get('GitCommit') not in
-                ['d329809', 'd3298094ac5111e5d67517a252d291d27543e408'] or
-                (engine.get('Os'), engine.get('Arch')) != ('linux', 'amd64')):
-            raise ValueError('Docker exporter source is not the exact reviewed engine; capture unavailable')
-
-        status, raw = run(['docker', 'image', 'inspect', original['store_id']], 'image-inspect', retain_stdout=False)
-        if status != 0: raise ValueError('Exact target is unavailable')
-        # Keep no image Env values. Full inspect bytes are private, not reported.
-        image = json.loads(raw)[0]
-        if image['Id'] != original['store_id'] or image.get('Config', {}).get('Volumes'):
-            raise ValueError('Image identity or declared-volume scope is unsupported')
-        source_label = image.get('Config', {}).get('Labels', {}).get('org.dollhousemcp.engine-proof-source')
-        if record and source_label != record['source']:
-            raise ValueError('Target source label differs from retained intake')
-        if not record and os.environ.get('GITHUB_SHA') and source_label != os.environ['GITHUB_SHA']:
-            raise ValueError('Target image source label differs from current qualification head')
-        archive = root / 'inputs/image.tar'
-        graph = verify_saved_image(archive, image['Id'], GIB, image.get('Descriptor'), platform=record['platform'] if record else 'linux/amd64', expected_source=record['source'] if record else None)
-        if graph != original: raise ValueError('Typed archive identity changed before capture')
-        with archive.open('rb') as source:
-            archive_hash = hashlib.file_digest(source, 'sha256').hexdigest()
-        write('target-binding.json', {'graph': graph, 'image_archive_sha256': archive_hash,
-             'architecture': image.get('Architecture'), 'os': image.get('Os'),
-             'original_image_user': image.get('Config', {}).get('User'),
-             'source_label': image.get('Config', {}).get('Labels', {}).get('org.dollhousemcp.engine-proof-source'),
-             'job': {key: os.environ.get(key) for key in ['GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT']}})
-        if (image.get('Architecture'), image.get('Os')) != ((record['platform'].split('/')[1] if record else 'amd64'), 'linux'):
-            raise ValueError('Capture is qualified only for linux/amd64 target')
-        container = None
-        token = uuid.uuid4().hex
-        owner = {'name': 'beta-applicability-' + token[:12], 'nonce': token, 'source_label': source_label}
-        write('ownership-intent.json', {**owner, 'typed_store_id': graph['store_id'], 'creation_state': 'about-to-attempt',
-              'note': 'Persisted before create; not authority to remove without exact identity verification'})
-        create_attempted = False
-        try:
-            create_attempted = True  # Before child or receipt persistence can fail.
-            summary['create_attempted'] = True
-            status, raw = run(create_command(owner['name'], graph['store_id'], token, record['platform'] if record else 'linux/amd64'), 'container-create')
-            identifier = raw.decode().strip()
-            if len(identifier) != 64 or any(c not in '0123456789abcdef' for c in identifier):
-                raise ValueError('Invalid exact container ID; cleanup identity unavailable')
-            container = identifier
-            if status != 0: raise ValueError('Create returned an exact owned ID but unsuccessful receipt; cleanup required')
-            for phase in ['before-export', 'after-export']:
-                status, raw = run(['docker', 'inspect', container], phase, maximum=1024 * 1024, retain_stdout=False)
-                if status != 0: raise ValueError('Never-started container inspect failed')
-                value = json.loads(raw)[0]
-                if value['Id'] != container: raise ValueError('Container inspect identity mismatch')
-                write(phase + '-selected.json', validate_never_started(value, graph, owner))
-                if phase == 'before-export':
-                    exported = private / 'final-rootfs.tar'
-                    status, _ = run(['docker', 'export', container], 'container-export', 60,
-                                    GIB + 128 * 1024 ** 2, exported)
-                    if status != 0: raise ValueError('Bounded final-rootfs export failed')
-                    exported.chmod(0o400)
-        finally:
-            if create_attempted:
-                # Inspect/validate/remove happens BEFORE any diagnostics write.
-                # A full disk or lost/malformed create output cannot bypass it.
-                cleanup = cleanup_owned_capture(owner, graph, container)
-                summary['cleanup'] = cleanup
-                write('container-cleanup.json', cleanup)
-                if cleanup['status'] != 'verified-owned-container-removed':
-                    raise ValueError('Capture cleanup UNKNOWN; inspect retained exact ownership intent')
-        with exported.open('rb') as source:
-            export_hash = hashlib.file_digest(source, 'sha256').hexdigest()
-        inventory = inventory_export(exported, private / 'selected-data', deadline=deadline)
-        write('filesystem-inventory.json', inventory)
-        entries = inventory['entries']
-        write('export-binding.json', {'sha256': export_hash, 'bytes': exported.stat().st_size,
-              'typed_target_store_id': graph['store_id'], 'container_id': container,
-              'trust_boundary': 'Reviewed Docker daemon materializes selected image filesystem; no candidate process started'})
-        write('predicate-surfaces.json', {
-            'privileged_metadata': [e for e in entries if e['mode'] & 0o6000 or e.get('capability_base64') is not None],
-            'named_tool_variants': [e for e in entries if any(Path(e['path']).name.startswith(name) for name in
-                ['infocmp', 'nsenter', 'mount', 'umount', 'getfacl', 'setfacl', 'chacl'])],
-            'perl_and_package_data': [e for e in entries if e.get('scratch_data') and e.get('format') != 'elf'],
-            'native_module_paths': [e for e in entries if e['path'].endswith('.node')],
-            'aliases': inventory['aliases'],
-            'limits': 'Names identify candidate surfaces only; full file hashes support independent renamed-copy/reference comparison. Missing caps, unparsed archives, modified/compiled copies and actual runtime callers stay UNKNOWN.'})
-        elf = [e for e in entries if e.get('format') == 'elf']
-        archives = [e for e in entries if e.get('format', '').endswith('archive-candidate')]
-        write('unresolved-archive-locations.json', {'archives': archives, 'status': 'UNKNOWN nested/packed contents not inspected'})
-        summary.update(export_sha256=export_hash, entry_count=len(entries), elf_count=len(elf),
-                       archive_candidate_count=len(archives))
-        # Only exact whitelisted public package/module data; never upload rootfs,
-        # ELF binaries, arbitrary application contents, image Env or credentials.
-        for entry in entries:
-            if entry.get('scratch_data') and entry.get('format') != 'elf':
-                path = Path(entry['scratch_data'])
-                if path.stat().st_size > raw_budget: raise ValueError('Raw metadata report exceeds cap')
-                data = path.read_bytes()
-                if sum(p.stat().st_size for p in reports.iterdir() if p.is_file()) + len(data) > raw_budget:
-                    raise ValueError('Raw metadata aggregate exceeds report cap')
-                (reports / ('data-' + entry['sha256'] + '.raw')).write_bytes(data)
-        summary['public_metadata_capture'] = 'retained-before-ELF-phase'
-        summary['elf_coverage_file'] = 'elf-index.json'
-        elf_index = capture_elf_facts(elf, private, run, write, deadline)
-        summary.update(status='facts-captured-with-explicit-unresolved-boundaries',
-                       elf_parse_unknown_count=elf_index['unknown_count'])
+        record, graph, source_label = admit_capture_target(root, supplied, args, approved_target, run, write)
+        exported, container = export_owned_capture(root, private, graph, record, source_label, run, write, summary)
+        capture_inventory_facts(exported, private, graph, container, deadline, reports, raw_budget, summary, run, write)
         return 0
     except Exception as error:
         summary['failure'] = str(error)

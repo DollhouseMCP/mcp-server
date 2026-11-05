@@ -15,7 +15,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
-from image_applicability import inventory_export, validate_never_started, preflight_tar
+from image_applicability import inventory_export, validate_never_started, preflight_tar, selected_text
 spec = importlib.util.spec_from_file_location('capture', Path(__file__).resolve().parents[2] / 'scripts/capture-image-applicability.py')
 capture = importlib.util.module_from_spec(spec); spec.loader.exec_module(capture)
 STORE = 'sha256:' + 'a' * 64
@@ -61,6 +61,17 @@ def directory(name): return (name, b'', {'type': tarfile.DIRTYPE})
 
 
 class InventoryTests(unittest.TestCase):
+    def test_package_metadata_selection_retains_exact_names_and_suffixes(self):
+        names = ['zlib1g', 'perl-base', 'ncurses-bin', 'ncurses-base', 'libtinfo6', 'util-linux',
+                 'bsdutils', 'mount', 'login', 'libmount1', 'libblkid1', 'libuuid1', 'libsmartcols1',
+                 'liblastlog2-2', 'gcc-14-base', 'libgcc-s1', 'libstdc++6', 'libc6', 'libc-bin', 'libacl1']
+        for name in names:
+            for suffix in ['.list', ':amd64.md5sums']:
+                with self.subTest(name=name, suffix=suffix):
+                    self.assertTrue(selected_text('var/lib/dpkg/info/' + name + suffix))
+        for name in ['libc7.list', 'libstdc+6.list', 'libmount2.list', 'libc6:.list', 'perl-base.md5sums.extra']:
+            with self.subTest(name=name): self.assertFalse(selected_text('var/lib/dpkg/info/' + name))
+
     def inventory(self, entries):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
