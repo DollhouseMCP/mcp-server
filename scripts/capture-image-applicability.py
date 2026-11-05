@@ -174,6 +174,16 @@ def validate_capture_provenance(root, graph, archive_hash):
         raise ValueError('Target archive differs from scanner provenance')
 
 
+def validate_capture_image(image, original, record):
+    if image['Id'] != original['store_id'] or image.get('Config', {}).get('Volumes'):
+        raise ValueError('Image identity or declared-volume scope is unsupported')
+    source_label = image.get('Config', {}).get('Labels', {}).get('org.dollhousemcp.engine-proof-source')
+    if record and source_label != record['source']:
+        raise ValueError('Target source label differs from retained intake')
+    if not record and os.environ.get('GITHUB_SHA') and source_label != os.environ['GITHUB_SHA']:
+        raise ValueError('Target image source label differs from current qualification head')
+    return source_label
+
 def admit_capture_target(root, supplied, args, approved_target, run, write):
     original = json.loads((root / 'reports/target-archive-identity.json').read_text())
     if 'admission_descriptor' not in original: raise ValueError('Original archive admission descriptor unavailable')
@@ -189,13 +199,7 @@ def admit_capture_target(root, supplied, args, approved_target, run, write):
     if status != 0: raise ValueError('Exact target is unavailable')
     # Keep no image Env values. Full inspect bytes are private, not reported.
     image = json.loads(raw)[0]
-    if image['Id'] != original['store_id'] or image.get('Config', {}).get('Volumes'):
-        raise ValueError('Image identity or declared-volume scope is unsupported')
-    source_label = image.get('Config', {}).get('Labels', {}).get('org.dollhousemcp.engine-proof-source')
-    if record and source_label != record['source']:
-        raise ValueError('Target source label differs from retained intake')
-    if not record and os.environ.get('GITHUB_SHA') and source_label != os.environ['GITHUB_SHA']:
-        raise ValueError('Target image source label differs from current qualification head')
+    source_label = validate_capture_image(image, original, record)
     archive = root / 'inputs/image.tar'
     if record:
         record, graph = validate_intake(args.retained_intake, args.intake_sha256, archive,

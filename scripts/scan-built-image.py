@@ -407,6 +407,28 @@ def confirm_target_archive(root, image_id, target_graph, target_descriptor, targ
     return archive_hash
 
 
+def save_verified_archive(reference, selected, label, run, reports, inputs, archive_hashes):
+    destination = inputs / (IMAGE_ARCHIVE if label == "target" else "runner.tar")
+    status, _ = run(["docker", "image", "save", reference], label + "-save", 180,
+                    stdout_path=destination, maximum=TARGET_MAX_BYTES + 128 * 1024 ** 2)
+    if status != 0:
+        raise ValueError(label + " archive export exceeded budget or failed; inspect export receipt")
+    observations = {**selected, "archive_bytes": destination.stat().st_size}
+    (reports / (label + "-archive-observations.json")).write_text(json.dumps(observations, indent=2))
+    try:
+        if label == "target":
+            evidence, archive_hashes[label] = verify_trusted_image(inputs.parent, label, selected["store_id"], TARGET_MAX_BYTES, selected["descriptor"], include_hash=True)
+        else:
+            evidence = verify_trusted_image(inputs.parent, label, selected["store_id"], TARGET_MAX_BYTES, selected["descriptor"])
+    except Exception as error:
+        (reports / (label + "-archive-verification-failure.json")).write_text(json.dumps({
+            **observations, "unpacked_admission_cap_bytes": TARGET_MAX_BYTES,
+            "complete_graph_verified": False, "error": str(error)}, indent=2))
+        raise
+    (reports / (label + "-archive-identity.json")).write_text(json.dumps(evidence, indent=2))
+    return evidence
+
+
 def scanner_operations(reports, inputs, deadline, receipts, archive_hashes):
     def run(command, name, timeout=180, retain_stdout=True, stdout_path=None, maximum=64 * 1024 * 1024):
         if name != "container-cleanup":
@@ -431,25 +453,7 @@ def scanner_operations(reports, inputs, deadline, receipts, archive_hashes):
         return selected
 
     def save_verified(reference, selected, label):
-        destination = inputs / (IMAGE_ARCHIVE if label == "target" else "runner.tar")
-        status, _ = run(["docker", "image", "save", reference], label + "-save", 180,
-                        stdout_path=destination, maximum=TARGET_MAX_BYTES + 128 * 1024 ** 2)
-        if status != 0:
-            raise ValueError(label + " archive export exceeded budget or failed; inspect export receipt")
-        observations = {**selected, "archive_bytes": destination.stat().st_size}
-        (reports / (label + "-archive-observations.json")).write_text(json.dumps(observations, indent=2))
-        try:
-            if label == "target":
-                evidence, archive_hashes[label] = verify_trusted_image(inputs.parent, label, selected["store_id"], TARGET_MAX_BYTES, selected["descriptor"], include_hash=True)
-            else:
-                evidence = verify_trusted_image(inputs.parent, label, selected["store_id"], TARGET_MAX_BYTES, selected["descriptor"])
-        except Exception as error:
-            (reports / (label + "-archive-verification-failure.json")).write_text(json.dumps({
-                **observations, "unpacked_admission_cap_bytes": TARGET_MAX_BYTES,
-                "complete_graph_verified": False, "error": str(error)}, indent=2))
-            raise
-        (reports / (label + "-archive-identity.json")).write_text(json.dumps(evidence, indent=2))
-        return evidence
+        return save_verified_archive(reference, selected, label, run, reports, inputs, archive_hashes)
 
     return run, inspect_image, save_verified
 
