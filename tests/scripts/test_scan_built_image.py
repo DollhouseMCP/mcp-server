@@ -116,12 +116,29 @@ class OfflineBoundaryTests(unittest.TestCase):
         from types import SimpleNamespace
         from unittest.mock import patch
         args = SimpleNamespace(retained_intake='doc', intake_sha256='digest', retained_archive='archive', scanner_head='head', scanner_tree='tree')
-        record = {'store_id': 'sha256:' + 'a' * 64, 'platform': 'linux/arm64'}
+        record = {'store_id': 'sha256:' + 'a' * 64, 'platform': 'linux/arm64', 'descriptor': {'digest': 'root'}}
         with patch.object(scanner, 'validate_intake', return_value=(record, {'fixture': True})):
-            retained, target, image_id = scanner.select_scanner_target([True], args, Path('/source'), {}, lambda *_: None)
+            retained, target, image_id, descriptor = scanner.select_scanner_target([True], args, Path('/source'), {}, lambda *_: None)
         self.assertTrue(retained)
         self.assertEqual(target, {'store_id': record['store_id'], 'architecture': 'arm64', 'os': 'linux'})
         self.assertEqual(image_id, record['store_id'])
+        self.assertEqual(descriptor, record['descriptor'])
+
+    def test_final_target_verification_preserves_root_descriptor_for_child_store(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from test_image_archive_identity import fixture, write_archive
+        from image_archive_identity import verify_saved_image
+        members, root_id, _, root_descriptor, size = fixture(True, True)
+        child = json.loads(members['blobs/sha256/' + root_id[7:]])['manifests'][0]['digest']
+        with tempfile.TemporaryDirectory() as directory:
+            runner = Path(directory).resolve(); root = runner / 'image-security'; inputs = root / 'inputs'; inputs.mkdir(parents=True)
+            archive = write_archive(inputs, members)
+            graph = verify_saved_image(archive, child, size, root_descriptor)
+            target = {'architecture': 'amd64'}; args = SimpleNamespace(target_source=None)
+            with patch.dict(scanner.os.environ, {'RUNNER_TEMP': str(runner)}):
+                actual_hash = scanner.confirm_target_archive(root, child, graph, root_descriptor, target, args, False)
+            self.assertEqual(actual_hash, hashlib.sha256(archive.read_bytes()).hexdigest())
 
     def test_scanner_saved_image_graph_uses_fixed_fd_route(self):
         from unittest.mock import patch

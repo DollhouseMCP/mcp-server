@@ -360,12 +360,14 @@ def select_scanner_target(supplied, args, source_root, approved_target, inspect_
                                                 args.scanner_head, args.scanner_tree, os.environ.get('GITHUB_SHA'), source_root, approved_target)
         target = {"store_id": record['store_id'], "architecture": record['platform'].split('/')[1], "os": "linux"}
         image_id = target['store_id']
+        target_descriptor = record['descriptor']
     else:
         target = inspect_image("dollhousemcp:latest-linux-amd64", "target-inspect")
         if not target or target["architecture"] != "amd64" or target["os"] != "linux":
             raise ValueError("The exact job-built linux/amd64 target is unavailable")
         image_id = target["store_id"]
-    return retained, target, image_id
+        target_descriptor = target["descriptor"]
+    return retained, target, image_id, target_descriptor
 
 def prepare_offline_inputs(inputs, reports, scanner_config, offline_runner, runner_reference, run, inspect_image, save_verified):
     binary_archive = inputs / ARCHIVE_NAME
@@ -395,6 +397,14 @@ def prepare_offline_inputs(inputs, reports, scanner_config, offline_runner, runn
     runner = verify_fixed_runner(runner_graph, runner_reference)
     (reports / "runner-reference-identity.json").write_text(json.dumps(runner, indent=2))
     return payload, binary_receipt, manifest, db_receipt, runner
+
+def confirm_target_archive(root, image_id, target_graph, target_descriptor, target, args, retained):
+    final_graph, archive_hash = verify_trusted_image(root, "target", image_id, TARGET_MAX_BYTES, target_descriptor, include_hash=True,
+                                                      platform="linux/" + target["architecture"],
+                                                      expected_source=args.target_source if retained else None)
+    if final_graph != target_graph: raise ValueError("Target archive identity changed before scanner creation")
+    return archive_hash
+
 
 def scanner_operations(reports, inputs, deadline, receipts):
     def run(command, name, timeout=180, retain_stdout=True, stdout_path=None, maximum=64 * 1024 * 1024):
@@ -464,7 +474,7 @@ def main():
 
     run, inspect_image, save_verified = scanner_operations(reports, inputs, deadline, receipts)
 
-    retained, target, image_id = select_scanner_target(supplied, args, source_root, approved_target, inspect_image)
+    retained, target, image_id, target_descriptor = select_scanner_target(supplied, args, source_root, approved_target, inspect_image)
     memory = {line.split(":", 1)[0]: int(line.split()[1]) * 1024
               for line in Path("/proc/meminfo").read_text().splitlines() if line.startswith(("MemTotal:", "MemAvailable:"))}
     disk_free = shutil.disk_usage(root).free
@@ -488,10 +498,7 @@ def main():
     payload, binary_receipt, manifest, db_receipt, runner = prepare_offline_inputs(inputs, reports, scanner_config, offline_runner, runner_reference, run, inspect_image, save_verified)
     for path in inputs.iterdir():
         if path.name != "grype": path.chmod(0o444)
-    final_target_graph, image_archive_hash = verify_trusted_image(root, "target", image_id, TARGET_MAX_BYTES, include_hash=True,
-                                                                  platform="linux/" + target["architecture"],
-                                                                  expected_source=args.target_source if retained else None)
-    if final_target_graph != target_graph: raise ValueError("Target archive identity changed before scanner creation")
+    image_archive_hash = confirm_target_archive(root, image_id, target_graph, target_descriptor, target, args, retained)
     provenance = {"capacity_admission": admission, "database_payload": payload, "scanner_archive": binary_receipt,
                   "database": {**db_receipt, "manifest": manifest}, "target": target_graph,
                   "image_archive_sha256": image_archive_hash, "runner": runner}
