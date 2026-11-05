@@ -167,6 +167,13 @@ def validate_capture_engine(run):
         raise ValueError('Docker exporter source is not the exact reviewed engine; capture unavailable')
 
 
+def validate_capture_provenance(root, graph, archive_hash):
+    provenance = read_scanner_provenance(root)
+    if (not isinstance(provenance, dict) or provenance.get('target') != graph or
+            provenance.get('image_archive_sha256') != archive_hash):
+        raise ValueError('Target archive differs from scanner provenance')
+
+
 def admit_capture_target(root, supplied, args, approved_target, run, write):
     original = json.loads((root / 'reports/target-archive-identity.json').read_text())
     if 'admission_descriptor' not in original: raise ValueError('Original archive admission descriptor unavailable')
@@ -200,10 +207,7 @@ def admit_capture_target(root, supplied, args, approved_target, run, write):
         graph, archive_hash = verify_trusted_image(root, 'target', image['Id'], GIB, original['admission_descriptor'],
                                                    include_hash=True, inspection_descriptor=image.get('Descriptor'))
     if graph != original: raise ValueError('Typed archive identity changed before capture')
-    provenance = read_scanner_provenance(root)
-    if (not isinstance(provenance, dict) or provenance.get('target') != graph or
-            provenance.get('image_archive_sha256') != archive_hash):
-        raise ValueError('Target archive differs from scanner provenance')
+    validate_capture_provenance(root, graph, archive_hash)
     write('target-binding.json', {'graph': graph, 'image_archive_sha256': archive_hash,
          'architecture': image.get('Architecture'), 'os': image.get('Os'),
          'original_image_user': image.get('Config', {}).get('User'),
