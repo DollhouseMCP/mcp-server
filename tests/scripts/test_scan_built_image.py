@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
 spec = importlib.util.spec_from_file_location(
     "scan_built_image", Path(__file__).resolve().parents[2] / "scripts/scan-built-image.py")
+import image_scan_intake as intake
 scanner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(scanner)
 
@@ -231,6 +232,119 @@ class OfflineBoundaryTests(unittest.TestCase):
         self.assertIn("--no-healthcheck", command)
         self.assertNotIn("/var/run/docker.sock", " ".join(command))
         self.assertEqual(command.count("--mount"), 5)
+
+
+class DownloadWorkerTests(unittest.TestCase):
+    def test_isolated_script_worker_route_refuses_invalid_slot_before_network(self):
+        import subprocess
+        result = subprocess.run([sys.executable, '-E', '-s', '-S', str(Path(scanner.__file__).resolve()),
+                                 '--download-worker', 'invalid', '0', 'https://github.com/file', '1', '-'],
+                                capture_output=True, timeout=5, check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b'fixed approved input slot', result.stderr)
+        self.assertEqual(result.stdout, b'')
+
+    def test_redirect_closes_actual_response_without_draining_or_following_forbidden_origin(self):
+        import http.client
+        import io
+        import urllib.request
+        class Stream(io.BytesIO):
+            def __init__(self, raw): super().__init__(raw); self.body_reads = 0
+            def read(self, *args): self.body_reads += 1; return super().read(*args)
+        class Socket:
+            def __init__(self, stream): self.stream = stream
+            def makefile(self, *_args, **_kwargs): return self.stream
+        for target, accepted in [('https://github.com/next', True), ('https://evil.invalid/next', False)]:
+            with self.subTest(target=target):
+                raw = (f'HTTP/1.1 302 Found\r\nLocation: {target}\r\nContent-Length: 7\r\n\r\n'.encode() + b'payload')
+                stream = Stream(raw); response = http.client.HTTPResponse(Socket(stream)); response.begin()
+                handler = scanner.TrustedRedirects({'github.com'}); followed = []
+                class Parent:
+                    def open(self, request, timeout):
+                        self.assertion()
+                        followed.append(request.full_url)
+                        return 'followed'
+                    def assertion(self):
+                        if not response.isclosed(): raise AssertionError('old response remains open')
+                handler.parent = Parent()
+                request = urllib.request.Request('https://github.com/start'); request.timeout = 30
+                if accepted:
+                    self.assertEqual(handler.http_error_302(request, response, 302, 'Found', response.headers), 'followed')
+                    self.assertEqual(followed, [target]); self.assertEqual(stream.body_reads, 0)
+                else:
+                    with self.assertRaises(ValueError): handler.http_error_302(request, response, 302, 'Found', response.headers)
+                    self.assertEqual(followed, []); self.assertEqual(stream.body_reads, 0); response.close()
+
+    def test_worker_readback_success_and_refuses_size_checksum_or_unsafe_slot(self):
+        from unittest.mock import patch
+        payload=b'inert download'; checksum=hashlib.sha256(payload).hexdigest()
+        url='https://grype.anchore.io/databases/v6/vulnerability-db_v6.1.10_fixture.tar.zst'
+        for scenario in ('ok', 'oversize', 'checksum'):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory:
+                path=Path(directory)/'destination'; fd=os.open(path,os.O_RDWR|os.O_CREAT|os.O_EXCL,0o600); closed=[]
+                class Response:
+                    def __init__(self): self.pending=(b'x'*(1024*1024+1)) if scenario=='oversize' else payload
+                    def __enter__(self): return self
+                    def __exit__(self,*_): closed.append(True)
+                    def read(self,_size): value=self.pending; self.pending=b''; return value
+                class Opener:
+                    def open(self,*_args,**_kwargs): return Response()
+                slot='manifest' if scenario=='oversize' else 'database'; chosen_url=scanner.DB_MANIFEST_URL if scenario=='oversize' else url
+                maximum=1024*1024 if scenario=='oversize' else 1024**3
+                expected=None if scenario=='oversize' else ('0'*64 if scenario=='checksum' else checksum)
+                try:
+                    with patch.object(scanner.urllib.request,'build_opener',return_value=Opener()):
+                        if scenario=='ok':
+                            receipt=scanner.download_worker(slot,fd,chosen_url,maximum,expected)
+                            self.assertEqual((receipt['bytes'],receipt['sha256']),(len(payload),checksum))
+                        else:
+                            with self.assertRaises(ValueError): scanner.download_worker(slot,fd,chosen_url,maximum,expected)
+                    self.assertEqual(closed,[True])
+                finally: os.close(fd)
+        with self.assertRaises(ValueError): scanner.download_contract('database','https://other.invalid/file',1024**3,checksum)
+
+    def test_parent_fixed_slot_passes_owned_fd_and_refuses_forged_receipt(self):
+        from unittest.mock import patch
+        for forged in (False, True):
+            with self.subTest(forged=forged), tempfile.TemporaryDirectory() as directory:
+                runner=Path(directory).resolve(); root=runner/'image-security'; reports=root/'reports'; reports.mkdir(parents=True)
+                payload=b'inert'; calls=[]
+                def worker(command, timeout, maximum, stderr_maximum, pass_fds):
+                    calls.append((command,timeout,pass_fds)); fd=pass_fds[0]; os.write(fd,payload)
+                    identity=list(intake.stable_identity(os.fstat(fd)))
+                    if forged: identity[1] += 1
+                    receipt={'kind':'download-worker-v1','url':scanner.DB_MANIFEST_URL,'sha256':hashlib.sha256(payload).hexdigest(),
+                             'bytes':len(payload),'started_utc':'start','finished_utc':'finish','identity':identity}
+                    return 0,json.dumps(receipt).encode(),b'',None
+                with patch.dict(os.environ,{'RUNNER_TEMP':str(runner)}), patch.object(scanner,'bounded_process',side_effect=worker):
+                    deadline=time.monotonic()+2
+                    if forged:
+                        with self.assertRaisesRegex(ValueError,'identity changed'):
+                            scanner.download(scanner.DB_MANIFEST_URL,reports/'database-manifest.json',1024*1024,deadline=deadline)
+                    else:
+                        receipt=scanner.download(scanner.DB_MANIFEST_URL,reports/'database-manifest.json',1024*1024,deadline=deadline)
+                        self.assertEqual(receipt['bytes'],len(payload))
+                    self.assertEqual(len(calls),1); self.assertLessEqual(calls[0][1],2)
+                    self.assertEqual(calls[0][0][1:4],['-E','-s','-S'])
+                    self.assertEqual((reports/'database-manifest.json').read_bytes(),payload)
+                    with self.assertRaises(ValueError): scanner.download(scanner.DB_MANIFEST_URL,root/'outside',1024*1024,deadline=deadline)
+
+    def test_parent_kills_and_reaps_inert_blocked_or_trickling_children(self):
+        for scenario in ('blocked-open', 'blocked-read', 'trickle'):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory:
+                path=Path(directory)/'owned'; fd=os.open(path,os.O_RDWR|os.O_CREAT|os.O_EXCL,0o600)
+                script=("import os,sys,time; f=int(sys.argv[1]); print(os.getpid(),flush=True); "
+                        + ("os.write(f,b'partial'); " if scenario != 'blocked-open' else '')
+                        + ("exec(" + repr("while True:\n print('x',flush=True); time.sleep(0.01)") + ")" if scenario=='trickle' else "time.sleep(5)"))
+                try:
+                    started=time.monotonic()
+                    status, stdout, stderr, error=scanner.bounded_process([sys.executable,'-c',script,str(fd)],0.15,maximum=4096,pass_fds=(fd,))
+                    self.assertIsNone(status); self.assertIn('deadline',error); self.assertLess(time.monotonic()-started,2)
+                    pid=int(stdout.splitlines()[0])
+                    with self.assertRaises(ProcessLookupError): os.kill(pid,0)
+                    self.assertEqual(path.read_bytes(),b'' if scenario=='blocked-open' else b'partial')
+                finally: os.close(fd)
+
 
 
 class BoundedCaptureTests(unittest.TestCase):

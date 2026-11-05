@@ -11,12 +11,14 @@ import json
 import os
 import re
 import selectors
+import stat
 import shutil
 import time
 import urllib.parse
 import uuid
 from image_archive_identity import verify_fixed_runner
-from image_scan_intake import validate_intake, trusted_work_root, verify_trusted_image, prepare_scanner_output, write_failure_report
+from image_scan_intake import (validate_intake, trusted_work_root, verify_trusted_image, prepare_scanner_output,
+                               write_failure_report, TrustedTree, bounded_hash, stable_identity, unique_object)
 from pathlib import Path
 import subprocess
 import tarfile
@@ -83,7 +85,10 @@ class TrustedRedirects(urllib.request.HTTPRedirectHandler):
 
     def redirect_request(self, request, fp, code, message, headers, url):
         validate_public_url(url, self.hosts)
-        return super().redirect_request(request, fp, code, message, headers, url)
+        next_request = super().redirect_request(request, fp, code, message, headers, url)
+        if next_request is not None:
+            fp.close()
+        return next_request
 
 
 def validate_public_url(url, allowed_hosts=None):
@@ -94,25 +99,97 @@ def validate_public_url(url, allowed_hosts=None):
         raise ValueError("Download redirects must remain on the bounded trusted HTTPS origins")
 
 
-def download(url, destination, maximum, expected=None):
+def download_contract(slot, url, maximum, expected):
     validate_public_url(url)
+    if slot == 'scanner':
+        valid = url == ARCHIVE_URL and maximum == 100 * 1024 * 1024 and expected == ARCHIVE_SHA256
+    elif slot == 'manifest':
+        valid = url == DB_MANIFEST_URL and maximum == 1024 * 1024 and expected is None
+    elif slot == 'database':
+        valid = (maximum == 1024 * 1024 * 1024 and isinstance(expected, str) and
+                 re.fullmatch(r'[a-f0-9]{64}', expected) is not None and
+                 re.fullmatch(r'https://grype[.]anchore[.]io/databases/v6/vulnerability-db_v6[.]1[.]10_[A-Za-z0-9:_-]+[.]tar[.]zst', url) is not None)
+    else:
+        valid = False
+    if not valid: raise ValueError('Download does not match the fixed approved input slot')
+
+
+def download_worker(slot, fd, url, maximum, expected):
+    """Child writes only the inherited owned FD; no destination path is accepted."""
+    download_contract(slot, url, maximum, expected)
+    initial = os.fstat(fd)
+    if (not stat.S_ISREG(initial.st_mode) or initial.st_uid != os.getuid() or initial.st_nlink != 1 or
+            stat.S_IMODE(initial.st_mode) != 0o600 or initial.st_size != 0):
+        raise ValueError('Worker destination FD is not a fresh owned regular file')
     request = urllib.request.Request(url, headers={"User-Agent": "dollhouse-offline-scanner-review/2026-10-28"})
-    digest = hashlib.sha256()
-    count = 0
-    started = time.monotonic()
-    started_utc = datetime.datetime.now(datetime.timezone.utc).isoformat()
     hosts = {GRYPE_HOST} if urllib.parse.urlsplit(url).hostname == GRYPE_HOST else {"github.com", "release-assets.githubusercontent.com"}
-    with urllib.request.build_opener(TrustedRedirects(hosts)).open(request, timeout=30) as response, destination.open("wb") as output:
+    started_utc = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    digest = hashlib.sha256(); count = 0
+    with os.fdopen(fd, 'r+b', closefd=False) as output, urllib.request.build_opener(TrustedRedirects(hosts)).open(request, timeout=30) as response:
         while chunk := response.read(1024 * 1024):
             count += len(chunk)
-            if count > maximum or time.monotonic() - started > 180:
-                raise ValueError("Download exceeds bounded size or time")
-            digest.update(chunk)
-            output.write(chunk)
-    if expected and digest.hexdigest() != expected:
-        raise ValueError("Downloaded artifact does not match its reviewed checksum")
-    return {"url": url, "sha256": digest.hexdigest(), "bytes": count,
-            "started_utc": started_utc, "finished_utc": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+            if count > maximum: raise ValueError('Download exceeds bounded size')
+            digest.update(chunk); output.write(chunk)
+        output.flush(); written = os.fstat(fd)
+        if written.st_size != count: raise ValueError('Downloaded output size differs from receipt')
+        output.seek(0); actual_hash = bounded_hash(output, count)
+        if actual_hash != digest.hexdigest() or (expected and actual_hash != expected):
+            raise ValueError('Downloaded artifact does not match its reviewed checksum or readback')
+        if stable_identity(written) != stable_identity(os.fstat(fd)):
+            raise ValueError('Downloaded output changed during readback')
+    return {'kind': 'download-worker-v1', 'url': url, 'sha256': actual_hash, 'bytes': count,
+            'started_utc': started_utc, 'finished_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            'identity': list(stable_identity(written))}
+
+
+def download_receipt(stdout, url, maximum, expected):
+    receipt = json.loads(stdout, object_pairs_hook=unique_object)
+    keys = {'kind', 'url', 'sha256', 'bytes', 'started_utc', 'finished_utc', 'identity'}
+    if (not isinstance(receipt, dict) or set(receipt) != keys or receipt['kind'] != 'download-worker-v1' or
+            receipt['url'] != url or type(receipt['bytes']) is not int or not 0 < receipt['bytes'] <= maximum or
+            not isinstance(receipt['sha256'], str) or not re.fullmatch(r'[a-f0-9]{64}', receipt['sha256']) or
+            (expected and receipt['sha256'] != expected) or
+            any(not isinstance(receipt[key], str) or len(receipt[key]) > 64 for key in ('started_utc', 'finished_utc'))):
+        raise ValueError('Download worker receipt is missing or inconsistent')
+    return receipt
+
+
+def check_download_identity(fd, parent, name, receipt):
+    actual = os.fstat(fd); selected = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    if (not stat.S_ISREG(actual.st_mode) or actual.st_uid != os.getuid() or actual.st_nlink != 1 or
+            stat.S_IMODE(actual.st_mode) != 0o600 or actual.st_size != receipt['bytes'] or
+            list(stable_identity(actual)) != receipt['identity'] or stable_identity(actual) != stable_identity(selected)):
+        raise ValueError('Download output identity changed after child completion')
+
+
+def download(url, destination, maximum, expected=None, *, deadline=None):
+    """Supervise one trusted download child within the original wall ceiling."""
+    runner = os.environ.get('RUNNER_TEMP') or ''
+    work = trusted_work_root(os.path.join(runner, 'image-security'))
+    slots = {'scanner': ('inputs', ARCHIVE_NAME), 'manifest': ('reports', 'database-manifest.json'),
+             'database': ('inputs', DATABASE_ARCHIVE)}
+    matches = [key for key, (directory, name) in slots.items() if Path(destination) == work / directory / name]
+    if len(matches) != 1: raise ValueError('Download destination is not a fixed trusted input slot')
+    slot = matches[0]; download_contract(slot, url, maximum, expected)
+    end = min(time.monotonic() + 180, deadline if deadline is not None else float('inf'))
+    if end <= time.monotonic(): raise ValueError('Scanner deadline exhausted before download')
+    directory, name = slots[slot]
+    with TrustedTree(work) as tree:
+        parent = tree.directory(tree.workfd, directory)
+        if os.fstat(parent).st_uid != os.getuid(): raise ValueError('Download directory is not runner-owned')
+        fd = os.open(name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
+        tree.stack.callback(os.close, fd)
+        source = str(Path(__file__).resolve())
+        command = [sys.executable, '-E', '-s', '-S', source, '--download-worker', slot, str(fd), url, str(maximum), expected or '-']
+        remaining = end - time.monotonic()
+        if remaining <= 0: raise ValueError('Scanner deadline exhausted before download child')
+        status, stdout, stderr, capture_error = bounded_process(command, remaining, maximum=65536, stderr_maximum=32768, pass_fds=(fd,))
+        if status != 0 or capture_error: raise ValueError('Download worker failed or exceeded its bound: ' + str(capture_error))
+        receipt = download_receipt(stdout, url, maximum, expected)
+        check_download_identity(fd, parent, name, receipt)
+        tree.check_directories()
+        if time.monotonic() > end: raise ValueError('Download exceeded its bounded wall deadline')
+        return {key: receipt[key] for key in ('url', 'sha256', 'bytes', 'started_utc', 'finished_utc')}
 
 
 def database_manifest(document, now):
@@ -276,12 +353,12 @@ def collect_process_chunk(event, chunk, ready, child, buffers, sink, count, maxi
     return count, None
 
 
-def bounded_process(command, timeout, maximum=64 * 1024 * 1024, stdout_path=None, stderr_maximum=None):
+def bounded_process(command, timeout, maximum=64 * 1024 * 1024, stdout_path=None, stderr_maximum=None, pass_fds=()):
     buffers = [bytearray(), bytearray()]
     error = None; count = 0
     limit = time.monotonic() + timeout
     with (stdout_path.open("wb") if stdout_path else contextlib.nullcontext(None)) as sink, \
-            subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as child:
+            subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, pass_fds=pass_fds) as child:
         with selectors.DefaultSelector() as ready:
             ready.register(child.stdout, selectors.EVENT_READ, 0)
             ready.register(child.stderr, selectors.EVENT_READ, 1)
@@ -369,16 +446,16 @@ def select_scanner_target(supplied, args, source_root, approved_target, inspect_
         target_descriptor = target["descriptor"]
     return retained, target, image_id, target_descriptor
 
-def prepare_offline_inputs(inputs, reports, scanner_config, offline_runner, runner_reference, run, inspect_image, save_verified):
+def prepare_offline_inputs(inputs, reports, scanner_config, offline_runner, runner_reference, run, inspect_image, save_verified, deadline):
     binary_archive = inputs / ARCHIVE_NAME
-    binary_receipt = download(ARCHIVE_URL, binary_archive, 100 * 1024 * 1024, ARCHIVE_SHA256)
+    binary_receipt = download(ARCHIVE_URL, binary_archive, 100 * 1024 * 1024, ARCHIVE_SHA256, deadline=deadline)
     (reports / "scanner-download.json").write_text(json.dumps(binary_receipt, indent=2))
     extract_verified_binary(binary_archive, inputs / "grype")
     (inputs / "grype").chmod(0o555)
-    download(DB_MANIFEST_URL, reports / "database-manifest.json", 1024 * 1024)
+    download(DB_MANIFEST_URL, reports / "database-manifest.json", 1024 * 1024, deadline=deadline)
     manifest = json.loads((reports / "database-manifest.json").read_text())
     url, checksum = database_manifest(manifest, datetime.datetime.now(datetime.timezone.utc))
-    db_receipt = download(url, inputs / DATABASE_ARCHIVE, 1024 * 1024 * 1024, checksum)
+    db_receipt = download(url, inputs / DATABASE_ARCHIVE, 1024 * 1024 * 1024, checksum, deadline=deadline)
     (reports / "database-download.json").write_text(json.dumps(db_receipt, indent=2))
     status, _ = run(["/usr/bin/zstd", "--version"], "db-payload-tool-version", 5)
     if status != 0: raise ValueError("Existing system zstd is unavailable; DB payload cannot be admitted")
@@ -505,7 +582,7 @@ def main():
     admission = capacity_admission(target_graph["unpacked_layer_bytes"], memory["MemAvailable"], shutil.disk_usage(root).free)
     admission["host_total_memory_bytes"] = memory["MemTotal"]
     (reports / "capacity-admission.json").write_text(json.dumps(admission, indent=2))
-    payload, binary_receipt, manifest, db_receipt, runner = prepare_offline_inputs(inputs, reports, scanner_config, offline_runner, runner_reference, run, inspect_image, save_verified)
+    payload, binary_receipt, manifest, db_receipt, runner = prepare_offline_inputs(inputs, reports, scanner_config, offline_runner, runner_reference, run, inspect_image, save_verified, deadline)
     for path in inputs.iterdir():
         if path.name != "grype": path.chmod(0o444)
     image_archive_hash = confirm_target_archive(root, image_id, target_graph, target_descriptor, target, args, retained, admitted_hash)
@@ -517,6 +594,15 @@ def main():
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == '--download-worker':
+        try:
+            if len(sys.argv) != 7: raise ValueError('Malformed download worker arguments')
+            result = download_worker(sys.argv[2], int(sys.argv[3]), sys.argv[4], int(sys.argv[5]), None if sys.argv[6] == '-' else sys.argv[6])
+            print(json.dumps(result))
+            sys.exit(0)
+        except Exception as error:
+            print(str(error), file=sys.stderr)
+            sys.exit(1)
     try:
         sys.exit(main())
     except Exception as error:
