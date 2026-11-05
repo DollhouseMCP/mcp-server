@@ -348,6 +348,33 @@ class DownloadWorkerTests(unittest.TestCase):
 
 
 class BoundedCaptureTests(unittest.TestCase):
+    def test_cleanup_error_preserves_primary_and_fresh_cancellation_propagates(self):
+        import io
+        from unittest.mock import patch
+        for cleanup in (OSError('cleanup failure'), KeyboardInterrupt(), SystemExit()):
+            with self.subTest(cleanup=type(cleanup).__name__):
+                original = OSError('capture failure')
+                class Child:
+                    def __init__(self): self.stdout = io.BytesIO(); self.stderr = io.BytesIO(); self.killed = False
+                    def kill(self): self.killed = True
+                    def wait(self, timeout=None):
+                        if timeout is None: raise AssertionError('unbounded wait')
+                        raise cleanup
+                    def __exit__(self, *_): raise AssertionError('context fallback')
+                child = Child()
+                with patch.object(scanner.subprocess, 'Popen', return_value=child), \
+                        patch.object(scanner, 'capture_process', side_effect=original):
+                    expected = OSError if isinstance(cleanup, Exception) else type(cleanup)
+                    with self.assertRaises(expected) as raised:
+                        scanner.bounded_process(['inert'], 0.01)
+                if isinstance(cleanup, Exception):
+                    self.assertIs(raised.exception, original)
+                    self.assertIn('UNKNOWN', original.__notes__[0])
+                else:
+                    self.assertIs(raised.exception, cleanup)
+                self.assertTrue(child.killed)
+                self.assertTrue(child.stdout.closed); self.assertTrue(child.stderr.closed)
+
     def test_unreapable_child_has_bounded_wait_and_preserves_original_error(self):
         import io
         import subprocess

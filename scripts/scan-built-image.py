@@ -193,7 +193,7 @@ def download(url, destination, maximum, expected=None, *, deadline=None):
         command = [sys.executable, '-E', '-s', '-S', source, '--download-worker', slot, str(fd), url, str(maximum), expected or '-']
         remaining = end - time.monotonic()
         if remaining <= 0: raise ValueError('Scanner deadline exhausted before download child')
-        status, stdout, stderr, capture_error = bounded_process(command, remaining, maximum=65536, stderr_maximum=32768, pass_fds=(fd,))
+        status, stdout, _, capture_error = bounded_process(command, remaining, maximum=65536, stderr_maximum=32768, pass_fds=(fd,))
         if status != 0 or capture_error: raise ValueError('Download worker failed or exceeded its bound: ' + str(capture_error))
         receipt = download_receipt(stdout, url, maximum, expected)
         check_download_identity(fd, parent, name, receipt)
@@ -403,7 +403,7 @@ def bounded_process(command, timeout, maximum=64 * 1024 * 1024, stdout_path=None
         except BaseException as original:
             try:
                 if not terminate_process(child, limit): original.add_note("Child reap UNKNOWN after bounded cleanup")
-            except BaseException as cleanup:
+            except Exception as cleanup:
                 original.add_note("Child cleanup UNKNOWN: " + str(cleanup))
             raise
         finally:
