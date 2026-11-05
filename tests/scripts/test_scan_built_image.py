@@ -348,6 +348,29 @@ class DownloadWorkerTests(unittest.TestCase):
 
 
 class BoundedCaptureTests(unittest.TestCase):
+    def test_unreapable_child_has_bounded_wait_and_preserves_original_error(self):
+        import io
+        import subprocess
+        from unittest.mock import patch
+        failure = OSError('selector failed')
+        class Unreapable:
+            def __init__(self): self.stdout = io.BytesIO(); self.stderr = io.BytesIO(); self.waits = []; self.killed = False
+            def kill(self): self.killed = True
+            def wait(self, timeout=None):
+                self.waits.append(timeout)
+                raise subprocess.TimeoutExpired('inert', timeout)
+            def __exit__(self, *_): raise AssertionError('Popen context fallback must not run')
+        child = Unreapable()
+        with patch.object(scanner.subprocess, 'Popen', return_value=child), \
+                patch.object(scanner, 'capture_process', side_effect=failure):
+            with self.assertRaises(OSError) as raised:
+                scanner.bounded_process(['inert'], 0.01)
+        self.assertIs(raised.exception, failure); self.assertTrue(child.killed)
+        self.assertEqual(len(child.waits), 1); self.assertIsNotNone(child.waits[0])
+        self.assertLessEqual(child.waits[0], 0.1)
+        self.assertIn('UNKNOWN', raised.exception.__notes__[0])
+        self.assertTrue(child.stdout.closed); self.assertTrue(child.stderr.closed)
+
     def test_selector_failure_and_cancellation_kill_and_reap_owned_child(self):
         from unittest.mock import patch
         import subprocess

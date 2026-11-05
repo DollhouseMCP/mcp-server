@@ -369,22 +369,35 @@ def capture_process(child, limit, maximum, stderr_maximum, sink, buffers):
             if error: break
         try: child.wait(timeout=max(0.1, limit - time.monotonic()))
         except subprocess.TimeoutExpired:
-            error = "process deadline exceeded"; child.kill(); child.wait()
+            error = "process deadline exceeded"
+            if not terminate_process(child, limit):
+                error = "process deadline exceeded; child reap UNKNOWN"
     return error
+
+
+def terminate_process(child, limit):
+    try: child.kill()
+    except ProcessLookupError: pass
+    try: child.wait(timeout=max(0.1, limit - time.monotonic()))
+    except subprocess.TimeoutExpired: return False
+    return True
 
 
 def bounded_process(command, timeout, maximum=64 * 1024 * 1024, stdout_path=None, stderr_maximum=None, pass_fds=()):
     buffers = [bytearray(), bytearray()]
     limit = time.monotonic() + timeout
-    with (stdout_path.open("wb") if stdout_path else contextlib.nullcontext(None)) as sink, \
-            subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, pass_fds=pass_fds) as child:
+    with (stdout_path.open("wb") if stdout_path else contextlib.nullcontext(None)) as sink:
+        child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, pass_fds=pass_fds)
         try:
             error = capture_process(child, limit, maximum, stderr_maximum, sink, buffers)
-        except BaseException:
-            try: child.kill()
-            except ProcessLookupError: pass
-            child.wait()
+        except BaseException as original:
+            try:
+                if not terminate_process(child, limit): original.add_note("Child reap UNKNOWN after bounded cleanup")
+            except BaseException as cleanup:
+                original.add_note("Child cleanup UNKNOWN: " + str(cleanup))
             raise
+        finally:
+            child.stdout.close(); child.stderr.close()
         return (None if error else child.returncode, bytes(buffers[0]), bytes(buffers[1]), error)
 
 
