@@ -80,7 +80,8 @@ describe('modern glob consumer qualification', () => {
     fs.mkdirSync(path.join(dir, 'projects', 'two'), { recursive: true });
     const { normalize } = rootRequire('jest-config');
     const result = await normalize({ rootDir: dir, projects: ['<rootDir>/projects/*'] }, {}, undefined);
-    expect(result.options.projects.sort()).toEqual(['one', 'two'].map(x => path.join(dir, 'projects', x)));
+    expect(result.options.projects.map((x: string) => fs.realpathSync.native(x)).sort())
+      .toEqual(['one', 'two'].map(x => fs.realpathSync.native(path.join(dir, 'projects', x))).sort());
   });
 
   test('Jest coverage reporter applies the glob threshold to a real coverage map', () => {
