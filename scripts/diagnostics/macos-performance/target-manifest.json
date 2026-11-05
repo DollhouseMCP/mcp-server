@@ -13,5 +13,241 @@
     "package.json": "98e442e3d20ce1ec03b1a99905c847a976994ccb98ca1844515026f8da26ecad",
     "package-lock.json": "537d93daf0da52c3e354c7cf3038a373afdfa4870b6234218132f2b3ceb76204",
     ".github/workflows/core-build-test.yml": "4cbd154c4122bb8db906b301bb85eec346f056b5ec4dd6ad08a7064bed9e2907"
+  },
+  "generators": {
+    "scripts/generate-version.js": {
+      "mode": "100644",
+      "sha256": "298a4568043361d0e01b7d5c806eecc7eb4bc5fa7c2cc48b23cea43d4804e197",
+      "bytes": 1405
+    },
+    "scripts/generate-hashes.mjs": {
+      "mode": "100644",
+      "sha256": "1a1b07ea4cc4081604c86f0eb1803a164637066f38462c08237d8bce4122e94d",
+      "bytes": 1716
+    }
+  },
+  "generated_source": {
+    "data/HASHES.json": {
+      "mode": "100644",
+      "sha256": "e59c6358febc6a0409904db6359b8cc29a959f2af596d71feecbf4038d52b3e5",
+      "bytes": 4454
+    },
+    "src/generated/version.ts": {
+      "mode": "100644",
+      "sha256": "8bd5664d817a120887668096c882344031b5fc4c74f73082657da2ff8fd4189d",
+      "bytes": 314
+    }
+  },
+  "data_inputs": {
+    "data/README.md": {
+      "mode": "100644",
+      "sha256": "545d52950dd98a66149c9ed0e370adc42392e34d9f896980a70248f16f3605aa",
+      "bytes": 4479
+    },
+    "data/agents/code-reviewer.md": {
+      "mode": "100644",
+      "sha256": "211cf981038183fc792ab1fb7dddf341c1733d96390699d3ccd066a8c201cb6c",
+      "bytes": 8065
+    },
+    "data/agents/documentation-writer.md": {
+      "mode": "100644",
+      "sha256": "98b719295e564f49c23499cd75d4497ade26a0f07eb6b159e9e5cf13dea5a139",
+      "bytes": 10564
+    },
+    "data/agents/hello-world-agent.md": {
+      "mode": "100644",
+      "sha256": "fe15a66af9eb2d649d519d1318c348311ab9c53f94f426fbece856ac8778c546",
+      "bytes": 6478
+    },
+    "data/agents/research-assistant.md": {
+      "mode": "100644",
+      "sha256": "7607c8698c49c538af25e47f50d075242882b7d5cad3731bf357c74d48527e43",
+      "bytes": 7958
+    },
+    "data/agents/session-monitor.md": {
+      "mode": "100644",
+      "sha256": "71c697f9be043eabd65f065644e6c919356207707982a7f28ef871f67225c281",
+      "bytes": 7829
+    },
+    "data/agents/task-manager.md": {
+      "mode": "100644",
+      "sha256": "6998b1bb9302b97c0cef55c558b9230c0cccff962a5ddeb27f02b9b64bf64b8d",
+      "bytes": 5910
+    },
+    "data/agents/test-generator.md": {
+      "mode": "100644",
+      "sha256": "d8610e29c61e911f61ef70446f3384f4fb8478f93ef79166f0586081097f1dab",
+      "bytes": 16111
+    },
+    "data/ensembles/business-advisor.md": {
+      "mode": "100644",
+      "sha256": "23cdfcfba5941fba80c4df725ac2b6b89c0c0bf96ff6ef5a95d6e0ad67123216",
+      "bytes": 9708
+    },
+    "data/ensembles/creative-studio.md": {
+      "mode": "100644",
+      "sha256": "2f4612870eea2e2aca53736568e97a83bcde460c4f581334ced7761e50c46768",
+      "bytes": 8457
+    },
+    "data/ensembles/development-team.md": {
+      "mode": "100644",
+      "sha256": "93d12cdc2b0f8c5b40eed5fb243296a418debf8c0b94fe3bf6c03b40673f5861",
+      "bytes": 7939
+    },
+    "data/ensembles/dollhouse-expert-suite.md": {
+      "mode": "100644",
+      "sha256": "1403542e62b2396ddac5e991ec8de51da44fde7c91fea242e61818049f232398",
+      "bytes": 1786
+    },
+    "data/ensembles/security-analysis-team.md": {
+      "mode": "100644",
+      "sha256": "9f2552c65736b33f4da080015bedc191609d8e87072ad4338282babffe103adb",
+      "bytes": 15768
+    },
+    "data/ensembles/welcome-to-the-dollhouse.md": {
+      "mode": "100644",
+      "sha256": "1b1f0ba2db4f734b3e6aa169437ffeaf81dd692ba113e19c31da5c7a19b56b58",
+      "bytes": 3413
+    },
+    "data/memories/conversation-history.md": {
+      "mode": "100644",
+      "sha256": "ab565fce2ee41d54119e0a17b2849c90b895809743f529ef7ca9278d3d316624",
+      "bytes": 5104
+    },
+    "data/memories/github-label-correction-memory.yaml": {
+      "mode": "100644",
+      "sha256": "ac0502649db307d800c59b9c2da0ada1e67f42e225b18705c655bf829f840214",
+      "bytes": 3417
+    },
+    "data/memories/learning-progress.md": {
+      "mode": "100644",
+      "sha256": "2bf18e6c5a7c4a0cec98b3aa357ac0911e2a4343108089a51227061a76c90960",
+      "bytes": 9526
+    },
+    "data/memories/project-context.md": {
+      "mode": "100644",
+      "sha256": "d5930789ee02029f81eafb10a0843fd4ed00c64d418a2411014df35d73bda5ca",
+      "bytes": 7246
+    },
+    "data/memories/welcome-to-dollhouse-guide.yaml": {
+      "mode": "100644",
+      "sha256": "a353a2835668ae318c8dcb062bc1ef8b0ea3b6071f403087c7f2fb1fe61e9476",
+      "bytes": 9965
+    },
+    "data/personas/business-consultant.md": {
+      "mode": "100644",
+      "sha256": "fc932237c124411d2e2a1eea14a525852f4ebf1927f1d7591ecad1b77283a622",
+      "bytes": 2275
+    },
+    "data/personas/creative-writer.md": {
+      "mode": "100644",
+      "sha256": "6f196943065ecd6c7f0617bf8ca3e060cafae909b26bf9c92192f38012b7e417",
+      "bytes": 1646
+    },
+    "data/personas/debug-detective.md": {
+      "mode": "100644",
+      "sha256": "0a8bdf2b09d2c65102bbea9344f6aa59ef8e9c3a9f23282d017269c79a54d98f",
+      "bytes": 2527
+    },
+    "data/personas/dollhouse-expert.md": {
+      "mode": "100644",
+      "sha256": "3dcc255d6e76cc00574f9810d80b589a8d137906911e62d3b97cc4f044c551a3",
+      "bytes": 7407
+    },
+    "data/personas/eli5-explainer.md": {
+      "mode": "100644",
+      "sha256": "c610b934254e7922aa26e7c00ca6e237f2d0d5bcf86fc0b891a80f430fd6b425",
+      "bytes": 2083
+    },
+    "data/personas/security-analyst.md": {
+      "mode": "100644",
+      "sha256": "8ef140160e191d673b0b84c739d37550f164d9fbc25fc6fefbcc6faf5a2bc99e",
+      "bytes": 5484
+    },
+    "data/personas/technical-analyst.md": {
+      "mode": "100644",
+      "sha256": "6b830d706b39ee5a93225fcf85c7e006948c858e8f1e41357c832711dfdb23e2",
+      "bytes": 1924
+    },
+    "data/skills/code-review.md": {
+      "mode": "100644",
+      "sha256": "0705801731a134f622b304cee6bebb9a2e902b37116a555492f54c10c73d6eb7",
+      "bytes": 3125
+    },
+    "data/skills/creative-writing.md": {
+      "mode": "100644",
+      "sha256": "43e54c55c8194e05f926a635ea247b73678c78df70a987da1f28f65b0d50a193",
+      "bytes": 5253
+    },
+    "data/skills/data-analysis.md": {
+      "mode": "100644",
+      "sha256": "8a6923dc30878e5f61735a177c81eae9884dd7616f3b84ab5e2f20be142f0b5a",
+      "bytes": 4724
+    },
+    "data/skills/penetration-testing.md": {
+      "mode": "100644",
+      "sha256": "30c8bc894251aa336ae7f4e6bd0a2b7bcb76052268b7f30ce150576bee756c44",
+      "bytes": 10339
+    },
+    "data/skills/research-to-elements.md": {
+      "mode": "100644",
+      "sha256": "5d81f7d0643f628b9706c0e271a0fc54d4369a73869b91b3d6a3207b46fa32fe",
+      "bytes": 4246
+    },
+    "data/skills/research.md": {
+      "mode": "100644",
+      "sha256": "634e87d6ec26b01c431d70cce745e37419766a943e301ba479e65f782a67bd46",
+      "bytes": 4927
+    },
+    "data/skills/threat-modeling.md": {
+      "mode": "100644",
+      "sha256": "1dd25becbd52da341a0bb6813d9e8c52600f78814d2fcdd6e80c5dfa330e082f",
+      "bytes": 13396
+    },
+    "data/skills/translation.md": {
+      "mode": "100644",
+      "sha256": "038835abddd94546d3612b325defc85c6fde39caae2a7f8e79c4a63dc1a99111",
+      "bytes": 4115
+    },
+    "data/templates/code-documentation.md": {
+      "mode": "100644",
+      "sha256": "68ce503f66c658715a1d732bfbc9221e8baf7d12a65eab6131dc4ccebc9e00f9",
+      "bytes": 3958
+    },
+    "data/templates/executive-report.md": {
+      "mode": "100644",
+      "sha256": "32317e82ef67a2f7c326eab75357275092d202a06995cf73f9f2c0a595b53e58",
+      "bytes": 3141
+    },
+    "data/templates/meeting-notes.md": {
+      "mode": "100644",
+      "sha256": "5ed8f38fae649ea0e8973ad519642153098fa890669ee4cb567259f0a7ed4a17",
+      "bytes": 2347
+    },
+    "data/templates/penetration-test-report.md": {
+      "mode": "100644",
+      "sha256": "2e2e105bd4e8769c732ab054c4f557718fb13320e419acb95648cd253c311130",
+      "bytes": 7856
+    },
+    "data/templates/professional-email.md": {
+      "mode": "100644",
+      "sha256": "fba64aaa27a5c18eebc70faeff813472a4daa6fc45f6588a6ed152675e94a53a",
+      "bytes": 1937
+    },
+    "data/templates/project-brief.md": {
+      "mode": "100644",
+      "sha256": "5ecb971cdba4c4f807bf64c9303c08a99218f4cffaf0848b927a827d70d1d722",
+      "bytes": 4263
+    },
+    "data/templates/security-vulnerability-report.md": {
+      "mode": "100644",
+      "sha256": "951dd546be46e1c81b33648bc54ab2aad7ee34323e14110e75e1f8ec26440f4d",
+      "bytes": 5600
+    },
+    "data/templates/threat-assessment-report.md": {
+      "mode": "100644",
+      "sha256": "5a92d4b84e2e6aca7d73c7967f26e2afbc7c18c29c17d7d8cfa271b2d21e412e",
+      "bytes": 7340
+    }
   }
 }
