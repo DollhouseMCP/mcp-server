@@ -10,7 +10,6 @@ env:
   PORTFOLIO_REPOSITORY_NAME: dollhouse-portfolio
   DIAG_TARGET_ROOT: ${{ github.workspace }}/target
   DIAG_TOOL_ROOT: ${{ github.workspace }}/diagnostic-tool
-  DIAG_OUTPUT: ${{ runner.temp }}/macos-performance-diagnostic
   TEST_PERSONAS_DIR: ${{ github.workspace }}/target/test-personas
 jobs:
   diagnostic:
@@ -39,6 +38,8 @@ jobs:
           cache: npm
           cache-dependency-path: target/package-lock.json
       - name: Admit source and host
+        env:
+          DIAG_OUTPUT: ${{ runner.temp }}/macos-performance-diagnostic
         id: admission
         run: python3 "$DIAG_TOOL_ROOT/scripts/diagnostics/macos-performance/host.py" before
       - name: Install dependencies
@@ -51,9 +52,13 @@ jobs:
         working-directory: target
         run: node node_modules/jest/bin/jest.js --clearCache
       - name: Run full performance suite once
+        env:
+          DIAG_OUTPUT: ${{ runner.temp }}/macos-performance-diagnostic
         run: python3 "$DIAG_TOOL_ROOT/scripts/diagnostics/macos-performance/launch.py"
       - name: Record host after diagnostic
         if: always() && steps.admission.outcome == 'success'
+        env:
+          DIAG_OUTPUT: ${{ runner.temp }}/macos-performance-diagnostic
         run: python3 "$DIAG_TOOL_ROOT/scripts/diagnostics/macos-performance/host.py" after
       - name: Upload bounded diagnostic facts
         if: always()
