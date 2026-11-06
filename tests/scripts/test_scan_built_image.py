@@ -452,6 +452,41 @@ class BoundedCaptureTests(unittest.TestCase):
         self.assertEqual((status, stdout, stderr, error), (2, b"finding\n", b"", None))
 
 
+class ScannerEnvelopeTests(unittest.TestCase):
+    def test_fixed_producer_names_are_written_and_untrusted_names_refuse_before_any_write(self):
+        with tempfile.TemporaryDirectory() as directory:
+            reports = Path(directory)
+            def envelope(files): return json.dumps({'kind': 'grype-offline-envelope-v1', 'exit_code': 0, 'files': files}).encode()
+            files = {'version.stdout': 'ok', 'db-import-receipt.json': '{}', 'application-image-vulnerabilities.json': '{}'}
+            self.assertEqual(scanner.persist_scanner_envelope(envelope(files), 0, reports), 0)
+            self.assertEqual({p.name for p in reports.iterdir()}, set(files))
+        for name in ('-version.stdout', '../outside.json', 'offline-provenance.json', 'scanner-owned-intent.json'):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                reports = Path(directory)
+                with self.assertRaises(ValueError):
+                    scanner.persist_scanner_envelope(envelope({'version.stdout': 'ok', name: 'bad'}), 0, reports)
+                self.assertEqual(list(reports.iterdir()), [])
+        with tempfile.TemporaryDirectory() as directory:
+            reports = Path(directory)
+            with self.assertRaises(ValueError): scanner.persist_scanner_envelope(envelope({'version.stdout': 1}), 0, reports)
+            self.assertEqual(list(reports.iterdir()), [])
+
+    def test_runner_archive_uses_independent_cap_for_export_verification_and_failure_receipt(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); inputs = root / 'inputs'; reports = root / 'reports'; inputs.mkdir(); reports.mkdir()
+            selected = {'store_id': 'sha256:' + 'a' * 64, 'descriptor': None}; calls = []
+            def run(_command, _label, _timeout, *, stdout_path, maximum):
+                calls.append(maximum); stdout_path.write_bytes(b'archive'); return 0, b''
+            with patch.object(scanner, 'RUNNER_MAX_BYTES', 1234), patch.object(scanner, 'verify_trusted_image', side_effect=ValueError('fixture')) as verify:
+                with self.assertRaisesRegex(ValueError, 'fixture'):
+                    scanner.save_verified_archive('runner', selected, 'runner', run, reports, inputs, {})
+                self.assertEqual(calls, [1234 + 128 * 1024 ** 2])
+                self.assertEqual(verify.call_args.args[3], 1234)
+                receipt = json.loads((reports / 'runner-archive-verification-failure.json').read_text())
+                self.assertEqual(receipt['unpacked_admission_cap_bytes'], 1234)
+
+
 class McpScannerCapacityTests(unittest.TestCase):
     def test_measured_payload_fits_proposed_public_runner_but_4g_vm_is_refused(self):
         admission = scanner.capacity_admission(712633849, 12 * scanner.GIB, 6 * scanner.GIB)

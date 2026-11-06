@@ -71,6 +71,7 @@ SUPPORTED_DB_SCHEMA = "v6.1.10"  # Inspected official manifest and existing vali
 
 GIB = 1024 ** 3
 TARGET_MAX_BYTES = GIB
+RUNNER_MAX_BYTES = GIB
 RAW_DB_MAX_BYTES = 5 * GIB // 2
 HYDRATED_DB_RESERVE_BYTES = 7 * GIB // 2
 SCRATCH_RESERVE_BYTES = GIB // 2
@@ -220,10 +221,10 @@ def capacity_admission(target_size, available_memory, free_disk):
         raise ValueError("Job-built image uncompressed Size exceeds the explicit 1 GiB admission cap")
     work_required = HYDRATED_DB_RESERVE_BYTES + 2 * target_size + SCRATCH_RESERVE_BYTES
     # Inputs: Docker archive plus metadata, compressed DB, binary, reports and disk margin.
-    disk_required = target_size + 128 * 1024 ** 2 + TARGET_MAX_BYTES + 128 * 1024 ** 2 + GIB + 100 * 1024 ** 2 + 64 * 1024 ** 2 + GIB
+    disk_required = target_size + 128 * 1024 ** 2 + RUNNER_MAX_BYTES + 128 * 1024 ** 2 + GIB + 100 * 1024 ** 2 + 64 * 1024 ** 2 + GIB
     if work_required > WORK_TMPFS_BYTES or available_memory < CONTAINER_MEMORY_BYTES + HOST_MEMORY_HEADROOM_BYTES or free_disk < disk_required:
         raise ValueError("Host RAM/disk or bounded work-space prerequisites are insufficient; scanner will not start")
-    return {"target_uncompressed_size_bytes": target_size, "target_max_bytes": TARGET_MAX_BYTES,
+    return {"target_uncompressed_size_bytes": target_size, "target_max_bytes": TARGET_MAX_BYTES, "runner_max_bytes": RUNNER_MAX_BYTES,
             "hydrated_db_reserve_bytes": HYDRATED_DB_RESERVE_BYTES,
             "target_and_scratch_required_bytes": work_required,
             "work_tmpfs_bytes": WORK_TMPFS_BYTES, "memory_limit_bytes": CONTAINER_MEMORY_BYTES,
@@ -415,9 +416,13 @@ def persist_scanner_envelope(stdout, status, reports):
     envelope = json.loads(stdout)
     if envelope.get("kind") != "grype-offline-envelope-v1" or envelope.get("exit_code") != status:
         raise ValueError("Offline scanner output is missing or incomplete")
+    labels = ('version', 'help', 'effective-config', 'db-import-help', 'db-import', 'db-status', 'scan')
+    allowed = {name + suffix for name in labels for suffix in ('.stdout', '.stderr', '-receipt.json')}
+    allowed.update(('failure.json', 'application-image-vulnerabilities.json'))
+    if not isinstance(envelope.get('files'), dict) or any(
+            name not in allowed or not isinstance(data, str) for name, data in envelope['files'].items()):
+        raise ValueError('Unexpected offline scanner output file')
     for filename, data in envelope["files"].items():
-        if not re.fullmatch(r"[a-z-]+[.](?:json|stdout|stderr)", filename) or not isinstance(data, str):
-            raise ValueError("Unexpected offline scanner output file")
         (reports / filename).write_text(data)
     return status if status in (0, 2) else 1
 
@@ -519,21 +524,23 @@ def confirm_target_archive(root, image_id, target_graph, target_descriptor, targ
 
 
 def save_verified_archive(reference, selected, label, run, reports, inputs, archive_hashes):
+    if label not in ('target', 'runner'): raise ValueError('Unknown archive role')
+    cap = TARGET_MAX_BYTES if label == 'target' else RUNNER_MAX_BYTES
     destination = inputs / (IMAGE_ARCHIVE if label == "target" else "runner.tar")
     status, _ = run(["docker", "image", "save", reference], label + "-save", 180,
-                    stdout_path=destination, maximum=TARGET_MAX_BYTES + 128 * 1024 ** 2)
+                    stdout_path=destination, maximum=cap + 128 * 1024 ** 2)
     if status != 0:
         raise ValueError(label + " archive export exceeded budget or failed; inspect export receipt")
     observations = {**selected, "archive_bytes": destination.stat().st_size}
     (reports / (label + "-archive-observations.json")).write_text(json.dumps(observations, indent=2))
     try:
         if label == "target":
-            evidence, archive_hashes[label] = verify_trusted_image(inputs.parent, label, selected["store_id"], TARGET_MAX_BYTES, selected["descriptor"], include_hash=True)
+            evidence, archive_hashes[label] = verify_trusted_image(inputs.parent, label, selected["store_id"], cap, selected["descriptor"], include_hash=True)
         else:
-            evidence = verify_trusted_image(inputs.parent, label, selected["store_id"], TARGET_MAX_BYTES, selected["descriptor"])
+            evidence = verify_trusted_image(inputs.parent, label, selected["store_id"], cap, selected["descriptor"])
     except Exception as error:
         (reports / (label + "-archive-verification-failure.json")).write_text(json.dumps({
-            **observations, "unpacked_admission_cap_bytes": TARGET_MAX_BYTES,
+            **observations, "unpacked_admission_cap_bytes": cap,
             "complete_graph_verified": False, "error": str(error)}, indent=2))
         raise
     (reports / (label + "-archive-identity.json")).write_text(json.dumps(evidence, indent=2))

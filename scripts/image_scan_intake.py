@@ -15,7 +15,9 @@ COMMIT = re.compile(r'[0-9a-f]{40}')
 
 
 MAX_ARCHIVE = 1024**3 + 128 * 1024**2
-NO_INSPECT_DESCRIPTOR = object()
+# This sentinel skips intake's second verification; explicit None is passed to
+# the archive verifier, whose separate sentinel means no inspection argument.
+_SKIP_INTAKE_INSPECTION = object()
 INTAKE_DOCUMENT = 'intake.json'
 STAGED_ARCHIVE = 'image.tar'
 
@@ -277,7 +279,7 @@ def verify_intake_archive(tree, slot, doc, doc_identity, arch, record, staged, s
                                     platform=record['platform'], expected_source=record['source'])
     tree.check_file(stream, identity, parent, name)
     tree.check_file(doc, doc_identity, slot, INTAKE_DOCUMENT)
-    if inspect_descriptor is not NO_INSPECT_DESCRIPTOR:
+    if inspect_descriptor is not _SKIP_INTAKE_INSPECTION:
         stream.seek(0)
         inspected_graph = verify_saved_image_file(stream, record['store_id'], 1024**3, record['descriptor'],
                                              platform=record['platform'], expected_source=record['source'],
@@ -293,7 +295,7 @@ def verify_intake_archive(tree, slot, doc, doc_identity, arch, record, staged, s
     tree.check_file(doc, doc_identity, slot, INTAKE_DOCUMENT)
     return record, graph
 
-def validate_intake(document, expected_hash, archive, scanner_head, scanner_tree, github_sha, checkout, approved_target, *, staged=False, stage=False, inspect_descriptor=NO_INSPECT_DESCRIPTOR):
+def validate_intake(document, expected_hash, archive, scanner_head, scanner_tree, github_sha, checkout, approved_target, *, staged=False, stage=False, inspect_descriptor=_SKIP_INTAKE_INSPECTION):
     if not HEX.fullmatch(expected_hash) or (staged and stage):
         raise ValueError('Invalid independent intake binding')
     runner = os.environ.get('RUNNER_TEMP') or ''
