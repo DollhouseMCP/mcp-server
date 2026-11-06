@@ -13,14 +13,20 @@ RUN test "$(go env GOVERSION)" = go1.26.10 \
     && test ! -e /go/pkg/mod/github.com/caddyserver/caddy/v2@v2.11.9 \
     && test ! -L /go/pkg/mod/github.com/caddyserver/caddy/v2@v2.11.9 \
     && go mod download github.com/caddyserver/caddy/v2@v2.11.9 \
-    && test "$(cat /go/pkg/mod/cache/download/github.com/caddyserver/caddy/v2/@v/v2.11.9.ziphash)" = 'h1:bhZtcRKQOq0fuLvEgCdPYvUxXyGn9kzjG4lh2332DTE=' \
-    && echo 'fdac2c0901e3e4064bf1da1558f9860cd175eecdf7179b17611d820008268e9b  /go/pkg/mod/cache/download/github.com/caddyserver/caddy/v2/@v/v2.11.9.zip' | sha256sum -c - \
+    && test \
+      "$(cat /go/pkg/mod/cache/download/github.com/caddyserver/caddy/v2/@v/v2.11.9.ziphash)" \
+      = 'h1:bhZtcRKQOq0fuLvEgCdPYvUxXyGn9kzjG4lh2332DTE=' \
+    && printf '%s  %s\n' \
+      'fdac2c0901e3e4064bf1da1558f9860cd175eecdf7179b17611d820008268e9b' \
+      '/go/pkg/mod/cache/download/github.com/caddyserver/caddy/v2/@v/v2.11.9.zip' | sha256sum -c - \
     && test ! -e /src/caddy-overlay \
     && test -z "$(find /go/pkg/mod/github.com/caddyserver/caddy/v2@v2.11.9 -type l -print -quit)" \
     && cp -a /go/pkg/mod/github.com/caddyserver/caddy/v2@v2.11.9 /src/caddy-overlay \
     && diff -r /go/pkg/mod/github.com/caddyserver/caddy/v2@v2.11.9 /src/caddy-overlay \
     && chmod u+w /src/caddy-overlay/go.mod \
-    && echo 'fe72d06e42cd4d96a1f21a4316687bbb72445168f7b9b12c3b1a075d625abe2c  /src/caddy-overlay.go.mod' | sha256sum -c - \
+    && printf '%s  %s\n' \
+      'fe72d06e42cd4d96a1f21a4316687bbb72445168f7b9b12c3b1a075d625abe2c' \
+      '/src/caddy-overlay.go.mod' | sha256sum -c - \
     && cp /src/caddy-overlay.go.mod /src/caddy-overlay/go.mod \
     && cd /src/caddy-overlay \
     && find . -type f -print | LC_ALL=C sort > /src/.qualified-source-files \
@@ -30,7 +36,9 @@ WORKDIR /src/build
 COPY build/go.mod build/go.sum ./
 RUN echo '087ac22fe587e30eb5394fd0c5ec037f053127c957595b2d28c24f7aea03a464  go.mod' | sha256sum -c - \
     && echo 'e5f08805a7472c49f427e9f027f9e275874a6da2af3704919c30102568861773  go.sum' | sha256sum -c - \
-    && echo 'fe72d06e42cd4d96a1f21a4316687bbb72445168f7b9b12c3b1a075d625abe2c  ../caddy-overlay/go.mod' | sha256sum -c - \
+    && printf '%s  %s\n' \
+      'fe72d06e42cd4d96a1f21a4316687bbb72445168f7b9b12c3b1a075d625abe2c' \
+      '../caddy-overlay/go.mod' | sha256sum -c - \
     && sha256sum go.mod go.sum ../caddy-overlay/go.mod > /src/.qualified-module-locks.sha256 \
     && go mod download
 RUN --network=none go mod verify \
