@@ -84,7 +84,7 @@ jobs:
             "localhost/dollhouse-caddy:qualification-${TARGET_ARCH}" \
             "${RUNNER_TEMP}/caddy-production-evidence"
           python3 scripts/ci/verify-caddy-runtime-archive.py \
-            "${RUNNER_TEMP}/caddy-production-evidence/caddy-production-${TARGET_ARCH}.docker.tar"
+            < "${RUNNER_TEMP}/caddy-production-evidence/caddy-production-${TARGET_ARCH}.docker.tar"
       - name: Retain tested final image for qualification
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2, existing project pin
         with:

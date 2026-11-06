@@ -23,30 +23,29 @@ DIRECTORIES = STORAGE | {"srv", "tmp"} | {
 NET_BIND_SERVICE = bytes.fromhex("0100000200040000000000000000000000000000")
 
 
+DIRECTORY_METADATA = dict.fromkeys(DIRECTORIES, (0, 0, 0o755))
+DIRECTORY_METADATA.update(dict.fromkeys(STORAGE, (1001, 1001, 0o750)))
+DIRECTORY_METADATA["tmp"] = (0, 0, 0o1777)
+FILE_METADATA = dict.fromkeys(FILES, (0, 0, 0o644))
+FILE_METADATA[CADDY] = (0, 0, 0o755)
+
+
 def verify_member(member, name):
+    expected = None
+    if member.isdir():
+        expected = DIRECTORY_METADATA.get(name)
+    elif member.isfile():
+        expected = FILE_METADATA.get(name)
     metadata = (member.uid, member.gid, member.mode)
     capability = member.pax_headers.get("SCHILY.xattr.security.capability", "")
-    if member.isdir() and name in DIRECTORIES:
-        expected = (0, 0, 0o755)
-        if name in STORAGE:
-            expected = (1001, 1001, 0o750)
-        elif name == "tmp":
-            expected = (0, 0, 0o1777)
-        if metadata == expected and not capability:
-            return
-    if member.isfile() and name in FILES:
-        if name == CADDY:
-            capability_bytes = capability.encode("utf-8", "surrogateescape")
-            if metadata == (0, 0, 0o755) and capability_bytes == NET_BIND_SERVICE:
-                return
-        elif metadata == (0, 0, 0o644) and not capability:
-            return
-    raise ValueError(f"unexpected Caddy layer entry or metadata: {name}")
+    expected_capability = NET_BIND_SERVICE if name == CADDY else b""
+    if metadata != expected or capability.encode("utf-8", "surrogateescape") != expected_capability:
+        raise ValueError(f"unexpected Caddy layer entry or metadata: {name}")
 
 
-def verify(archive_path):
+def verify(stream):
     seen = set()
-    with tarfile.open(archive_path) as archive:
+    with tarfile.open(fileobj=stream, mode="r:") as archive:
         (manifest,) = json.load(archive.extractfile("manifest.json"))
         for layer_name in manifest["Layers"]:
             with tarfile.open(fileobj=archive.extractfile(layer_name), mode="r|*") as layer:
@@ -63,4 +62,4 @@ def verify(archive_path):
 
 
 if __name__ == "__main__":
-    verify(sys.argv[1])
+    verify(sys.stdin.buffer)
