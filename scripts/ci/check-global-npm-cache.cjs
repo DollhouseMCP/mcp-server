@@ -67,12 +67,15 @@ test('qualified Vary wildcard fix remains present', () => {
 });
 
 const scenarios = [
+  { name: 'legacy combined fresh no-cache validates', cc: 'max-age=600, no-cache, pre-check=0, post-check=0', count: 2, sequence: 2 },
+  { name: 'legacy combined fresh no-cache offline refuses', cc: 'max-age=600, no-cache, pre-check=0, post-check=0', options: { offline: true }, count: 1, error: 'ENOTCACHED' },
+  { name: 'legacy combined fresh no-store is never persisted', cc: 'max-age=600, no-store, pre-check=0, post-check=0', count: 2, sequence: 2, noEntries: true },
   { name: 'no-cache max-stale validates', cc: 'no-cache', headers: { 'cache-control': 'max-stale=1000' }, count: 2, sequence: 2 },
   { name: 'no-cache socket failure rejects', cc: 'no-cache', origin: 'socket', count: 2, error: true },
   { name: 'no-cache HTTP error rejects', cc: 'no-cache, stale-if-error=100', origin: 'http', count: 2, error: true },
   { name: 'no-cache offline refuses', cc: 'no-cache', options: { offline: true }, count: 1, error: 'ENOTCACHED' },
   { name: 'no-cache preferOffline validates', cc: 'no-cache', options: { preferOffline: true }, count: 2, sequence: 2 },
-  { name: 'stale must max-stale validates', cc: 'max-age=0, must-revalidate', headers: { 'cache-control': 'max-stale=1000' }, count: 2, sequence: 2 },
+  { name: 'stale must max-stale validates', cc: 'max-age=0, must-revalidate, pre-check=0, post-check=0', headers: { 'cache-control': 'max-stale=1000' }, count: 2, sequence: 2 },
   { name: 'stale must socket rejects', cc: 'max-age=0, must-revalidate', origin: 'socket', count: 2, error: true },
   { name: 'stale must offline refuses', cc: 'max-age=0, must-revalidate', options: { offline: true }, count: 1, error: 'ENOTCACHED' },
   { name: 'stale must preferOffline validates', cc: 'max-age=0, must-revalidate', options: { preferOffline: true }, count: 2, sequence: 2 },

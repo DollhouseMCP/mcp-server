@@ -40,8 +40,12 @@
     {
       "path": "node_modules/make-fetch-happen/lib/cache/policy.js",
       "beforeSha256": "2014cf549fceb8808cba81e8760315b9060f502b6c62b7cb79e1b024abde54c3",
-      "afterSha256": "ecbf5fce87a4db73d83b34795fd547c8a4486d232855447aaa27ba30dcc6c3bb",
+      "afterSha256": "fe5aa332d1b9d4ff7a1ffc691f373e044cf1a7ca873bbcfcecc55b327b20996b",
       "replacements": [
+        {
+          "before": "  ignoreCargoCult: true,",
+          "after": "  ignoreCargoCult: false,"
+        },
         {
           "before": "  // NOTE: this is a hack to avoid parsing the cache-control\n  // header ourselves, it returns true if the response's\n  // cache-control contains must-revalidate\n  get mustRevalidate () {\n    return !!this.policy._rescc['must-revalidate']\n  }",
           "after": "  // Dollhouse local vendor guard (ISC): mandatory validation also applies\n  // to no-cache. must-revalidate applies only after freshness expires.\n  // Keep this distinct from ordinary staleness so offline cache still works.\n  get mustRevalidate () {\n    return !!(this.policy._rescc['no-cache'] ||\n      (this.policy._rescc['must-revalidate'] && this.policy.stale()))\n  }"
