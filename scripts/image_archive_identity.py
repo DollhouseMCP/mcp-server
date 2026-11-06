@@ -85,6 +85,8 @@ class SavedImage:
             raise ValueError('OCI index depth exceeds bound')
         self.check_time()
         platform = descriptor.get('platform')
+        if platform is not None and not isinstance(platform, dict):
+            raise ValueError('Invalid OCI descriptor platform')
         if platform and (platform.get('os'), platform.get('architecture')) != self.platform:
             return []
         media = descriptor.get('mediaType')
@@ -161,15 +163,19 @@ def select_oci_candidate(archive, store_id, descriptor, config_bytes, config_dig
                   if entry[2] == config_bytes]
     if len(candidates) != 1:
         raise ValueError('OCI selected-platform graph is missing or ambiguous')
-    return candidates[0]
+    root, selected = candidates[0]
+    return root, selected, len(roots) == 1 and root is selected[0]
 
 
-def validate_selected_descriptor(archive, root, selected, descriptor, expected_source):
-    if expected_source is not None and (selected[0].get('platform', {}).get('os'), selected[0].get('platform', {}).get('architecture')) != archive.platform:
-        raise ValueError('Selected target descriptor platform is missing or mismatched')
+def validate_selected_descriptor(archive, root, selected, descriptor, expected_source, allow_missing_platform=False):
+    if expected_source is not None:
+        platform = selected[0].get('platform')
+        missing_allowed = allow_missing_platform and 'platform' not in selected[0]
+        if not missing_allowed and (not isinstance(platform, dict) or (platform.get('os'), platform.get('architecture')) != archive.platform):
+            raise ValueError('Selected target descriptor platform is missing or mismatched')
     if descriptor is not None:
         matching = next((d for d in (root, selected[0]) if d.get('digest') == descriptor.get('digest')), None)
-        if not matching or any(descriptor.get(k) != matching.get(k) for k in ['digest', 'mediaType', 'size']) or ('platform' in descriptor and descriptor['platform'] != matching.get('platform')):
+        if not matching or any(descriptor.get(k) != matching.get(k) for k in ['digest', 'mediaType', 'size']) or ('platform' in descriptor and ('platform' not in matching or descriptor['platform'] != matching['platform'])):
             raise ValueError('Inspect descriptor differs from saved graph')
 
 
@@ -184,11 +190,12 @@ def store_role(store_id, root, selected, config_digest):
 
 
 def select_oci_graph(archive, store_id, descriptor, config_bytes, config_digest, docker, expected_source, inspection_descriptor=NO_INSPECTION_DESCRIPTOR):
-    root, selected = select_oci_candidate(archive, store_id, descriptor, config_bytes, config_digest)
-    validate_selected_descriptor(archive, root, selected, descriptor, expected_source)
-    if inspection_descriptor is not NO_INSPECTION_DESCRIPTOR:
-        validate_selected_descriptor(archive, root, selected, inspection_descriptor, expected_source)
+    root, selected, direct_single = select_oci_candidate(archive, store_id, descriptor, config_bytes, config_digest)
     role = store_role(store_id, root, selected, config_digest)
+    allow_missing_platform = expected_source is not None and direct_single and role in ('manifest', 'config')
+    validate_selected_descriptor(archive, root, selected, descriptor, expected_source, allow_missing_platform)
+    if inspection_descriptor is not NO_INSPECTION_DESCRIPTOR:
+        validate_selected_descriptor(archive, root, selected, inspection_descriptor, expected_source, allow_missing_platform)
     if selected[1]['config']['digest'] != config_digest:
         raise ValueError('OCI and Docker config digest disagree')
     descriptors = selected[1]['layers']
