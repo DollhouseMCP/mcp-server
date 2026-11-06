@@ -14,13 +14,6 @@
 import { IndexEntry } from '../types/collection.js';
 import { normalizeSearchTerm } from '../utils/searchUtils.js';
 
-// Common English stop words that don't add search value.
-const STOP_WORDS: ReadonlySet<string> = new Set([
-  'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for',
-  'from', 'has', 'he', 'in', 'is', 'it', 'its', 'of', 'on',
-  'that', 'the', 'to', 'was', 'will', 'with'
-]);
-
 /**
  * Single token entry in the inverted index
  */
@@ -47,6 +40,13 @@ export interface InvertedIndexStats {
  * Inverted index for fast collection search
  */
 export class InvertedIndex {
+  // Reuse the fixed vocabulary for every token instead of allocating per lookup.
+  private static readonly STOP_WORDS: ReadonlySet<string> = new Set([
+    'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for',
+    'from', 'has', 'he', 'in', 'is', 'it', 'its', 'of', 'on',
+    'that', 'the', 'to', 'was', 'will', 'with'
+  ]);
+
   // Main index: token -> entry IDs and field locations
   private index: Map<string, TokenEntry> = new Map();
 
@@ -160,7 +160,7 @@ export class InvertedIndex {
    * Stop words are filtered to reduce index size and improve relevance
    */
   private isStopWord(token: string): boolean {
-    return STOP_WORDS.has(token);
+    return InvertedIndex.STOP_WORDS.has(token);
   }
 
   /**

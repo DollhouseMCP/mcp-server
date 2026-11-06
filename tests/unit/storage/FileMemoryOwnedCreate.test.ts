@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -14,12 +14,27 @@ import { FileMemoryCreateScanBudget } from '../../../src/storage/FileMemoryCreat
 import { FileMemoryOwnedCreate, commitCreateDirectory } from '../../../src/storage/FileMemoryOwnedCreate.js';
 
 import { fileMetadataProof } from './helpers/fileProof.js';
+import { OwnedStorageCase } from './fixtures/ownedStorageCase.js';
 
 const USER = '11111111-1111-4111-8111-111111111111';
 const roots: string[] = [];
-async function fixture(locator = 'Notes/Created.yaml') {
+const admitted: Promise<unknown>[] = [];
+function track<T>(pending: Promise<T>): Promise<T> {
+  admitted.push(pending);
+  void pending.catch(() => undefined);
+  return pending;
+}
+export function ownedAll<T>(values: Promise<T>[]): Promise<T[]> {
+  for (const pending of values) track(pending);
+  return Promise.all(values);
+}
+export const ownership = new OwnedStorageCase();
+beforeEach(() => ownership.begin());
+export async function fixture(locator = 'Notes/Created.yaml') {
+  ownership.checkpoint();
   const tenantRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'memory-exclusive-create-'));
   roots.push(tenantRoot);
+  ownership.checkpoint();
   await fs.mkdir(path.dirname(path.join(tenantRoot, locator)), { recursive: true });
   const request = { operationId: randomUUID(), locator, content: 'name: Created\ncontent: hello\n' };
   const coordinator = new FileMemoryTransactionCoordinator({ tenantRoot, getCurrentUserId: () => USER, fence: new FileMemoryFence() });
@@ -29,17 +44,28 @@ async function fixture(locator = 'Notes/Created.yaml') {
   return { tenantRoot, request, store, coordinator, head: path.join(tenantRoot, locator) };
 }
 afterEach(async () => {
-  jest.restoreAllMocks();
-  for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
+  await ownership.teardown(async checkpoint => {
+    checkpoint();
+    await Promise.allSettled(admitted);
+    checkpoint();
+    admitted.splice(0);
+    jest.restoreAllMocks();
+    while (roots.length) {
+      checkpoint();
+      await fs.rm(roots[0], { recursive: true, force: true });
+      checkpoint();
+      roots.shift();
+    }
+  });
 });
 describe('exclusive owned CREATE', () => {
   if (process.platform === 'win32') {
-    it('refuses unsupported non-POSIX ownership storage', () => {
+    it('refuses unsupported non-POSIX ownership storage', ownership.own(() => {
       expect(() => new FileMemoryOwnerSnapshots({ tenantRoot: 'C:\\', getCurrentUserId: () => USER, fence: new FileMemoryFence() })).toThrow('requires POSIX');
-    });
+    }));
     return;
   }
-  it.each(['Notes/Created.yaml', 'Created.yaml'])('creates and freshly verifies %s', async locator => {
+  it.each(['Notes/Created.yaml', 'Created.yaml'])('creates and freshly verifies %s', ownership.own(async locator => {
     const f = await fixture(locator);
     const token = await f.store().createOwned(f.request);
     expect(token.ownership).toBe('owned');
@@ -47,8 +73,8 @@ describe('exclusive owned CREATE', () => {
     expect(await fs.readFile(f.head, 'utf8')).toBe(f.request.content);
     expect((await f.store().readHeadSnapshot(locator)).token).toEqual(token);
     expect((await fs.readdir(path.dirname(f.head))).filter(name => name.includes('memory-write'))).toEqual([]);
-  });
-  it.each(['prepared', 'linked', 'published'] as const)('resumes exact persisted %s evidence', async stop => {
+  }));
+  it.each(['prepared', 'linked', 'published'] as const)('resumes exact persisted %s evidence', ownership.own(async stop => {
     const f = await fixture();
     const cause = new Error('controlled interruption');
     await expect(f.store(phase => { if (phase === stop) throw cause; }).createOwned(f.request))
@@ -56,16 +82,16 @@ describe('exclusive owned CREATE', () => {
     const token = await f.store().createOwned(f.request);
     expect((await f.store().readHeadSnapshot(f.request.locator)).token).toEqual(token);
     expect(await fs.readFile(f.head, 'utf8')).toBe(f.request.content);
-  });
-  it('preserves an existing same-content target and never reconstructs a creation receipt', async () => {
+  }));
+  it('preserves an existing same-content target and never reconstructs a creation receipt', ownership.own(async () => {
     const f = await fixture();
     const token = await f.store().createOwned(f.request);
     const before = fileMetadataProof(await fs.stat(f.head, { bigint: true }));
     await expect(f.store().createOwned(f.request)).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
     expect(fileMetadataProof(await fs.stat(f.head, { bigint: true }))).toEqual(before);
     expect((await f.store().readHeadSnapshot(f.request.locator)).token).toEqual(token);
-  });
-  it('refuses an orphan content stage before creating ownership directories', async () => {
+  }));
+  it('refuses an orphan content stage before creating ownership directories', ownership.own(async () => {
     const f = await fixture();
     const hash = createHash('sha256').update(path.basename(f.head)).digest('hex');
     const stage = path.join(path.dirname(f.head), `.${hash}.memory-write.json.create-${f.request.operationId}.head.tmp`);
@@ -83,8 +109,8 @@ describe('exclusive owned CREATE', () => {
     expect(await fs.readdir(path.dirname(f.head))).toEqual(names);
     await expect(fs.stat(path.join(f.tenantRoot, '.memory-owners'))).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(fs.stat(f.head)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
-  it('closes the actual exclusively opened stage without writing after authority loss', async () => {
+  }));
+  it('closes the actual exclusively opened stage without writing after authority loss', ownership.own(async () => {
     const f = await fixture();
     const revoked = new Error('controlled authority loss');
     const internals = FileMemoryOwnedCreate.prototype as unknown as {
@@ -108,8 +134,8 @@ describe('exclusive owned CREATE', () => {
     expect(stage).toBeDefined();
     expect(await fs.readFile(path.join(path.dirname(f.head), stage), 'utf8')).toBe('');
     await expect(fs.stat(f.head)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
-  it('reports actual link EEXIST as conflict and preserves the foreign inode and own stage', async () => {
+  }));
+  it('reports actual link EEXIST as conflict and preserves the foreign inode and own stage', ownership.own(async () => {
     const f = await fixture();
     const internals = FileMemoryOwnedCreate.prototype as unknown as { barrier: (phase: CreatePublication) => Promise<void> };
     const original = internals.barrier;
@@ -127,21 +153,21 @@ describe('exclusive owned CREATE', () => {
     const names = await fs.readdir(path.dirname(f.head));
     expect(names.some(name => name.endsWith('.head.tmp'))).toBe(true);
     expect(names.some(name => name.endsWith('.memory-write.json'))).toBe(true);
-  });
-  it('does not attribute a hook-forged EEXIST to the private link syscall', async () => {
+  }));
+  it('does not attribute a hook-forged EEXIST to the private link syscall', ownership.own(async () => {
     const f = await fixture();
     const cause = Object.assign(new Error('forged conflict'), { code: 'EEXIST' });
     await expect(f.store(phase => { if (phase === 'before-link') throw cause; }).createOwned(f.request))
       .rejects.toMatchObject({ code: 'EOWNERRECOVERY', cause });
     await expect(fs.stat(f.head)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
-  it.each(['linked-before-intent', 'unlinked-stage-before-intent'] as const)('preserves the unrecorded %s transition for manual recovery', async stop => {
+  }));
+  it.each(['linked-before-intent', 'unlinked-stage-before-intent'] as const)('preserves the unrecorded %s transition for manual recovery', ownership.own(async stop => {
     const f = await fixture();
     const cause = new Error('unrecorded identity');
     await expect(f.store(phase => { if (phase === stop) throw cause; }).createOwned(f.request))
       .rejects.toMatchObject({ code: 'EHEADCOMMITUNKNOWN', cause });
     const names = (await fs.readdir(path.dirname(f.head))).sort();
-    const before = await Promise.all(names.map(async name => {
+    const before = await ownedAll(names.map(async name => {
       const file = path.join(path.dirname(f.head), name), stat = await fs.stat(file);
       return { name, raw: await fs.readFile(file, 'utf8'), inode: stat.ino, links: stat.nlink };
     }));
@@ -152,8 +178,8 @@ describe('exclusive owned CREATE', () => {
       expect({ raw: await fs.readFile(file, 'utf8'), inode: stat.ino, links: stat.nlink })
         .toEqual({ raw: entry.raw, inode: entry.inode, links: entry.links });
     }
-  });
-  it('preserves long Unicode unrelated names without growing compact phase records', async () => {
+  }));
+  it('preserves long Unicode unrelated names without growing compact phase records', ownership.own(async () => {
     const f = await fixture();
     for (let index = 0; index < 20; index++) await fs.writeFile(path.join(path.dirname(f.head), `${index}-${'界'.repeat(70)}`), 'preserved');
     const token = await f.store().createOwned(f.request);
@@ -161,8 +187,8 @@ describe('exclusive owned CREATE', () => {
     expect((await fs.readdir(path.dirname(f.head))).filter(name => name.endsWith('.memory-write.json'))).toEqual([]);
     expect((await fs.readdir(path.dirname(f.head))).filter(name => name.endsWith('.head.tmp'))).toEqual([]);
     for (let index = 0; index < 20; index++) expect(await fs.readFile(path.join(path.dirname(f.head), `${index}-${'界'.repeat(70)}`), 'utf8')).toBe('preserved');
-  });
-  it('refuses an over-cap real census before creating ownership directories or artifacts', async () => {
+  }));
+  it('refuses an over-cap real census before creating ownership directories or artifacts', ownership.own(async () => {
     const f = await fixture();
     for (let index = 0; index < 4096; index++) await fs.writeFile(path.join(path.dirname(f.head), `unrelated-${index}`), 'preserved');
     const names = (await fs.readdir(path.dirname(f.head))).sort();
@@ -170,11 +196,11 @@ describe('exclusive owned CREATE', () => {
     expect((await fs.readdir(path.dirname(f.head))).sort()).toEqual(names);
     await expect(fs.stat(f.head)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(fs.stat(path.join(f.tenantRoot, '.memory-owners'))).rejects.toMatchObject({ code: 'ENOENT' });
-  });
+  }));
   it.each([
     ['prepared', 'EOWNERRECOVERY'], ['active-sidecar', 'EOWNERRECOVERY'],
     ['intent-unlinked', 'EHEADCOMMITUNKNOWN'],
-  ] as const)('allows scoped observation at %s but refuses foreign drift at the next full checkpoint', async (point, code) => {
+  ] as const)('allows scoped observation at %s but refuses foreign drift at the next full checkpoint', ownership.own(async (point, code) => {
     const f = await fixture(), foreign = path.join(path.dirname(f.head), 'foreign');
     await fs.writeFile(foreign, 'original');
     const internals = FileMemoryOwnedCreate.prototype as unknown as { barrier: (phase: CreatePublication) => Promise<void> };
@@ -191,8 +217,8 @@ describe('exclusive owned CREATE', () => {
     expect(journals).toHaveLength(point === 'intent-unlinked' ? 0 : 1);
     if (point === 'prepared') await expect(fs.stat(f.head)).rejects.toMatchObject({ code: 'ENOENT' });
     else expect(await fs.readFile(f.head, 'utf8')).toBe(f.request.content);
-  });
-  it('uses full foreign evidence after an actual callback before content staging', async () => {
+  }));
+  it('uses full foreign evidence after an actual callback before content staging', ownership.own(async () => {
     const f = await fixture(), foreign = path.join(path.dirname(f.head), 'foreign');
     await fs.writeFile(foreign, 'original'); let called = false;
     await expect(f.store(async phase => {
@@ -201,8 +227,8 @@ describe('exclusive owned CREATE', () => {
     expect(called).toBe(true); expect(await fs.readFile(foreign, 'utf8')).toBe('changed');
     await expect(fs.stat(f.head)).rejects.toMatchObject({ code: 'ENOENT' });
     expect((await fs.readdir(path.dirname(f.head))).some(name => name.includes('memory-write'))).toBe(false);
-  });
-  it('rechecks full foreign evidence after final directory sync and before close', async () => {
+  }));
+  it('rechecks full foreign evidence after final directory sync and before close', ownership.own(async () => {
     const f = await fixture(), foreign = path.join(path.dirname(f.head), 'foreign');
     await fs.writeFile(foreign, 'original');
     const internals = FileMemoryOwnedCreate.prototype as unknown as {
@@ -223,8 +249,8 @@ describe('exclusive owned CREATE', () => {
     expect(changed).toBe(true);
     expect(await fs.readFile(foreign, 'utf8')).toBe('changed');
     expect(await fs.readFile(f.head, 'utf8')).toBe(f.request.content);
-  });
-  it('retains genuine commitment when post-audit full foreign evidence refuses', async () => {
+  }));
+  it('retains genuine commitment when post-audit full foreign evidence refuses', ownership.own(async () => {
     const f = await fixture(), foreign = path.join(path.dirname(f.head), 'foreign');
     await fs.writeFile(foreign, 'original');
     const internals = FileMemoryOwnedCreate.prototype as unknown as { audit: () => void };
@@ -236,8 +262,8 @@ describe('exclusive owned CREATE', () => {
       token: { locator: f.request.locator, revision: '1', ownership: 'owned' } });
     expect(audited).toBe(true); expect(await fs.readFile(foreign, 'utf8')).toBe('changed');
     expect(await fs.readFile(f.head, 'utf8')).toBe(f.request.content);
-  });
-  it('performs full foreign comparison immediately before successful return without a callback', async () => {
+  }));
+  it('performs full foreign comparison immediately before successful return without a callback', ownership.own(async () => {
     const f = await fixture(), foreign = path.join(path.dirname(f.head), 'foreign');
     await fs.writeFile(foreign, 'original');
     const internals = FileMemoryOwnedCreate.prototype as unknown as { barrier: (phase: CreatePublication) => Promise<void> };
@@ -249,8 +275,8 @@ describe('exclusive owned CREATE', () => {
     await expect(f.store().createOwned(f.request)).rejects.toMatchObject({ code: 'EHEADCOMMITTED', committed: true });
     expect(changed).toBe(true); expect(await fs.readFile(foreign, 'utf8')).toBe('changed');
     expect(await fs.readFile(f.head, 'utf8')).toBe(f.request.content);
-  });
-  it('rejects unrelated same-byte file ABA during its own permitted directory transition', async () => {
+  }));
+  it('rejects unrelated same-byte file ABA during its own permitted directory transition', ownership.own(async () => {
     const f = await fixture(), unrelated = path.join(path.dirname(f.head), 'unrelated');
     await fs.writeFile(unrelated, 'unchanged');
     const initial = await fs.stat(unrelated);
@@ -273,8 +299,8 @@ describe('exclusive owned CREATE', () => {
     expect((await fs.stat(unrelated)).ino).not.toBe(initial.ino);
     expect(await fs.readFile(unrelated, 'utf8')).toBe('unchanged');
     await expect(fs.stat(f.head)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
-  it('cannot reuse a genuine prior CREATE receipt before the current commit', async () => {
+  }));
+  it('cannot reuse a genuine prior CREATE receipt before the current commit', ownership.own(async () => {
     const first = await fixture(), second = await fixture();
     const cause = new Error('after genuine commit');
     let prior: unknown;
@@ -290,8 +316,8 @@ describe('exclusive owned CREATE', () => {
       expect(error).not.toHaveProperty('committed');
     }
     await expect(fs.stat(second.head)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
-  it.each(['sync', 'close'] as const)('does not claim commit when the final directory %s fails', async operation => {
+  }));
+  it.each(['sync', 'close'] as const)('does not claim commit when the final directory %s fails', ownership.own(async operation => {
     const f = await fixture(), cause = new Error(`controlled directory ${operation}`);
     const internals = FileMemoryOwnedCreate.prototype as unknown as {
       phase: string;
@@ -313,8 +339,8 @@ describe('exclusive owned CREATE', () => {
     await expect(descriptor!.stat()).rejects.toMatchObject({ code: 'EBADF' });
     expect(await fs.readFile(f.head, 'utf8')).toBe(f.request.content);
     await expect(f.store().createOwned(f.request)).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
-  });
-  it.each([null, undefined])('preserves primitive primary %s and the actual secondary close failure', async primary => {
+  }));
+  it.each([null, undefined])('preserves primitive primary %s and the actual secondary close failure', ownership.own(async primary => {
     const f = await fixture(), closeCause = new Error('controlled close');
     const internals = FileMemoryOwnedCreate.prototype as unknown as {
       closed: (handle: fs.FileHandle, body: () => Promise<unknown>) => Promise<unknown>;
@@ -337,8 +363,8 @@ describe('exclusive owned CREATE', () => {
     }
     expect(injected).toBe(true);
     await expect(fs.stat(f.head)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
-  it.each(['code', 'committed', 'token', 'hostile-getter'] as const)('sanitizes pre-scope %s markers without current commit evidence', async marker => {
+  }));
+  it.each(['code', 'committed', 'token', 'hostile-getter'] as const)('sanitizes pre-scope %s markers without current commit evidence', ownership.own(async marker => {
     const f = await fixture();
     const cause = marker === 'code' ? { code: 'EHEADCOMMITTED' } : marker === 'committed' ? { committed: true } :
       marker === 'token' ? { token: 'forged' } : Object.defineProperty({}, 'code', { get() { throw new Error('hostile marker'); } });
@@ -351,8 +377,8 @@ describe('exclusive owned CREATE', () => {
       expect(error).not.toHaveProperty('token'); expect(error).not.toHaveProperty('committed');
     }
     await expect(fs.stat(f.head)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
-  it.each(['standalone', 'transaction'] as const)('sanitizes an input getter’s forged receipt on the %s entry point', async mode => {
+  }));
+  it.each(['standalone', 'transaction'] as const)('sanitizes an input getter’s forged receipt on the %s entry point', ownership.own(async mode => {
     const f = await fixture(), cause = { code: 'EHEADCOMMITTED', token: 'forged', committed: true };
     const request = Object.defineProperty({ ...f.request }, 'content', { get() { throw cause; } });
     let refusal: unknown;
@@ -367,8 +393,8 @@ describe('exclusive owned CREATE', () => {
     expect((refusal as { cause: unknown }).cause).toBe(cause);
     expect(refusal).not.toHaveProperty('token'); expect(refusal).not.toHaveProperty('committed');
     await expect(fs.stat(f.head)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
-  it('binds a partial named read to the original exclusive descriptor before continuing the write', async () => {
+  }));
+  it('binds a partial named read to the original exclusive descriptor before continuing the write', ownership.own(async () => {
     const f = await fixture();
     const internals = FileMemoryOwnedCreate.prototype as unknown as {
       read: (target: string, maximum: number, links?: '1' | '2') => Promise<unknown>;
@@ -391,8 +417,8 @@ describe('exclusive owned CREATE', () => {
     expect(await fs.readFile(replacement!.path, 'utf8')).toBe(replacement!.raw);
     expect((await fs.stat(replacement!.path, { bigint: true })).ino).toBe(replacement!.inode);
     await expect(fs.stat(f.head)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
-  it.each(['capture', 'close'] as const)('preserves the freshly created private directory when descriptor %s fails', async fault => {
+  }));
+  it.each(['capture', 'close'] as const)('preserves the freshly created private directory when descriptor %s fails', ownership.own(async fault => {
     const f = await fixture(), cause = new Error(`controlled directory ${fault}`);
     const internals = FileMemoryOwnedCreate.prototype as unknown as {
       closed: (handle: fs.FileHandle, body: () => Promise<unknown>) => Promise<unknown>;
@@ -417,6 +443,7 @@ describe('exclusive owned CREATE', () => {
     expect((await fs.stat(path.join(f.tenantRoot, '.memory-owners'))).isDirectory()).toBe(true);
     expect(await fs.readdir(path.join(f.tenantRoot, '.memory-owners'))).toEqual([]);
     expect(await fs.readdir(path.dirname(f.head))).toEqual([]);
+    ownership.checkpoint();
     jest.restoreAllMocks();
     const syncs: string[] = [], canonicalRoot = await fs.realpath(f.tenantRoot);
     const durability = FileMemoryOwnedCreate.prototype as unknown as { syncDirectory: (target: string, final?: boolean) => Promise<void> };
@@ -429,8 +456,8 @@ describe('exclusive owned CREATE', () => {
       if (phase === 'before-content') expect(syncs).toContain(canonicalRoot);
     }).createOwned(f.request);
     expect((await f.store().readHeadSnapshot(f.request.locator)).token).toEqual(token);
-  });
-  it.each(['sync', 'close'] as const)('refuses retry until an existing ownership parent directory %s is acknowledged', async fault => {
+  }));
+  it.each(['sync', 'close'] as const)('refuses retry until an existing ownership parent directory %s is acknowledged', ownership.own(async fault => {
     const f = await fixture(), first = new Error('first directory capture failed');
     const internals = FileMemoryOwnedCreate.prototype as unknown as {
       captureCreatedDirectory: (locator: string) => Promise<unknown>;
@@ -438,6 +465,7 @@ describe('exclusive owned CREATE', () => {
     };
     jest.spyOn(internals, 'captureCreatedDirectory').mockRejectedValueOnce(first);
     await expect(f.store().createOwned(f.request)).rejects.toMatchObject({ cause: first });
+    ownership.checkpoint();
     jest.restoreAllMocks();
     const rootIdentity = await fs.stat(f.tenantRoot, { bigint: true });
     const secondary = new Error(`retry parent ${fault} failed`), closed = internals.closed;
@@ -459,11 +487,12 @@ describe('exclusive owned CREATE', () => {
     await expect(descriptor!.stat()).rejects.toMatchObject({ code: 'EBADF' });
     await expect(fs.stat(f.head)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await fs.readdir(path.dirname(f.head))).toEqual([]);
+    ownership.checkpoint();
     jest.restoreAllMocks();
     const token = await f.store().createOwned(f.request);
     expect((await f.store().readHeadSnapshot(f.request.locator)).token).toEqual(token);
-  });
-  it.each(['.memory-owner.json.tmp', '.MEMORY-OWNER.JSON'])('refuses existing per-head %s residue before staging', async suffix => {
+  }));
+  it.each(['.memory-owner.json.tmp', '.MEMORY-OWNER.JSON'])('refuses existing per-head %s residue before staging', ownership.own(async suffix => {
     const f = await fixture(), hash = createHash('sha256').update(path.basename(f.head)).digest('hex');
     const residue = path.join(path.dirname(f.head), `.${hash}${suffix}`);
     await fs.writeFile(residue, 'foreign residue', { mode: 0o600 });
@@ -472,15 +501,15 @@ describe('exclusive owned CREATE', () => {
     expect((await fs.stat(residue)).ino).toBe(inode);
     expect(await fs.readFile(residue, 'utf8')).toBe('foreign residue');
     expect(await fs.readdir(path.dirname(f.head))).toEqual([path.basename(residue)]);
-  });
-  it('does not apply ownership-directory privacy requirements to an ordinary similarly prefixed ancestor', async () => {
+  }));
+  it('does not apply ownership-directory privacy requirements to an ordinary similarly prefixed ancestor', ownership.own(async () => {
     const f = await fixture('.memory-owners-history/Created.yaml');
     await fs.chmod(path.dirname(f.head), 0o755);
     const token = await f.store().createOwned(f.request);
     expect((await f.store().readHeadSnapshot(f.request.locator)).token).toEqual(token);
     expect((await fs.stat(path.dirname(f.head))).mode & 0o777).toBe(0o755);
-  });
-  it('checks authority synchronously after the pre-open proof and allocates no content stage', async () => {
+  }));
+  it('checks authority synchronously after the pre-open proof and allocates no content stage', ownership.own(async () => {
     const f = await fixture(), cause = new Error('revoked after proof');
     const internals = FileMemoryOwnedCreate.prototype as unknown as {
       proof: () => Promise<void>; write: (target: string, raw: string, partial?: CreatePublication) => Promise<unknown>;
@@ -501,8 +530,8 @@ describe('exclusive owned CREATE', () => {
     await expect(f.store().createOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY', cause });
     expect(triggered).toBe(true);
     expect(await fs.readdir(path.dirname(f.head))).toEqual([]);
-  });
-  it('checks authority immediately after the final pre-link barrier without publishing a head', async () => {
+  }));
+  it('checks authority immediately after the final pre-link barrier without publishing a head', ownership.own(async () => {
     const f = await fixture(), cause = new Error('revoked before link');
     const internals = FileMemoryOwnedCreate.prototype as unknown as { barrier: (phase: CreatePublication) => Promise<void> };
     const original = internals.barrier;
@@ -520,8 +549,8 @@ describe('exclusive owned CREATE', () => {
     const stage = (await fs.readdir(path.dirname(f.head))).find(name => name.endsWith('.head.tmp'))!;
     expect((await fs.stat(path.join(path.dirname(f.head), stage))).nlink).toBe(1);
     expect(await fs.readFile(path.join(path.dirname(f.head), stage), 'utf8')).toBe(f.request.content);
-  });
-  it.each(['short', 'zero'] as const)('handles actual descriptor %s writes without a false successful publication', async kind => {
+  }));
+  it.each(['short', 'zero'] as const)('handles actual descriptor %s writes without a false successful publication', ownership.own(async kind => {
     const f = await fixture();
     const internals = FileMemoryOwnedCreate.prototype as unknown as {
       closed: (handle: fs.FileHandle, body: () => Promise<unknown>) => Promise<unknown>;
@@ -555,8 +584,8 @@ describe('exclusive owned CREATE', () => {
       expect((await f.store().readHeadSnapshot(f.request.locator)).token).toEqual(token);
     }
     expect(injected).toBe(true);
-  });
-  it('composes its committed token with ordinary conditional UPDATE and rejects the stale creation token', async () => {
+  }));
+  it('composes its committed token with ordinary conditional UPDATE and rejects the stale creation token', ownership.own(async () => {
     const f = await fixture(), store = f.store();
     const created = await store.createOwned(f.request);
     const fresh = await store.readHeadSnapshot(f.request.locator);
@@ -570,8 +599,8 @@ describe('exclusive owned CREATE', () => {
     await expect(store.updateOwnedHead(created, 'name: Created\ncontent: stale\n'))
       .rejects.toMatchObject({ code: 'EHEADCONFLICT' });
     expect(await fs.readFile(f.head, 'utf8')).toBe(content);
-  });
-  it.each(['prepared', 'linked', 'published', 'active-sidecar'] as const)('ordinary reads refuse pending CREATE at %s', async stop => {
+  }));
+  it.each(['prepared', 'linked', 'published', 'active-sidecar'] as const)('ordinary reads refuse pending CREATE at %s', ownership.own(async stop => {
     const f = await fixture(), cause = new Error('pending creation');
     await expect(f.store(phase => { if (phase === stop) throw cause; }).createOwned(f.request))
       .rejects.toMatchObject({ code: 'EOWNERRECOVERY', cause });
@@ -580,8 +609,8 @@ describe('exclusive owned CREATE', () => {
       code: stop === 'prepared' ? 'ENOENT' : stop === 'linked' ? 'EHEADCONFLICT' : 'EOWNERRECOVERY',
     });
     expect((await fs.readdir(path.dirname(f.head))).sort()).toEqual(names);
-  });
-  it.each(['.json.tmp', '.JSON'])('preserves derived owner-registry %s residue on a published retry', async suffix => {
+  }));
+  it.each(['.json.tmp', '.JSON'])('preserves derived owner-registry %s residue on a published retry', ownership.own(async suffix => {
     const f = await fixture();
     await expect(f.store(phase => { if (phase === 'published') throw new Error('stop'); }).createOwned(f.request))
       .rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
@@ -596,8 +625,8 @@ describe('exclusive owned CREATE', () => {
     expect(await fs.readFile(residue, 'utf8')).toBe('foreign registry residue');
     expect((await fs.stat(f.head, { bigint: true })).ino).toBe(head.ino);
     expect(await fs.readdir(path.dirname(residue))).toEqual([path.basename(residue)]);
-  });
-  it.each(['adoption', 'update'] as const)('existing conditional %s refuses a pending replacement CREATE without mutation', async operation => {
+  }));
+  it.each(['adoption', 'update'] as const)('existing conditional %s refuses a pending replacement CREATE without mutation', ownership.own(async operation => {
     const f = await fixture(), store = f.store();
     let action: () => Promise<unknown>;
     if (operation === 'adoption') {
@@ -620,7 +649,7 @@ describe('exclusive owned CREATE', () => {
     await expect(f.store(phase => { if (phase === 'published') throw new Error('pending replacement'); }).createOwned(request))
       .rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
     const names = (await fs.readdir(path.dirname(f.head))).sort();
-    const before = await Promise.all(names.map(async name => {
+    const before = await ownedAll(names.map(async name => {
       const file = path.join(path.dirname(f.head), name), stat = await fs.stat(file, { bigint: true });
       return { name, raw: await fs.readFile(file, 'utf8'), inode: stat.ino };
     }));
@@ -631,8 +660,8 @@ describe('exclusive owned CREATE', () => {
       expect(await fs.readFile(file, 'utf8')).toBe(record.raw);
       expect((await fs.stat(file, { bigint: true })).ino).toBe(record.inode);
     }
-  });
-  it('refuses sidecar-only publication evidence without recreating the missing registry', async () => {
+  }));
+  it('refuses sidecar-only publication evidence without recreating the missing registry', ownership.own(async () => {
     const f = await fixture();
     await expect(f.store(phase => { if (phase === 'active-sidecar') throw new Error('interrupted metadata'); }).createOwned(f.request))
       .rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
@@ -641,7 +670,7 @@ describe('exclusive owned CREATE', () => {
     const { ownerId } = JSON.parse(await fs.readFile(path.join(path.dirname(f.head), journal), 'utf8')) as { ownerId: string };
     const registry = path.join(f.tenantRoot, '.memory-owners', 'owners', `${ownerId}.json`);
     await fs.unlink(registry);
-    const before = await Promise.all(names.map(async name => {
+    const before = await ownedAll(names.map(async name => {
       const file = path.join(path.dirname(f.head), name), stat = await fs.stat(file, { bigint: true });
       return { name, raw: await fs.readFile(file, 'utf8'), identity: { dev: stat.dev, ino: stat.ino, size: stat.size, mtime: stat.mtimeNs, ctime: stat.ctimeNs } };
     }));
@@ -653,9 +682,10 @@ describe('exclusive owned CREATE', () => {
       expect(await fs.readFile(file, 'utf8')).toBe(record.raw);
       expect({ dev: stat.dev, ino: stat.ino, size: stat.size, mtime: stat.mtimeNs, ctime: stat.ctimeNs }).toEqual(record.identity);
     }
-  });
+  }));
   async function seedOwners(f: Awaited<ReturnType<typeof fixture>>, count: number): Promise<void> {
     for (let index = 0; index < count; index++) {
+      ownership.checkpoint();
       const locator = path.posix.join(path.posix.dirname(f.request.locator), `Existing${index}.yaml`);
       await fs.writeFile(path.join(f.tenantRoot, locator), 'name: Existing\ncontent: prior\n', { mode: 0o600 });
       const snapshot = await f.store().readHeadSnapshot(locator);
@@ -669,6 +699,7 @@ describe('exclusive owned CREATE', () => {
     await fs.mkdir(path.dirname(owners), { mode: 0o700 });
     await fs.mkdir(owners, { mode: 0o700 });
     for (let index = 0; index < count; index++) {
+      ownership.checkpoint();
       const locator = path.posix.join(path.posix.dirname(f.request.locator), `Existing${index}.yaml`);
       const target = path.join(f.tenantRoot, locator), raw = 'name: Existing\ncontent: prior\n';
       await fs.writeFile(target, raw, { mode: 0o600 });
@@ -683,7 +714,7 @@ describe('exclusive owned CREATE', () => {
     }
     expect((await f.store().readHeadSnapshot(path.posix.join(path.posix.dirname(f.request.locator), 'Existing0.yaml'))).token.ownership).toBe('owned');
   }
-  it('commits exact ordinal child identities and refuses malformed canonical baselines', () => {
+  it('commits exact ordinal child identities and refuses malformed canonical baselines', ownership.own(() => {
     const child = { name: 'a', directory: false, identity: { device: '1', inode: '2', size: '3', mtimeNs: '4', ctimeNs: '5' }, mode: '384', uid: '1', links: '1' };
     const baseline = { locator: '.', device: '1', inode: '9', mode: '448', uid: '1', names: ['a'], children: [child] };
     const committed = commitCreateDirectory(baseline);
@@ -711,8 +742,8 @@ describe('exclusive owned CREATE', () => {
     ])).digest('hex'));
     expect(() => commitCreateDirectory({ ...baseline, children: [{ ...directoryChild, links: '1' }] })).toThrow();
     expect(() => commitCreateDirectory({ ...baseline, names: ['a', 'a'], children: [child, child] })).toThrow();
-  });
-  it('indexes each fresh child observation without silently collapsing duplicate names', () => {
+  }));
+  it('indexes each fresh child observation without silently collapsing duplicate names', ownership.own(() => {
     type Child = Parameters<typeof commitCreateDirectory>[0]['children'][number];
     const index = FileMemoryOwnedCreate.prototype as unknown as { childIndex: (children: Child[]) => Map<string, Child> };
     const a: Child = { name: 'a', directory: false, identity: { device: '1', inode: '2', size: '3', mtimeNs: '4', ctimeNs: '5' }, mode: '384', uid: '1', links: '1' };
@@ -725,8 +756,8 @@ describe('exclusive owned CREATE', () => {
     expect(() => index.childIndex([a, { ...a, identity: { ...a.identity, inode: '99' } }])).toThrow(expect.objectContaining({ code: 'EOWNERRECOVERY' }));
     expect(index.childIndex([{ ...a, identity: { ...a.identity, inode: '99' } }]).get('a')?.identity.inode).toBe('99');
     expect(observed.get('a')?.identity.inode).toBe('2');
-  });
-  it.each([null, undefined])('drains sixteen readonly child observations and retains ordinal failure %s', async first => {
+  }));
+  it.each([null, undefined])('drains sixteen readonly child observations and retains ordinal failure %s', ownership.own(async first => {
     const f = await fixture(), parent = await fs.realpath(path.dirname(f.head));
     for (const name of 'abcdefghijklmnopq') await fs.writeFile(path.join(parent, name), 'unchanged');
     type Child = Parameters<typeof commitCreateDirectory>[0]['children'][number];
@@ -750,8 +781,9 @@ describe('exclusive owned CREATE', () => {
       }));
       return result.finally(() => { outstanding--; });
     });
-    const operation = f.store().createOwned(f.request);
+    const operation = track(f.store().createOwned(f.request));
     void operation.then(() => { completed = true; }, () => { completed = true; });
+    try {
     await batchStarted;
     expect(calls).toEqual([...'abcdefghijklmnop']);
     expect(maximum).toBe(16);
@@ -771,8 +803,12 @@ describe('exclusive owned CREATE', () => {
     expect(calls).toEqual([...'abcdefghijklmnop']);
     await expect(fs.stat(path.join(f.tenantRoot, '.memory-owners'))).rejects.toMatchObject({ code: 'ENOENT' });
     for (const name of 'abcdefghijklmnopq') expect(await fs.readFile(path.join(parent, name), 'utf8')).toBe('unchanged');
-  });
-  it('preserves strict schema3 forward recovery instead of reinterpreting legacy evidence', async () => {
+    } finally {
+      rejectFirst?.(); releaseC?.(); releaseD?.();
+      await operation.catch(() => undefined);
+    }
+  }));
+  it('preserves strict schema3 forward recovery instead of reinterpreting legacy evidence', ownership.own(async () => {
     const f = await fixture();
     await expect(f.store(phase => { if (phase === 'prepared') throw new Error('stop'); }).createOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
     const names = await fs.readdir(path.dirname(f.head)), journal = names.find(name => name.endsWith('.memory-write.json'))!;
@@ -799,8 +835,8 @@ describe('exclusive owned CREATE', () => {
     }).createOwned(f.request);
     expect(seen).toEqual([3, 3]);
     expect((await f.store().readHeadSnapshot(f.request.locator)).token).toEqual(token);
-  });
-  it.each(['count', 'digest', 'same-byte-ABA'] as const)('refuses compact recovery with changed %s without accepting a fresh baseline', async change => {
+  }));
+  it.each(['count', 'digest', 'same-byte-ABA'] as const)('refuses compact recovery with changed %s without accepting a fresh baseline', ownership.own(async change => {
     const f = await fixture(), unrelated = path.join(path.dirname(f.head), 'unrelated');
     await fs.writeFile(unrelated, 'same bytes');
     await expect(f.store(phase => { if (phase === 'prepared') throw new Error('stop'); }).createOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
@@ -816,17 +852,17 @@ describe('exclusive owned CREATE', () => {
       else value.namespace[0].sha256 = '0'.repeat(64);
       await fs.writeFile(target, JSON.stringify(value));
     }
-    const before = await Promise.all(names.map(async name => ({ name, raw: await fs.readFile(path.join(path.dirname(f.head), name), 'utf8'),
+    const before = await ownedAll(names.map(async name => ({ name, raw: await fs.readFile(path.join(path.dirname(f.head), name), 'utf8'),
       inode: (await fs.stat(path.join(path.dirname(f.head), name))).ino })));
     await expect(f.store().createOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
     for (const entry of before) expect({ raw: await fs.readFile(path.join(path.dirname(f.head), entry.name), 'utf8'),
       inode: (await fs.stat(path.join(path.dirname(f.head), entry.name))).ino }).toEqual({ raw: entry.raw, inode: entry.inode });
     await expect(fs.stat(f.head)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
+  }));
   it.each([
     ['Created.yaml', 100], ['Created.yaml', 250], ['Created.yaml', 1000],
     ['Notes/Created.yaml', 100], ['Notes/Created.yaml', 250], ['Notes/Created.yaml', 1000],
-  ] as const)('fits compact phase evidence and completes %s with %s existing memories', async (locator, count) => {
+  ] as const)('fits compact phase evidence and completes %s with %s existing memories', ownership.own(async (locator, count) => {
       const diagnostic = count === 1000 ? capacityDiagnostic(locator) : undefined;
       diagnostic?.('setup-start');
       const f = await fixture(locator);
@@ -850,7 +886,7 @@ describe('exclusive owned CREATE', () => {
       expect(observed.budget().limit).toBeLessThanOrEqual(454656);
       diagnostic?.('operation-complete', undefined, observed);
       process.stderr.write(`CREATE capacity ${JSON.stringify({ locator, count, sizes, consumed: observed.budget().consumed, reserved: observed.budget().limit, ms: performance.now() - start, measured: observed.measured })}\n`);
-  });
+  }));
   function capacityDiagnostic(locator: string, stop?: CreatePublication) {
     const started = performance.now(); let records = 0;
     return (event: 'setup-start' | 'setup-complete' | 'interrupted-start' | 'interrupted-end' | 'operation-start' | 'publication' | 'operation-complete',
@@ -915,7 +951,7 @@ describe('exclusive owned CREATE', () => {
   it.each([
     ['Created.yaml', 'prepared'], ['Created.yaml', 'linked'], ['Created.yaml', 'published'],
     ['Notes/Created.yaml', 'prepared'], ['Notes/Created.yaml', 'linked'], ['Notes/Created.yaml', 'published'],
-  ] as const)('recovers %s at %s with 1000 persisted owners and exact compact evidence', async (locator, stop) => {
+  ] as const)('recovers %s at %s with 1000 persisted owners and exact compact evidence', ownership.own(async (locator, stop) => {
     const diagnostic = capacityDiagnostic(locator, stop);
     diagnostic('setup-start');
     const f = await fixture(locator);
@@ -934,10 +970,10 @@ describe('exclusive owned CREATE', () => {
     diagnostic('operation-complete', undefined, observed);
     process.stderr.write(`CREATE target recovery ${JSON.stringify({ locator, stop, before: observed.records[0].before,
       consumed: observed.budget().consumed, reserved: observed.budget().limit, ms: performance.now() - start, measured: observed.measured })}\n`);
-  });
+  }));
   it.each([
     ['Created.yaml', 1], ['Created.yaml', 5], ['Notes/Created.yaml', 1], ['Notes/Created.yaml', 5],
-  ] as const)('completes real %s CREATE with %s existing owners inside its reserved protocol', async (locator, count) => {
+  ] as const)('completes real %s CREATE with %s existing owners inside its reserved protocol', ownership.own(async (locator, count) => {
     const f = await fixture(locator);
     await seedOwners(f, count);
     const observed = observeAccounting(), progress: number[] = [];
@@ -957,13 +993,13 @@ describe('exclusive owned CREATE', () => {
     expect((await f.store().readHeadSnapshot(locator)).token).toEqual(token);
     expect((await fs.readdir(path.dirname(f.head))).some(name => name.includes('memory-write'))).toBe(false);
     process.stderr.write(`CREATE accounting ${JSON.stringify({ locator, count, consumed: observed.budget().consumed, reserved: observed.budget().limit })}\n`);
-  });
-  it.each(['prepared', 'linked', 'published'] as const)('retains discovery consumption while reserving only the remaining %s recovery', async stop => {
+  }));
+  it.each(['prepared', 'linked', 'published'] as const)('retains discovery consumption while reserving only the remaining %s recovery', ownership.own(async stop => {
     const f = await fixture();
     await seedOwners(f, 5);
     const cause = new Error('controlled persisted interruption');
     await expect(f.store(phase => { if (phase === stop) throw cause; }).createOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY', cause });
-    const initialCost = (await Promise.all(['.', 'Notes', '.memory-owners', '.memory-owners/owners'].map(async locator =>
+    const initialCost = (await ownedAll(['.', 'Notes', '.memory-owners', '.memory-owners/owners'].map(async locator =>
       (await fs.readdir(path.join(f.tenantRoot, locator))).length + 1))).reduce((sum, value) => sum + value, 0);
     const observed = observeAccounting();
     const token = await f.store().createOwned(f.request);
@@ -974,8 +1010,8 @@ describe('exclusive owned CREATE', () => {
     expect(observed.budget().consumed).toBeLessThanOrEqual(observed.budget().limit);
     expect((await f.store().readHeadSnapshot(f.request.locator)).token).toEqual(token);
     process.stderr.write(`CREATE recovery accounting ${JSON.stringify({ stop, before: observed.records[0].before, consumed: observed.budget().consumed, reserved: observed.budget().limit })}\n`);
-  });
-  it('cannot rebase a missing ownership slot created after discovery', async () => {
+  }));
+  it('cannot rebase a missing ownership slot created after discovery', ownership.own(async () => {
     const f = await fixture();
     const internals = FileMemoryOwnedCreate.prototype as unknown as { preflight: () => Promise<void> };
     const preflight = internals.preflight;
@@ -992,20 +1028,20 @@ describe('exclusive owned CREATE', () => {
     expect(await fs.readFile(path.join(f.tenantRoot, '.memory-owners', 'foreign'), 'utf8')).toBe('preserved');
     await expect(fs.stat(path.join(f.tenantRoot, '.memory-owners', 'owners'))).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(fs.stat(f.head)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
-  it('rejects unsupported persisted numeric widths before recovery mutations', async () => {
+  }));
+  it('rejects unsupported persisted numeric widths before recovery mutations', ownership.own(async () => {
     const f = await fixture();
     await expect(f.store(phase => { if (phase === 'prepared') throw new Error('stop'); }).createOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
     const names = await fs.readdir(path.dirname(f.head)), journal = names.find(name => name.endsWith('.memory-write.json'))!;
     const target = path.join(path.dirname(f.head), journal), value = JSON.parse(await fs.readFile(target, 'utf8'));
     value.initialStageIdentity.mtimeNs = '9'.repeat(33); value.currentStageIdentity.mtimeNs = '9'.repeat(33);
     await fs.writeFile(target, JSON.stringify(value));
-    const before = await Promise.all(names.map(async name => ({ name, raw: await fs.readFile(path.join(path.dirname(f.head), name), 'utf8'), ino: (await fs.stat(path.join(path.dirname(f.head), name))).ino })));
+    const before = await ownedAll(names.map(async name => ({ name, raw: await fs.readFile(path.join(path.dirname(f.head), name), 'utf8'), ino: (await fs.stat(path.join(path.dirname(f.head), name))).ino })));
     await expect(f.store().createOwned(f.request)).rejects.toMatchObject({ code: 'EHEADCONFLICT', cause: { code: 'EOWNERRECOVERY' } });
     for (const entry of before) expect({ raw: await fs.readFile(path.join(path.dirname(f.head), entry.name), 'utf8'), ino: (await fs.stat(path.join(path.dirname(f.head), entry.name))).ino }).toEqual({ raw: entry.raw, ino: entry.ino });
     await expect(fs.stat(f.head)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
-  it('preserves one real EOF counter and refuses quota reset or excess projected cardinality', async () => {
+  }));
+  it('preserves one real EOF counter and refuses quota reset or excess projected cardinality', ownership.own(async () => {
     const f = await fixture(), budget = new FileMemoryCreateScanBudget();
     await budget.scan(path.dirname(f.head), () => { throw new Error('not empty'); });
     expect(budget.consumed).toBe(1);
@@ -1022,7 +1058,7 @@ describe('exclusive owned CREATE', () => {
     expect(() => excessive.reserve([{ ...slots[0], names: Array.from({ length: 4096 }, (_, index) => String(index)) }, ...slots.slice(1)], 'Notes')).toThrow('budget exhausted');
     expect(excessive.consumed).toBe(0);
     await expect(fs.stat(path.join(f.tenantRoot, '.memory-owners'))).rejects.toMatchObject({ code: 'ENOENT' });
-  });
+  }));
   const crashChild = `
     const [ownersUrl,coordinatorUrl,fenceUrl,root,user,request,stop]=process.argv.slice(1);
     const {FileMemoryOwnerSnapshots}=await import(ownersUrl);
@@ -1036,7 +1072,7 @@ describe('exclusive owned CREATE', () => {
   `;
   it.each(['partial-content', 'prepared', 'linked-before-intent', 'linked', 'unlinked-stage-before-intent',
     'published', 'active-registry', 'active-sidecar', 'intent-unlinked'] as const)(
-    'preserves actual SIGKILL residue at %s and qualifies only supported fresh retry', async stop => {
+    'preserves actual SIGKILL residue at %s and qualifies only supported fresh retry', ownership.own(async stop => {
       const f = await fixture();
       const extension = import.meta.url.endsWith('.js') ? 'js' : 'ts';
       const modules = ['FileMemoryOwnerSnapshots', 'FileMemoryTransactionCoordinator', 'FileMemoryFence']
@@ -1058,7 +1094,6 @@ describe('exclusive owned CREATE', () => {
       });
       void ready.catch(() => undefined);
       const timer = setTimeout(() => { if (!didClose) child.kill('SIGKILL'); }, 5000);
-      const index = roots.indexOf(f.tenantRoot); if (index >= 0) roots.splice(index, 1);
       try {
         await ready;
         child.kill('SIGKILL'); await closed;
@@ -1067,7 +1102,7 @@ describe('exclusive owned CREATE', () => {
         const headBefore = await fs.stat(f.head, { bigint: true }).catch(() => undefined);
         const manual = ['partial-content', 'linked-before-intent', 'unlinked-stage-before-intent', 'intent-unlinked'].includes(stop);
         const names = (await fs.readdir(path.dirname(f.head))).sort();
-        const artifacts = await Promise.all(names.map(async name => {
+        const artifacts = await ownedAll(names.map(async name => {
           const file = path.join(path.dirname(f.head), name), stat = await fs.stat(file, { bigint: true });
           return { name, raw: await fs.readFile(file, 'utf8'), inode: stat.ino, links: stat.nlink };
         }));
@@ -1093,7 +1128,11 @@ describe('exclusive owned CREATE', () => {
         clearTimeout(timer);
         if (!didClose) child.kill('SIGKILL');
         await closed;
+        ownership.checkpoint();
+        await Promise.allSettled(admitted);
+        ownership.checkpoint();
         await fs.rm(f.tenantRoot, { recursive: true, force: true });
+        const index = roots.indexOf(f.tenantRoot); if (index >= 0) roots.splice(index, 1);
       }
-    });
+    }));
 });
