@@ -1,0 +1,122 @@
+{
+  "checkedAtUtc": "2026-11-03T17:12:51.792752+00:00",
+  "advisory": "GHSA-rmxm-3fg6-px4f",
+  "cve": "CVE-2026-118663",
+  "severity": "Moderate",
+  "lowestFixedVersion": "2.1.3",
+  "publishedAt": "2026-09-29T06:10:34.512Z",
+  "ageEligibleAt": "2026-10-20T06:10:34.512Z",
+  "exactVersionSelected": true,
+  "ageExceptionRequired": false,
+  "tarball": "https://registry.npmjs.org/@hono/node-server/-/node-server-2.1.3.tgz",
+  "integrity": "sha512-TA//nWMqPhbfdfneACk6t5a9eqbS9lABEPyKn0/xZTah3H3U2XaVg85rJFl0/Fyit0I552YDHgXGVSf3GwqbUw==",
+  "sha256": "45d02627ce61f2eeb27bb0f6b7480dfe5e2206bb1edee68e39518e049fad1082",
+  "registrySignaturesVerified": [
+    {
+      "version": "1.19.15",
+      "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+      "valid": true
+    },
+    {
+      "version": "2.1.2",
+      "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+      "valid": true
+    },
+    {
+      "version": "2.1.3",
+      "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+      "valid": true
+    }
+  ],
+  "npmAuditSignatures": {
+    "exitCode": 0,
+    "invalid": [],
+    "missing": []
+  },
+  "provenance": {
+    "subjectSha512": "4c0fff9d632a3e16df75f9de00293ab796bd7aa6d2f6500110fc8a9f4ff16536a1dc7dd4d9769583ce6b245974fc5ca2b74239e766031e05c65527f71b0a9b53",
+    "subjectMatchesArchive": true,
+    "sourceCommit": "720ac7843fbc7c1bdae1beaa47e2ab5db7f99a9b",
+    "upstreamTag": "v2.1.3",
+    "tagObject": "9f8eec1ac7d150882ec60bbf6a833a3c21b53807",
+    "tagSignatureVerified": false,
+    "tagSignatureReason": "unsigned",
+    "npmGitHeadPresent": false,
+    "workflow": {
+      "ref": "refs/tags/v2.1.3",
+      "repository": "https://github.com/honojs/node-server",
+      "path": ".github/workflows/release.yml"
+    },
+    "invocation": "https://github.com/honojs/node-server/actions/runs/36529262099/attempts/1",
+    "publisherTransition": "Same yusukebe maintainer/approver; GitHub Actions trusted OIDC publication replaces manual npm publication; expected repository/tag/release workflow recorded by npm SLSA. Generated dist artifacts were not independently reproduced."
+  },
+  "compatibility": {
+    "nodeFloor": ">=20",
+    "projectNodeFloor": ">=20.0.0",
+    "honoPeer": "^4",
+    "sdkVersion": "1.32.0",
+    "sdkDeclaredRange": "^1.19.9 || ^2.0.5",
+    "runtimeDependenciesAdded": false,
+    "lockScope": {
+      "base": "93e366e634633e6918fc7753726a8b39eec6b269",
+      "changedLockRecords": [
+        "node_modules/@hono/node-server"
+      ],
+      "noAddedOrRemovedRecords": true,
+      "rootPackageCount": 866,
+      "sdkRange": "^1.19.9 || ^2.0.5",
+      "safetyPackageUnchanged": true
+    },
+    "caller": "SDK server/streamableHttp.js invokes getRequestListener with overrideGlobalObjects:false; no application serve-static/vercel imports found."
+  },
+  "sourceReview": {
+    "securityDeltaFrom2_1_2": "One guard rejects residual percent signs before second decode, enabled by default; explicit allowPercentInPath remains for trusted public filenames. Matching option type, regression tests and release declaration accompany it.",
+    "majorLineDelta": "Broader adapter changes: lazy headers with duplicate-sensitive raw-header fallback, response/content-length fast paths, body read/abort/disconnect recovery, URL/method normalization, optional early-hints/WebSocket support and removed Vercel entry point. Reviewed installed SDK call path and sensitive source paths; not described as a one-line major upgrade or an exhaustive upstream audit."
+  },
+  "securityRegression": {
+    "fixedCasesPassed": 2,
+    "old1_19_15ControlExit": 1,
+    "oldMalformedProtectedPathStatus": 200,
+    "fixedMalformedProtectedPathStatus": 404,
+    "oldControlWasReversibleIsolatedInstalledTreeMutation": true,
+    "fixedInstalledPackageRestored": true
+  },
+  "productionNpmAudit": {
+    "auditReportVersion": 2,
+    "vulnerabilities": {},
+    "metadata": {
+      "vulnerabilities": {
+        "info": 0,
+        "low": 0,
+        "moderate": 0,
+        "high": 0,
+        "critical": 0,
+        "total": 0
+      },
+      "dependencies": {
+        "prod": 235,
+        "dev": 630,
+        "optional": 107,
+        "peer": 0,
+        "peerOptional": 0,
+        "total": 865
+      }
+    }
+  },
+  "imageScanOrDeploymentClaim": false,
+  "sdkHttpCompatibility": {
+    "suitesPassed": 6,
+    "testsPassed": 121,
+    "localNodeVersion": "v24.16.0",
+    "suites": [
+      "http-transport-parity",
+      "http-transport-smoke",
+      "oauth-http-auth",
+      "http-stream-keepalive",
+      "http-active-post",
+      "http-keepalive-drain"
+    ],
+    "postgresSelected": false,
+    "remoteProvidersSelected": false
+  }
+}

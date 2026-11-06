@@ -4,9 +4,9 @@
 
 # Install first: npm can materialize workspace build tools with --omit=dev.
 # Sanitize the resulting dependency tree before it enters any final image layer.
-# Exact official Node 24.21.0 multi-platform image; qualification: #3064.
+# Exact official Node 24.22.1 multi-platform image; exact age exception: #2452 (6481615082).
 # Apply supported Trixie fixes to every target, including the migration builder.
-FROM node@sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66 AS node-base
+FROM node@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea AS node-base
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libc-bin=2.41-12+deb13u4 \
     libc6=2.41-12+deb13u4 \
@@ -21,8 +21,9 @@ FROM node-base AS runtime-dependencies
 WORKDIR /app
 
 # Deterministic build-only leaf fixes; preserve npm core and npm/npx callers.
-COPY docker/global-npm-security-patches.json scripts/ci/prepare-global-npm.mjs scripts/ci/smoke-global-npm.mjs /tmp/npm-tooling/
+COPY docker/global-npm-security-patches.json docker/global-npm-vendor-patches.json scripts/ci/prepare-global-npm.mjs scripts/ci/stage-global-npm-vendor-patches.mjs scripts/ci/check-global-npm-cache.cjs scripts/ci/smoke-global-npm.mjs /tmp/npm-tooling/
 RUN node /tmp/npm-tooling/prepare-global-npm.mjs \
+    && node --test /tmp/npm-tooling/check-global-npm-cache.cjs \
     && node /tmp/npm-tooling/smoke-global-npm.mjs \
     && rm -rf /tmp/npm-tooling
 COPY package*.json ./
@@ -46,8 +47,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /usr/local/lib/node_modules/npm
 
-# Remove only unused final-image diagnostics; retain the complete builder,
-# package metadata, other commands and shared libraries. Guard both paths first.
+# Remove only unused final-image diagnostics and mount CLIs; retain the builder,
+# package metadata, other commands and shared libraries. Guard all four paths first.
 COPY docker/remove-optional-runtime-tools.mjs /tmp/remove-optional-runtime-tools.mjs
 # Create non-root user for security
 # Using specific UID/GID for consistency across containers
@@ -67,8 +68,9 @@ COPY --from=runtime-dependencies /app/packages/ ./packages/
 COPY --from=runtime-dependencies /app/node_modules ./node_modules
 COPY --from=runtime-dependencies /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
 # Verify the final copied bundle too; no stale base-package files may survive.
-COPY scripts/ci/prepare-global-npm.mjs scripts/ci/smoke-global-npm.mjs /tmp/npm-tooling/
-RUN node /tmp/npm-tooling/smoke-global-npm.mjs && rm -rf /tmp/npm-tooling
+COPY scripts/ci/prepare-global-npm.mjs scripts/ci/stage-global-npm-vendor-patches.mjs scripts/ci/check-global-npm-cache.cjs scripts/ci/smoke-global-npm.mjs /tmp/npm-tooling/
+RUN node --test /tmp/npm-tooling/check-global-npm-cache.cjs \
+    && node /tmp/npm-tooling/smoke-global-npm.mjs && rm -rf /tmp/npm-tooling
 
 # Copy pre-built application (dist/ must exist locally)
 COPY dist ./dist
