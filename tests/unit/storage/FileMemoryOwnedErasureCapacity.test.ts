@@ -6,6 +6,8 @@ import { FileMemoryOwnerSnapshots, type OwnedErasureWorkReport } from '../../../
 import { runErasureCapacityLifecycle, CAPACITY_OBSERVER_TIMEOUT_MS } from './fixtures/erasureCapacityLifecycle.js';
 import { captureErasureFiles, makeOwnedErasureFixture } from './fixtures/ownedErasureFixture.js';
 
+import { ErasurePublicationDiagnostics } from './fixtures/erasurePublicationDiagnostics.js';
+
 const it = process.platform === 'win32' || !process.getuid ? jestIt.skip : jestIt;
 const cases = ([100, 250, 1000] as const).flatMap(foreignOwners =>
   [false, true].flatMap(nested => ([2, 10] as const).map(volumes => ({ foreignOwners, nested, volumes }))));
@@ -14,12 +16,13 @@ describe('dormant owner erasure populated portfolios', () => {
   for (const options of cases) {
     it(`erases ${options.volumes} volumes with ${options.foreignOwners} foreign owners, nested=${options.nested}`, async () => {
       const deadlineMs = options.foreignOwners === 1000 && options.volumes === 10 ? 45_000 : 30_000;
+      const publications = new ErasurePublicationDiagnostics();
       let report: OwnedErasureWorkReport | undefined;
       let operationMs: number | undefined;
       let verificationMs: number | undefined;
       await runErasureCapacityLifecycle({ deadlineMs, label: JSON.stringify(options), completed: timing => {
         console.info('ERASURE capacity complete', JSON.stringify({ ...options, ...timing, deadlineMs,
-          operationMs, verificationMs, report }));
+          operationMs, verificationMs, report, publications: publications.summary() }));
       } }, async lifecycle => {
         const started = lifecycle.started;
         const fixture = await makeOwnedErasureFixture({ ...options, archive: 'published' }, root => {
@@ -32,10 +35,12 @@ describe('dormant owner erasure populated portfolios', () => {
         const head = path.join(fixture.root, fixture.token.locator);
         const headNames = (await fs.readdir(path.dirname(head))).sort();
         const selectedOwner = path.join(fixture.root, 'volumes', 'by-id', fixture.token.ownerId);
-        const owners = new FileMemoryOwnerSnapshots({ coordinator: fixture.coordinator, afterErasureWork: value => { report = value; } });
+        const owners = new FileMemoryOwnerSnapshots({ coordinator: fixture.coordinator, afterErasurePublication: publications.publication,
+          afterErasureWork: value => { report = value; publications.afterWork(); } });
         const setupMs = performance.now() - started;
         phase('setup-complete');
         const operationStarted = performance.now();
+        publications.start();
         const result = await owners.eraseOwned(fixture.request);
         operationMs = performance.now() - operationStarted;
         phase('operation-end');
