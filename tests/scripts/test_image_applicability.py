@@ -1,12 +1,13 @@
 """Pure fixtures; no candidate image or Docker command is executed."""
 import base64
 import copy
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, contextmanager
 from types import SimpleNamespace
 import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -24,17 +25,9 @@ GRAPH = {'store_id': STORE, 'manifest_descriptor': DESC, 'admission_descriptor':
 CID = 'c' * 64
 
 
-class ToolFixture:
-    def exists(self): return True
-    def is_file(self): return True
-    def stat(self): return SimpleNamespace(st_size=16, st_uid=0, st_mode=0o100755)
-    def read_bytes(self): return b'trusted tool fixture'
-    def resolve(self): return '/usr/bin/readelf'
-    def __str__(self): return '/usr/bin/readelf'
-
-
-def capture_path(value):
-    return ToolFixture() if str(value) == '/usr/bin/readelf' else Path(value)
+@contextmanager
+def fake_readelf():
+    yield 17, '/usr/bin/readelf', 'fixture-hash', ('fixture-identity',)
 
 
 def state():
@@ -142,6 +135,55 @@ class InventoryTests(unittest.TestCase):
 
 
 class ElfCoverageTests(unittest.TestCase):
+    def test_readelf_descriptor_admission_refuses_mutation_and_unsafe_metadata(self):
+        with tempfile.TemporaryDirectory() as d:
+            original = Path(d) / 'tool'; original.write_bytes(b'trusted fixture')
+            real_open, real_fstat = os.open, os.fstat
+            calls = []
+            def opened(_path, flags):
+                calls.append(flags)
+                return real_open(original, flags)
+            def metadata(fd):
+                info = real_fstat(fd)
+                return SimpleNamespace(st_dev=info.st_dev, st_ino=info.st_ino, st_mode=0o100755,
+                                       st_uid=0, st_nlink=info.st_nlink, st_size=info.st_size,
+                                       st_mtime_ns=info.st_mtime_ns, st_ctime_ns=info.st_ctime_ns)
+            with patch.object(capture.sys, 'platform', 'linux'), patch.object(capture.os, 'supports_fd', {os.execve}), \
+                    patch.object(Path, 'resolve', return_value=Path('/usr/bin/reviewed-readelf')), \
+                    patch.object(capture.os, 'open', side_effect=opened), patch.object(capture.os, 'fstat', side_effect=metadata):
+                with capture.trusted_readelf() as (fd, path, digest, identity):
+                    self.assertEqual(path, '/usr/bin/reviewed-readelf')
+                    self.assertEqual(digest, hashlib.sha256(b'trusted fixture').hexdigest())
+                    self.assertTrue(calls[0] & os.O_NOFOLLOW); self.assertTrue(calls[0] & os.O_NONBLOCK)
+                    original.write_bytes(b'changed fixture')
+                    with self.assertRaisesRegex(ValueError, 'changed'):
+                        capture.check_readelf(fd, identity)
+            original.write_bytes(b'original file'); replacement = Path(d) / 'replacement'; replacement.write_bytes(b'foreign file')
+            with patch.object(capture.sys, 'platform', 'linux'), patch.object(capture.os, 'supports_fd', {os.execve}), \
+                    patch.object(Path, 'resolve', return_value=Path('/usr/bin/reviewed-readelf')), \
+                    patch.object(capture.os, 'open', side_effect=opened), patch.object(capture.os, 'fstat', side_effect=metadata):
+                with capture.trusted_readelf() as (fd, _, _, identity):
+                    os.replace(replacement, original)
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    self.assertEqual(os.read(fd, 100), b'original file')
+                    with self.assertRaisesRegex(ValueError, 'changed'):
+                        capture.check_readelf(fd, identity)
+            for mode, uid, size in [(0o100777, 0, 2), (0o100755, 1, 2), (0o010600, 0, 2), (0o100755, 0, 0), (0o100755, 0, 16 * 1024 ** 2 + 1)]:
+                temporary_fd = real_open(original, os.O_RDONLY)
+                try: info = metadata(temporary_fd)
+                finally: os.close(temporary_fd)
+                info.st_mode, info.st_uid, info.st_size = mode, uid, size
+                with self.subTest(mode=mode, uid=uid, size=size), patch.object(capture.sys, 'platform', 'linux'), \
+                        patch.object(capture.os, 'supports_fd', {os.execve}), patch.object(Path, 'resolve', return_value=Path('/usr/bin/reviewed-readelf')), \
+                        patch.object(capture.os, 'open', side_effect=opened), patch.object(capture.os, 'fstat', return_value=info):
+                    with self.assertRaises(ValueError):
+                        with capture.trusted_readelf(): pass
+            with patch.object(capture.sys, 'platform', 'linux'), patch.object(capture.os, 'supports_fd', {os.execve}), \
+                    patch.object(Path, 'resolve', return_value=Path('/tmp/untrusted-readelf')), patch.object(capture.os, 'open') as opened_file:
+                with self.assertRaisesRegex(ValueError, 'outside'):
+                    with capture.trusted_readelf(): pass
+                opened_file.assert_not_called()
+
     def phase(self, count, fail=None):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d); data = root/'opaque.data'; data.write_bytes(b'\x7fELFdata')
@@ -149,7 +191,8 @@ class ElfCoverageTests(unittest.TestCase):
             rows = [{'path': '/native-' + str(n), 'sha256': digest, 'scratch_data': str(data)} for n in range(count)]
             self.reports = {}; self.calls = []; clock = [100.0]
             def write(name, value): self.reports[name] = copy.deepcopy(value)
-            def run(cmd, label, timeout=30, maximum=1024*1024):
+            def run(cmd, label, timeout=30, maximum=1024*1024, pass_fds=()):
+                self.assertEqual(pass_fds, (17,))
                 self.calls.append((cmd, label, timeout, maximum))
                 if label.startswith('elf-'):
                     self.assertLessEqual(timeout, 5)
@@ -158,7 +201,7 @@ class ElfCoverageTests(unittest.TestCase):
                     if label == 'elf-1' and fail == 'output': raise ValueError('Capture raw report budget exhausted')
                     if label == 'elf-1' and fail == 'parser': return None, b''
                 return 0, b'trusted mock output'
-            with patch.object(capture, 'Path', side_effect=capture_path), patch.object(capture.time, 'monotonic', side_effect=lambda: clock[0]):
+            with patch.object(capture, 'trusted_readelf', fake_readelf), patch.object(capture, 'check_readelf'), patch.object(capture.time, 'monotonic', side_effect=lambda: clock[0]):
                 return capture.capture_elf_facts(rows, root, run, write, 240.0)
 
     def test_observed_663_objects_are_admitted_with_unchanged_child_and_phase_bounds(self):
@@ -194,13 +237,14 @@ class ElfCoverageTests(unittest.TestCase):
             root = Path(d); data = root / 'opaque'; data.write_bytes(b'ELF')
             rows = [{'path':'/opaque', 'sha256':hashlib.sha256(b'ELF').hexdigest(), 'scratch_data':str(data)}]
             clock = [100.0]; calls = []; reports = {}
-            class DelayedTool(ToolFixture):
-                def read_bytes(self): clock[0] += 58; return b'trusted tool fixture'
-            def path(value): return DelayedTool() if str(value) == '/usr/bin/readelf' else Path(value)
-            def run(cmd, label, timeout=30, maximum=0):
+            @contextmanager
+            def delayed_readelf():
+                clock[0] += 58
+                yield 17, '/usr/bin/readelf', 'fixture-hash', ('fixture-identity',)
+            def run(cmd, label, timeout=30, maximum=0, pass_fds=()):
                 calls.append((label, timeout, maximum)); clock[0] += 0.5
                 return 0, b''
-            with patch.object(capture, 'Path', side_effect=path), patch.object(capture.time, 'monotonic', side_effect=lambda: clock[0]):
+            with patch.object(capture, 'trusted_readelf', delayed_readelf), patch.object(capture, 'check_readelf'), patch.object(capture.time, 'monotonic', side_effect=lambda: clock[0]):
                 result = capture.capture_elf_facts(rows, root, run, lambda n,v: reports.update({n:copy.deepcopy(v)}), 240)
             self.assertEqual(result['unknown_count'], 0)
             self.assertEqual([label for label,_,_ in calls], ['tool-version', 'tool-help', 'elf-0'])
@@ -213,7 +257,7 @@ class ElfCoverageTests(unittest.TestCase):
                 root = Path(d); data = root / 'opaque'; data.write_bytes(b'ELF')
                 rows = [{'path':'/opaque', 'sha256':hashlib.sha256(b'ELF').hexdigest(), 'scratch_data':str(data)}]
                 clock = [100.0]; calls = []; reports = {}; real_read = Path.read_bytes
-                def run(cmd, label, timeout=30, maximum=0):
+                def run(cmd, label, timeout=30, maximum=0, pass_fds=()):
                     calls.append((label, timeout))
                     if scenario == 'metadata' and label == 'tool-version': clock[0] += 60
                     return 0, b''
@@ -223,7 +267,7 @@ class ElfCoverageTests(unittest.TestCase):
                     return value
                 parent = 101.0 if scenario == 'parent' else 240.0
                 if scenario == 'parent': clock[0] = 101.0
-                with patch.object(capture, 'Path', side_effect=capture_path), patch.object(capture.time, 'monotonic', side_effect=lambda: clock[0]), patch.object(Path, 'read_bytes', read):
+                with patch.object(capture, 'trusted_readelf', fake_readelf), patch.object(capture, 'check_readelf'), patch.object(capture.time, 'monotonic', side_effect=lambda: clock[0]), patch.object(Path, 'read_bytes', read):
                     with self.assertRaisesRegex(ValueError, 'deadline'):
                         capture.capture_elf_facts(rows, root, run, lambda n,v: reports.update({n:copy.deepcopy(v)}), parent)
                 self.assertEqual([x[0] for x in calls], ['tool-version'] if scenario == 'metadata' else ['tool-version','tool-help'] if scenario == 'object-hash' else [])
@@ -241,6 +285,19 @@ class ElfCoverageTests(unittest.TestCase):
 
 
 class ContainerTests(unittest.TestCase):
+    def test_capture_labels_refuse_before_spawn_or_any_report_mutation(self):
+        with tempfile.TemporaryDirectory() as d:
+            reports = Path(d); summary = {'receipts': {}}
+            _, run = capture.capture_report_functions(reports, 10000, capture.time.monotonic() + 30, summary)
+            with patch.object(capture.scanner, 'bounded_process', return_value=(0, b'ok', b'', None)) as process:
+                for label in ('../escape', '-option', 'a/b', '', 'a' * 81, None):
+                    with self.subTest(label=label), self.assertRaises(ValueError): run(['inert'], label)
+                    self.assertEqual(list(reports.iterdir()), []); self.assertEqual(summary, {'receipts': {}})
+                process.assert_not_called()
+                self.assertEqual(run(['inert'], 'valid-1'), (0, b'ok'))
+                self.assertIn('valid-1', summary['receipts'])
+                self.assertTrue((reports / 'valid-1-receipt.json').exists())
+
     def test_exact_created_container_roles_and_all_active_or_mounted_variants_refuse(self):
         self.assertEqual(validate_never_started(state(), GRAPH)['pid'], 0)
         changes = [lambda x: x.update(Image='sha256:' + 'b' * 64),
@@ -351,7 +408,7 @@ class ContainerTests(unittest.TestCase):
                     if scenario == 'receipt-persist-failure' and path.name == 'container-create.stdout':
                         raise OSError('simulated create receipt persistence failure')
                     return real_write(path, data)
-                def process(cmd, timeout, maximum=0, stdout_path=None, stderr_maximum=None):
+                def process(cmd, timeout, maximum=0, stdout_path=None, stderr_maximum=None, pass_fds=()):
                     commands.append(cmd)
                     if cmd[:2] == ['docker', 'version']:
                         return 0, json.dumps({'Version': '29.4.2', 'GitCommit': 'unreviewed' if scenario == 'wrong-engine' else 'd329809', 'Os': 'linux', 'Arch': 'amd64'}).encode(), b'', None
@@ -384,7 +441,7 @@ class ContainerTests(unittest.TestCase):
                         output = b'x'*(2*1024**2) if scenario == 'elf-output-bound' and '--file-header' in cmd else b'trusted readelf fixture output'
                         return (1 if scenario == 'elf-parser-failure' and '--file-header' in cmd else 0), output, b'', None
                     raise AssertionError(cmd)
-                with patch.object(capture.scanner, 'bounded_process', process), patch.object(capture, 'verify_trusted_image', return_value=(GRAPH, hashlib.sha256(b'verified archive fixture').hexdigest())), patch.object(sys, 'argv', ['capture', str(root)]), patch.dict(capture.os.environ, {'GITHUB_SHA': 'e' * 40, 'RUNNER_TEMP': str(root.parent)}), patch.object(capture, 'Path', side_effect=capture_path), patch.object(Path, 'write_bytes', write_bytes), patch.object(capture, 'MAX_ELF_OBJECTS', 2 if scenario == 'elf-count-bound' else 1024), patch.object(capture, 'MAX_REPORT', 2*1024**2 if scenario == 'elf-output-bound' else 32*1024**2):
+                with patch.object(capture.scanner, 'bounded_process', process), patch.object(capture, 'verify_trusted_image', return_value=(GRAPH, hashlib.sha256(b'verified archive fixture').hexdigest())), patch.object(sys, 'argv', ['capture', str(root)]), patch.dict(capture.os.environ, {'GITHUB_SHA': 'e' * 40, 'RUNNER_TEMP': str(root.parent)}), patch.object(capture, 'trusted_readelf', fake_readelf), patch.object(capture, 'check_readelf'), patch.object(Path, 'write_bytes', write_bytes), patch.object(capture, 'MAX_ELF_OBJECTS', 2 if scenario == 'elf-count-bound' else 1024), patch.object(capture, 'MAX_REPORT', 2*1024**2 if scenario == 'elf-output-bound' else 32*1024**2):
                     self.assertEqual(capture.main(), 0 if scenario == 'ok' else 1)
                 self.assertEqual([x for x in commands if x[:2] == ['docker', 'rm']], [] if scenario in ['wrong-engine', 'wrong-source', 'declared-volume', 'running', 'missing-late-create', 'foreign-owner', 'foreign-name', 'foreign-container-source', 'conflicting-create-id'] else [['docker', 'rm', '--volumes', CID]])
                 self.assertFalse(any(x[:2] in [['docker', 'start'], ['docker', 'run'], ['docker', 'exec']] for x in commands))
@@ -435,12 +492,15 @@ class ContainerTests(unittest.TestCase):
             self.assertLessEqual(len(stderr), 100)
 
     def test_trusted_existing_readelf_only_parses_nonexecutable_fixture_data(self):
-        if not Path('/usr/bin/readelf').exists(): self.skipTest('Trusted host readelf unavailable')
+        if sys.platform != 'linux' or os.execve not in os.supports_fd or not Path('/usr/bin/readelf').exists():
+            self.skipTest('Trusted host readelf FD execution unavailable')
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / 'opaque.data'; path.write_bytes(Path('/usr/bin/true').read_bytes()); path.chmod(0o600)
-            r = subprocess.run(['/usr/bin/python3', '-I', '-c', capture.READELF_LAUNCHER, d,
-                                '--file-header', '--dynamic', '--notes', '--dyn-syms', '--wide', '--no-demangle', '--debug-dump=no-follow-links', '--debug-dump=do-not-use-debuginfod', str(path)],
-                               capture_output=True, timeout=5)
+            with capture.trusted_readelf() as (fd, _, _, identity):
+                r = subprocess.run(['/usr/bin/python3', '-I', '-c', capture.READELF_LAUNCHER, d, str(fd),
+                                    '--file-header', '--dynamic', '--notes', '--dyn-syms', '--wide', '--no-demangle', '--debug-dump=no-follow-links', '--debug-dump=do-not-use-debuginfod', str(path)],
+                                   capture_output=True, timeout=5, pass_fds=(fd,))
+                capture.check_readelf(fd, identity)
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn(b'ELF Header', r.stdout)
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)

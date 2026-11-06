@@ -2,6 +2,7 @@
 """Capture facts from a never-started target; never certify security closure."""
 import datetime
 import argparse
+import contextlib
 import sys
 # Keep imports from creating untracked files in the validated scanner checkout.
 sys.dont_write_bytecode = True
@@ -9,10 +10,13 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
+import stat
 from pathlib import Path
 import time
 import uuid
-from image_scan_intake import validate_intake, trusted_work_root, verify_trusted_image, prepare_capture_output, read_scanner_provenance
+from image_scan_intake import (validate_intake, trusted_work_root, verify_trusted_image, prepare_capture_output,
+                               read_scanner_provenance, stable_identity, bounded_hash)
 from image_applicability import GIB, MAX_REPORT, inventory_export, validate_never_started
 
 spec = importlib.util.spec_from_file_location('reviewed_image_scanner', Path(__file__).with_name('scan-built-image.py'))
@@ -32,8 +36,37 @@ READELF_LAUNCHER = """import os,resource,sys
 resource.setrlimit(resource.RLIMIT_AS,(536870912,536870912))
 resource.setrlimit(resource.RLIMIT_CPU,(5,5))
 resource.setrlimit(resource.RLIMIT_NOFILE,(64,64))
-os.execve('/usr/bin/readelf',['/usr/bin/readelf']+sys.argv[2:],{'PATH':'/usr/bin:/bin','HOME':sys.argv[1],'LC_ALL':'C','DEBUGINFOD_URLS':''})
+tool_fd=int(sys.argv[2])
+os.set_inheritable(tool_fd,False)
+os.execve(tool_fd,['/usr/bin/readelf']+sys.argv[3:],{'PATH':'/usr/bin:/bin','HOME':sys.argv[1],'LC_ALL':'C','DEBUGINFOD_URLS':''})
 """
+
+
+def check_readelf(fd, identity):
+    if stable_identity(os.fstat(fd)) != identity:
+        raise ValueError('Trusted readelf changed after admission')
+
+
+@contextlib.contextmanager
+def trusted_readelf():
+    if sys.platform != 'linux' or os.execve not in os.supports_fd:
+        raise ValueError('Trusted readelf FD execution is unavailable')
+    resolved = Path('/usr/bin/readelf').resolve(strict=True)
+    if resolved.parent != Path('/usr/bin'):
+        raise ValueError('Trusted readelf resolves outside /usr/bin')
+    fd = os.open(resolved, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022 or
+                not 0 < info.st_size <= 16 * 1024 ** 2):
+            raise ValueError('Existing trusted host readelf is unavailable or unexpectedly writable')
+        identity = stable_identity(info)
+        with os.fdopen(fd, 'rb', closefd=False) as stream:
+            digest = bounded_hash(stream, info.st_size)
+        check_readelf(fd, identity)
+        yield fd, str(resolved), digest, identity
+    finally:
+        os.close(fd)
 
 
 def create_command(name, store_id, nonce, platform=DEFAULT_PLATFORM):
@@ -120,34 +153,35 @@ def capture_elf_facts(elf, private, run, write, deadline):
         if len(elf) > MAX_ELF_OBJECTS:
             raise ValueError('Selected ELF object count exceeds ' + str(MAX_ELF_OBJECTS) + ' bound; unprocessed coverage UNKNOWN')
         remaining()
-        tool = Path('/usr/bin/readelf')
-        if not tool.exists() or not tool.is_file() or tool.stat().st_size > 16 * 1024 ** 2 or tool.stat().st_uid != 0 or tool.stat().st_mode & 0o022:
-            raise ValueError('Existing trusted host readelf is unavailable or unexpectedly writable')
-        tool_hash = hashlib.sha256(tool.read_bytes()).hexdigest()
-        remaining()
-        home = private / 'empty-home'; home.mkdir(mode=0o700)
-        command = ['/usr/bin/python3', '-I', '-c', READELF_LAUNCHER, str(home)]
-        for label, args in [('tool-version', ['--version']), ('tool-help', ['--help'])]:
-            status, _ = run(command + args, label, min(5, remaining()))
-            if status != 0: raise ValueError('Host readelf tool metadata unavailable')
-        remaining()
-        write('readelf-tool.json', {'path': str(tool), 'resolved_path': str(tool.resolve()), 'sha256': tool_hash,
-              'launcher_sha256': hashlib.sha256(READELF_LAUNCHER.encode()).hexdigest(),
-              'limits': {'address_space_bytes': 536870912, 'cpu_seconds': 5, 'open_files': 64},
-              'source_adoption': False, 'candidate_execution': False})
-        remaining()
-        for number, entry in enumerate(elf):
+        with trusted_readelf() as (tool_fd, tool_path, tool_hash, tool_identity):
             remaining()
-            path = Path(entry['scratch_data'])
-            if hashlib.sha256(path.read_bytes()).hexdigest() != entry['sha256']:
-                raise ValueError('Selected ELF data hash changed')
-            status, _ = run(command + ['--file-header', '--program-headers', '--dynamic', '--notes', '--dyn-syms', '--wide', '--no-demangle', '--debug-dump=no-follow-links', '--debug-dump=do-not-use-debuginfod', str(path)],
-                            'elf-' + str(number), min(5, remaining()), 8 * 1024 ** 2)
-            results[number]['status'] = 'parsed-data' if status == 0 else 'UNKNOWN-parser-failed-or-bounded'
-            index['processed_count'] += 1
-        remaining()
-        if any(row['status'] != 'parsed-data' for row in results):
-            raise ValueError('ELF parser failed or reached a child bound; affected objects UNKNOWN')
+            home = private / 'empty-home'; home.mkdir(mode=0o700)
+            command = ['/usr/bin/python3', '-I', '-c', READELF_LAUNCHER, str(home), str(tool_fd)]
+            for label, args in [('tool-version', ['--version']), ('tool-help', ['--help'])]:
+                check_readelf(tool_fd, tool_identity)
+                status, _ = run(command + args, label, min(5, remaining()), pass_fds=(tool_fd,))
+                check_readelf(tool_fd, tool_identity)
+                if status != 0: raise ValueError('Host readelf tool metadata unavailable')
+            remaining()
+            write('readelf-tool.json', {'path': '/usr/bin/readelf', 'resolved_path': tool_path, 'sha256': tool_hash,
+                  'launcher_sha256': hashlib.sha256(READELF_LAUNCHER.encode()).hexdigest(),
+                  'limits': {'address_space_bytes': 536870912, 'cpu_seconds': 5, 'open_files': 64},
+                  'source_adoption': False, 'candidate_execution': False})
+            remaining()
+            for number, entry in enumerate(elf):
+                remaining()
+                path = Path(entry['scratch_data'])
+                if hashlib.sha256(path.read_bytes()).hexdigest() != entry['sha256']:
+                    raise ValueError('Selected ELF data hash changed')
+                check_readelf(tool_fd, tool_identity)
+                status, _ = run(command + ['--file-header', '--program-headers', '--dynamic', '--notes', '--dyn-syms', '--wide', '--no-demangle', '--debug-dump=no-follow-links', '--debug-dump=do-not-use-debuginfod', str(path)],
+                                'elf-' + str(number), min(5, remaining()), 8 * 1024 ** 2, pass_fds=(tool_fd,))
+                check_readelf(tool_fd, tool_identity)
+                results[number]['status'] = 'parsed-data' if status == 0 else 'UNKNOWN-parser-failed-or-bounded'
+                index['processed_count'] += 1
+            remaining()
+            if any(row['status'] != 'parsed-data' for row in results):
+                raise ValueError('ELF parser failed or reached a child bound; affected objects UNKNOWN')
         index['phase_status'] = 'all-admitted-parsed'
     finally:
         index['unknown_count'] = len(elf) - sum(row['status'] == 'parsed-data' for row in results)
@@ -316,12 +350,15 @@ def capture_report_functions(reports, raw_budget, deadline, summary):
         if sum(p.stat().st_size for p in reports.iterdir() if p.is_file() and p.name != name) + len(data) > raw_budget:
             raise ValueError('Complete capture report budget exhausted')
         (reports / name).write_bytes(data)
-    def run(command, label, timeout=30, maximum=1024 * 1024, stream=None, cleanup=False, retain_stdout=True):
+    def run(command, label, timeout=30, maximum=1024 * 1024, stream=None, cleanup=False, retain_stdout=True, pass_fds=()):
+        if not isinstance(label, str) or len(label) > 80 or not re.fullmatch(r'[a-z][a-z0-9-]*', label):
+            raise ValueError('Invalid capture report label')
         remaining = deadline - time.monotonic()
         if not cleanup and remaining <= 0: raise ValueError('Capture overall deadline exceeded')
         actual_timeout = timeout if cleanup else min(timeout, max(0.1, remaining))
         start = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        status, stdout, stderr, error = scanner.bounded_process(command, actual_timeout, maximum, stream, stderr_maximum=1024 * 1024)
+        fd_options = {'pass_fds': pass_fds} if pass_fds else {}
+        status, stdout, stderr, error = scanner.bounded_process(command, actual_timeout, maximum, stream, stderr_maximum=1024 * 1024, **fd_options)
         receipt = {'command': command, 'started_utc': start,
                    'finished_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
                    'exit_code': status, 'capture_error': error, 'timeout_seconds': actual_timeout,
