@@ -196,6 +196,9 @@ def bounded_hash(stream, expected_size, *, deadline=None):
 
 
 def stage_verified(tree, stream, expected_size, expected_hash, identity, parent, name, *, output_dir='inputs', output_name=STAGED_ARCHIVE, deadline=None):
+    if (output_dir not in ('inputs', 'reports') or not isinstance(output_name, str) or
+            output_name in ('.', '..') or not re.fullmatch(r'[A-Za-z0-9._-]+', output_name)):
+        raise ValueError('Invalid staged output slot')
     inputs = tree.directory(tree.workfd, output_dir)
     fd = os.open(output_name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=inputs)
     try:

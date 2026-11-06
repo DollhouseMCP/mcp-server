@@ -55,6 +55,17 @@ class IntakeTests(unittest.TestCase):
     def test_explicit_target_and_scanner_tuples_accept(self):
         self.assertEqual(self.invoke()[0], self.record)
 
+    def test_staged_output_slot_rejects_unsafe_names_before_any_access(self):
+        from unittest.mock import Mock
+        invalid = [('inputs', name) for name in ('', '.', '..', '/tmp/escape', '../escape', 'part/name', 'part\\name', 'white space', 'é', None)]
+        invalid += [(name, 'image.tar') for name in ('', '..', '/tmp', '../inputs', 'inputs/other', 'other')]
+        for directory, name in invalid:
+            tree = Mock()
+            with self.subTest(directory=directory, name=name), patch.object(intake.os, 'open') as opened:
+                with self.assertRaisesRegex(ValueError, 'Invalid staged output slot'):
+                    intake.stage_verified(tree, None, 1, 'x', None, 1, 'source', output_dir=directory, output_name=name)
+                tree.directory.assert_not_called(); opened.assert_not_called()
+
     def test_raw_fds_close_when_wrapping_or_first_stage_stat_fails(self):
         (self.work / 'reports').mkdir()
         for scenario in ('file-fdopen', 'failure-fdopen', 'stage-fdopen', 'stage-fstat', 'stage-cancel'):
