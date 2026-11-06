@@ -84,6 +84,7 @@ describe('OAuth state lock Windows probe budget', () => {
     expect(entered).toBe(true);
     expect(execFileSync.mock.calls.map(([command]) => path.win32.basename(command)))
       .toEqual(['WMIC.exe', 'pwsh.exe', 'powershell.exe']);
+    // 4,900 ms probe budget minus the simulated 164 ms and 783 ms probes.
     expect(execFileSync.mock.calls[2][2].timeout).toBe(3_953);
     expect(now).toBe(4_910); // 4.9 s total probe budget + one 10 ms retry.
     expect(now).toBeLessThan(5_000);

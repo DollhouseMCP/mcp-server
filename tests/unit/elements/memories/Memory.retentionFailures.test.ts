@@ -70,6 +70,7 @@ describe('Retention failure boundaries', () => {
     const memory = new Memory({ maxEntries: 2, onFull: 'evict_oldest' }, metadata);
     const first = await memory.addEntry('First');
     await memory.addEntry('Second');
+    // Expiry makes manual enforcement audit at exact capacity; guarded hydration leaves it for the public API.
     const loaded = JSON.parse(memory.serialize());
     loaded.entries.find((entry: { id: string }) => entry.id === first.id).expiresAt = '2000-01-01T00:00:00.000Z';
     memory.deserialize(JSON.stringify(loaded), { suppressLoadPolicy: true });

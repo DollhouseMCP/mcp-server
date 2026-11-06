@@ -89,6 +89,7 @@ describe('check-safety-package-version', () => {
     ].join(''));
     const marks = new Map((await readFile(join(template, '.git', 'fixture-marks'), 'utf8'))
       .trim().split(/\r?\n/).map(line => {
+        // The 40-character marks match this fixture's explicitly initialized SHA-1 repository.
         const match = /^(:[12]) ([0-9a-f]{40})$/.exec(line);
         if (!match) throw new Error('Fixture import returned an invalid commit mark');
         return [match[1], match[2]] as const;
