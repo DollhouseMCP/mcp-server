@@ -404,9 +404,9 @@ def capture_process(child, limit, maximum, stderr_maximum, sink, buffers):
             if error: break
         try: child.wait(timeout=max(0.1, limit - time.monotonic()))
         except subprocess.TimeoutExpired:
-            error = "process deadline exceeded"
+            error = error or "process deadline exceeded"
             if not terminate_process(child, limit):
-                error = "process deadline exceeded; child reap UNKNOWN"
+                error += "; child reap UNKNOWN"
     return error
 
 
@@ -418,21 +418,42 @@ def terminate_process(child, limit):
     return True
 
 
+def close_child_pipes(child, primary, error):
+    failures = []; cancellation = None
+    for pipe in (child.stdout, child.stderr):
+        try: pipe.close()
+        except BaseException as issue:
+            if isinstance(issue, Exception): failures.append(issue)
+            elif cancellation is None: cancellation = issue
+    if cancellation is not None: raise cancellation
+    if failures:
+        detail = 'Pipe close UNKNOWN: ' + '; '.join(str(issue) for issue in failures)
+        if primary is not None: primary.add_note(detail)
+        elif error: error += '; ' + detail
+        else: raise ValueError(detail) from failures[0]
+    return error
+
+
 def bounded_process(command, timeout, maximum=64 * 1024 * 1024, stdout_path=None, stderr_maximum=None, pass_fds=()):
     buffers = [bytearray(), bytearray()]
     limit = time.monotonic() + timeout
     with (stdout_path.open("wb") if stdout_path else contextlib.nullcontext(None)) as sink:
         child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, pass_fds=pass_fds)
+        error = None; primary = None
         try:
-            error = capture_process(child, limit, maximum, stderr_maximum, sink, buffers)
-        except BaseException as original:
             try:
-                if not terminate_process(child, limit): original.add_note("Child reap UNKNOWN after bounded cleanup")
-            except Exception as cleanup:
-                original.add_note("Child cleanup UNKNOWN: " + str(cleanup))
+                error = capture_process(child, limit, maximum, stderr_maximum, sink, buffers)
+            except BaseException as original:
+                try:
+                    if not terminate_process(child, limit): original.add_note("Child reap UNKNOWN after bounded cleanup")
+                except Exception as cleanup:
+                    original.add_note("Child cleanup UNKNOWN: " + str(cleanup))
+                raise
+        except BaseException as active:
+            primary = active
             raise
         finally:
-            child.stdout.close(); child.stderr.close()
+            error = close_child_pipes(child, primary, error)
         return (None if error else child.returncode, bytes(buffers[0]), bytes(buffers[1]), error)
 
 

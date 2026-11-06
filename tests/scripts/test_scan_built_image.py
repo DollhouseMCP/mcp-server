@@ -366,6 +366,67 @@ class DownloadWorkerTests(unittest.TestCase):
 
 
 class BoundedCaptureTests(unittest.TestCase):
+    def test_successful_child_does_not_treat_callers_exception_as_its_primary(self):
+        from unittest.mock import Mock, patch
+        child = Mock(); child.stdout.close.side_effect = OSError('fixture close failure')
+        with patch.object(scanner.subprocess, 'Popen', return_value=child), patch.object(scanner, 'capture_process', return_value=None):
+            try: raise RuntimeError('unrelated caller exception')
+            except RuntimeError as caller:
+                with self.assertRaisesRegex(ValueError, 'Pipe close UNKNOWN'):
+                    scanner.bounded_process(['inert'], 1)
+                self.assertFalse(hasattr(caller, '__notes__'))
+        child.stdout.close.assert_called_once(); child.stderr.close.assert_called_once()
+
+    def test_pipe_close_attempts_both_and_preserves_primary_or_capture_error(self):
+        from unittest.mock import Mock, patch
+        for side in ('stdout', 'stderr'):
+            for state in ('success', 'bounded', 'primary', 'cancel'):
+                child = Mock(); close_error = OSError('close fixture')
+                getattr(child, side).close.side_effect = close_error
+                primary = KeyboardInterrupt('cancel') if state == 'cancel' else OSError('primary')
+                capture = primary if state in ('primary', 'cancel') else None
+                with self.subTest(side=side, state=state), patch.object(scanner.subprocess, 'Popen', return_value=child), \
+                        patch.object(scanner, 'capture_process', side_effect=capture, return_value='bounded capture' if state == 'bounded' else None):
+                    if state == 'success':
+                        with self.assertRaisesRegex(ValueError, 'Pipe close UNKNOWN'):
+                            scanner.bounded_process(['inert'], 1)
+                    elif state == 'bounded':
+                        result = scanner.bounded_process(['inert'], 1)
+                        self.assertIn('bounded capture; Pipe close UNKNOWN', result[3])
+                    else:
+                        with self.assertRaises(type(primary)) as raised:
+                            scanner.bounded_process(['inert'], 1)
+                        self.assertIs(raised.exception, primary)
+                        self.assertIn('Pipe close UNKNOWN', primary.__notes__[0])
+                child.stdout.close.assert_called_once(); child.stderr.close.assert_called_once()
+
+        for side in ('stdout', 'stderr'):
+            child = Mock(); cancellation = KeyboardInterrupt('close cancelled')
+            getattr(child, side).close.side_effect = cancellation
+            with self.subTest(cancelled_side=side), patch.object(scanner.subprocess, 'Popen', return_value=child), \
+                    patch.object(scanner, 'capture_process', return_value=None):
+                with self.assertRaises(KeyboardInterrupt) as raised:
+                    scanner.bounded_process(['inert'], 1)
+                self.assertIs(raised.exception, cancellation)
+            child.stdout.close.assert_called_once(); child.stderr.close.assert_called_once()
+
+    def test_size_error_is_retained_when_child_reap_is_unknown(self):
+        from unittest.mock import Mock, patch
+        child = Mock(); child.wait.side_effect = subprocess.TimeoutExpired('fixture', 1)
+        event = Mock(); event.fd = 17
+        class Selector:
+            def __enter__(self): return self
+            def __exit__(self, *_): pass
+            def register(self, *_): pass
+            def get_map(self): return True
+            def select(self, _timeout): return [(event, None)]
+        with patch.object(scanner.selectors, 'DefaultSelector', return_value=Selector()), \
+                patch.object(scanner.os, 'read', return_value=b'x'), \
+                patch.object(scanner, 'collect_process_chunk', return_value=(0, 'combined size exceeded')), \
+                patch.object(scanner, 'terminate_process', return_value=False):
+            result = scanner.capture_process(child, time.monotonic() + 1, 1, None, None, [bytearray(), bytearray()])
+        self.assertEqual(result, 'combined size exceeded; child reap UNKNOWN')
+
     def test_cleanup_error_preserves_primary_and_fresh_cancellation_propagates(self):
         import io
         from unittest.mock import patch

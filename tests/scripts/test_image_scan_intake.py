@@ -55,6 +55,44 @@ class IntakeTests(unittest.TestCase):
     def test_explicit_target_and_scanner_tuples_accept(self):
         self.assertEqual(self.invoke()[0], self.record)
 
+    def test_raw_fds_close_when_wrapping_or_first_stage_stat_fails(self):
+        (self.work / 'reports').mkdir()
+        for scenario in ('file-fdopen', 'failure-fdopen', 'stage-fdopen', 'stage-fstat', 'stage-cancel'):
+            captured = []; real_open, real_fstat = os.open, os.fstat
+            def opened(path, flags, *args, **kwargs):
+                fd = real_open(path, flags, *args, **kwargs)
+                if path in ('production-arm64.docker.tar', 'failure.json', 'image.tar'): captured.append(fd)
+                return fd
+            def wrapping(fd, *_args, **_kwargs):
+                captured.append(fd)
+                if scenario == 'stage-cancel': raise KeyboardInterrupt('fixture cancellation')
+                raise OSError('fixture fdopen failure')
+            def fstat(fd):
+                if captured and fd == captured[-1]: raise OSError('fixture fstat failure')
+                return real_fstat(fd)
+            expected = KeyboardInterrupt if scenario == 'stage-cancel' else (ValueError if scenario.startswith('stage-') else OSError)
+            with self.subTest(scenario=scenario):
+                if scenario == 'failure-fdopen':
+                    with patch.object(intake.os, 'open', side_effect=opened), patch.object(intake.os, 'fdopen', side_effect=wrapping):
+                        with self.assertRaises(expected): intake.write_failure_report(self.work, {'status': 'UNKNOWN'})
+                    (self.work / 'reports/failure.json').unlink()
+                else:
+                    with intake.TrustedTree(self.work) as tree:
+                        slot = tree.directory(tree.directory(tree.workfd, 'retained'), 'arm64')
+                        if scenario == 'file-fdopen':
+                            with patch.object(intake.os, 'open', side_effect=opened), patch.object(intake.os, 'fdopen', side_effect=wrapping):
+                                with self.assertRaises(expected): tree.file(slot, 'production-arm64.docker.tar', 1024)
+                        else:
+                            stream, identity = tree.file(slot, 'production-arm64.docker.tar', 1024)
+                            with patch.object(intake.os, 'open', side_effect=opened), \
+                                    patch.object(intake.os, 'fdopen', side_effect=wrapping if scenario != 'stage-fstat' else os.fdopen), \
+                                    patch.object(intake.os, 'fstat', side_effect=fstat if scenario == 'stage-fstat' else real_fstat):
+                                with self.assertRaises(expected):
+                                    intake.stage_verified(tree, stream, identity[5], self.record['archive_sha256'], identity, slot, 'production-arm64.docker.tar')
+                    if scenario.startswith('stage-'): (self.work / 'inputs/image.tar').unlink()
+                self.assertTrue(captured)
+                with self.assertRaises(OSError): real_fstat(captured[-1])
+
     def test_record_rejects_nonobject_descriptor(self):
         for value in ('descriptor', [], 7):
             record = copy.deepcopy(self.record); record['descriptor'] = value

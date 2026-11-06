@@ -90,7 +90,8 @@ class TrustedTree:
                 before.st_mode & 0o022 or not 0 < before.st_size <= maximum):
             raise ValueError('Untrusted or oversized intake file')
         fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
-        stream = self.stack.enter_context(os.fdopen(fd, 'rb')); actual = os.fstat(fd)
+        self.stack.callback(os.close, fd)
+        stream = self.stack.enter_context(os.fdopen(fd, 'rb', closefd=False)); actual = os.fstat(fd)
         if stable_identity(before) != stable_identity(actual): raise ValueError('Intake file changed during open')
         return stream, stable_identity(actual)
 
@@ -144,7 +145,8 @@ def write_failure_report(work_root, payload):
         reports = tree.directory(tree.workfd, 'reports')
         if os.fstat(reports).st_uid != os.getuid(): raise ValueError('Report directory is not runner-owned')
         fd = os.open('failure.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=reports)
-        with os.fdopen(fd, 'w') as output: output.write(json.dumps(payload, indent=2))
+        tree.stack.callback(os.close, fd)
+        with os.fdopen(fd, 'w', closefd=False) as output: output.write(json.dumps(payload, indent=2))
         tree.check_directories()
 
 
@@ -194,9 +196,11 @@ def bounded_hash(stream, expected_size):
 def stage_verified(tree, stream, expected_size, expected_hash, identity, parent, name):
     inputs = tree.directory(tree.workfd, 'inputs')
     fd = os.open(STAGED_ARCHIVE, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=inputs)
-    created = os.fstat(fd); owned = (created.st_dev, created.st_ino, created.st_uid)
     try:
-        with os.fdopen(fd, 'w+b') as target:
+        with ExitStack() as owned_stack:
+            owned_stack.callback(os.close, fd)
+            created = os.fstat(fd); owned = (created.st_dev, created.st_ino, created.st_uid)
+            target = owned_stack.enter_context(os.fdopen(fd, 'w+b', closefd=False))
             digest = hashlib.sha256(); count = 0; stream.seek(0)
             while count <= expected_size:
                 chunk = stream.read(min(65536, expected_size + 1 - count))
