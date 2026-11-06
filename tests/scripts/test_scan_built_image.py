@@ -68,6 +68,135 @@ class ExtractVerifiedBinaryTests(unittest.TestCase):
                 self.assertFalse((root / "verified").exists())
 
 
+class FrozenInputTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve() / 'image-security'; self.root.mkdir()
+        for name in ('admitted', 'inputs', 'reports'): (self.root / name).mkdir(mode=0o700)
+        self.binary = b'inert binary'
+        archive = self.root / 'admitted' / scanner.ARCHIVE_NAME
+        with tarfile.open(archive, 'w:gz') as bundle:
+            item = tarfile.TarInfo('grype'); item.size = len(self.binary)
+            bundle.addfile(item, io.BytesIO(self.binary))
+        self.archive_hash = hashlib.sha256(archive.read_bytes()).hexdigest()
+        self.db = b'inert database archive'
+        (self.root / 'admitted' / scanner.DATABASE_ARCHIVE).write_bytes(self.db)
+        self.manifest = {'status': 'active', 'schemaVersion': 'v6.1.10',
+            'built': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            'path': 'vulnerability-db_v6.1.10_fixture.tar.zst',
+            'checksum': 'sha256:' + hashlib.sha256(self.db).hexdigest()}
+        self.write_manifest(json.dumps(self.manifest).encode())
+        self.hashes = {'manifest': self.manifest_hash, 'binary': hashlib.sha256(self.binary).hexdigest()}
+
+    def write_manifest(self, content):
+        (self.root / 'admitted' / 'database-manifest.json').write_bytes(content)
+        self.manifest_hash = hashlib.sha256(content).hexdigest()
+
+    def prepare(self):
+        from unittest.mock import patch
+        with patch.object(scanner, 'ARCHIVE_SHA256', self.archive_hash), patch.object(scanner, 'download', side_effect=AssertionError('network forbidden')):
+            return scanner.prepare_frozen_inputs(self.root, self.hashes, time.monotonic() + 30)
+
+    def test_fixed_files_copy_and_binary_identity(self):
+        binary, manifest, database = self.prepare()
+        self.assertEqual((self.root / 'inputs' / 'grype').read_bytes(), self.binary)
+        self.assertEqual((self.root / 'inputs' / 'grype').stat().st_mode & 0o777, 0o555)
+        self.assertEqual(manifest, self.manifest)
+        self.assertEqual(database['sha256'], hashlib.sha256(self.db).hexdigest())
+        self.assertEqual(binary['origin'], 'frozen-admitted')
+        self.assertEqual(binary['binary_sha256'], self.hashes['binary'])
+        self.assertEqual(binary['binary_bytes'], len(self.binary))
+        self.assertIsNone(binary['url'])
+        self.assertEqual(database['url'], 'https://grype.anchore.io/databases/v6/' + self.manifest['path'])
+        scanner.verify_frozen_mounts(self.root, self.hashes, database['sha256'], time.monotonic()+30)
+        (self.root / 'inputs' / scanner.DATABASE_ARCHIVE).write_bytes(b'changed')
+        deadline = time.monotonic()+30
+        with self.assertRaisesRegex(ValueError, 'mounted input changed'):
+            scanner.verify_frozen_mounts(self.root, self.hashes, database['sha256'], deadline)
+
+    def test_invalid_flags_refuse_before_output_preparation(self):
+        complete = ['x'] * 10; complete[8] = 1
+        self.assertIsNone(scanner.validate_frozen_arguments(None, None, complete))
+        for a, b, retained in [('', 'a'*64, complete), ('a'*64, None, complete),
+                               ('z'*64, 'b'*64, complete), ('a'*64, 'b'*64, [None]*10)]:
+            with self.subTest(a=a, b=b), self.assertRaises(ValueError):
+                scanner.validate_frozen_arguments(a, b, retained)
+
+    def test_wrong_binary_hash_refuses_before_chmod(self):
+        self.hashes['binary'] = '0' * 64
+        with self.assertRaisesRegex(ValueError, 'binary SHA256'): self.prepare()
+        self.assertEqual((self.root / 'inputs' / 'grype').stat().st_mode & 0o777, 0o600)
+
+    def test_duplicate_stale_or_wrong_manifest_refuses(self):
+        for content in (b'{"status":"active","status":"active"}',
+                        json.dumps({**self.manifest, 'built': '2020-01-01T00:00:00Z'}).encode()):
+            with self.subTest(content=content):
+                for path in (self.root / 'inputs').iterdir(): path.unlink()
+                for path in (self.root / 'reports').iterdir(): path.unlink()
+                self.write_manifest(content); self.hashes['manifest'] = self.manifest_hash
+                with self.assertRaises(ValueError): self.prepare()
+        self.hashes['manifest'] = '0' * 64
+        for path in (self.root / 'inputs').iterdir(): path.unlink()
+        for path in (self.root / 'reports').iterdir(): path.unlink()
+        with self.assertRaises(ValueError): self.prepare()
+
+    def test_symlink_wrong_database_and_expired_deadline_refuse(self):
+        archive = self.root / 'admitted' / scanner.ARCHIVE_NAME
+        archive.unlink(); archive.symlink_to(self.root / 'admitted' / scanner.DATABASE_ARCHIVE)
+        with self.assertRaises(ValueError): self.prepare()
+        deadline = time.monotonic() - 1
+        with self.assertRaisesRegex(ValueError, 'deadline'):
+            scanner.frozen_copy(self.root, scanner.DATABASE_ARCHIVE, scanner.GIB, '0'*64, 'inputs', scanner.DATABASE_ARCHIVE, deadline)
+
+    def test_main_rejects_partial_frozen_flags_before_output(self):
+        from unittest.mock import patch
+        with patch.object(sys, 'argv', ['scanner', '/unused', '--frozen-db-manifest-sha256', 'a'*64]), patch.object(scanner, 'trusted_work_root', side_effect=AssertionError('output preparation reached')):
+            with self.assertRaisesRegex(ValueError, 'both SHA256'):
+                scanner.main()
+
+    def test_bad_database_hash_and_missing_inputs_refuse(self):
+        (self.root / 'admitted' / scanner.DATABASE_ARCHIVE).write_bytes(b'wrong database')
+        with self.assertRaisesRegex(ValueError, 'SHA256 mismatch'): self.prepare()
+        for path in (self.root / 'inputs').iterdir(): path.unlink()
+        for path in (self.root / 'reports').iterdir(): path.unlink()
+        (self.root / 'admitted' / 'database-manifest.json').unlink()
+        with self.assertRaises(FileNotFoundError): self.prepare()
+
+    def test_symlinked_admitted_directory_refuses(self):
+        admitted = self.root / 'admitted'; original = self.root / 'moved'
+        admitted.rename(original); admitted.symlink_to(original, target_is_directory=True)
+        with self.assertRaises(ValueError): self.prepare()
+
+    def test_common_preparation_accepts_local_runner_without_network(self):
+        from unittest.mock import patch, Mock
+        config = self.root / 'config'; config.write_text('config')
+        runner_file = self.root / 'runner'; runner_file.write_text('runner')
+        run = Mock(return_value=(0, b'')); inspect = Mock(return_value={'id': 'local'}); save = Mock(return_value={'graph': True})
+        with patch.object(scanner, 'ARCHIVE_SHA256', self.archive_hash), patch.object(scanner, 'database_payload_bytes', return_value=1), patch.object(scanner, 'download', side_effect=AssertionError('network forbidden')), patch.object(scanner, 'verify_fixed_runner', return_value={'runner': 'verified'}):
+            payload, binary, manifest, database, runner = scanner.prepare_offline_inputs(self.root/'inputs', self.root/'reports', config, runner_file, runner_file, run, inspect, save, time.monotonic()+30, frozen=self.hashes)
+        self.assertEqual(payload, 1); self.assertEqual(binary['binary_sha256'], self.hashes['binary'])
+        self.assertEqual(database['origin'], 'frozen-admitted'); self.assertEqual(manifest, self.manifest)
+        self.assertEqual(runner, {'runner': 'verified'})
+        inspect.assert_called_once_with(scanner.RUNNER_REF, 'runner-inspect')
+        save.assert_called_once_with(scanner.RUNNER_REF, {'id': 'local'}, 'runner')
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_args.args[0], ['/usr/bin/zstd', '--version'])
+
+    def test_missing_runner_never_pulls(self):
+        from unittest.mock import patch, Mock
+        config = self.root / 'config'; config.write_text('config')
+        runner = self.root / 'runner'; runner.write_text('runner')
+        run = Mock(return_value=(0, b'')); inspect = Mock(return_value=None); save = Mock()
+        fake = ({'origin':'frozen-admitted'}, self.manifest, {'origin':'frozen-admitted'})
+        inputs = self.root/'inputs'; reports = self.root/'reports'; deadline = time.monotonic()+30
+        with patch.object(scanner, 'prepare_frozen_inputs', return_value=fake), patch.object(scanner, 'database_payload_bytes', return_value=1), patch.object(scanner, 'download', side_effect=AssertionError('network forbidden')):
+            with self.assertRaisesRegex(ValueError, 'runner reference'):
+                scanner.prepare_offline_inputs(inputs, reports, config, runner, runner, run, inspect, save, deadline, frozen=self.hashes)
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_args.args[0], ['/usr/bin/zstd', '--version'])
+        save.assert_not_called()
+
+
 class ScannerEnvironmentTests(unittest.TestCase):
     def test_inherited_cataloger_exclusion_distro_and_database_controls_are_stripped(self):
         inherited = {
