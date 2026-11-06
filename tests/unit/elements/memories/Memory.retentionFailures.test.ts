@@ -18,6 +18,43 @@ function failRetentionAudit(cause: Error): void {
 }
 
 describe('Retention failure boundaries', () => {
+  it('replaces a reused instance with the loaded capacity and removes every old index entry', async () => {
+    const memory = new Memory({ maxEntries: 3 }, metadata);
+    const first = await memory.addEntry('Old first');
+    const second = await memory.addEntry('Old second');
+    const index = (memory as unknown as { searchIndex: { removeEntry(id: string): void } }).searchIndex;
+    const remove = jest.spyOn(index, 'removeEntry');
+    memory.deserialize(JSON.stringify({ id: memory.id, type: memory.type,
+      metadata: { ...memory.metadata, maxEntries: 1 },
+      entries: [{ id: 'replacement', timestamp: '2026-01-01T00:00:00.000Z', content: 'Replacement' }]
+    }), { suppressLoadPolicy: true });
+    expect(remove.mock.calls).toEqual([[first.id], [second.id]]);
+    expect(memory.getAllEntries().map(entry => entry.id)).toEqual(['replacement']);
+    const before = memory.serialize();
+    await expect(memory.addEntry('Over the loaded limit')).rejects.toThrow(/limit is 1/);
+    expect(memory.serialize()).toBe(before);
+
+    memory.deserialize(JSON.stringify({ id: memory.id, type: memory.type,
+      metadata: { ...memory.metadata, maxEntries: 2 }, entries: memory.getAllEntries()
+    }), { suppressLoadPolicy: true });
+    await expect(memory.addEntry('Within the replacement limit')).resolves.toBeDefined();
+    expect(memory.getAllEntries()).toHaveLength(2);
+  });
+
+  it('removes expired entries from the derived search index as well as authoritative storage', () => {
+    const memory = new Memory({}, metadata, undefined,
+      { shouldEnforceOnLoad: () => true, isEnabled: () => true });
+    const index = (memory as unknown as { searchIndex: { removeEntry(id: string): void } }).searchIndex;
+    const remove = jest.spyOn(index, 'removeEntry');
+    memory.deserialize(JSON.stringify({ id: memory.id, type: memory.type, metadata: memory.metadata,
+      entries: [{ id: 'expired', timestamp: '2020-01-01T00:00:00.000Z', content: 'Expired entry',
+        expiresAt: '2020-01-02T00:00:00.000Z' }]
+    }));
+    expect(memory.getAllEntries()).toEqual([]);
+    expect(remove).toHaveBeenCalledWith('expired');
+    expect(memory.getPolicyRemovedCount()).toBe(1);
+  });
+
   it('reports an actual on-load enforcement failure instead of ignoring a rejected Promise', () => {
     const memory = new Memory({ name: 'Load failure', maxEntries: 2, onFull: 'evict_oldest' }, metadata, undefined,
       { shouldEnforceOnLoad: () => true, isEnabled: () => true });

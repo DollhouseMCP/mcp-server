@@ -82,7 +82,8 @@ export function erasureSerialize(value: ErasureRecord | ErasureSegment): string 
 }
 export function erasureBasename(value: unknown): value is string {
   return typeof value === 'string' && !!value && value !== '.' && value !== '..' &&
-    !/[\\/\0]/u.test(value) && Buffer.byteLength(value) <= 255 && Buffer.from(value).toString('utf8') === value;
+    !/[\\/\0]/u.test(value) && (!/\P{ASCII}/u.test(value) ? value.length <= 255 :
+      Buffer.byteLength(value) <= 255 && Buffer.from(value).toString('utf8') === value);
 }
 function locator(value: unknown): value is string {
   return typeof value === 'string' && !!value && !path.isAbsolute(value) && !path.win32.isAbsolute(value) &&
