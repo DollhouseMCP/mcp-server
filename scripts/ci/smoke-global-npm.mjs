@@ -13,7 +13,7 @@ export async function smokeGlobalNpm(root) {
   root = await realpath(root);
   const require = createRequire(join(root, 'package.json'));
   const receipt = JSON.parse(await readFile(join(root, '.dollhouse-security-patches.json'), 'utf8'));
-  assert.equal(require('./package.json').version, '11.19.0');
+  assert.equal(require('./package.json').version, '11.19.1');
   const current = await inventory(root);
   delete current['.dollhouse-security-patches.json'];
   assert.deepEqual(current, receipt.after, 'Installed npm tree differs from exact patched inventory');
@@ -52,7 +52,7 @@ export async function smokeGlobalNpm(root) {
     const archive = join(directory, 'dollhouse-offline-tooling-proof-1.0.0.tgz');
     const output = run('npx-cli.js', ['--offline', '--yes', '--ignore-scripts', `--package=${archive}`, '--', 'dollhouse-npm-proof', 'exact']);
     assert.equal(output.trim(), 'offline-npx-ok');
-    return { npmCore: '11.19.0', actualOfflinePack: true, actualOfflineNpx: true, packageScriptsDisabled: true, minimatchBrace: true, socksIpAddress: true, nodeGypUndici: true, npmQuerySelector: true };
+    return { npmCore: '11.19.1', actualOfflinePack: true, actualOfflineNpx: true, packageScriptsDisabled: true, minimatchBrace: true, socksIpAddress: true, nodeGypUndici: true, npmQuerySelector: true };
   } finally { await rm(directory, { recursive: true, force: true }); }
 }
 
