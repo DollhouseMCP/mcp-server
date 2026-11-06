@@ -102,14 +102,14 @@ jobs:
       - name: Select the matching Node/npm toolchain for bundle controls
         uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
-          node-version: '24.21.0'
+          node-version: '24.22.1'
 
       - name: Verify global npm artifact safety and refusal controls
         shell: bash
         run: |
-          test "$(node --version)" = "v24.21.0"
-          test "$(npm --version)" = "11.19.0"
-          node --test tests/scripts/prepare-global-npm.test.mjs
+          test "$(node --version)" = "v24.22.1"
+          test "$(npm --version)" = "11.19.1"
+          node --test tests/scripts/prepare-global-npm.test.mjs tests/scripts/stage-global-npm-vendor-patches.test.mjs
 
       - name: 🔧 Set up QEMU (AMD64 only - ARM64 uses native runner)
         uses: docker/setup-qemu-action@v3
@@ -301,6 +301,8 @@ jobs:
           fi
 
           set -e  # Re-enable exit on error
+          # Capture the immutable production identity before any runtime tests.
+          docker image inspect --format '{{.Id}}' "dollhousemcp:latest-${PLATFORM_TAG}" > "$RUNNER_TEMP/beta3-tested-production.id"
 
       - name: Verify private drain hold against native Docker restart manager
         if: matrix.platform == 'linux/amd64'
@@ -651,6 +653,109 @@ jobs:
           echo "Duration: ${TOOLS_DURATION}s"
           echo "========================================="
 
+
+      - name: Preserve the exact tested production image for static qualification
+        shell: bash
+        env:
+          EVIDENCE_PLATFORM: ${{ matrix.platform }}
+          EVIDENCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY_EVIDENCE'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import platform
+          import re
+          import subprocess
+
+
+          def output(*args):
+              return subprocess.check_output(args, text=True).strip()
+
+
+          def require(condition, message):
+              if not condition:
+                  raise SystemExit(message)
+
+
+          expected = os.environ['EVIDENCE_PLATFORM']
+          require(expected in {'linux/amd64', 'linux/arm64'}, 'Unexpected evidence platform')
+          image_id = pathlib.Path(os.environ['RUNNER_TEMP'], 'beta3-tested-production.id').read_text().strip()
+          require(re.fullmatch(r'sha256:[a-f0-9]{64}', image_id), 'Invalid tested production identity')
+          tag = 'dollhousemcp:latest-' + expected.replace('/', '-')
+          require(output('docker', 'image', 'inspect', '--format', '{{.Id}}', tag) == image_id,
+                  'Production tag changed after runtime tests')
+          image = json.loads(output('docker', 'image', 'inspect', image_id))[0]
+          require(image['Id'] == image_id and image['Os'] + '/' + image['Architecture'] == expected,
+                  'Production image identity/platform mismatch')
+          host_arches = {'linux/amd64': {'x86_64', 'amd64'}, 'linux/arm64': {'aarch64', 'arm64'}}
+          require(platform.machine().lower() in host_arches[expected], 'Runtime was not native for this platform')
+          checkout = output('git', 'rev-parse', 'HEAD')
+          checkout_tree = output('git', 'rev-parse', 'HEAD^{tree}')
+          head = os.environ['EVIDENCE_HEAD_SHA']
+          require(all(re.fullmatch(r'[a-f0-9]{40}', value) for value in (checkout, checkout_tree, head)),
+                  'Invalid source identity')
+          commit_headers = output('git', 'cat-file', 'commit', 'HEAD').split('\n\n', 1)[0]
+          parents = [line.split(' ', 1)[1] for line in commit_headers.splitlines() if line.startswith('parent ')]
+          require(all(re.fullmatch(r'[a-f0-9]{40}', parent) for parent in parents), 'Invalid checkout parent')
+          require(head == checkout or (os.environ['GITHUB_EVENT_NAME'] == 'pull_request' and head in parents),
+                  'Recorded source head is not the tested checkout or its direct PR parent')
+          require(checkout == os.environ['GITHUB_SHA'], 'Checkout differs from the tested workflow source')
+          require(output('git', 'status', '--porcelain', '--untracked-files=no') == '', 'Tracked source changed during tests')
+          config = image['Config']
+          require(config['User'] == 'dollhouse' and config['Cmd'] == ['node', '--trace-warnings', 'dist/index.js'],
+                  'Refuse builder or unexpected runtime command')
+          require(config.get('Labels', {}).get('org.dollhousemcp.engine-proof-source') == checkout,
+                  'Image source label differs from tested checkout')
+          # Only the public constants in the approved Node base and production Dockerfile
+          # may enter the image config. No workflow credential or runtime environment is passed.
+          environment = dict(item.split('=', 1) for item in config['Env'])
+          expected_environment = {
+              'NODE_VERSION': '24.22.1', 'YARN_VERSION': '1.22.22', 'NODE_ENV': 'production',
+              'PERSONAS_DIR': '/app/data/personas', 'NODE_OPTIONS': '--max-old-space-size=256',
+              'DOLLHOUSE_DISABLE_UPDATES': 'true', 'DOLLHOUSE_SECURITY_MODE': 'strict',
+              'DOLLHOUSE_PORTFOLIO_DIR': '/app/tmp/portfolio', 'DOLLHOUSE_CACHE_DIR': '/app/tmp/cache',
+              'PATH': '/app/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+          }
+          require(len(config['Env']) == len(expected_environment) and environment == expected_environment,
+                  'Unexpected production image environment; do not upload')
+          folder = pathlib.Path(os.environ['RUNNER_TEMP'], 'beta3-runtime-evidence')
+          folder.mkdir(mode=0o700)
+          archive = folder / ('production-' + expected.replace('/', '-') + '.docker.tar')
+          # Save the immutable image, never a container's writable layer or builder image.
+          subprocess.run(['docker', 'image', 'save', '--output', str(archive), image_id], check=True)
+          digest = hashlib.sha256()
+          with archive.open('rb') as stream:
+              for block in iter(lambda: stream.read(1024 * 1024), b''):
+                  digest.update(block)
+          sha = digest.hexdigest()
+          (folder / 'SHA256SUMS').write_text(sha + '  ' + archive.name + '\n')
+          metadata = {
+              'formatVersion': 1, 'imageId': image_id, 'platform': expected, 'nativeRunnerArch': platform.machine(),
+              'sourceHeadSha': head, 'testedCheckoutSha': checkout, 'testedCheckoutTree': checkout_tree,
+              'testedCheckoutParents': parents,
+              'runId': os.environ['GITHUB_RUN_ID'], 'runAttempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'rootFsDiffIds': image['RootFS']['Layers'], 'archive': archive.name,
+              'archiveSha256': sha, 'archiveBytes': archive.stat().st_size,
+              'collectedAfterRequiredRuntimeTests': True,
+              'nativeDockerRestartWitness': 'passed' if expected == 'linux/amd64' else 'not-selected',
+              'imageEnvironmentCheckedAgainstPublicConstants': True,
+              'runtimeWritableLayerIncluded': False, 'builderImageIncluded': False,
+          }
+          (folder / 'metadata.json').write_text(json.dumps(metadata, indent=2) + '\n')
+          print(json.dumps(metadata))
+          PY_EVIDENCE
+
+      - name: Upload tested production image evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2; existing repository pin
+        with:
+          name: tested-production-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/beta3-runtime-evidence/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 1
 
       - name: Cleanup containers
         if: always()
