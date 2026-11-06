@@ -463,12 +463,14 @@ class ScannerEnvelopeTests(unittest.TestCase):
         for name in ('-version.stdout', '../outside.json', 'offline-provenance.json', 'scanner-owned-intent.json'):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
                 reports = Path(directory)
+                raw = envelope({'version.stdout': 'ok', name: 'bad'})
                 with self.assertRaises(ValueError):
-                    scanner.persist_scanner_envelope(envelope({'version.stdout': 'ok', name: 'bad'}), 0, reports)
+                    scanner.persist_scanner_envelope(raw, 0, reports)
                 self.assertEqual(list(reports.iterdir()), [])
         with tempfile.TemporaryDirectory() as directory:
             reports = Path(directory)
-            with self.assertRaises(ValueError): scanner.persist_scanner_envelope(envelope({'version.stdout': 1}), 0, reports)
+            raw = envelope({'version.stdout': 1})
+            with self.assertRaises(ValueError): scanner.persist_scanner_envelope(raw, 0, reports)
             self.assertEqual(list(reports.iterdir()), [])
 
     def test_runner_archive_uses_independent_cap_for_export_verification_and_failure_receipt(self):
