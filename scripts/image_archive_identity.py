@@ -227,8 +227,16 @@ def normalized_admission_descriptor(descriptor):
     return {key: descriptor[key] for key in ('digest', 'mediaType', 'size', 'platform') if key in descriptor}
 
 
+def _validate_external_descriptors(descriptor, inspection_descriptor):
+    if descriptor is not None and not isinstance(descriptor, dict):
+        raise ValueError('Admission descriptor must be an object or null')
+    if inspection_descriptor is not NO_INSPECTION_DESCRIPTOR and inspection_descriptor is not None and not isinstance(inspection_descriptor, dict):
+        raise ValueError('Inspection descriptor must be an object or null')
+
+
 def _verify_saved_image(path, store_id, unpacked_cap, descriptor=None, *, platform=DEFAULT_PLATFORM, expected_source=None, fileobj=None, inspection_descriptor=NO_INSPECTION_DESCRIPTOR):
     """The opaque store ID must bind to its exact role, never an arbitrary digest."""
+    _validate_external_descriptors(descriptor, inspection_descriptor)
     if not DIGEST.fullmatch(store_id):
         raise ValueError('Invalid local store identifier')
     archive = SavedImage(path, platform, fileobj)

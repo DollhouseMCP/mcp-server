@@ -11,6 +11,7 @@ import tempfile
 import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
 from image_archive_identity import verify_saved_image, verify_saved_image_file, verify_fixed_runner, sha
+import image_archive_identity as identity
 
 
 def encoded(value):
@@ -63,6 +64,21 @@ def write_archive(root, members):
 
 
 class ImageGraphTests(unittest.TestCase):
+    def test_nonobject_descriptors_refuse_before_archive_parser_for_both_apis(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'archive'; path.write_bytes(b'inert')
+            for value in ('descriptor', [], 7):
+                with self.subTest(value=value), patch.object(identity, 'SavedImage') as parser:
+                    with self.assertRaisesRegex(ValueError, 'Admission descriptor'):
+                        verify_saved_image(path, 'sha256:' + 'a' * 64, 1024, value)
+                    with path.open('rb') as stream:
+                        with self.assertRaisesRegex(ValueError, 'Admission descriptor'):
+                            verify_saved_image_file(stream, 'sha256:' + 'a' * 64, 1024, value)
+                        with self.assertRaisesRegex(ValueError, 'Inspection descriptor'):
+                            verify_saved_image_file(stream, 'sha256:' + 'a' * 64, 1024, inspection_descriptor=value)
+                    parser.assert_not_called()
+
     def test_fd_api_rejects_unbacked_or_nonregular_streams_before_parsing(self):
         import os
         stream = io.BytesIO(b'not an archive')

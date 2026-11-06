@@ -55,6 +55,14 @@ class IntakeTests(unittest.TestCase):
     def test_explicit_target_and_scanner_tuples_accept(self):
         self.assertEqual(self.invoke()[0], self.record)
 
+    def test_record_rejects_nonobject_descriptor(self):
+        for value in ('descriptor', [], 7):
+            record = copy.deepcopy(self.record); record['descriptor'] = value
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'descriptor must be'):
+                intake.validate_record(record, self.approved)
+        record = copy.deepcopy(self.record); record['descriptor'] = None
+        self.assertEqual(intake.validate_record(record, self.approved), record)
+
     def test_clean_real_checkout_and_copied_helper_refusal(self):
         checkout = self.root / 'checkout'; (checkout / 'scripts').mkdir(parents=True)
         helper = checkout / 'scripts/image_scan_intake.py'; helper.write_text('fixture')

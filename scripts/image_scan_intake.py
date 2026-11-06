@@ -238,6 +238,8 @@ def validate_record(record, approved_target):
               'config_digest', 'diff_ids', 'descriptor'}
     if not isinstance(record, dict) or set(record) != fields or record['schema'] != 'retained-image-intake-v1':
         raise ValueError('Unexpected or missing intake fields')
+    if record['descriptor'] is not None and not isinstance(record['descriptor'], dict):
+        raise ValueError('Intake descriptor must be an object or null')
     if (set(approved_target) != {'source', 'tree', 'run_id', 'attempt', 'runtime_receipt_sha256'} or
         any(record[k] != approved_target[k] for k in approved_target) or
         not COMMIT.fullmatch(record['source']) or not COMMIT.fullmatch(record['tree']) or

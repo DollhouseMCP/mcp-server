@@ -72,3 +72,15 @@ test('oversized report fails without publishing its contents', () => {
   assert.ok(result.envelope.files['failure.json']);
   assert.equal(result.envelope.files['application-image-vulnerabilities.json'], undefined);
 });
+
+test('total deadline stops before another command and emits one failure envelope', t => {
+  let reads = 0;
+  t.mock.method(Date, 'now', () => reads++ < 2 ? 1000 : 91000);
+  const result = fixture();
+  assert.equal(result.outcome, 1);
+  assert.equal(result.commands.length, 1);
+  assert.deepEqual(JSON.parse(result.envelope.files['failure.json']), {
+    error: 'Offline scanner exceeded its total 90 second process budget', status: 'unavailable'
+  });
+  assert.equal(result.envelope.files['scan.stdout'], undefined);
+});
