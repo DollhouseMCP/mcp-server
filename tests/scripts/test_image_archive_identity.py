@@ -26,11 +26,12 @@ def layer(data=b'owned content'):
     return out.getvalue()
 
 
-def fixture(modern=False, indexed=False, wrong_diff=False, arch="amd64", source=None):
+def fixture(modern=False, indexed=False, wrong_diff=False, arch="amd64", source=None, labels=None):
     raw = layer(); compressed = gzip.compress(raw, mtime=0) if modern else raw
     config_data = {'os': 'linux', 'architecture': arch, 'rootfs': {'type': 'layers',
                    'diff_ids': [sha(b'wrong') if wrong_diff else sha(raw)]}}
     if source is not None: config_data['config'] = {'Labels': {'org.dollhousemcp.engine-proof-source': source}}
+    if labels is not None: config_data['config'] = {'Labels': labels}
     config = encoded(config_data)
     config_id = sha(config); layer_id = sha(compressed)
     config_path = 'blobs/sha256/' + config_id[7:] if modern else config_id[7:] + '.json'
@@ -255,6 +256,25 @@ class ImageGraphTests(unittest.TestCase):
                 with path.open('rb') as stream:
                     with self.assertRaisesRegex(ValueError, 'Inspect descriptor'):
                         verify_saved_image_file(stream, store, size, desc, platform='linux/'+arch, expected_source=source, inspection_descriptor=wrong)
+
+    def test_caddy_requires_explicit_mode_and_both_bound_labels(self):
+        source = 'a' * 40
+        revision = {'org.opencontainers.image.revision': source}
+        distribution = {'org.dollhousemcp.caddy.distribution': 'source-rebuilt-security-candidate'}
+        for labels in (revision, revision | distribution):
+            with tempfile.TemporaryDirectory() as tmp:
+                members, store, _, _, size = fixture(modern=True, labels=labels)
+                path = write_archive(Path(tmp), members)
+                with self.assertRaisesRegex(ValueError, 'source label mismatch'):
+                    verify_saved_image(path, store, size, expected_source=source)
+                if labels == revision:
+                    with self.assertRaisesRegex(ValueError, 'retained Caddy'):
+                        verify_saved_image(path, store, size, expected_source=source, source_kind='caddy')
+                else:
+                    graph = verify_saved_image(path, store, size, expected_source=source, source_kind='caddy')
+                    self.assertEqual(graph['store_id'], store)
+                    with self.assertRaisesRegex(ValueError, 'source label mismatch'):
+                        verify_saved_image(path, store, size, expected_source='b' * 40, source_kind='caddy')
 
     def test_retained_missing_platform_fallback_refuses_explicit_invalid_and_multiple_roots(self):
         source = 'a' * 40

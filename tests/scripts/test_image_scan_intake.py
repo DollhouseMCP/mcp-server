@@ -38,7 +38,7 @@ class IntakeTests(unittest.TestCase):
         self.graph = {k:self.record[k] for k in ('store_id','store_id_role','root_digest','manifest_digest','config_digest')}
         self.graph['layers'] = [{'diff_id': self.record['diff_ids'][0]}]
 
-    def invoke(self, record=None, approved=None, github=None, git_values=None, raw=None):
+    def invoke(self, record=None, approved=None, github=None, git_values=None, raw=None, source_kind='application'):
         raw = raw if raw is not None else json.dumps(record or self.record).encode()
         path = self.slot / 'intake.json'; path.write_bytes(raw)
         outputs = iter(git_values or [self.head, self.tree, ''])
@@ -47,13 +47,17 @@ class IntakeTests(unittest.TestCase):
             result = Result(); result.stdout = next(outputs).encode(); return result
         with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake.subprocess, 'run', side_effect=git), patch.object(intake, 'verify_saved_image_file', return_value=self.graph) as verify:
             result = intake.validate_intake(path, hashlib.sha256(raw).hexdigest(), self.archive, self.head, self.tree,
-                                           self.head if github is None else github, Path(intake.__file__).resolve().parent.parent, approved or self.approved)
+                                           self.head if github is None else github, Path(intake.__file__).resolve().parent.parent, approved or self.approved, source_kind=source_kind)
+            self.assertEqual(verify.call_args.kwargs['source_kind'], source_kind)
             self.assertEqual(verify.call_args.kwargs['platform'], 'linux/arm64')
             self.assertEqual(verify.call_args.kwargs['expected_source'], self.approved['source'])
             return result
 
     def test_explicit_target_and_scanner_tuples_accept(self):
         self.assertEqual(self.invoke()[0], self.record)
+
+    def test_explicit_caddy_mode_reaches_archive_verifier(self):
+        self.assertEqual(self.invoke(source_kind='caddy')[0], self.record)
 
     def test_staged_output_slot_rejects_unsafe_names_before_any_access(self):
         from unittest.mock import Mock

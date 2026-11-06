@@ -246,7 +246,7 @@ class OfflineBoundaryTests(unittest.TestCase):
     def test_retained_target_selection_uses_admitted_record(self):
         from types import SimpleNamespace
         from unittest.mock import patch
-        args = SimpleNamespace(retained_intake='doc', intake_sha256='digest', retained_archive='archive', scanner_head='head', scanner_tree='tree')
+        args = SimpleNamespace(caddy=False, retained_intake='doc', intake_sha256='digest', retained_archive='archive', scanner_head='head', scanner_tree='tree')
         record = {'store_id': 'sha256:' + 'a' * 64, 'platform': 'linux/arm64', 'descriptor': {'digest': 'root'}}
         with patch.object(scanner, 'validate_intake', return_value=(record, {'fixture': True})):
             retained, target, image_id, descriptor = scanner.select_scanner_target([True], args, Path('/source'), {}, lambda *_: None)
@@ -267,7 +267,7 @@ class OfflineBoundaryTests(unittest.TestCase):
             runner = Path(directory).resolve(); root = runner / 'image-security'; inputs = root / 'inputs'; inputs.mkdir(parents=True)
             archive = write_archive(inputs, members)
             graph = verify_saved_image(archive, child, size, root_descriptor, expected_source=source)
-            target = {'architecture': 'amd64'}; args = SimpleNamespace(target_source=source)
+            target = {'architecture': 'amd64'}; args = SimpleNamespace(caddy=False, target_source=source)
             admitted_hash = hashlib.sha256(archive.read_bytes()).hexdigest()
             wrong = dict(root_descriptor); wrong['size'] += 1
             with patch.dict(scanner.os.environ, {'RUNNER_TEMP': str(runner)}):
