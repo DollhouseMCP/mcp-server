@@ -219,6 +219,78 @@ class ImageGraphTests(unittest.TestCase):
             wrong = copy.deepcopy(desc); wrong['platform']['architecture'] = 'arm64'
             with self.assertRaises(ValueError): verify_saved_image(path, store, size, wrong)
 
+    def test_retained_direct_single_manifest_can_bind_missing_platform_to_config(self):
+        source = 'a' * 40
+        for arch in ('amd64', 'arm64'):
+            members, store, config, desc, size = fixture(True, arch=arch, source=source)
+            del desc['platform']
+            members['index.json'] = encoded({'schemaVersion': 2, 'manifests': [desc]})
+            with self.subTest(arch=arch), tempfile.TemporaryDirectory() as d:
+                path = write_archive(Path(d), members)
+                for identity_value, role in ((store, 'manifest'), (config, 'config')):
+                    graph = verify_saved_image(path, identity_value, size, desc, platform='linux/'+arch, expected_source=source)
+                    self.assertEqual(graph['store_id_role'], role)
+                    self.assertEqual(graph['unpacked_layer_bytes'], size)
+                    with path.open('rb') as stream:
+                        self.assertEqual(verify_saved_image_file(stream, identity_value, size, desc, platform='linux/'+arch, expected_source=source)['store_id_role'], role)
+                with self.assertRaisesRegex(ValueError, 'source label'):
+                    verify_saved_image(path, store, size, desc, platform='linux/'+arch, expected_source='b'*40)
+                self.assertEqual(verify_saved_image(path, store, size, None, platform='linux/'+arch, expected_source=source)['store_id_role'], 'manifest')
+                with path.open('rb') as stream:
+                    self.assertEqual(verify_saved_image_file(stream, store, size, None, platform='linux/'+arch, expected_source=source, inspection_descriptor=desc)['store_id_role'], 'manifest')
+                null_platform = {**desc, 'platform': None}
+                with self.assertRaisesRegex(ValueError, 'Inspect descriptor'):
+                    verify_saved_image(path, store, size, null_platform, platform='linux/'+arch, expected_source=source)
+                with path.open('rb') as stream:
+                    with self.assertRaisesRegex(ValueError, 'Inspect descriptor'):
+                        verify_saved_image_file(stream, store, size, None, platform='linux/'+arch, expected_source=source, inspection_descriptor=null_platform)
+                wrong = {**desc, 'platform': {'os':'linux', 'architecture':arch}}
+                with self.assertRaisesRegex(ValueError, 'Inspect descriptor'):
+                    verify_saved_image(path, store, size, wrong, platform='linux/'+arch, expected_source=source)
+                with self.assertRaises(ValueError):
+                    verify_saved_image(path, store, size-1, desc, platform='linux/'+arch, expected_source=source)
+                other_arch = 'arm64' if arch == 'amd64' else 'amd64'
+                with self.assertRaisesRegex(ValueError, 'platform'):
+                    verify_saved_image(path, store, size, desc, platform='linux/'+other_arch, expected_source=source)
+                with path.open('rb') as stream:
+                    with self.assertRaisesRegex(ValueError, 'Inspect descriptor'):
+                        verify_saved_image_file(stream, store, size, desc, platform='linux/'+arch, expected_source=source, inspection_descriptor=wrong)
+
+    def test_retained_missing_platform_fallback_refuses_explicit_invalid_and_multiple_roots(self):
+        source = 'a' * 40
+        for value in (None, {}, '', False, [], {'os':'linux','architecture':'arm64'}, {'os':'windows','architecture':'amd64'}):
+            members, store, _, desc, size = fixture(True, source=source)
+            desc['platform'] = value; members['index.json'] = encoded({'schemaVersion':2, 'manifests':[desc]})
+            with self.subTest(platform=value), tempfile.TemporaryDirectory() as d:
+                path = write_archive(Path(d), members)
+                with self.assertRaises(ValueError): verify_saved_image(path, store, size, desc, expected_source=source)
+        members, store, _, desc, size = fixture(True, source=source)
+        del desc['platform']; other = {**desc, 'platform': {'os':'linux', 'architecture':'arm64'}}
+        members['index.json'] = encoded({'schemaVersion':2, 'manifests':[desc, other]})
+        with tempfile.TemporaryDirectory() as d:
+            path = write_archive(Path(d), members)
+            with self.assertRaisesRegex(ValueError, 'platform'):
+                verify_saved_image(path, store, size, desc, expected_source=source)
+
+    def test_retained_missing_platform_fallback_refuses_nested_graph_and_bad_layer(self):
+        source = 'a' * 40
+        members, store, config, root, size = fixture(True, indexed=True, source=source)
+        nested = json.loads(members['blobs/sha256/'+store[7:]])
+        child = nested['manifests'][0]; del child['platform']
+        data = encoded(nested); root = {**root, 'digest':sha(data), 'size':len(data)}
+        members['blobs/sha256/'+root['digest'][7:]] = data
+        members['index.json'] = encoded({'schemaVersion':2, 'manifests':[root]})
+        with tempfile.TemporaryDirectory() as d:
+            path = write_archive(Path(d), members)
+            with self.assertRaisesRegex(ValueError, 'platform'):
+                verify_saved_image(path, config, size, root, expected_source=source)
+        members, store, _, desc, size = fixture(True, wrong_diff=True, source=source)
+        del desc['platform']; members['index.json'] = encoded({'schemaVersion':2, 'manifests':[desc]})
+        with tempfile.TemporaryDirectory() as d:
+            path = write_archive(Path(d), members)
+            with self.assertRaisesRegex(ValueError, 'diffID'):
+                verify_saved_image(path, store, size, desc, expected_source=source)
+
     def test_arm_data_requires_explicit_platform_and_matching_descriptor(self):
         for modern in (False, True):
             members, store, _, desc, size = fixture(modern, arch='arm64')
