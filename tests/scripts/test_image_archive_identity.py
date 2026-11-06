@@ -27,6 +27,8 @@ def layer(data=b'owned content'):
 
 
 def fixture(modern=False, indexed=False, wrong_diff=False, arch="amd64", source=None, labels=None):
+    if source is not None and labels is not None:
+        raise ValueError('Use either source or labels for a fixture')
     raw = layer(); compressed = gzip.compress(raw, mtime=0) if modern else raw
     config_data = {'os': 'linux', 'architecture': arch, 'rootfs': {'type': 'layers',
                    'diff_ids': [sha(b'wrong') if wrong_diff else sha(raw)]}}
@@ -256,6 +258,11 @@ class ImageGraphTests(unittest.TestCase):
                 with path.open('rb') as stream:
                     with self.assertRaisesRegex(ValueError, 'Inspect descriptor'):
                         verify_saved_image_file(stream, store, size, desc, platform='linux/'+arch, expected_source=source, inspection_descriptor=wrong)
+
+    def test_unknown_source_kind_fails_before_opening_archive(self):
+        for source in (None, 'a' * 40):
+            with self.subTest(source=source), self.assertRaisesRegex(ValueError, 'Unknown image source kind'):
+                verify_saved_image(Path('not-opened.tar'), 'sha256:' + '0' * 64, 100, expected_source=source, source_kind='unknown')
 
     def test_caddy_requires_explicit_mode_and_both_bound_labels(self):
         source = 'a' * 40

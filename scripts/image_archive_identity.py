@@ -253,6 +253,8 @@ def _validate_external_descriptors(descriptor, inspection_descriptor):
 
 def _verify_saved_image(path, store_id, unpacked_cap, descriptor=None, *, platform=DEFAULT_PLATFORM, expected_source=None, source_kind='application', fileobj=None, inspection_descriptor=NO_INSPECTION_DESCRIPTOR):
     """The opaque store ID must bind to its exact role, never an arbitrary digest."""
+    if source_kind not in SOURCE_LABELS:
+        raise ValueError('Unknown image source kind')
     _validate_external_descriptors(descriptor, inspection_descriptor)
     if not DIGEST.fullmatch(store_id):
         raise ValueError('Invalid local store identifier')
