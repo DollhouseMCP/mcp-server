@@ -2,6 +2,8 @@
 import gzip
 import hashlib
 import json
+import os
+import stat
 from pathlib import PurePosixPath
 import re
 import tarfile
@@ -17,6 +19,10 @@ SHA_PREFIX = 'sha256:'
 BLOB_PREFIX = 'blobs/sha256/'
 INDEX_FILE = 'index.json'
 DEFAULT_PLATFORM = 'linux/amd64'
+NO_INSPECTION_DESCRIPTOR = object()
+RUNNER_INDEX_DIGEST = 'sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66'
+RUNNER_MANIFEST_DIGEST = 'sha256:c83040f7e24bacea68e58a0b96a484ba430bf24abb2973eab7ba4701144b7b63'
+RUNNER_CONFIG_DIGEST = 'sha256:04f59b17d8d39a8fdeb138fecb8fcbaa6e208ed7b6db929c7e98ad9005e0a52f'
 
 
 def sha(data):
@@ -24,13 +30,13 @@ def sha(data):
 
 
 class SavedImage:
-    def __init__(self, path, platform=DEFAULT_PLATFORM):
+    def __init__(self, path, platform=DEFAULT_PLATFORM, fileobj=None):
         if platform not in {DEFAULT_PLATFORM, "linux/arm64"}:
             raise ValueError("Unsupported target platform")
         self.platform = tuple(platform.split("/"))
         self.path = path
         self.deadline = time.monotonic() + 30
-        self.tar = tarfile.open(path, 'r:')
+        self.tar = tarfile.open(path if fileobj is None else None, 'r:', fileobj=fileobj)
         self.members = {}
         for member in self.tar:
             self.check_time()
@@ -161,7 +167,7 @@ def select_oci_candidate(archive, store_id, descriptor, config_bytes, config_dig
 def validate_selected_descriptor(archive, root, selected, descriptor, expected_source):
     if expected_source is not None and (selected[0].get('platform', {}).get('os'), selected[0].get('platform', {}).get('architecture')) != archive.platform:
         raise ValueError('Selected target descriptor platform is missing or mismatched')
-    if descriptor:
+    if descriptor is not None:
         matching = next((d for d in (root, selected[0]) if d.get('digest') == descriptor.get('digest')), None)
         if not matching or any(descriptor.get(k) != matching.get(k) for k in ['digest', 'mediaType', 'size']) or ('platform' in descriptor and descriptor['platform'] != matching.get('platform')):
             raise ValueError('Inspect descriptor differs from saved graph')
@@ -177,9 +183,11 @@ def store_role(store_id, root, selected, config_digest):
     raise ValueError('Store ID has no exact role in selected OCI graph')
 
 
-def select_oci_graph(archive, store_id, descriptor, config_bytes, config_digest, docker, expected_source):
+def select_oci_graph(archive, store_id, descriptor, config_bytes, config_digest, docker, expected_source, inspection_descriptor=NO_INSPECTION_DESCRIPTOR):
     root, selected = select_oci_candidate(archive, store_id, descriptor, config_bytes, config_digest)
     validate_selected_descriptor(archive, root, selected, descriptor, expected_source)
+    if inspection_descriptor is not NO_INSPECTION_DESCRIPTOR:
+        validate_selected_descriptor(archive, root, selected, inspection_descriptor, expected_source)
     role = store_role(store_id, root, selected, config_digest)
     if selected[1]['config']['digest'] != config_digest:
         raise ValueError('OCI and Docker config digest disagree')
@@ -214,39 +222,69 @@ def verified_layers(archive, config, docker, descriptors, unpacked_cap):
     return layers, total
 
 
-def verify_saved_image(path, store_id, unpacked_cap, descriptor=None, *, platform=DEFAULT_PLATFORM, expected_source=None):
+def normalized_admission_descriptor(descriptor):
+    if descriptor is None: return None
+    return {key: descriptor[key] for key in ('digest', 'mediaType', 'size', 'platform') if key in descriptor}
+
+
+def _validate_external_descriptors(descriptor, inspection_descriptor):
+    if descriptor is not None and not isinstance(descriptor, dict):
+        raise ValueError('Admission descriptor must be an object or null')
+    if inspection_descriptor is not NO_INSPECTION_DESCRIPTOR and inspection_descriptor is not None and not isinstance(inspection_descriptor, dict):
+        raise ValueError('Inspection descriptor must be an object or null')
+
+
+def _verify_saved_image(path, store_id, unpacked_cap, descriptor=None, *, platform=DEFAULT_PLATFORM, expected_source=None, fileobj=None, inspection_descriptor=NO_INSPECTION_DESCRIPTOR):
     """The opaque store ID must bind to its exact role, never an arbitrary digest."""
+    _validate_external_descriptors(descriptor, inspection_descriptor)
     if not DIGEST.fullmatch(store_id):
         raise ValueError('Invalid local store identifier')
-    archive = SavedImage(path, platform)
+    archive = SavedImage(path, platform, fileobj)
     try:
         docker, config_bytes, config = saved_config(archive, expected_source)
         config_digest = sha(config_bytes)
         selected = None; root_digest = None
         if INDEX_FILE in archive.members:
-            root_digest, selected, role, descriptors = select_oci_graph(archive, store_id, descriptor, config_bytes, config_digest, docker, expected_source)
+            root_digest, selected, role, descriptors = select_oci_graph(archive, store_id, descriptor, config_bytes, config_digest, docker, expected_source, inspection_descriptor)
         else:
-            if descriptor or store_id != config_digest:
+            if descriptor is not None or (inspection_descriptor is not NO_INSPECTION_DESCRIPTOR and inspection_descriptor is not None):
+                raise ValueError('Classic Docker archive does not support an inspect descriptor')
+            if store_id != config_digest:
                 raise ValueError('Classic Docker config identity does not match observed store ID')
             role = 'config'; descriptors = [None] * len(docker['Layers'])
         layers, total = verified_layers(archive, config, docker, descriptors, unpacked_cap)
         return {'store_id': store_id, 'store_id_role': role, 'root_digest': root_digest,
+                'admission_descriptor': normalized_admission_descriptor(descriptor),
                 'manifest_digest': selected[0]['digest'] if selected else None,
                 'manifest_descriptor': selected[0] if selected else None,
                 'config_digest': config_digest, 'layers': layers,
-                'archive_bytes': path.stat().st_size, 'unpacked_layer_bytes': total,
+                'archive_bytes': os.fstat(fileobj.fileno()).st_size if fileobj is not None else path.stat().st_size, 'unpacked_layer_bytes': total,
                 'format': 'oci-with-docker-manifest' if selected else 'classic-docker'}
     finally:
         archive.close()
+
+
+def verify_saved_image(path, store_id, unpacked_cap, descriptor=None, *, platform=DEFAULT_PLATFORM, expected_source=None):
+    """Verify a library caller's trusted path; CLI callers must use the FD API."""
+    return _verify_saved_image(path, store_id, unpacked_cap, descriptor, platform=platform, expected_source=expected_source)
+
+
+def verify_saved_image_file(stream, store_id, unpacked_cap, descriptor=None, *, platform=DEFAULT_PLATFORM, expected_source=None, inspection_descriptor=NO_INSPECTION_DESCRIPTOR):
+    """Verify an already admitted open file object without reopening its name."""
+    try: info = os.fstat(stream.fileno())
+    except (AttributeError, OSError, ValueError, TypeError) as error:
+        raise ValueError('Saved-image FD must be an open regular file') from error
+    if not stat.S_ISREG(info.st_mode): raise ValueError('Saved-image FD must be an open regular file')
+    return _verify_saved_image(None, store_id, unpacked_cap, descriptor, platform=platform, expected_source=expected_source, fileobj=stream, inspection_descriptor=inspection_descriptor)
 
 
 def verify_fixed_runner(evidence, reference_directory):
     """Anchor either archive format to the exact protected public reference graph."""
     index_bytes = (reference_directory / INDEX_FILE).read_bytes()
     manifest_bytes = (reference_directory / 'linux-amd64-manifest.json').read_bytes()
-    root = 'sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66'
-    manifest_digest = 'sha256:c83040f7e24bacea68e58a0b96a484ba430bf24abb2973eab7ba4701144b7b63'
-    config_digest = 'sha256:04f59b17d8d39a8fdeb138fecb8fcbaa6e208ed7b6db929c7e98ad9005e0a52f'
+    root = RUNNER_INDEX_DIGEST
+    manifest_digest = RUNNER_MANIFEST_DIGEST
+    config_digest = RUNNER_CONFIG_DIGEST
     if sha(index_bytes) != root or sha(manifest_bytes) != manifest_digest:
         raise ValueError('Protected runner reference bytes do not match fixed digests')
     index, manifest = json.loads(index_bytes), json.loads(manifest_bytes)
@@ -255,6 +293,8 @@ def verify_fixed_runner(evidence, reference_directory):
         raise ValueError('Protected runner index/manifest/config graph mismatch')
     if evidence['config_digest'] != config_digest:
         raise ValueError('Runner archive is not the protected independent config')
+    if evidence['format'] == 'classic-docker' and (evidence.get('store_id_role') != 'config' or evidence.get('store_id') != config_digest):
+        raise ValueError('Classic runner store identity must be the protected config')
     if evidence['format'] == 'oci-with-docker-manifest':
         if evidence['root_digest'] not in {root, manifest_digest} or evidence['manifest_digest'] != manifest_digest:
             raise ValueError('Runner selected manifest is not the exact protected platform')

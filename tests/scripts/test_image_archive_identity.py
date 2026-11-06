@@ -10,7 +10,8 @@ import tarfile
 import tempfile
 import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
-from image_archive_identity import verify_saved_image, verify_fixed_runner, sha
+from image_archive_identity import verify_saved_image, verify_saved_image_file, verify_fixed_runner, sha
+import image_archive_identity as identity
 
 
 def encoded(value):
@@ -25,10 +26,12 @@ def layer(data=b'owned content'):
     return out.getvalue()
 
 
-def fixture(modern=False, indexed=False, wrong_diff=False, arch="amd64"):
+def fixture(modern=False, indexed=False, wrong_diff=False, arch="amd64", source=None):
     raw = layer(); compressed = gzip.compress(raw, mtime=0) if modern else raw
-    config = encoded({'os': 'linux', 'architecture': arch, 'rootfs': {'type': 'layers',
-                     'diff_ids': [sha(b'wrong') if wrong_diff else sha(raw)]}})
+    config_data = {'os': 'linux', 'architecture': arch, 'rootfs': {'type': 'layers',
+                   'diff_ids': [sha(b'wrong') if wrong_diff else sha(raw)]}}
+    if source is not None: config_data['config'] = {'Labels': {'org.dollhousemcp.engine-proof-source': source}}
+    config = encoded(config_data)
     config_id = sha(config); layer_id = sha(compressed)
     config_path = 'blobs/sha256/' + config_id[7:] if modern else config_id[7:] + '.json'
     layer_path = 'blobs/sha256/' + layer_id[7:] if modern else 'classic/layer.tar'
@@ -61,6 +64,40 @@ def write_archive(root, members):
 
 
 class ImageGraphTests(unittest.TestCase):
+    def test_nonobject_descriptors_refuse_before_archive_parser_for_both_apis(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'archive'; path.write_bytes(b'inert')
+            for value in ('descriptor', [], 7):
+                with self.subTest(value=value), patch.object(identity, 'SavedImage') as parser:
+                    with self.assertRaisesRegex(ValueError, 'Admission descriptor'):
+                        verify_saved_image(path, 'sha256:' + 'a' * 64, 1024, value)
+                    with path.open('rb') as stream:
+                        with self.assertRaisesRegex(ValueError, 'Admission descriptor'):
+                            verify_saved_image_file(stream, 'sha256:' + 'a' * 64, 1024, value)
+                        with self.assertRaisesRegex(ValueError, 'Inspection descriptor'):
+                            verify_saved_image_file(stream, 'sha256:' + 'a' * 64, 1024, inspection_descriptor=value)
+                    parser.assert_not_called()
+
+    def test_fd_api_rejects_unbacked_or_nonregular_streams_before_parsing(self):
+        import os
+        stream = io.BytesIO(b'not an archive')
+        with self.assertRaisesRegex(ValueError, 'open regular file'):
+            verify_saved_image_file(stream, 'sha256:' + 'a' * 64, 1024)
+        with open(os.devnull, 'rb') as device:
+            with self.assertRaisesRegex(ValueError, 'open regular file'):
+                verify_saved_image_file(device, 'sha256:' + 'a' * 64, 1024)
+
+    def test_classic_descriptor_and_store_mismatch_have_distinct_failures(self):
+        members, store, _, _, size = fixture()
+        with tempfile.TemporaryDirectory() as d:
+            path = write_archive(Path(d), members)
+            descriptor = {'digest': store, 'size': 1, 'mediaType': 'fixture'}
+            with self.assertRaisesRegex(ValueError, 'does not support an inspect descriptor'):
+                verify_saved_image(path, store, size, descriptor)
+            with self.assertRaisesRegex(ValueError, 'config identity'):
+                verify_saved_image(path, 'sha256:' + 'f' * 64, size)
+
     def test_classic_config_id_and_real_diffid_are_verified(self):
         members, store, config, desc, size = fixture()
         with tempfile.TemporaryDirectory() as d:
@@ -207,6 +244,28 @@ class ImageGraphTests(unittest.TestCase):
         bad = copy.deepcopy(evidence); bad['config_digest'] = 'sha256:' + 'e' * 64
         with self.assertRaisesRegex(ValueError, 'independent config'):
             verify_fixed_runner(bad, reference)
+
+    def test_classic_runner_requires_exact_config_store_identity(self):
+        reference = Path(__file__).resolve().parents[2] / '.github/grype-runner-reference'
+        config = 'sha256:04f59b17d8d39a8fdeb138fecb8fcbaa6e208ed7b6db929c7e98ad9005e0a52f'
+        evidence = {'format': 'classic-docker', 'store_id_role': 'config', 'store_id': config,
+                    'config_digest': config, 'root_digest': None, 'manifest_digest': None}
+        self.assertEqual(verify_fixed_runner(evidence, reference)['container_image_id'], config)
+        for key, bad in [('store_id', 'sha256:' + 'f' * 64), ('store_id_role', 'manifest')]:
+            changed = copy.deepcopy(evidence); changed[key] = bad
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'Classic runner store identity'):
+                verify_fixed_runner(changed, reference)
+
+    def test_fixed_oci_runner_retains_distinct_store_aliases(self):
+        reference = Path(__file__).resolve().parents[2] / '.github/grype-runner-reference'
+        root = 'sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66'
+        manifest = 'sha256:c83040f7e24bacea68e58a0b96a484ba430bf24abb2973eab7ba4701144b7b63'
+        config = 'sha256:04f59b17d8d39a8fdeb138fecb8fcbaa6e208ed7b6db929c7e98ad9005e0a52f'
+        for role, identifier in [('index', root), ('manifest', manifest), ('config', config)]:
+            evidence = {'format': 'oci-with-docker-manifest', 'store_id_role': role, 'store_id': identifier,
+                        'root_digest': root, 'manifest_digest': manifest, 'config_digest': config}
+            with self.subTest(role=role):
+                self.assertEqual(verify_fixed_runner(evidence, reference)['container_image_id'], identifier)
 
 
 if __name__ == '__main__':
