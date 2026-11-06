@@ -31,6 +31,9 @@ GRYPE_HOST = "grype.anchore.io"
 WORK_DIR = "/work"
 GRYPE_CONFIG = "grype.yaml"
 DATABASE_ARCHIVE = "database.tar.zst"
+DATABASE_MANIFEST = "database-manifest.json"
+SHA256_HEX = r'[a-f0-9]{64}'
+FROZEN_ARGUMENT_ERROR = "Frozen inputs require both SHA256 values and complete retained intake"
 IMAGE_ARCHIVE = "image.tar"
 OFFLINE_RUNNER = "grype-offline-runner.mjs"
 
@@ -112,7 +115,7 @@ def download_contract(slot, url, maximum, expected):
         valid = url == DB_MANIFEST_URL and maximum == 1024 * 1024 and expected is None
     elif slot == 'database':
         valid = (maximum == 1024 * 1024 * 1024 and isinstance(expected, str) and
-                 re.fullmatch(r'[a-f0-9]{64}', expected) is not None and
+                 re.fullmatch(SHA256_HEX, expected) is not None and
                  re.fullmatch(r'https://grype[.]anchore[.]io/databases/v6/vulnerability-db_v6[.]1[.]10_[A-Za-z0-9:_-]+[.]tar[.]zst', url) is not None)
     else:
         valid = False
@@ -157,7 +160,7 @@ def download_receipt(stdout, url, maximum, expected):
     keys = {'kind', 'url', 'sha256', 'bytes', 'started_utc', 'finished_utc', 'identity'}
     if (not isinstance(receipt, dict) or set(receipt) != keys or receipt['kind'] != 'download-worker-v1' or
             receipt['url'] != url or type(receipt['bytes']) is not int or not 0 < receipt['bytes'] <= maximum or
-            not isinstance(receipt['sha256'], str) or not re.fullmatch(r'[a-f0-9]{64}', receipt['sha256']) or
+            not isinstance(receipt['sha256'], str) or not re.fullmatch(SHA256_HEX, receipt['sha256']) or
             (expected and receipt['sha256'] != expected) or
             any(not isinstance(receipt[key], str) or len(receipt[key]) > 64 for key in ('started_utc', 'finished_utc'))):
         raise ValueError('Download worker receipt is missing or inconsistent')
@@ -175,7 +178,7 @@ def check_download_identity(fd, parent, name, receipt):
 def download_slot(destination):
     runner = os.environ.get('RUNNER_TEMP') or ''
     work = trusted_work_root(os.path.join(runner, 'image-security'))
-    slots = {'scanner': ('inputs', ARCHIVE_NAME), 'manifest': ('reports', 'database-manifest.json'),
+    slots = {'scanner': ('inputs', ARCHIVE_NAME), 'manifest': ('reports', DATABASE_MANIFEST),
              'database': ('inputs', DATABASE_ARCHIVE)}
     matches = [key for key, (directory, name) in slots.items() if Path(destination) == work / directory / name]
     if len(matches) != 1: raise ValueError('Download destination is not a fixed trusted input slot')
@@ -536,11 +539,11 @@ class FrozenArgumentsError(ValueError):
 def validate_frozen_arguments(manifest_hash, binary_hash, retained):
     values = (manifest_hash, binary_hash)
     if not any(value is not None for value in values): return None
-    if not all(isinstance(value, str) and re.fullmatch(r'[a-f0-9]{64}', value) for value in values):
-        raise FrozenArgumentsError('Frozen inputs require both SHA256 values and complete retained intake')
+    if not all(isinstance(value, str) and re.fullmatch(SHA256_HEX, value) for value in values):
+        raise FrozenArgumentsError(FROZEN_ARGUMENT_ERROR)
     try: validate_intake_arguments(retained, retained[8])
-    except ValueError as error: raise FrozenArgumentsError('Frozen inputs require both SHA256 values and complete retained intake') from error
-    if not all(retained): raise FrozenArgumentsError('Frozen inputs require both SHA256 values and complete retained intake')
+    except ValueError as error: raise FrozenArgumentsError(FROZEN_ARGUMENT_ERROR) from error
+    if not all(retained): raise FrozenArgumentsError(FROZEN_ARGUMENT_ERROR)
     return {'manifest': manifest_hash, 'binary': binary_hash}
 
 
@@ -600,12 +603,12 @@ def prepare_frozen_inputs(root, hashes, deadline):
     binary = frozen_copy(root, ARCHIVE_NAME, 100 * 1024 * 1024, ARCHIVE_SHA256, 'inputs', ARCHIVE_NAME, deadline)
     binary['binary_bytes'] = extract_frozen_binary(root, hashes['binary'], deadline)
     binary['binary_sha256'] = hashes['binary']
-    frozen_copy(root, 'database-manifest.json', 1024 * 1024, hashes['manifest'], 'reports', 'database-manifest.json', deadline)
+    frozen_copy(root, DATABASE_MANIFEST, 1024 * 1024, hashes['manifest'], 'reports', DATABASE_MANIFEST, deadline)
     with TrustedTree(root) as tree:
         reports = tree.directory(tree.workfd, 'reports')
-        stream, identity = tree.file(reports, 'database-manifest.json', 1024 * 1024)
+        stream, identity = tree.file(reports, DATABASE_MANIFEST, 1024 * 1024)
         data = stream.read(identity[5] + 1)
-        tree.check_file(stream, identity, reports, 'database-manifest.json')
+        tree.check_file(stream, identity, reports, DATABASE_MANIFEST)
         if len(data) != identity[5] or hashlib.sha256(data).hexdigest() != hashes['manifest']:
             raise ValueError('Frozen manifest changed')
         manifest = json.loads(data, object_pairs_hook=unique_object)
@@ -657,8 +660,8 @@ def prepare_downloaded_inputs(inputs, reports, deadline):
     (reports / "scanner-download.json").write_text(json.dumps(binary_receipt, indent=2))
     extract_verified_binary(binary_archive, inputs / "grype")
     (inputs / "grype").chmod(0o555)
-    download(DB_MANIFEST_URL, reports / "database-manifest.json", 1024 * 1024, deadline=deadline)
-    manifest = json.loads((reports / "database-manifest.json").read_text())
+    download(DB_MANIFEST_URL, reports / DATABASE_MANIFEST, 1024 * 1024, deadline=deadline)
+    manifest = json.loads((reports / DATABASE_MANIFEST).read_text())
     url, checksum = database_manifest(manifest, datetime.datetime.now(datetime.timezone.utc))
     db_receipt = download(url, inputs / DATABASE_ARCHIVE, 1024 * 1024 * 1024, checksum, deadline=deadline)
     (reports / "database-download.json").write_text(json.dumps(db_receipt, indent=2))

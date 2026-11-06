@@ -184,10 +184,14 @@ def read_scanner_provenance(work_root):
         return json.loads(data, object_pairs_hook=unique_object)
 
 
+def check_deadline(deadline, message):
+    if deadline is not None and time.monotonic() >= deadline: raise ValueError(message)
+
+
 def bounded_hash(stream, expected_size, *, deadline=None):
     digest = hashlib.sha256(); count = 0
     while count <= expected_size:
-        if deadline is not None and time.monotonic() >= deadline: raise ValueError('Scanner deadline exhausted during bounded hash')
+        check_deadline(deadline, 'Scanner deadline exhausted during bounded hash')
         chunk = stream.read(min(65536, expected_size + 1 - count))
         if not chunk: break
         count += len(chunk); digest.update(chunk)
@@ -208,7 +212,7 @@ def stage_verified(tree, stream, expected_size, expected_hash, identity, parent,
             target = owned_stack.enter_context(os.fdopen(fd, 'w+b', closefd=False))
             digest = hashlib.sha256(); count = 0; stream.seek(0)
             while count <= expected_size:
-                if deadline is not None and time.monotonic() >= deadline: raise ValueError('Scanner deadline exhausted during staged copy')
+                check_deadline(deadline, 'Scanner deadline exhausted during staged copy')
                 chunk = stream.read(min(65536, expected_size + 1 - count))
                 if not chunk: break
                 count += len(chunk)

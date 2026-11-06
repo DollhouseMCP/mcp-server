@@ -110,8 +110,9 @@ class FrozenInputTests(unittest.TestCase):
         self.assertEqual(database['url'], 'https://grype.anchore.io/databases/v6/' + self.manifest['path'])
         scanner.verify_frozen_mounts(self.root, self.hashes, database['sha256'], time.monotonic()+30)
         (self.root / 'inputs' / scanner.DATABASE_ARCHIVE).write_bytes(b'changed')
+        deadline = time.monotonic()+30
         with self.assertRaisesRegex(ValueError, 'mounted input changed'):
-            scanner.verify_frozen_mounts(self.root, self.hashes, database['sha256'], time.monotonic()+30)
+            scanner.verify_frozen_mounts(self.root, self.hashes, database['sha256'], deadline)
 
     def test_invalid_flags_refuse_before_output_preparation(self):
         complete = ['x'] * 10; complete[8] = 1
@@ -143,8 +144,9 @@ class FrozenInputTests(unittest.TestCase):
         archive = self.root / 'admitted' / scanner.ARCHIVE_NAME
         archive.unlink(); archive.symlink_to(self.root / 'admitted' / scanner.DATABASE_ARCHIVE)
         with self.assertRaises(ValueError): self.prepare()
+        deadline = time.monotonic() - 1
         with self.assertRaisesRegex(ValueError, 'deadline'):
-            scanner.frozen_copy(self.root, scanner.DATABASE_ARCHIVE, scanner.GIB, '0'*64, 'inputs', scanner.DATABASE_ARCHIVE, time.monotonic() - 1)
+            scanner.frozen_copy(self.root, scanner.DATABASE_ARCHIVE, scanner.GIB, '0'*64, 'inputs', scanner.DATABASE_ARCHIVE, deadline)
 
     def test_main_rejects_partial_frozen_flags_before_output(self):
         from unittest.mock import patch
@@ -186,9 +188,10 @@ class FrozenInputTests(unittest.TestCase):
         runner = self.root / 'runner'; runner.write_text('runner')
         run = Mock(return_value=(0, b'')); inspect = Mock(return_value=None); save = Mock()
         fake = ({'origin':'frozen-admitted'}, self.manifest, {'origin':'frozen-admitted'})
+        inputs = self.root/'inputs'; reports = self.root/'reports'; deadline = time.monotonic()+30
         with patch.object(scanner, 'prepare_frozen_inputs', return_value=fake), patch.object(scanner, 'database_payload_bytes', return_value=1), patch.object(scanner, 'download', side_effect=AssertionError('network forbidden')):
             with self.assertRaisesRegex(ValueError, 'runner reference'):
-                scanner.prepare_offline_inputs(self.root/'inputs', self.root/'reports', config, runner, runner, run, inspect, save, time.monotonic()+30, frozen=self.hashes)
+                scanner.prepare_offline_inputs(inputs, reports, config, runner, runner, run, inspect, save, deadline, frozen=self.hashes)
         self.assertEqual(run.call_count, 1)
         self.assertEqual(run.call_args.args[0], ['/usr/bin/zstd', '--version'])
         save.assert_not_called()
