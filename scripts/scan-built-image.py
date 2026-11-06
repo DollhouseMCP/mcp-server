@@ -419,13 +419,12 @@ def terminate_process(child, limit):
 
 
 def close_child_pipes(child, primary, error):
-    failures = []; cancellation = None
-    for pipe in (child.stdout, child.stderr):
+    failures = []
+    def close(pipe):
         try: pipe.close()
-        except BaseException as issue:
-            if isinstance(issue, Exception): failures.append(issue)
-            elif cancellation is None: cancellation = issue
-    if cancellation is not None: raise cancellation
+        except Exception as issue: failures.append(issue)
+    try: close(child.stdout)
+    finally: close(child.stderr)
     if failures:
         detail = 'Pipe close UNKNOWN: ' + '; '.join(str(issue) for issue in failures)
         if primary is not None: primary.add_note(detail)
