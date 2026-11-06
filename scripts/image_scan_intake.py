@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import stat
+import time
 from contextlib import ExitStack
 import re
 import subprocess
@@ -183,9 +184,10 @@ def read_scanner_provenance(work_root):
         return json.loads(data, object_pairs_hook=unique_object)
 
 
-def bounded_hash(stream, expected_size):
+def bounded_hash(stream, expected_size, *, deadline=None):
     digest = hashlib.sha256(); count = 0
     while count <= expected_size:
+        if deadline is not None and time.monotonic() >= deadline: raise ValueError('Scanner deadline exhausted during bounded hash')
         chunk = stream.read(min(65536, expected_size + 1 - count))
         if not chunk: break
         count += len(chunk); digest.update(chunk)
@@ -193,9 +195,9 @@ def bounded_hash(stream, expected_size):
     return digest.hexdigest()
 
 
-def stage_verified(tree, stream, expected_size, expected_hash, identity, parent, name):
-    inputs = tree.directory(tree.workfd, 'inputs')
-    fd = os.open(STAGED_ARCHIVE, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=inputs)
+def stage_verified(tree, stream, expected_size, expected_hash, identity, parent, name, *, output_dir='inputs', output_name=STAGED_ARCHIVE, deadline=None):
+    inputs = tree.directory(tree.workfd, output_dir)
+    fd = os.open(output_name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=inputs)
     try:
         with ExitStack() as owned_stack:
             owned_stack.callback(os.close, fd)
@@ -203,6 +205,7 @@ def stage_verified(tree, stream, expected_size, expected_hash, identity, parent,
             target = owned_stack.enter_context(os.fdopen(fd, 'w+b', closefd=False))
             digest = hashlib.sha256(); count = 0; stream.seek(0)
             while count <= expected_size:
+                if deadline is not None and time.monotonic() >= deadline: raise ValueError('Scanner deadline exhausted during staged copy')
                 chunk = stream.read(min(65536, expected_size + 1 - count))
                 if not chunk: break
                 count += len(chunk)
@@ -212,14 +215,14 @@ def stage_verified(tree, stream, expected_size, expected_hash, identity, parent,
             if count != expected_size or digest.hexdigest() != expected_hash: raise ValueError('Staged archive changed')
             tree.check_file(stream, identity, parent, name)
             actual = os.fstat(target.fileno())
-            selected = os.stat(STAGED_ARCHIVE, dir_fd=inputs, follow_symlinks=False)
+            selected = os.stat(output_name, dir_fd=inputs, follow_symlinks=False)
             if (not stat.S_ISREG(actual.st_mode) or (actual.st_dev, actual.st_ino, actual.st_uid) != owned or
                     actual.st_uid != os.getuid() or actual.st_nlink != 1 or stat.S_IMODE(actual.st_mode) != 0o600 or
                     actual.st_size != expected_size or stable_identity(actual) != stable_identity(selected)):
                 raise ValueError('Staged archive identity mismatch')
             target.seek(0)
-            if bounded_hash(target, expected_size) != expected_hash: raise ValueError('Staged archive hash mismatch')
-            if stable_identity(actual) != stable_identity(os.fstat(target.fileno())) or stable_identity(actual) != stable_identity(os.stat(STAGED_ARCHIVE, dir_fd=inputs, follow_symlinks=False)):
+            if bounded_hash(target, expected_size, deadline=deadline) != expected_hash: raise ValueError('Staged archive hash mismatch')
+            if stable_identity(actual) != stable_identity(os.fstat(target.fileno())) or stable_identity(actual) != stable_identity(os.stat(output_name, dir_fd=inputs, follow_symlinks=False)):
                 raise ValueError('Staged archive changed during verification')
             tree.check_directories()
     except Exception as error:

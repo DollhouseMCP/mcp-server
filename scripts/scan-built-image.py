@@ -18,7 +18,7 @@ import urllib.parse
 import uuid
 from image_archive_identity import verify_fixed_runner, RUNNER_INDEX_DIGEST, RUNNER_MANIFEST_DIGEST, RUNNER_CONFIG_DIGEST
 from image_scan_intake import (validate_intake, trusted_work_root, verify_trusted_image, prepare_scanner_output,
-                               write_failure_report, TrustedTree, bounded_hash, stable_identity, unique_object, validate_intake_arguments)
+                               write_failure_report, TrustedTree, bounded_hash, stable_identity, unique_object, validate_intake_arguments, stage_verified)
 from pathlib import Path
 import subprocess
 import tarfile
@@ -529,7 +529,129 @@ def select_scanner_target(supplied, args, source_root, approved_target, inspect_
         target_descriptor = target["descriptor"]
     return retained, target, image_id, target_descriptor
 
-def prepare_offline_inputs(inputs, reports, scanner_config, offline_runner, runner_reference, run, inspect_image, save_verified, deadline):
+class FrozenArgumentsError(ValueError):
+    pass
+
+
+def validate_frozen_arguments(manifest_hash, binary_hash, retained):
+    values = (manifest_hash, binary_hash)
+    if not any(value is not None for value in values): return None
+    if not all(isinstance(value, str) and re.fullmatch(r'[a-f0-9]{64}', value) for value in values):
+        raise FrozenArgumentsError('Frozen inputs require both SHA256 values and complete retained intake')
+    try: validate_intake_arguments(retained, retained[8])
+    except ValueError as error: raise FrozenArgumentsError('Frozen inputs require both SHA256 values and complete retained intake') from error
+    if not all(retained): raise FrozenArgumentsError('Frozen inputs require both SHA256 values and complete retained intake')
+    return {'manifest': manifest_hash, 'binary': binary_hash}
+
+
+def frozen_copy(root, source_name, maximum, expected, output_dir, output_name, deadline):
+    if time.monotonic() >= deadline: raise ValueError('Scanner deadline exhausted before frozen admission')
+    started = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    with TrustedTree(root) as tree:
+        admitted = tree.directory(tree.workfd, 'admitted')
+        stream, identity = tree.file(admitted, source_name, maximum)
+        if bounded_hash(stream, identity[5], deadline=deadline) != expected: raise ValueError('Frozen input SHA256 mismatch')
+        tree.check_file(stream, identity, admitted, source_name)
+        stage_verified(tree, stream, identity[5], expected, identity, admitted, source_name,
+                       output_dir=output_dir, output_name=output_name, deadline=deadline)
+    if time.monotonic() >= deadline: raise ValueError('Scanner deadline exhausted during frozen admission')
+    return {'url': None, 'sha256': expected, 'bytes': identity[5], 'started_utc': started,
+            'finished_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            'origin': 'frozen-admitted', 'source_slot': source_name}
+
+
+def extract_frozen_binary(root, expected_binary, deadline):
+    with TrustedTree(root) as tree:
+        inputs = tree.directory(tree.workfd, 'inputs')
+        stream, identity = tree.file(inputs, ARCHIVE_NAME, 100 * 1024 * 1024)
+        if bounded_hash(stream, identity[5], deadline=deadline) != ARCHIVE_SHA256: raise ValueError('Frozen Grype archive SHA256 mismatch')
+        stream.seek(0)
+        with tarfile.open(fileobj=stream, mode='r:gz') as bundle:
+            members = [member for member in bundle.getmembers() if member.name == 'grype']
+            if len(members) != 1 or not members[0].isfile() or not 0 < members[0].size <= 100 * 1024 * 1024:
+                raise ValueError('Expected exactly one bounded regular grype binary')
+            fd = os.open('grype', os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=inputs)
+            tree.stack.callback(os.close, fd)
+            with bundle.extractfile(members[0]) as source, os.fdopen(fd, 'w+b', closefd=False) as output:
+                count = 0
+                while count < members[0].size:
+                    if time.monotonic() >= deadline: raise ValueError('Scanner deadline exhausted during extraction')
+                    chunk = source.read(min(65536, members[0].size - count))
+                    if not chunk: raise ValueError('Truncated Grype binary')
+                    output.write(chunk); count += len(chunk)
+                output.flush(); before_readback = stable_identity(os.fstat(fd)); output.seek(0)
+                if bounded_hash(output, count, deadline=deadline) != expected_binary: raise ValueError('Frozen Grype binary SHA256 mismatch')
+                actual = os.fstat(fd); selected = os.stat('grype', dir_fd=inputs, follow_symlinks=False)
+                if (not stat.S_ISREG(actual.st_mode) or actual.st_uid != os.getuid() or actual.st_nlink != 1 or
+                        stat.S_IMODE(actual.st_mode) != 0o600 or stable_identity(actual) != before_readback or
+                        stable_identity(actual) != stable_identity(selected)):
+                    raise ValueError('Frozen Grype binary identity changed')
+                tree.check_file(stream, identity, inputs, ARCHIVE_NAME)
+                os.fchmod(fd, 0o555)
+                final = os.fstat(fd)
+                if stat.S_IMODE(final.st_mode) != 0o555 or stable_identity(final) != stable_identity(os.stat('grype', dir_fd=inputs, follow_symlinks=False)):
+                    raise ValueError('Frozen Grype binary changed during chmod')
+                tree.check_directories()
+                if time.monotonic() >= deadline: raise ValueError('Scanner deadline exhausted during extraction')
+    return count
+
+
+def prepare_frozen_inputs(root, hashes, deadline):
+    binary = frozen_copy(root, ARCHIVE_NAME, 100 * 1024 * 1024, ARCHIVE_SHA256, 'inputs', ARCHIVE_NAME, deadline)
+    binary['binary_bytes'] = extract_frozen_binary(root, hashes['binary'], deadline)
+    binary['binary_sha256'] = hashes['binary']
+    frozen_copy(root, 'database-manifest.json', 1024 * 1024, hashes['manifest'], 'reports', 'database-manifest.json', deadline)
+    with TrustedTree(root) as tree:
+        reports = tree.directory(tree.workfd, 'reports')
+        stream, identity = tree.file(reports, 'database-manifest.json', 1024 * 1024)
+        data = stream.read(identity[5] + 1)
+        tree.check_file(stream, identity, reports, 'database-manifest.json')
+        if len(data) != identity[5] or hashlib.sha256(data).hexdigest() != hashes['manifest']:
+            raise ValueError('Frozen manifest changed')
+        manifest = json.loads(data, object_pairs_hook=unique_object)
+    url, checksum = database_manifest(manifest, datetime.datetime.now(datetime.timezone.utc))
+    database = frozen_copy(root, DATABASE_ARCHIVE, GIB, checksum, 'inputs', DATABASE_ARCHIVE, deadline)
+    database['url'] = url  # Provenance origin; origin records that no download occurred.
+    return binary, manifest, database
+
+
+def verify_frozen_mounts(root, hashes, database_sha256, deadline):
+    with TrustedTree(root) as tree:
+        inputs = tree.directory(tree.workfd, 'inputs')
+        for name, maximum, expected in (('grype', 100 * 1024 * 1024, hashes['binary']),
+                                        (DATABASE_ARCHIVE, GIB, database_sha256)):
+            stream, identity = tree.file(inputs, name, maximum)
+            if bounded_hash(stream, identity[5], deadline=deadline) != expected:
+                raise ValueError('Frozen mounted input changed before scanner creation')
+            tree.check_file(stream, identity, inputs, name)
+    if time.monotonic() >= deadline: raise ValueError('Scanner deadline exhausted before scanner creation')
+
+
+def prepare_offline_inputs(inputs, reports, scanner_config, offline_runner, runner_reference, run, inspect_image, save_verified, deadline, frozen=None):
+    if frozen is not None:
+        binary_receipt, manifest, db_receipt = prepare_frozen_inputs(inputs.parent, frozen, deadline)
+        (reports / "scanner-download.json").write_text(json.dumps(binary_receipt, indent=2))
+        (reports / "database-download.json").write_text(json.dumps(db_receipt, indent=2))
+    else:
+        binary_receipt, manifest, db_receipt = prepare_downloaded_inputs(inputs, reports, deadline)
+    status, _ = run(["/usr/bin/zstd", "--version"], "db-payload-tool-version", 5)
+    if status != 0: raise ValueError("Existing system zstd is unavailable; DB payload cannot be admitted")
+    payload = database_payload_bytes(inputs / DATABASE_ARCHIVE)
+    (reports / "database-payload-probe.json").write_text(json.dumps(payload, indent=2))
+    for source, target in [(scanner_config, GRYPE_CONFIG), (offline_runner, OFFLINE_RUNNER)]:
+        shutil.copyfile(source, inputs / target)
+    selected_runner = inspect_image(RUNNER_REF, "runner-inspect")
+    if selected_runner is None and frozen is None:
+        status, _ = run(["docker", "pull", "--platform", "linux/amd64", RUNNER_REF], "runner-pull", 120)
+        if status != 0: raise ValueError("Exact protected runner base is unavailable")
+        selected_runner = inspect_image(RUNNER_REF, "runner-inspect-after-pull")
+    if not selected_runner: raise ValueError("Unable to inspect exact runner reference")
+    runner_graph = save_verified(RUNNER_REF, selected_runner, "runner")
+    runner = verify_fixed_runner(runner_graph, runner_reference)
+    (reports / "runner-reference-identity.json").write_text(json.dumps(runner, indent=2))
+    return payload, binary_receipt, manifest, db_receipt, runner
+
+def prepare_downloaded_inputs(inputs, reports, deadline):
     binary_archive = inputs / ARCHIVE_NAME
     binary_receipt = download(ARCHIVE_URL, binary_archive, 100 * 1024 * 1024, ARCHIVE_SHA256, deadline=deadline)
     (reports / "scanner-download.json").write_text(json.dumps(binary_receipt, indent=2))
@@ -540,23 +662,8 @@ def prepare_offline_inputs(inputs, reports, scanner_config, offline_runner, runn
     url, checksum = database_manifest(manifest, datetime.datetime.now(datetime.timezone.utc))
     db_receipt = download(url, inputs / DATABASE_ARCHIVE, 1024 * 1024 * 1024, checksum, deadline=deadline)
     (reports / "database-download.json").write_text(json.dumps(db_receipt, indent=2))
-    status, _ = run(["/usr/bin/zstd", "--version"], "db-payload-tool-version", 5)
-    if status != 0: raise ValueError("Existing system zstd is unavailable; DB payload cannot be admitted")
-    payload = database_payload_bytes(inputs / DATABASE_ARCHIVE)
-    (reports / "database-payload-probe.json").write_text(json.dumps(payload, indent=2))
-    for source, target in [(scanner_config, GRYPE_CONFIG),
-                           (offline_runner, OFFLINE_RUNNER)]:
-        shutil.copyfile(source, inputs / target)
-    selected_runner = inspect_image(RUNNER_REF, "runner-inspect")
-    if selected_runner is None:
-        status, _ = run(["docker", "pull", "--platform", "linux/amd64", RUNNER_REF], "runner-pull", 120)
-        if status != 0: raise ValueError("Exact protected runner base is unavailable")
-        selected_runner = inspect_image(RUNNER_REF, "runner-inspect-after-pull")
-    if not selected_runner: raise ValueError("Unable to inspect exact runner reference")
-    runner_graph = save_verified(RUNNER_REF, selected_runner, "runner")
-    runner = verify_fixed_runner(runner_graph, runner_reference)
-    (reports / "runner-reference-identity.json").write_text(json.dumps(runner, indent=2))
-    return payload, binary_receipt, manifest, db_receipt, runner
+    return binary_receipt, manifest, db_receipt
+
 
 def confirm_target_archive(root, image_id, target_graph, target_descriptor, target, args, retained, admitted_hash):
     final_graph, archive_hash = verify_trusted_image(root, "target", image_id, TARGET_MAX_BYTES, target_descriptor, include_hash=True,
@@ -633,8 +740,11 @@ def main():
     parser.add_argument('--target-attempt', type=int)
     parser.add_argument('--runtime-receipt-sha256')
     parser.add_argument('--retained-archive')
+    parser.add_argument('--frozen-db-manifest-sha256')
+    parser.add_argument('--frozen-grype-binary-sha256')
     args = parser.parse_args()
     supplied = [args.retained_intake, args.intake_sha256, args.scanner_head, args.scanner_tree, args.retained_archive, args.target_source, args.target_tree, args.target_run_id, args.target_attempt, args.runtime_receipt_sha256]
+    frozen = validate_frozen_arguments(args.frozen_db_manifest_sha256, args.frozen_grype_binary_sha256, supplied)
     validate_intake_arguments(supplied, args.target_attempt)
     approved_target = {'source': args.target_source, 'tree': args.target_tree, 'run_id': args.target_run_id, 'attempt': args.target_attempt, 'runtime_receipt_sha256': args.runtime_receipt_sha256}
     root = trusted_work_root(args.root, create=True)
@@ -667,10 +777,11 @@ def main():
     admission = capacity_admission(target_graph["unpacked_layer_bytes"], memory["MemAvailable"], shutil.disk_usage(root).free)
     admission["host_total_memory_bytes"] = memory["MemTotal"]
     (reports / "capacity-admission.json").write_text(json.dumps(admission, indent=2))
-    payload, binary_receipt, manifest, db_receipt, runner = prepare_offline_inputs(inputs, reports, scanner_config, offline_runner, runner_reference, run, inspect_image, save_verified, deadline)
+    payload, binary_receipt, manifest, db_receipt, runner = prepare_offline_inputs(inputs, reports, scanner_config, offline_runner, runner_reference, run, inspect_image, save_verified, deadline, frozen=frozen)
     for path in inputs.iterdir():
         if path.name != "grype": path.chmod(0o444)
     image_archive_hash = confirm_target_archive(root, image_id, target_graph, target_descriptor, target, args, retained, admitted_hash)
+    if frozen is not None: verify_frozen_mounts(root, frozen, db_receipt['sha256'], deadline)
     provenance = {"capacity_admission": admission, "database_payload": payload, "scanner_archive": binary_receipt,
                   "database": {**db_receipt, "manifest": manifest}, "target": target_graph,
                   "image_archive_sha256": image_archive_hash, "runner": runner}
@@ -691,7 +802,7 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except Exception as error:
-        if len(sys.argv) > 1:
+        if len(sys.argv) > 1 and not isinstance(error, FrozenArgumentsError):
             try:
                 root = trusted_work_root(sys.argv[1])
                 write_failure_report(root, {
