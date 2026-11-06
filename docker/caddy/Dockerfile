@@ -57,37 +57,36 @@ RUN --network=none echo 'ac320c3ac47ad8abed7a0d2595639d78f9ff55cf1dba8494a66cd88
     && go version -m /out/caddy > /out/build-info.txt \
     && awk -f /src/check-build-info.awk /out/build-info.txt
 
-# Official Caddy 2.11.9 runtime input on Alpine 3.24.4.
-FROM docker.io/library/caddy@sha256:0bbb055bda6793c999bde78b1b5ce3e89f829fb031af2cf50056ea1246559fee AS production
+# This executable is mounted only by native qualification.
+FROM builder AS qualification-tools-build
+COPY inspect-runtime.go /tmp/inspect-runtime.go
+RUN --network=none go build -trimpath -o /out/inspect-runtime /tmp/inspect-runtime.go
+
+FROM scratch AS qualification-tools
+COPY --from=qualification-tools-build /out/inspect-runtime /
+
+# Use the OpenSSH-patched Alpine base to prepare the runtime files.
+FROM docker.io/library/caddy@sha256:0bbb055bda6793c999bde78b1b5ce3e89f829fb031af2cf50056ea1246559fee AS runtime-files
+COPY prepare-runtime.sh approved-packages.txt approved-world.txt /tmp/caddy-security/
+RUN --network=none sh /tmp/caddy-security/prepare-runtime.sh / /tmp/caddy-security /rootfs
+COPY --from=builder --chown=0:0 --chmod=0755 /out/caddy /rootfs/usr/bin/caddy
+COPY --from=builder /out/build-info.txt /rootfs/usr/share/caddy/dollhouse-build-info.txt
+RUN --network=none chown 1001:1001 \
+      /rootfs/data /rootfs/data/caddy /rootfs/config /rootfs/config/caddy \
+    && setcap cap_net_bind_service=+ep /rootfs/usr/bin/caddy \
+    && test "$(getcap /rootfs/usr/bin/caddy)" = '/rootfs/usr/bin/caddy cap_net_bind_service=ep'
+
+# Copy the closed runtime filesystem without carrying any Alpine base layers.
+FROM scratch AS production
 LABEL org.dollhousemcp.caddy.distribution="source-rebuilt-security-candidate" \
       org.dollhousemcp.caddy.upstream-source="0d98caea58f794f88e709b1bef2880996a471bca" \
       org.dollhousemcp.caddy.go="1.26.10" \
       org.dollhousemcp.caddy.x-net="v0.62.0" \
       org.dollhousemcp.caddy.go-jose-v4="v4.1.9"
-COPY remove-curl.sh approved-packages.txt runtime-packages.txt approved-world.txt runtime-world.txt /tmp/caddy-security/
-RUN sh /tmp/caddy-security/remove-curl.sh / /tmp/caddy-security \
-    && rm -rf /tmp/caddy-security
-COPY --from=builder --chown=0:0 --chmod=0755 /out/caddy /usr/bin/caddy
-COPY --from=builder /out/build-info.txt /usr/share/caddy/dollhouse-build-info.txt
-# Deliberately harden the first-party output: immutable root-owned executable,
-# dedicated non-login runtime identity and image-layer storage ownership only.
-# Existing persistent volumes require a separate preflight/migration decision.
-RUN test -z "$(awk -F: '$1 == "caddy" || $3 == 1001 {print}' /etc/passwd)" \
-    && test -z "$(awk -F: '$1 == "caddy" || $3 == 1001 {print}' /etc/group)" \
-    && addgroup -S -g 1001 caddy \
-    && adduser -S -D -H -u 1001 -G caddy -h /config -s /sbin/nologin caddy \
-    && test -f /usr/bin/caddy && test ! -L /usr/bin/caddy \
-    && test "$(stat -c '%u:%g:%a:%h' /usr/bin/caddy)" = 0:0:755:1 \
-    && setcap cap_net_bind_service=+ep /usr/bin/caddy \
-    && test "$(getcap /usr/bin/caddy)" = '/usr/bin/caddy cap_net_bind_service=ep' \
-    && for directory in /data /data/caddy /config /config/caddy; do \
-         test -d "$directory" && test ! -L "$directory" || exit 1; \
-       done \
-    && for directory in /data /data/caddy /config /config/caddy; do \
-         chown 1001:1001 "$directory" && chmod 0750 "$directory" \
-           && test "$(stat -c '%u:%g:%a' "$directory")" = 1001:1001:750 || exit 1; \
-       done \
-    && /usr/bin/caddy version
+COPY --from=runtime-files /rootfs/ /
+ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    CADDY_VERSION=v2.11.9 XDG_CONFIG_HOME=/config XDG_DATA_HOME=/data
+WORKDIR /srv
+EXPOSE 2019/tcp 443/tcp 443/udp 80/tcp
 USER 1001:1001
-# Preserve upstream CMD, ENV, WORKDIR, assets and ports. Runtime USER and
-# executable/storage ownership intentionally differ from the upstream base.
+CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]

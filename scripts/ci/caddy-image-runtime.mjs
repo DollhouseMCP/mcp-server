@@ -9,10 +9,12 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { waitForReady, hardenedRuntimeConfig } from './export-tested-caddy-image.mjs';
 
-const [image, fixtureImage, connection] = process.argv.slice(2);
+const [image, fixtureImage, inspectorFile, connection] = process.argv.slice(2);
 assert.match(image ?? '', /^(?:sha256:)?[a-f0-9]{64}$/);
 assert.match(fixtureImage ?? '', /^(?:sha256:)?[a-f0-9]{64}$/);
 if (connection) assert.equal(connection, 'ubuntu-dev-work');
+assert.ok(path.isAbsolute(inspectorFile));
+assert.ok(fs.lstatSync(inspectorFile).isFile(), 'runtime inspector must be a regular file');
 const engineArgs = connection ? ['--connection', connection] : [];
 // Supported qualification hosts use fixed system-owned executables. Do not
 // resolve an executable through a caller-controlled PATH.
@@ -198,6 +200,13 @@ try {
   assert.equal(inspect(fixtureImage).Architecture, native, 'fixture must run on matching native daemon');
   network = engine(['network', 'create', '--internal', prefix]);
   for (const suffix of ['data', 'config', 'caddyfile']) volume(suffix);
+  const diagnosticVolume = volume('diagnostic');
+  const diagnosticWriter = container(['--interactive', '--network', 'none', '--read-only', '--cap-drop', 'ALL',
+    '--security-opt', 'no-new-privileges', '--user', '0:0', '--volume', `${diagnosticVolume}:/qualification`,
+    '--entrypoint', 'node', fixtureImage, '-e',
+    'const fs=require("node:fs");fs.writeFileSync("/qualification/inspect-runtime",fs.readFileSync(0),{flag:"wx",mode:0o755});']);
+  engine(['start', '--attach', '--interactive', diagnosticWriter], { input:fs.readFileSync(inspectorFile) });
+  assert.equal(inspect(diagnosticWriter).State.ExitCode, 0);
   const upstream = container(['--name', `${prefix}-upstream`, '--network', network,
     '--network-alias', 'dollhousemcp', '--read-only', '--cap-drop', 'ALL',
     '--security-opt', 'no-new-privileges', '--tmpfs', '/tmp:rw,noexec,nosuid,size=16m',
@@ -210,7 +219,7 @@ try {
   const request = options => JSON.parse(engine(['exec', upstream, 'node', '-e', clientSource, JSON.stringify(options)]));
   const requestAsync = async options => JSON.parse((await engineAsync(['exec', upstream, 'node', '-e', clientSource, JSON.stringify(options)])).stdout.trim());
   const proxy = container(['--name', `${prefix}-proxy`, '--network', network,
-    '--network-alias', 'proxy', '--volume', `${ownedVolumes[0]}:/data`,
+    '--network-alias', 'proxy', '--mount', `type=volume,source=${diagnosticVolume},target=/qualification,readonly`, '--volume', `${ownedVolumes[0]}:/data`,
     '--volume', `${ownedVolumes[1]}:/config`, '--volume', `${ownedVolumes[2]}:/etc/caddy:ro`,
     '--read-only', '--cap-drop', 'ALL',
     '--cap-add', 'NET_BIND_SERVICE', '--security-opt', 'no-new-privileges',
@@ -231,8 +240,8 @@ try {
   installConfig('caddy-http', '192.0.2.0/24');
   engine(['start', proxy]);
   await waitForReady(request, { path:'/ready' });
-  const processStatus = engine(['exec', proxy, '/bin/cat', '/proc/1/status']);
-  const fields = Object.fromEntries(processStatus.split('\n').filter(line => line.includes(':')).map(line => {
+  const evidence = JSON.parse(engine(['exec', proxy, '/qualification/inspect-runtime']));
+  const fields = Object.fromEntries(evidence.status.split('\n').filter(line => line.includes(':')).map(line => {
     const split=line.indexOf(':');return [line.slice(0,split),line.slice(split+1).trim()];
   }));
   assert.ok(fields.Uid.split(/\s+/).every(value => value === '1001'));
@@ -240,12 +249,12 @@ try {
   assert.equal(fields.NoNewPrivs,'1');
   assert.equal(BigInt('0x'+fields.CapEff),0x400n);
   assert.equal(BigInt('0x'+fields.CapBnd),0x400n);
-  const privilegedPortStart = engine(['exec', proxy, '/bin/cat', '/proc/sys/net/ipv4/ip_unprivileged_port_start']);
-  assert.equal(privilegedPortStart,'1024');
+  assert.equal(evidence.portStart, '1024');
   assert.equal(inspect(proxy).HostConfig.ReadonlyRootfs,true);
-  assert.equal(engine(['exec', proxy, '/bin/busybox', 'stat', '-c', '%u:%g:%a:%h', '/usr/bin/caddy']),'0:0:755:1');
+  assert.deepEqual(evidence.paths['/usr/bin/caddy'], { UID:0, GID:0, Mode:0o100755, Links:1 });
   for (const directory of ['/data','/data/caddy','/config','/config/caddy']) {
-    assert.equal(engine(['exec', proxy, '/bin/busybox', 'stat', '-c', '%u:%g:%a', directory]),'1001:1001:750');
+    const { UID, GID, Mode } = evidence.paths[directory];
+    assert.deepEqual({ UID, GID, Mode }, { UID:1001, GID:1001, Mode:0o40750 });
   }
   processProfile={uid:1001,gid:1001,noNewPrivs:1,capEffective:fields.CapEff,capBounding:fields.CapBnd,privilegedPortStart:1024,rootFilesystemReadonly:true};
   const noCapability = container(['--name',`${prefix}-no-capability`,'--network',network,

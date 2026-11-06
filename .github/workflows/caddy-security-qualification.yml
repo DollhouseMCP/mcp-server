@@ -29,7 +29,8 @@ jobs:
         shell: bash
         run: |
           node --test tests/scripts/caddy-runtime-packages.test.mjs tests/scripts/caddy-image-evidence.test.mjs
-          sh -n docker/caddy/remove-curl.sh scripts/ci/caddy-upstream-tests.sh
+          sh -n docker/caddy/prepare-runtime.sh
+          sh -n scripts/ci/caddy-upstream-tests.sh
       - name: Build and test the qualified upstream module graph offline
         shell: bash
         env:
@@ -62,11 +63,16 @@ jobs:
           printf 'CADDY_TEST_IMAGE_ID=%s\n' "$image_id" >> "$GITHUB_ENV"
       - name: Native renderer, HTTP, TLS, HTTP2, quiet stream and persistent PKI qualification
         shell: bash
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
         run: |
           # Approved exact public Node fixture input; no app packages or installs.
           docker pull docker.io/library/node:24.22.1-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea
           fixture_id=$(docker image inspect --format '{{.Id}}' docker.io/library/node:24.22.1-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea)
-          node scripts/ci/caddy-image-runtime.mjs "$CADDY_TEST_IMAGE_ID" "$fixture_id"
+          docker build --platform "linux/${TARGET_ARCH}" --target qualification-tools \
+            --file docker/caddy/Dockerfile --output "type=local,dest=${RUNNER_TEMP}/caddy-tools" docker/caddy
+          node scripts/ci/caddy-image-runtime.mjs "$CADDY_TEST_IMAGE_ID" "$fixture_id" \
+            "${RUNNER_TEMP}/caddy-tools/inspect-runtime"
       - name: Export exact tested final image and source metadata
         shell: bash
         env:
@@ -77,6 +83,8 @@ jobs:
           node scripts/ci/export-tested-caddy-image.mjs "$CADDY_TEST_IMAGE_ID" \
             "localhost/dollhouse-caddy:qualification-${TARGET_ARCH}" \
             "${RUNNER_TEMP}/caddy-production-evidence"
+          python3 scripts/ci/verify-caddy-runtime-archive.py \
+            "${RUNNER_TEMP}/caddy-production-evidence/caddy-production-${TARGET_ARCH}.docker.tar"
       - name: Retain tested final image for qualification
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2, existing project pin
         with:

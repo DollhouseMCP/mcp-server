@@ -22,13 +22,13 @@ Both Alpine releases include the OpenSSH password-bypass fix and the
 apk-tools security update. The runtime package inventory has no SSH server.
 [Alpine release announcement](https://alpinelinux.org/posts/alpine-3.21.10-3.22.8-3.23.8-3.24.4-released/).
 
-The package contracts come from that input's authenticated installed database,
-not a new APK resolution. `remove-curl.sh` requires the exact 32-package/world
-baseline, performs normal **offline** APK removal of only the curl world root,
-and requires exactly 23 unchanged package versions afterwards. It preserves
-ssl_client's conditional installation and checks inherited CA/MIME/default
-configuration/welcome data. A failure after APK mutation fails the build;
-this helper does not claim transactional rollback of a failed build layer.
+The Alpine build stage verifies the exact 32-package inventory and world from
+both pinned Caddy input images. It copies the CA bundle, MIME database, default
+Caddyfile and welcome page into a closed runtime filesystem. The final image
+starts from scratch and adds the source-built Caddy executable, build metadata,
+the account files and storage directories. This keeps BusyBox, its wget applet,
+the APK database and every other Alpine utility out of all shipped layers.
+[Alpine BusyBox advisory](https://security.alpinelinux.org/vuln/CVE-2025-60876)
 
 `build/main.go` is byte-identical to official source commit
 `0d98caea58f794f88e709b1bef2880996a471bca/cmd/caddy/main.go`, including its
@@ -58,8 +58,8 @@ or execute the candidate. The age and graph inventory, including 30 changed
 versions with proxy timestamps under 21 days, is in `source-age-research.json`.
 The proposed image inputs require their own qualification. The rebuilt
 executable identifies its v2.11.9 source and local dependency overlay in
-its full Go build information. Native builds must verify both package
-contracts after curl removal and produce new archives for scanning.
+its full Go build information. Native builds verify the input package contracts and export both final images
+for layer validation and scanning.
 
 ## Hardened first-party runtime
 
@@ -69,10 +69,11 @@ is root-owned `0:0`, a single regular file with mode `0755` and
 `1001:1001`. Only the image-layer `/data`, `/data/caddy`, `/config` and
 `/config/caddy` directories become `1001:1001`, mode `0750`. There is no
 recursive ownership change or migration of an existing persistent volume.
-CMD, four public ENV entries, WORKDIR, ports, CA/MIME/welcome assets and all
-23 retained package versions remain unchanged. The original runtime-config
-contract remains an input record; the evidence helper explicitly derives
-the hardened output's `User` rather than relabeling upstream defaults.
+The final image retains the command, public environment, working directory,
+ports and data assets. Native qualification mounts a diagnostic executable
+read-only to check the running process and storage metadata. The exported
+image layer validator checks the closed file inventory and the sole executable
+file capability, including the absence of the diagnostic executable.
 
 ## Historical 2.11.7 qualification checkpoint — October 29, 2026
 
