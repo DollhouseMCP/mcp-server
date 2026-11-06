@@ -1,7 +1,7 @@
 {
   "Env": [
     "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-    "CADDY_VERSION=v2.11.7",
+    "CADDY_VERSION=v2.11.9",
     "XDG_CONFIG_HOME=/config",
     "XDG_DATA_HOME=/data"
   ],

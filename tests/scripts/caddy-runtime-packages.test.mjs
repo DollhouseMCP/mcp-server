@@ -38,7 +38,7 @@ test('exact offline nine-package removal preserves ssl_client and protected data
     const before = new Map(assets.map(name => [name, fs.readFileSync(path.join(f.root, name))]));
     const result = f.run();
     assert.equal(result.status, 0, result.stderr + result.stdout);
-    assert.match(fs.readFileSync(path.join(f.root, 'lib/apk/db/installed'), 'utf8'), /P:ssl_client\nV:1.37.0-r30/);
+    assert.match(fs.readFileSync(path.join(f.root, 'lib/apk/db/installed'), 'utf8'), /P:ssl_client\nV:1.37.0-r31/);
     for (const [name, bytes] of before) assert.deepEqual(fs.readFileSync(path.join(f.root, name)), bytes);
   } finally { f.cleanup(); }
 });
@@ -66,7 +66,7 @@ for (const name of ['drops ssl_client', 'upgrades retained package', 'leaves cur
     try {
       if (name === 'drops ssl_client') f.write('next-installed', installed(lines('runtime-packages.txt').filter(x => !x.startsWith('ssl_client='))));
       if (name === 'upgrades retained package') f.write('next-installed', installed(lines('runtime-packages.txt').map(x => x.startsWith('musl=') ? 'musl=99.0.0-r0' : x)));
-      if (name === 'leaves curl installed') f.write('next-installed', installed([...lines('runtime-packages.txt'), 'curl=8.22.0-r0']));
+      if (name === 'leaves curl installed') f.write('next-installed', installed([...lines('runtime-packages.txt'), 'curl=8.23.0-r0']));
       if (name === 'leaves curl executable') f.write('sbin/apk', fs.readFileSync(path.join(f.root, 'sbin/apk'), 'utf8').replace('rm "$r/usr/bin/curl"', ': # intentionally retain executable'), 0o755);
       if (name === 'changes world root') fs.appendFileSync(path.join(f.root, 'next-world'), 'unexpected\n');
       if (name === 'changes CA data') fs.appendFileSync(path.join(f.root, 'sbin/apk'), 'printf changed > "$r/etc/ssl/certs/ca-certificates.crt"\n');

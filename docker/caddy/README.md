@@ -1,7 +1,7 @@
 # Caddy security qualification
 
 This directory prepares a custom rebuilt Caddy candidate from v2.11.9 source
-and the retained Caddy 2.11.7 runtime input. The updated source and dependency
+and the official Caddy 2.11.9 runtime input on Alpine 3.24.4. The updated source and dependency
 graph are not approved or runtime-qualified. It does not
 change the hosted renderer, publish an image, or authorize deployment. The
 existing renderer/pull/rollback path cannot consume an unpublished archive;
@@ -14,8 +14,14 @@ The decision covers only Go 1.26.10 Alpine 3.23 index
 (its two reviewed Linux children), x/net v0.60.0 and go-jose/v4 v4.1.6.
 It grants no residual-risk, publication, merge or deployment approval.
 
-The runtime input is the previously approved exact Caddy 2.11.7 index
-`sha256:504a44d7d74bd2bc28a66afc4774912fc21223ca8a67734af1c54ab2f999b489`.
+The proposed runtime input is Caddy 2.11.9 on Alpine 3.24.4, pinned to
+`sha256:0bbb055bda6793c999bde78b1b5ce3e89f829fb031af2cf50056ea1246559fee`.
+The proposed Go 1.26.10 builder uses Alpine 3.23.8, pinned to
+`sha256:78e7f1e419545bc4b8b5ee8a40a99ddb5df1216d38681dbab2eeb1fdb2427f43`.
+Both Alpine releases include the OpenSSH password-bypass fix and the
+apk-tools security update. The runtime package inventory has no SSH server.
+[Alpine release announcement](https://alpinelinux.org/posts/alpine-3.21.10-3.22.8-3.23.8-3.24.4-released/).
+
 The package contracts come from that input's authenticated installed database,
 not a new APK resolution. `remove-curl.sh` requires the exact 32-package/world
 baseline, performs normal **offline** APK removal of only the curl world root,
@@ -50,15 +56,10 @@ is static Go metadata, not a built-binary or runtime finding. Local Linux
 amd64/arm64 `go list` used CGO disabled and the release tags; it did not build
 or execute the candidate. The age and graph inventory, including 30 changed
 versions with proxy timestamps under 21 days, is in `source-age-research.json`.
-Proxy timestamps are not proof of first publication or approval. The new
-Caddy source and changed dependencies require a separate age decision; the
-old approved 2.11.7 runtime input and builder image are not changed. Its
-inherited `CADDY_VERSION=v2.11.7` remains image metadata; the executable is
-rebuilt from v2.11.9 source. Source inspection predicts the local replacement
-may display `(devel)_custom` as the simple version, with the v2.11.9 module and
-replacement path in full build info; actual output requires a native build.
-No fresh
-candidate build, native test, scan, publish or deployment has occurred.
+The proposed image inputs require their own qualification. The rebuilt
+executable identifies its v2.11.9 source and local dependency overlay in
+its full Go build information. Native builds must verify both package
+contracts after curl removal and produce new archives for scanning.
 
 ## Hardened first-party runtime
 

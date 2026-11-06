@@ -1,6 +1,6 @@
 # Only the reviewed linux/amd64 and linux/arm64/v8 children are qualified.
-# Go 1.26.10 / Alpine 3.23, selected by immutable digest only.
-FROM docker.io/library/golang@sha256:34414731924cf2263160f0021f5cf6e1807382d85248f7cb419d4187b96d5e43 AS builder
+# Go 1.26.10 / Alpine 3.23.8, selected by immutable digest only.
+FROM docker.io/library/golang@sha256:78e7f1e419545bc4b8b5ee8a40a99ddb5df1216d38681dbab2eeb1fdb2427f43 AS builder
 ENV GOTOOLCHAIN=local GOWORK=off CGO_ENABLED=0 GO111MODULE=on \
     GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org GOENV=off \
     GOPRIVATE= GONOPROXY= GONOSUMDB= GOFLAGS=
@@ -57,8 +57,8 @@ RUN --network=none echo 'ac320c3ac47ad8abed7a0d2595639d78f9ff55cf1dba8494a66cd88
     && go version -m /out/caddy > /out/build-info.txt \
     && awk -f /src/check-build-info.awk /out/build-info.txt
 
-# Approved official Caddy 2.11.7 runtime input.
-FROM docker.io/library/caddy@sha256:504a44d7d74bd2bc28a66afc4774912fc21223ca8a67734af1c54ab2f999b489 AS production
+# Official Caddy 2.11.9 runtime input on Alpine 3.24.4.
+FROM docker.io/library/caddy@sha256:0bbb055bda6793c999bde78b1b5ce3e89f829fb031af2cf50056ea1246559fee AS production
 LABEL org.dollhousemcp.caddy.distribution="source-rebuilt-security-candidate" \
       org.dollhousemcp.caddy.upstream-source="0d98caea58f794f88e709b1bef2880996a471bca" \
       org.dollhousemcp.caddy.go="1.26.10" \

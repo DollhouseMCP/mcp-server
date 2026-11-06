@@ -1,5 +1,5 @@
 #!/bin/sh
-# A build-only guard for the two approved Caddy 2.11.7 runtime children.
+# A build-only guard for the two pinned Caddy runtime children.
 # APK performs its normal offline dependency/trigger processing. No force,
 # package upgrade, index download, or hand-written library deletion is used.
 set -eu
