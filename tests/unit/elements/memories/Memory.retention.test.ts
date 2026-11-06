@@ -11,10 +11,13 @@ const metadata: Partial<MemoryMetadata> = { name: 'Retention regression', maxEnt
 async function serializedEntries(count: number, onFull: MemoryMetadata['onFull'] = 'evict_oldest') {
   const source = new Memory({ ...metadata, maxEntries: count, onFull }, metadataService);
   for (let i = 0; i < count; i++) {
-    const entry = await source.addEntry(`Entry ${i}`);
-    entry.timestamp = new Date(Date.UTC(2026, 0, i + 1));
+    await source.addEntry(`Entry ${i}`);
   }
   const data = JSON.parse(source.serialize());
+  for (let i = 0; i < count; i++) {
+    data.entries.find((entry: { content: string }) => entry.content === `Entry ${i}`).timestamp =
+      new Date(Date.UTC(2026, 0, i + 1)).toISOString();
+  }
   data.metadata.maxEntries = 3;
   data.extensions.maxEntries = 3;
   return JSON.stringify(data);

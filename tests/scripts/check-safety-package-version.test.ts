@@ -142,6 +142,8 @@ describe('check-safety-package-version', () => {
     changed[0] ^= 0xff;
     await chmod(copyPath, 0o600);
     await writeFile(copyPath, changed);
+    expect(await readFile(copyPath)).toEqual(changed);
+    expect(() => git(repo, ['cat-file', '-t', templatePublishedGitHead])).toThrow();
     expect(await readFile(templatePath)).toEqual(original);
     expect(git(template, ['cat-file', '-t', templatePublishedGitHead])).toBe('commit');
   });

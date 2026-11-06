@@ -124,4 +124,22 @@ describe('OAuth state lock Windows probe budget', () => {
     expect(fs.existsSync(`${stateFile}.lock/2.done`)).toBe(true);
     expect(fs.existsSync(`${stateFile}.lock.process-${process.pid}.identity`)).toBe(false);
   });
+
+  it('does not spawn a fallback provider after the probe reserve is exhausted', () => {
+    execFileSync.mockImplementation(command => {
+      expect(path.win32.basename(command)).toBe('WMIC.exe');
+      now = 4_900;
+      throw new Error('provider unavailable at reserve');
+    });
+
+    expect(() => withOAuthStateLockSync(stateFile, () => { entered = true; }))
+      .toThrow('Timed out waiting for OAuth state lock');
+    expect(execFileSync).toHaveBeenCalledTimes(1);
+    expect(entered).toBe(false);
+    expect(now).toBeGreaterThanOrEqual(5_000);
+    expect(now).toBeLessThanOrEqual(5_001);
+    expect(fs.existsSync(ownerDone)).toBe(false);
+    expect(fs.existsSync(`${stateFile}.lock/1.slot`)).toBe(true);
+    expect(fs.existsSync(`${stateFile}.lock/2.done`)).toBe(true);
+  });
 });
