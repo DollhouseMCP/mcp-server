@@ -1,6 +1,8 @@
 # Caddy security qualification
 
-This directory prepares a custom rebuilt Caddy 2.11.7 runtime. It does not
+This directory prepares a custom rebuilt Caddy candidate from v2.11.9 source
+and the retained Caddy 2.11.7 runtime input. The updated source and dependency
+graph are not approved or runtime-qualified. It does not
 change the hosted renderer, publish an image, or authorize deployment. The
 existing renderer/pull/rollback path cannot consume an unpublished archive;
 qualified artifact intake and proxy recovery remain separate release gates.
@@ -23,26 +25,40 @@ configuration/welcome data. A failure after APK mutation fails the build;
 this helper does not claim transactional rollback of a failed build layer.
 
 `build/main.go` is byte-identical to official source commit
-`72dd0fb067f6d7826c7f79907670ba4a713bfe37/cmd/caddy/main.go`, including its
+`0d98caea58f794f88e709b1bef2880996a471bca/cmd/caddy/main.go`, including its
 Apache notice, embedded timezone data and standard-module imports. The
 official release uses CGO disabled, `nobadger,nomysql,nopgx`, `-trimpath`,
 `-mod=readonly` and `-ldflags='-s -w'`. No xcaddy or extra module is selected.
-These three files under `build/` are intentional checked-in source/locks,
-not generated binary artifacts. Qualified SHA256 values:
+These files are checked-in source/locks, not generated binary artifacts.
+Candidate SHA256 values (not yet approved):
 
 | File | SHA256 |
 | --- | --- |
 | main.go | `ac320c3ac47ad8abed7a0d2595639d78f9ff55cf1dba8494a66cd8851c5d076e` |
-| go.mod | `b155a2815a958feea056cc386d28e47f5014e0bb2bc199d9a8be0c54725c42a2` |
-| go.sum | `5c668b3ebdfce4153468ccafaba4df8b73e38e5d23cca1aa547f4dc8835d3a23` |
+| go.mod | `087ac22fe587e30eb5394fd0c5ec037f053127c957595b2d28c24f7aea03a464` |
+| go.sum | `e5f08805a7472c49f427e9f027f9e275874a6da2af3704919c30102568861773` |
+| caddy-overlay.go.mod | `fe72d06e42cd4d96a1f21a4316687bbb72445168f7b9b12c3b1a075d625abe2c` |
 
-Standard authenticated Go/SumDB resolution and `go mod verify` passed for
-this actual wrapper. The 596-module official source graph becomes 597 only
-because the wrapper adds its main module and requires Caddy as the same
-exact v2.11.7 source dependency. Only the two approved external module
-versions change; no other external version was added or raised. Committed
-mod/sum bytes are checked before download, after verification and after
-compilation. Age approval does not extend to another dependency.
+The source candidate is the authenticated Go proxy/SumDB v2.11.9 ZIP
+SHA256 `fdac2c0901e3e4064bf1da1558f9860cd175eecdf7179b17611d820008268e9b`
+with upstream signed tag commit `0d98caea58f794f88e709b1bef2880996a471bca`.
+The build stages that exact source and substitutes only the reviewed dependency
+overlay. The pre-adoption research copy matched all 740 source files except
+`go.mod`. The wrapper uses a version-specific local replacement and keeps the
+existing module registrations. The selected module graph has no JOSE v3; this
+is static Go metadata, not a built-binary or runtime finding. Local Linux
+amd64/arm64 `go list` used CGO disabled and the release tags; it did not build
+or execute the candidate. The age and graph inventory, including 30 changed
+versions with proxy timestamps under 21 days, is in `source-age-research.json`.
+Proxy timestamps are not proof of first publication or approval. The new
+Caddy source and changed dependencies require a separate age decision; the
+old approved 2.11.7 runtime input and builder image are not changed. Its
+inherited `CADDY_VERSION=v2.11.7` remains image metadata; the executable is
+rebuilt from v2.11.9 source. Source inspection predicts the local replacement
+may display `(devel)_custom` as the simple version, with the v2.11.9 module and
+replacement path in full build info; actual output requires a native build.
+No fresh
+candidate build, native test, scan, publish or deployment has occurred.
 
 ## Hardened first-party runtime
 
@@ -57,7 +73,7 @@ CMD, four public ENV entries, WORKDIR, ports, CA/MIME/welcome assets and all
 contract remains an input record; the evidence helper explicitly derives
 the hardened output's `User` rather than relabeling upstream defaults.
 
-## Local qualification checkpoint — October 29, 2026
+## Historical 2.11.7 qualification checkpoint — October 29, 2026
 
 Hardened native ARM candidate:
 `a792e4b45d70aff72b1276d3ce4ef9432f60bb99410660325a756842cf9df398`.

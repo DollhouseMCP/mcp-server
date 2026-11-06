@@ -23,7 +23,7 @@ go mod verify
 # testdata directory. This container has its own writable overlay: neither
 # the immutable builder image nor a host/shared module cache is modified.
 module=$(go list -m -mod=readonly -f '{{.Dir}}' github.com/caddyserver/caddy/v2)
-test "$module" = /go/pkg/mod/github.com/caddyserver/caddy/v2@v2.11.7
+test "$module" = /src/caddy-overlay
 test -d "$module/caddyconfig/caddyfile/testdata"
 test ! -L "$module/caddyconfig/caddyfile/testdata"
 chmod u+w "$module/caddyconfig/caddyfile/testdata"
@@ -37,3 +37,7 @@ go test -json -count=1 -mod=readonly -tags=nobadger,nomysql,nopgx -p 2 -parallel
   golang.org/x/net/http2
 go mod verify
 sha256sum -c /src/.qualified-module-locks.sha256
+(cd /src/caddy-overlay && sha256sum -c /src/.qualified-source.sha256 &&
+  find . -type f -print | LC_ALL=C sort > /src/.qualified-source-after &&
+  cmp /src/.qualified-source-files /src/.qualified-source-after &&
+  test -z "$(find . -type l -print -quit)")

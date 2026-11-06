@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { bindSource, verifyRuntimeConfig, waitForReady, hardenedRuntimeConfig } from '../../scripts/ci/export-tested-caddy-image.mjs';
 
 const tree = 'a'.repeat(40);
@@ -63,4 +65,24 @@ test('failed startup keeps the last actual cause and respects the unchanged atte
   }), error => error.cause===failure);
   assert.equal(requests,30);
   assert.equal(pauses,30);
+});
+
+const checker = fileURLToPath(new URL('../../docker/caddy/check-build-info.awk', import.meta.url));
+const good = '\tdep\tgithub.com/caddyserver/caddy/v2\tv2.11.9\n\t=>\t../caddy-overlay\t(devel)\t\n';
+function check(input) {
+  const child = spawnSync('awk', ['-f', checker], { input, encoding: 'utf8' });
+  assert.equal(child.error, undefined);
+  return child.status;
+}
+test('build identity accepts the exact module and immediately bound replacement', () => {
+  assert.equal(check(good), 0);
+});
+test('build identity refuses missing, duplicate, altered or unbound modules and JOSE v3', () => {
+  for (const value of ['', good + good, good.replace('v2.11.9', 'v2.11.7'),
+    good.replace('../caddy-overlay', '../other'), good.replace('(devel)', 'v2.11.9'),
+    good.replace('\t=>', '\tother'),
+    good + '\tdep\tgithub.com/go-jose/go-jose/v3\tv3.0.5\th1:fixture\n',
+    good + '\t=>\tgithub.com/go-jose/go-jose/v3\tv3.0.5\n']) {
+    assert.equal(check(value), 1);
+  }
 });

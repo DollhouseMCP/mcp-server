@@ -1,29 +1,61 @@
 # Only the reviewed linux/amd64 and linux/arm64/v8 children are qualified.
 # Go 1.26.10 / Alpine 3.23, selected by immutable digest only.
 FROM docker.io/library/golang@sha256:34414731924cf2263160f0021f5cf6e1807382d85248f7cb419d4187b96d5e43 AS builder
-ENV GOTOOLCHAIN=local GOWORK=off CGO_ENABLED=0 GO111MODULE=on
+ENV GOTOOLCHAIN=local GOWORK=off CGO_ENABLED=0 GO111MODULE=on \
+    GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org GOENV=off \
+    GOPRIVATE= GONOPROXY= GONOSUMDB= GOFLAGS=
 WORKDIR /src
-COPY build/go.mod build/go.sum ./
+COPY caddy-overlay.go.mod ./caddy-overlay.go.mod
+# Authenticate the exact source archive through Go proxy/SumDB and an
+# independently pinned raw ZIP hash. No source archive or module is executed.
 RUN test "$(go env GOVERSION)" = go1.26.10 \
     && case "$(go env GOARCH)" in amd64|arm64) ;; *) exit 1 ;; esac \
-    && sha256sum go.mod go.sum > /src/.qualified-module-locks.sha256 \
-    && go mod download \
-    && go mod verify \
+    && test ! -e /go/pkg/mod/github.com/caddyserver/caddy/v2@v2.11.9 \
+    && test ! -L /go/pkg/mod/github.com/caddyserver/caddy/v2@v2.11.9 \
+    && go mod download github.com/caddyserver/caddy/v2@v2.11.9 \
+    && test "$(cat /go/pkg/mod/cache/download/github.com/caddyserver/caddy/v2/@v/v2.11.9.ziphash)" = 'h1:bhZtcRKQOq0fuLvEgCdPYvUxXyGn9kzjG4lh2332DTE=' \
+    && echo 'fdac2c0901e3e4064bf1da1558f9860cd175eecdf7179b17611d820008268e9b  /go/pkg/mod/cache/download/github.com/caddyserver/caddy/v2/@v/v2.11.9.zip' | sha256sum -c - \
+    && test ! -e /src/caddy-overlay \
+    && test -z "$(find /go/pkg/mod/github.com/caddyserver/caddy/v2@v2.11.9 -type l -print -quit)" \
+    && cp -a /go/pkg/mod/github.com/caddyserver/caddy/v2@v2.11.9 /src/caddy-overlay \
+    && diff -r /go/pkg/mod/github.com/caddyserver/caddy/v2@v2.11.9 /src/caddy-overlay \
+    && chmod u+w /src/caddy-overlay/go.mod \
+    && echo 'fe72d06e42cd4d96a1f21a4316687bbb72445168f7b9b12c3b1a075d625abe2c  /src/caddy-overlay.go.mod' | sha256sum -c - \
+    && cp /src/caddy-overlay.go.mod /src/caddy-overlay/go.mod \
+    && cd /src/caddy-overlay \
+    && find . -type f -print | LC_ALL=C sort > /src/.qualified-source-files \
+    && test "$(wc -l < /src/.qualified-source-files)" -eq 740 \
+    && xargs sha256sum < /src/.qualified-source-files > /src/.qualified-source.sha256
+WORKDIR /src/build
+COPY build/go.mod build/go.sum ./
+RUN echo '087ac22fe587e30eb5394fd0c5ec037f053127c957595b2d28c24f7aea03a464  go.mod' | sha256sum -c - \
+    && echo 'e5f08805a7472c49f427e9f027f9e275874a6da2af3704919c30102568861773  go.sum' | sha256sum -c - \
+    && echo 'fe72d06e42cd4d96a1f21a4316687bbb72445168f7b9b12c3b1a075d625abe2c  ../caddy-overlay/go.mod' | sha256sum -c - \
+    && sha256sum go.mod go.sum ../caddy-overlay/go.mod > /src/.qualified-module-locks.sha256 \
+    && go mod download
+RUN --network=none go mod verify \
     && sha256sum -c /src/.qualified-module-locks.sha256
 COPY build/main.go ./main.go
+COPY check-build-info.awk /src/check-build-info.awk
 # Match the official release recipe, preserving standard modules and tzdata.
-RUN go build -trimpath -mod=readonly -tags=nobadger,nomysql,nopgx \
+RUN --network=none echo 'ac320c3ac47ad8abed7a0d2595639d78f9ff55cf1dba8494a66cd8851c5d076e  main.go' | sha256sum -c - \
+    && go build -trimpath -mod=readonly -tags=nobadger,nomysql,nopgx \
       -ldflags='-s -w' -o /out/caddy . \
     && sha256sum -c /src/.qualified-module-locks.sha256 \
-    && go version -m /out/caddy > /out/build-info.txt
+    && (cd /src/caddy-overlay && sha256sum -c /src/.qualified-source.sha256 \
+        && find . -type f -print | LC_ALL=C sort > /src/.qualified-source-after \
+        && cmp /src/.qualified-source-files /src/.qualified-source-after \
+        && test -z "$(find . -type l -print -quit)") \
+    && go version -m /out/caddy > /out/build-info.txt \
+    && awk -f /src/check-build-info.awk /out/build-info.txt
 
 # Approved official Caddy 2.11.7 runtime input.
 FROM docker.io/library/caddy@sha256:504a44d7d74bd2bc28a66afc4774912fc21223ca8a67734af1c54ab2f999b489 AS production
 LABEL org.dollhousemcp.caddy.distribution="source-rebuilt-security-candidate" \
-      org.dollhousemcp.caddy.upstream-source="72dd0fb067f6d7826c7f79907670ba4a713bfe37" \
+      org.dollhousemcp.caddy.upstream-source="0d98caea58f794f88e709b1bef2880996a471bca" \
       org.dollhousemcp.caddy.go="1.26.10" \
-      org.dollhousemcp.caddy.x-net="v0.60.0" \
-      org.dollhousemcp.caddy.go-jose-v4="v4.1.6"
+      org.dollhousemcp.caddy.x-net="v0.62.0" \
+      org.dollhousemcp.caddy.go-jose-v4="v4.1.9"
 COPY remove-curl.sh approved-packages.txt runtime-packages.txt approved-world.txt runtime-world.txt /tmp/caddy-security/
 RUN sh /tmp/caddy-security/remove-curl.sh / /tmp/caddy-security \
     && rm -rf /tmp/caddy-security
