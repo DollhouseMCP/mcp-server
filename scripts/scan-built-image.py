@@ -16,9 +16,9 @@ import shutil
 import time
 import urllib.parse
 import uuid
-from image_archive_identity import verify_fixed_runner
+from image_archive_identity import verify_fixed_runner, RUNNER_INDEX_DIGEST, RUNNER_MANIFEST_DIGEST, RUNNER_CONFIG_DIGEST
 from image_scan_intake import (validate_intake, trusted_work_root, verify_trusted_image, prepare_scanner_output,
-                               write_failure_report, TrustedTree, bounded_hash, stable_identity, unique_object)
+                               write_failure_report, TrustedTree, bounded_hash, stable_identity, unique_object, validate_intake_arguments)
 from pathlib import Path
 import subprocess
 import tarfile
@@ -65,8 +65,7 @@ def scanner_environment(inherited, root):
 
 DB_MANIFEST_URL = "https://grype.anchore.io/databases/v6/latest.json"
 # Protected beta88efb60c docker/Dockerfile:5, not candidate-controlled Dockerfile input.
-RUNNER_REF = "node@sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66"
-RUNNER_CONFIG_DIGEST = "sha256:04f59b17d8d39a8fdeb138fecb8fcbaa6e208ed7b6db929c7e98ad9005e0a52f"
+RUNNER_REF = 'node@' + RUNNER_INDEX_DIGEST
 SUPPORTED_DB_SCHEMA = "v6.1.10"  # Inspected official manifest and existing validated DB.
 
 GIB = 1024 ** 3
@@ -85,7 +84,12 @@ class TrustedRedirects(urllib.request.HTTPRedirectHandler):
         self.hosts = hosts
 
     def redirect_request(self, request, fp, code, message, headers, url):
-        validate_public_url(url, self.hosts)
+        try: validate_public_url(url, self.hosts)
+        except ValueError as error:
+            try: fp.close()
+            except Exception as cleanup:
+                error.add_note('Redirect response close failed: ' + str(cleanup))
+            raise
         next_request = super().redirect_request(request, fp, code, message, headers, url)
         if next_request is not None:
             fp.close()
@@ -239,27 +243,47 @@ def db_payload_header(header):
     return entry.size
 
 
+def read_db_payload_header(child):
+    data = bytearray()
+    with selectors.DefaultSelector() as ready:
+        ready.register(child.stdout, selectors.EVENT_READ)
+        deadline = time.monotonic() + 5
+        while len(data) < 512:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not ready.select(remaining):
+                raise ValueError("DB payload header probe exceeded its five-second bound")
+            chunk = os.read(child.stdout.fileno(), 512 - len(data))
+            if not chunk: raise ValueError("DB payload header is missing")
+            data.extend(chunk)
+    return db_payload_header(bytes(data))
+
+
 def database_payload_bytes(archive):
     # Existing Ubuntu system zstd only; no installation or network/Go execution.
     command = ["/usr/bin/zstd", "--decompress", "--stdout", str(archive)]
-    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as child:
+    child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    failure = None
+    try:
         try:
-            data = bytearray()
-            with selectors.DefaultSelector() as ready:
-                ready.register(child.stdout, selectors.EVENT_READ)
-                deadline = time.monotonic() + 5
-                while len(data) < 512:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0 or not ready.select(remaining):
-                        raise ValueError("DB payload header probe exceeded its five-second bound")
-                    chunk = os.read(child.stdout.fileno(), 512 - len(data))
-                    if not chunk: raise ValueError("DB payload header is missing")
-                    data.extend(chunk)
-            return {"command": command, "declared_payload_bytes": db_payload_header(bytes(data)),
-                    "terminated_after_header": True, "maximum_probe_seconds": 5}
-        finally:
-            child.kill()
-            child.wait(timeout=5)
+            payload = read_db_payload_header(child)
+        except BaseException as original:
+            try:
+                if not terminate_process(child, time.monotonic() + 5): original.add_note('DB probe cleanup UNKNOWN')
+            except Exception as cleanup:
+                original.add_note('DB probe cleanup UNKNOWN: ' + str(cleanup))
+            raise
+        if not terminate_process(child, time.monotonic() + 5):
+            raise ValueError('DB probe cleanup UNKNOWN')
+        return {"command": command, "declared_payload_bytes": payload,
+                "terminated_after_header": True, "maximum_probe_seconds": 5}
+    except BaseException as original:
+        failure = original
+        raise
+    finally:
+        try: child.stdout.close()
+        except Exception as cleanup:
+            if failure is None: raise
+            failure.add_note('DB probe stdout close UNKNOWN: ' + str(cleanup))
 
 
 def isolated_container_command(name, inputs, runner, nonce=None):
@@ -337,7 +361,7 @@ def cleanup_owned_scanner(owner, inputs, runner, expected_id=None):
         if value.get("Name") != "/" + owner["name"] or value.get("Config", {}).get("Labels", {}).get("org.dollhousemcp.scanner-owner") != owner["nonce"]:
             raise ValueError("Owned name or nonce mismatch")
         if (runner.get("index_digest") != RUNNER_REF.removeprefix("node@") or
-            runner.get("manifest_digest") != "sha256:c83040f7e24bacea68e58a0b96a484ba430bf24abb2973eab7ba4701144b7b63" or
+            runner.get("manifest_digest") != RUNNER_MANIFEST_DIGEST or
             runner.get("config_digest") != RUNNER_CONFIG_DIGEST):
             raise ValueError("Runner graph mismatch")
         report["verified_identity"] = isolation_evidence(value, inputs, runner)
@@ -398,7 +422,7 @@ def bounded_process(command, timeout, maximum=64 * 1024 * 1024, stdout_path=None
     buffers = [bytearray(), bytearray()]
     limit = time.monotonic() + timeout
     with (stdout_path.open("wb") if stdout_path else contextlib.nullcontext(None)) as sink:
-        child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, pass_fds=pass_fds)
+        child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, pass_fds=pass_fds)
         try:
             error = capture_process(child, limit, maximum, stderr_maximum, sink, buffers)
         except BaseException as original:
@@ -591,7 +615,7 @@ def main():
     parser.add_argument('--retained-archive')
     args = parser.parse_args()
     supplied = [args.retained_intake, args.intake_sha256, args.scanner_head, args.scanner_tree, args.retained_archive, args.target_source, args.target_tree, args.target_run_id, args.target_attempt, args.runtime_receipt_sha256]
-    if any(supplied) and not all(supplied): raise ValueError('Complete retained intake arguments required')
+    validate_intake_arguments(supplied, args.target_attempt)
     approved_target = {'source': args.target_source, 'tree': args.target_tree, 'run_id': args.target_run_id, 'attempt': args.target_attempt, 'runtime_receipt_sha256': args.runtime_receipt_sha256}
     root = trusted_work_root(args.root, create=True)
     reports, inputs = prepare_scanner_output(root)

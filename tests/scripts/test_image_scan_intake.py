@@ -16,6 +16,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
 import image_scan_intake as intake
 
 
+class IntakeArgumentTests(unittest.TestCase):
+    def test_absent_legacy_and_complete_positive_attempt_are_accepted(self):
+        intake.validate_intake_arguments([None, None], None)
+        intake.validate_intake_arguments(['record', 1], 1)
+        for supplied, attempt in [(['', None], None), ([None, 0], 0), (['record', -1], -1)]:
+            with self.subTest(supplied=supplied), self.assertRaises(ValueError):
+                intake.validate_intake_arguments(supplied, attempt)
+
+
 class IntakeTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)

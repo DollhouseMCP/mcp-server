@@ -10,7 +10,7 @@ import tarfile
 import tempfile
 import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
-from image_archive_identity import verify_saved_image, verify_fixed_runner, sha
+from image_archive_identity import verify_saved_image, verify_saved_image_file, verify_fixed_runner, sha
 
 
 def encoded(value):
@@ -63,6 +63,25 @@ def write_archive(root, members):
 
 
 class ImageGraphTests(unittest.TestCase):
+    def test_fd_api_rejects_unbacked_or_nonregular_streams_before_parsing(self):
+        import os
+        stream = io.BytesIO(b'not an archive')
+        with self.assertRaisesRegex(ValueError, 'open regular file'):
+            verify_saved_image_file(stream, 'sha256:' + 'a' * 64, 1024)
+        with open(os.devnull, 'rb') as device:
+            with self.assertRaisesRegex(ValueError, 'open regular file'):
+                verify_saved_image_file(device, 'sha256:' + 'a' * 64, 1024)
+
+    def test_classic_descriptor_and_store_mismatch_have_distinct_failures(self):
+        members, store, _, _, size = fixture()
+        with tempfile.TemporaryDirectory() as d:
+            path = write_archive(Path(d), members)
+            descriptor = {'digest': store, 'size': 1, 'mediaType': 'fixture'}
+            with self.assertRaisesRegex(ValueError, 'does not support an inspect descriptor'):
+                verify_saved_image(path, store, size, descriptor)
+            with self.assertRaisesRegex(ValueError, 'config identity'):
+                verify_saved_image(path, 'sha256:' + 'f' * 64, size)
+
     def test_classic_config_id_and_real_diffid_are_verified(self):
         members, store, config, desc, size = fixture()
         with tempfile.TemporaryDirectory() as d:

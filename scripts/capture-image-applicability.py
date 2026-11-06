@@ -16,7 +16,7 @@ from pathlib import Path
 import time
 import uuid
 from image_scan_intake import (validate_intake, trusted_work_root, verify_trusted_image, prepare_capture_output,
-                               read_scanner_provenance, stable_identity, bounded_hash)
+                               read_scanner_provenance, stable_identity, bounded_hash, validate_intake_arguments)
 from image_applicability import GIB, MAX_REPORT, inventory_export, validate_never_started
 
 spec = importlib.util.spec_from_file_location('reviewed_image_scanner', Path(__file__).with_name('scan-built-image.py'))
@@ -383,7 +383,7 @@ def main():
     parser.add_argument('--runtime-receipt-sha256')
     args = parser.parse_args()
     supplied = [args.retained_intake, args.intake_sha256, args.scanner_head, args.scanner_tree, args.target_source, args.target_tree, args.target_run_id, args.target_attempt, args.runtime_receipt_sha256]
-    if any(supplied) and not all(supplied): raise ValueError('Complete retained intake arguments required')
+    validate_intake_arguments(supplied, args.target_attempt)
     approved_target = {'source': args.target_source, 'tree': args.target_tree, 'run_id': args.target_run_id, 'attempt': args.target_attempt, 'runtime_receipt_sha256': args.runtime_receipt_sha256}
     root = trusted_work_root(args.root, create=True)
     reports, private = prepare_capture_output(root)

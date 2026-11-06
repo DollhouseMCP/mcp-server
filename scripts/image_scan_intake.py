@@ -21,6 +21,10 @@ _SKIP_INTAKE_INSPECTION = object()
 INTAKE_DOCUMENT = 'intake.json'
 STAGED_ARCHIVE = 'image.tar'
 
+def validate_intake_arguments(supplied, attempt):
+    if any(value is not None for value in supplied) and (not all(supplied) or type(attempt) is not int or attempt <= 0):
+        raise ValueError('Complete retained intake arguments and positive attempt required')
+
 def trusted_work_root(argument, *, create=False):
     runner = os.environ.get('RUNNER_TEMP')
     if not runner or not os.path.isabs(runner) or '..' in Path(runner).parts:
@@ -241,7 +245,7 @@ def validate_record(record, approved_target):
         type(record['attempt']) is not int or record['attempt'] < 1):
         raise ValueError('Target approved source, run, attempt or receipt mismatch')
     if (not HEX.fullmatch(record['runtime_receipt_sha256']) or not HEX.fullmatch(record['archive_sha256']) or
-        type(record['archive_bytes']) is not int or not 0 < record['archive_bytes'] <= 1024**3 + 128 * 1024**2 or
+        type(record['archive_bytes']) is not int or not 0 < record['archive_bytes'] <= MAX_ARCHIVE or
         record['platform'] not in ('linux/amd64', 'linux/arm64') or record['store_id_role'] not in ('index', 'manifest', 'config') or
         not DIGEST.fullmatch(record['store_id']) or not DIGEST.fullmatch(record['config_digest']) or
         any(x is not None and not DIGEST.fullmatch(x) for x in (record['root_digest'], record['manifest_digest'])) or

@@ -285,6 +285,14 @@ class ElfCoverageTests(unittest.TestCase):
 
 
 class ContainerTests(unittest.TestCase):
+    def test_partial_or_empty_retained_arguments_refuse_before_output_preparation(self):
+        for extra in (['--target-attempt', '0'], ['--retained-intake', '']):
+            with self.subTest(extra=extra), patch.object(sys, 'argv', ['capture', '/fixture', *extra]), \
+                    patch.object(capture, 'trusted_work_root') as work, patch.object(capture, 'prepare_capture_output') as prepare:
+                with self.assertRaisesRegex(ValueError, 'Complete retained intake'):
+                    capture.main()
+                work.assert_not_called(); prepare.assert_not_called()
+
     def test_capture_labels_refuse_before_spawn_or_any_report_mutation(self):
         with tempfile.TemporaryDirectory() as d:
             reports = Path(d); summary = {'receipts': {}}

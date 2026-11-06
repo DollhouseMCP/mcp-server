@@ -6,6 +6,7 @@ import copy
 import importlib.util
 import io
 import os
+import subprocess
 from pathlib import Path
 import tarfile
 import tempfile
@@ -273,7 +274,24 @@ class DownloadWorkerTests(unittest.TestCase):
                     self.assertEqual(followed, [target]); self.assertEqual(stream.body_reads, 0)
                 else:
                     with self.assertRaises(ValueError): handler.http_error_302(request, response, 302, 'Found', response.headers)
-                    self.assertEqual(followed, []); self.assertEqual(stream.body_reads, 0); response.close()
+                    self.assertEqual(followed, []); self.assertEqual(stream.body_reads, 0); self.assertTrue(response.isclosed())
+
+    def test_forbidden_redirect_preserves_primary_error_if_response_close_fails(self):
+        from unittest.mock import Mock
+        response = Mock(); response.close.side_effect = OSError('close fixture')
+        handler = scanner.TrustedRedirects({'github.com'})
+        with self.assertRaisesRegex(ValueError, 'trusted HTTPS') as raised:
+            handler.redirect_request(None, response, 302, 'Found', {}, 'https://evil.invalid/next')
+        self.assertIn('close fixture', raised.exception.__notes__[0])
+        response.close.assert_called_once()
+
+    def test_redirect_close_propagates_fresh_cancellation(self):
+        from unittest.mock import Mock
+        cancellation = KeyboardInterrupt('close cancelled'); response = Mock(); response.close.side_effect = cancellation
+        handler = scanner.TrustedRedirects({'github.com'})
+        with self.assertRaises(KeyboardInterrupt) as raised:
+            handler.redirect_request(None, response, 302, 'Found', {}, 'https://evil.invalid/next')
+        self.assertIs(raised.exception, cancellation)
 
     def test_worker_readback_success_and_refuses_size_checksum_or_unsafe_slot(self):
         from unittest.mock import patch
@@ -453,6 +471,59 @@ class BoundedCaptureTests(unittest.TestCase):
 
 
 class ScannerEnvelopeTests(unittest.TestCase):
+    def test_database_probe_preserves_failure_and_refuses_unknown_reap(self):
+        from unittest.mock import patch, Mock
+        header = tarfile.TarInfo('vulnerability.db'); header.size = 1; raw = header.tobuf()
+        archive = Path('fixture')
+        class Selector:
+            def __enter__(self): return self
+            def __exit__(self, *_): pass
+            def register(self, *_): pass
+            def select(self, _timeout): return [True]
+        for scenario in ('success', 'unreaped', 'read-error', 'read-error-unreaped', 'read-error-close-error', 'success-close-error', 'read-error-cleanup-cancel'):
+            child = Mock(); child.stdout.fileno.return_value = 17
+            child.wait.side_effect = subprocess.TimeoutExpired('fixture', 5) if 'unreaped' in scenario else None
+            failure = OSError('fixture read failed')
+            close_error = OSError('fixture close failed')
+            cancellation = KeyboardInterrupt('fixture cancellation')
+            if 'close-error' in scenario: child.stdout.close.side_effect = close_error
+            if scenario == 'read-error-cleanup-cancel': child.kill.side_effect = cancellation
+            read = failure if scenario.startswith('read-error') else raw
+            with self.subTest(scenario=scenario), patch.object(scanner.subprocess, 'Popen', return_value=child) as popen, \
+                    patch.object(scanner.selectors, 'DefaultSelector', return_value=Selector()), patch.object(scanner.os, 'read', side_effect=read if isinstance(read, OSError) else None, return_value=raw):
+                if scenario == 'success':
+                    result = scanner.database_payload_bytes(archive)
+                    self.assertEqual(result['declared_payload_bytes'], 1)
+                elif scenario == 'unreaped':
+                    with self.assertRaisesRegex(ValueError, 'cleanup UNKNOWN'):
+                        scanner.database_payload_bytes(archive)
+                elif scenario == 'success-close-error':
+                    with self.assertRaises(OSError) as raised:
+                        scanner.database_payload_bytes(archive)
+                    self.assertIs(raised.exception, close_error)
+                elif scenario == 'read-error-cleanup-cancel':
+                    with self.assertRaises(KeyboardInterrupt) as raised:
+                        scanner.database_payload_bytes(archive)
+                    self.assertIs(raised.exception, cancellation)
+                else:
+                    with self.assertRaises(OSError) as raised:
+                        scanner.database_payload_bytes(archive)
+                    self.assertIs(raised.exception, failure)
+                    if scenario.endswith('unreaped'): self.assertIn('UNKNOWN', failure.__notes__[0])
+                    if scenario.endswith('close-error'): self.assertIn('close UNKNOWN', failure.__notes__[0])
+                self.assertEqual(popen.call_args.kwargs['stdin'], subprocess.DEVNULL)
+                child.stdout.close.assert_called_once(); child.kill.assert_called_once()
+                if scenario != 'read-error-cleanup-cancel': self.assertIsNotNone(child.wait.call_args.kwargs['timeout'])
+
+    def test_partial_or_empty_retained_arguments_refuse_before_output_preparation(self):
+        from unittest.mock import patch
+        for extra in (['--target-attempt', '0'], ['--retained-intake', '']):
+            with self.subTest(extra=extra), patch.object(sys, 'argv', ['scanner', '/fixture', *extra]), \
+                    patch.object(scanner, 'trusted_work_root') as work, patch.object(scanner, 'prepare_scanner_output') as prepare:
+                with self.assertRaisesRegex(ValueError, 'Complete retained intake'):
+                    scanner.main()
+                work.assert_not_called(); prepare.assert_not_called()
+
     def test_fixed_producer_names_are_written_and_untrusted_names_refuse_before_any_write(self):
         with tempfile.TemporaryDirectory() as directory:
             reports = Path(directory)

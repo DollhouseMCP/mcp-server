@@ -3,6 +3,7 @@ import gzip
 import hashlib
 import json
 import os
+import stat
 from pathlib import PurePosixPath
 import re
 import tarfile
@@ -19,6 +20,9 @@ BLOB_PREFIX = 'blobs/sha256/'
 INDEX_FILE = 'index.json'
 DEFAULT_PLATFORM = 'linux/amd64'
 NO_INSPECTION_DESCRIPTOR = object()
+RUNNER_INDEX_DIGEST = 'sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66'
+RUNNER_MANIFEST_DIGEST = 'sha256:c83040f7e24bacea68e58a0b96a484ba430bf24abb2973eab7ba4701144b7b63'
+RUNNER_CONFIG_DIGEST = 'sha256:04f59b17d8d39a8fdeb138fecb8fcbaa6e208ed7b6db929c7e98ad9005e0a52f'
 
 
 def sha(data):
@@ -235,7 +239,9 @@ def _verify_saved_image(path, store_id, unpacked_cap, descriptor=None, *, platfo
         if INDEX_FILE in archive.members:
             root_digest, selected, role, descriptors = select_oci_graph(archive, store_id, descriptor, config_bytes, config_digest, docker, expected_source, inspection_descriptor)
         else:
-            if descriptor is not None or (inspection_descriptor is not NO_INSPECTION_DESCRIPTOR and inspection_descriptor is not None) or store_id != config_digest:
+            if descriptor is not None or (inspection_descriptor is not NO_INSPECTION_DESCRIPTOR and inspection_descriptor is not None):
+                raise ValueError('Classic Docker archive does not support an inspect descriptor')
+            if store_id != config_digest:
                 raise ValueError('Classic Docker config identity does not match observed store ID')
             role = 'config'; descriptors = [None] * len(docker['Layers'])
         layers, total = verified_layers(archive, config, docker, descriptors, unpacked_cap)
@@ -257,6 +263,10 @@ def verify_saved_image(path, store_id, unpacked_cap, descriptor=None, *, platfor
 
 def verify_saved_image_file(stream, store_id, unpacked_cap, descriptor=None, *, platform=DEFAULT_PLATFORM, expected_source=None, inspection_descriptor=NO_INSPECTION_DESCRIPTOR):
     """Verify an already admitted open file object without reopening its name."""
+    try: info = os.fstat(stream.fileno())
+    except (AttributeError, OSError, ValueError, TypeError) as error:
+        raise ValueError('Saved-image FD must be an open regular file') from error
+    if not stat.S_ISREG(info.st_mode): raise ValueError('Saved-image FD must be an open regular file')
     return _verify_saved_image(None, store_id, unpacked_cap, descriptor, platform=platform, expected_source=expected_source, fileobj=stream, inspection_descriptor=inspection_descriptor)
 
 
@@ -264,9 +274,9 @@ def verify_fixed_runner(evidence, reference_directory):
     """Anchor either archive format to the exact protected public reference graph."""
     index_bytes = (reference_directory / INDEX_FILE).read_bytes()
     manifest_bytes = (reference_directory / 'linux-amd64-manifest.json').read_bytes()
-    root = 'sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66'
-    manifest_digest = 'sha256:c83040f7e24bacea68e58a0b96a484ba430bf24abb2973eab7ba4701144b7b63'
-    config_digest = 'sha256:04f59b17d8d39a8fdeb138fecb8fcbaa6e208ed7b6db929c7e98ad9005e0a52f'
+    root = RUNNER_INDEX_DIGEST
+    manifest_digest = RUNNER_MANIFEST_DIGEST
+    config_digest = RUNNER_CONFIG_DIGEST
     if sha(index_bytes) != root or sha(manifest_bytes) != manifest_digest:
         raise ValueError('Protected runner reference bytes do not match fixed digests')
     index, manifest = json.loads(index_bytes), json.loads(manifest_bytes)
