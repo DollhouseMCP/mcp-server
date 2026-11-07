@@ -5,13 +5,19 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 HOSTED_DEPLOY="${REPO_ROOT}/scripts/hosted-deploy.sh"
+export DOLLHOUSE_HOSTED_CADDY_IMAGE="${DOLLHOUSE_HOSTED_CADDY_IMAGE:-registry.example.test/team/caddy@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
+export DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME="${DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME:-fixture_data}"
+export DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME="${DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME:-fixture_config}"
+DOLLHOUSE_FAKE_PYTHON="$(command -v python3)"
+export DOLLHOUSE_FAKE_PYTHON
 TMP_ROOT="$(mktemp -d)"
+TMP_ROOT="$(cd "${TMP_ROOT}" && pwd -P)"
 FAKE_BIN="${TMP_ROOT}/bin"
 DOCKER_LOG="${TMP_ROOT}/docker.log"
 CURL_LOG="${TMP_ROOT}/curl.log"
 
 cleanup() {
-  if [[ -n "${TMP_ROOT:-}" && -d "${TMP_ROOT}" && "${TMP_ROOT}" == "${TMPDIR:-/tmp}"* ]]; then
+  if [[ -n "${TMP_ROOT:-}" && -d "${TMP_ROOT}" && "${TMP_ROOT}" == "$(cd "${TMPDIR:-/tmp}" && pwd -P)"/* ]]; then
     rm -R "${TMP_ROOT}"
   fi
 }
@@ -58,6 +64,11 @@ printf 'docker %s\n' "$*" >> "${DOLLHOUSE_FAKE_DOCKER_LOG:?}"
 
 if [[ "${1:-}" == "compose" && "${2:-}" == "version" ]]; then
   printf 'Docker Compose version fake\n'
+  exit 0
+fi
+
+if [[ "${1:-}" == inspect && "${3:-}" == '{{.Config.User}}|{{.State.Running}}' ]]; then
+  printf '1001:1001|true\n'
   exit 0
 fi
 
@@ -167,7 +178,36 @@ fi
 exit 0
 EOF
 
-  chmod +x "${FAKE_BIN}/docker" "${FAKE_BIN}/curl"
+  cat > "${FAKE_BIN}/python3" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  */caddy_image_admission.py) printf '{}\n' ;;
+  */caddy_transition_action.py)
+    cat >/dev/null
+    case "${2:-}" in
+      status) printf 'none\n' ;;
+      begin-fresh|begin-update|begin-rollback) printf 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' ;;
+      select-rollback|select-proxy) printf '%s/server.prev-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' "${DOLLHOUSE_HOSTED_DEPLOY_DIR:?}" ;;
+      stage|finish|bind-admission) printf 'ok\n' ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  */caddy_fresh_action.py|*/caddy_fresh_recheck.py|*/caddy_prestart_action.py|*/caddy_recover_action.py|*/caddy_verify_noop_action.py) cat >/dev/null; printf '{}\n' ;;
+  */caddy_unchanged_action.py)
+    cat >/dev/null
+    printf '%s/server.prev-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' "${DOLLHOUSE_HOSTED_DEPLOY_DIR:?}"
+    ;;
+  *) exec "${DOLLHOUSE_FAKE_PYTHON:?}" "$@" ;;
+esac
+EOF
+
+  cat > "${FAKE_BIN}/flock" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+
+  chmod +x "${FAKE_BIN}/docker" "${FAKE_BIN}/curl" "${FAKE_BIN}/python3" "${FAKE_BIN}/flock"
 }
 
 create_source_repo() {
@@ -292,7 +332,7 @@ DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
 DOLLHOUSE_HOSTED_SOURCE_DIR="${SOURCE_REPO}" \
 DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=dummy-client \
 DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=dummy-secret \
-  bash "${HOSTED_DEPLOY}" install > "${BOOTSTRAP_OUTPUT}" 2>&1
+  bash "${HOSTED_DEPLOY}" install > "${BOOTSTRAP_OUTPUT}" 2>&1 || { cat "${BOOTSTRAP_OUTPUT}" >&2; fail "bootstrap-required install failed"; }
 assert_contains "${BOOTSTRAP_OUTPUT}" "/readyz reports bootstrap_required"
 
 log "running install workflow"
@@ -312,9 +352,8 @@ assert_file_equals "${DEPLOY_DIR}/server/version.txt" "v2"
 previous_bundle="$(latest_dir 'server.prev-*')"
 [[ -n "${previous_bundle}" ]] || fail "expected update to retain a previous server bundle"
 assert_file_equals "${previous_bundle}/version.txt" "v1"
-assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d dollhousemcp"
+assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d --pull never dollhousemcp"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} pull caddy"
-assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d --no-deps --force-recreate caddy"
 
 log "running bootstrap-admin workflow"
 run_hosted_with_bootstrap bootstrap-admin octocat
@@ -328,7 +367,7 @@ rollback_bundle="$(latest_dir 'server.rollback-from-*')"
 [[ -n "${rollback_bundle}" ]] || fail "expected rollback to retain the rolled-back current bundle"
 assert_file_equals "${rollback_bundle}/version.txt" "v2"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} pull caddy"
-assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d dollhousemcp caddy"
+assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d --pull never dollhousemcp"
 
 log "checking invalid source error"
 bad_output="${TMP_ROOT}/bad-source.out"

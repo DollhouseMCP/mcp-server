@@ -7,7 +7,8 @@ describe_render_plan() {
   resolve_allowed_hosts
   validate_render_inputs
   log "dry-run: deployment mode=${DEPLOY_MODE} instance=${INSTANCE_NAME} proxy_mode=${PROXY_MODE} bind=${BIND_ADDRESS} public_url=${PUBLIC_BASE_URL}"
-  log "dry-run: compose project=${INSTANCE_NAME} image=${IMAGE_TAG}"
+  log "dry-run: compose project=${INSTANCE_NAME} image=${IMAGE_TAG} caddy=${CADDY_IMAGE}"
+  log "dry-run: caddy data=${CADDY_DATA_VOLUME} config=${CADDY_CONFIG_VOLUME}; image and volumes require qualification"
   log "dry-run: Docker json-file log rotation max-size=${DOCKER_LOG_MAX_SIZE} max-file=${DOCKER_LOG_MAX_FILE}"
   log "dry-run: auth provider=${AUTH_PROVIDER} methods=${AUTH_METHODS:-none} generation=${AUTH_GENERATION} open_dcr=${OPEN_DCR} allowlist_required=${ALLOWLIST_REQUIRED}"
   log "dry-run: would render deployment files in ${DEPLOY_DIR}"
@@ -104,21 +105,20 @@ dry_run_bootstrap_admin() {
 
 dry_run_rollback() {
   describe_render_plan
-  log "dry-run: would restore the newest server.prev-* bundle"
+  log "dry-run: would use the exact completed receipt-bound rollback source"
   if [[ -d "${SERVER_DIR}" ]]; then
     log "dry-run: current server bundle exists at ${SERVER_DIR}"
   else
     log "dry-run: current server bundle is not present yet"
   fi
   local previous
-  previous="$(latest_previous_bundle)"
-  if [[ -n "${previous}" ]]; then
-    log "dry-run: newest rollback candidate is ${previous}"
+  if [[ -d "${DEPLOY_DIR}/.caddy-state" ]] && previous="$(caddy_transition select-rollback 2>/dev/null)"; then
+    log "dry-run: validated rollback candidate is ${previous}"
   else
-    log "dry-run: no server.prev-* rollback candidate found yet"
+    log "dry-run: no completed, unambiguous rollback candidate is available"
   fi
-  log "dry-run: would rebuild dollhousemcp image, check pinned running postgres without recreation, and pull caddy before stopping the current app"
-  log "dry-run: would require successful non-force graceful stop immediately before replacing dollhousemcp + caddy"
+  log "dry-run: would validate and restore or retain the recorded proxy before moving source"
+  log "dry-run: would rebuild dollhousemcp, check pinned postgres, and require non-force graceful stop before app replacement"
   log "dry-run: would verify ${PUBLIC_BASE_URL}/healthz, /readyz, and /mcp for up to ${VERIFY_READY_TIMEOUT}s"
   log "dry-run: would warn, not fail, if /readyz reports bootstrap_required before the first admin is claimed"
 
@@ -153,6 +153,18 @@ run_dry_action() {
       ;;
     bootstrap-admin)
       dry_run_bootstrap_admin
+      ;;
+    clone-caddy-volumes)
+      validate_persisted_caddy_fields
+      resolve_mode_defaults
+      validate_caddy_selection "${CADDY_IMAGE}" "${CADDY_DATA_VOLUME}" "${CADDY_CONFIG_VOLUME}"
+      log "dry-run: would require the existing proxy stopped and clone its volumes to ${CADDY_DATA_VOLUME} and ${CADDY_CONFIG_VOLUME}"
+      ;;
+    recover-caddy-proxy)
+      validate_persisted_caddy_fields
+      resolve_mode_defaults
+      validate_caddy_selection "${CADDY_IMAGE}" "${CADDY_DATA_VOLUME}" "${CADDY_CONFIG_VOLUME}"
+      log "dry-run: would validate the selected previous bundle and its proxy receipt before proxy-only recovery"
       ;;
     rollback)
       dry_run_rollback

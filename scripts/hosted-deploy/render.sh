@@ -120,8 +120,19 @@ services:
     command: ["npm", "run", "db:migrate"]
 
   caddy:
-    # trusted_proxies_strict requires Caddy 2.8 or newer.
-    image: caddy:2.8
+    image: ${CADDY_IMAGE}
+    user: "1001:1001"
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "1024"
+    tmpfs:
+      - /tmp:noexec,nosuid,nodev,size=64M,mode=1777
     container_name: ${CADDY_CONTAINER_NAME}
     restart: unless-stopped
     logging: *dollhouse-logging
@@ -136,7 +147,11 @@ $(caddy_ports_yaml)
 
 volumes:
   caddy_data:
+    external: true
+    name: ${CADDY_DATA_VOLUME}
   caddy_config:
+    external: true
+    name: ${CADDY_CONFIG_VOLUME}
 EOF
 
   return 0
@@ -215,7 +230,7 @@ EOF
   return 0
 }
 
-write_caddyfile() {
+caddyfile_content() {
   local site_address forwarded_proto
   case "${PROXY_MODE}" in
     caddy-tls)
@@ -231,7 +246,7 @@ write_caddyfile() {
       ;;
   esac
 
-  cat > "${CADDY_FILE}" <<EOF
+  cat <<EOF
 $(caddy_global_options_block)
 ${site_address} {
 	encode gzip
@@ -250,8 +265,34 @@ $(caddy_access_log_block)
 	}
 }
 EOF
+}
+
+write_caddyfile() {
+  local generated
+  [[ ! -L "${CADDY_FILE}" ]] || die "Caddyfile must not be a symlink"
+  generated="$(mktemp "${DEPLOY_DIR}/.Caddyfile.XXXXXXXX")" || die "cannot prepare Caddyfile"
+  caddyfile_content > "${generated}"
+  chmod 0644 "${generated}"
+  if [[ -f "${CADDY_FILE}" ]] && cmp -s "${generated}" "${CADDY_FILE}"; then
+    rm -f "${generated}"
+  else
+    mv "${generated}" "${CADDY_FILE}"
+  fi
+  chmod 0644 "${CADDY_FILE}"
 
   return 0
+}
+
+require_safe_caddyfile_change() {
+  if [[ "${CADDY_KEEP_PROXY:-false}" == true ]]; then
+    [[ -f "${CADDY_FILE}" && ! -L "${CADDY_FILE}" ]] || die "the running Caddyfile is unavailable"
+    caddyfile_content | cmp -s - "${CADDY_FILE}" || die "the unchanged Caddy proxy requires an unchanged Caddyfile"
+  fi
+  if [[ -d "${SERVER_DIR}" && -e "${CADDY_FILE}" && "${CADDY_RECOVERY_VERIFIED:-false}" != true ]]; then
+    [[ ! -L "${CADDY_FILE}" ]] || die "Caddyfile must not be a symlink"
+    caddyfile_content | cmp -s - "${CADDY_FILE}" || \
+      die "Caddyfile changes require a protected proxy recovery receipt; use the qualified update path"
+  fi
 }
 
 write_init_db() {
@@ -378,13 +419,21 @@ EOF
 }
 
 render_files() {
+  local expected_caddy_image expected_caddy_data expected_caddy_config
   resolve_public_base_url
   resolve_hostname
   resolve_allowed_hosts
   validate_render_inputs
+  ensure_supported_python
+  require_safe_caddyfile_change
+  expected_caddy_image="${CADDY_IMAGE}"; expected_caddy_data="${CADDY_DATA_VOLUME}"; expected_caddy_config="${CADDY_CONFIG_VOLUME}"
   ensure_layout
   write_env_defaults
   load_env_file
+  validate_caddy_selection "${CADDY_IMAGE}" "${CADDY_DATA_VOLUME}" "${CADDY_CONFIG_VOLUME}"
+  [[ "${CADDY_IMAGE}" == "${expected_caddy_image}" && "${CADDY_DATA_VOLUME}" == "${expected_caddy_data}" && "${CADDY_CONFIG_VOLUME}" == "${expected_caddy_config}" ]] ||
+    die "Caddy selection changed while loading the deployment environment"
+  require_safe_caddyfile_change
   write_compose
   write_caddyfile
   write_init_db

@@ -159,6 +159,11 @@ adopt_deployment_config_from_env_file() {
     [[ -z "${value}" ]] || TRUSTED_PROXIES="${value}"
   fi
 
+  # Image and named PKI volumes are deployment-wide explicit selections.
+  if [[ -z "${CADDY_IMAGE}" ]]; then CADDY_IMAGE="$(deployment_env_file_value DOLLHOUSE_HOSTED_CADDY_IMAGE)"; fi
+  if [[ -z "${CADDY_DATA_VOLUME}" ]]; then CADDY_DATA_VOLUME="$(deployment_env_file_value DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME)"; fi
+  if [[ -z "${CADDY_CONFIG_VOLUME}" ]]; then CADDY_CONFIG_VOLUME="$(deployment_env_file_value DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME)"; fi
+
   if [[ "${adopt_mode_dependent}" == "true" && "${CADDY_ACCESS_LOG_SET}" != "true" && -z "${CADDY_ACCESS_LOG}" ]]; then
     value="$(deployment_env_file_value DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG)"
     [[ -z "${value}" ]] || CADDY_ACCESS_LOG="${value}"

@@ -5,6 +5,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 HOSTED_DEPLOY="${REPO_ROOT}/scripts/hosted-deploy.sh"
+export DOLLHOUSE_HOSTED_CADDY_IMAGE="${DOLLHOUSE_HOSTED_CADDY_IMAGE:-registry.example.test/team/caddy@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
+export DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME="${DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME:-fixture_data}"
+export DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME="${DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME:-fixture_config}"
 TMP_ROOT="$(mktemp -d)"
 ENTERPRISE_MODE_ENV_LINE='DOLLHOUSE_HOSTED_MODE=enterprise'
 
@@ -209,7 +212,7 @@ assert_line "${COMPOSE_FILE}" '    container_name: deploy'
 assert_line "${COMPOSE_FILE}" '    container_name: deploy-caddy'
 assert_contains "${COMPOSE_FILE}" 'image: deploy-hosted:alpha'
 assert_contains "${COMPOSE_FILE}" 'image: deploy-hosted:alpha-migrate'
-assert_contains "${COMPOSE_FILE}" 'image: caddy:2.8'
+assert_contains "${COMPOSE_FILE}" "image: ${DOLLHOUSE_HOSTED_CADDY_IMAGE}"
 assert_contains "${COMPOSE_FILE}" 'x-dollhouse-logging: &dollhouse-logging'
 assert_contains "${COMPOSE_FILE}" '  driver: json-file'
 assert_contains "${COMPOSE_FILE}" '    max-size: "25m"'

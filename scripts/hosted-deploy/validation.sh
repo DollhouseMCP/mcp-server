@@ -438,6 +438,40 @@ validate_docker_log_max_file() {
   return 0
 }
 
+validate_caddy_image_reference() {
+  [[ "$1" =~ ^[a-z0-9][a-z0-9.-]*(:[0-9]+)?(/[a-z0-9]+([._-][a-z0-9]+)*)+@sha256:[0-9a-f]{64}$ ]] ||
+    die "DOLLHOUSE_HOSTED_CADDY_IMAGE must be a registry/repository@sha256 digest reference"
+}
+
+validate_caddy_volume_name() {
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]] || die "Caddy volume must be an explicit safe name"
+}
+
+validate_caddy_selection() {
+  validate_caddy_image_reference "$1"
+  validate_caddy_volume_name "$2"
+  validate_caddy_volume_name "$3"
+  [[ "$2" != "$3" ]] || die "Caddy data and config require distinct explicit named volumes"
+}
+
+validate_persisted_caddy_fields() {
+  [[ -f "${ENV_FILE}" ]] || return 0
+  local line value image_count=0 data_count=0 config_count=0
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    if [[ "${line}" =~ ^[[:space:]]*(export[[:space:]]+)?(CADDY_IMAGE|CADDY_DATA_VOLUME|CADDY_CONFIG_VOLUME|CADDY_ADMISSION_RECEIPT|CADDY_RECOVERY_VERIFIED|CADDY_KEEP_PROXY|CADDY_TRANSITION_TOKEN|PREVIOUS_BUNDLE|HOSTED_CADDY_[A-Z_]+)= ]]; then
+      die "Internal Caddy aliases are forbidden in the deployment environment file"
+    fi
+    case "${line}" in
+      DOLLHOUSE_HOSTED_CADDY_IMAGE=*) image_count=$((image_count+1)); value="${line#*=}"; validate_caddy_image_reference "${value}" ;;
+      DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME=*) data_count=$((data_count+1)); value="${line#*=}"; validate_caddy_volume_name "${value}" ;;
+      DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME=*) config_count=$((config_count+1)); value="${line#*=}"; validate_caddy_volume_name "${value}" ;;
+      *DOLLHOUSE_HOSTED_CADDY_IMAGE=*|*DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME=*|*DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME=*)
+        die "Caddy deployment environment fields must use literal unquoted assignments" ;;
+    esac
+  done < "${ENV_FILE}"
+  (( image_count <= 1 && data_count <= 1 && config_count <= 1 )) || die "Duplicate Caddy deployment fields are forbidden"
+}
+
 validate_render_inputs() {
   resolve_mode_defaults
   validate_bool DOLLHOUSE_AUTH_OPEN_DCR "${OPEN_DCR}"
@@ -454,6 +488,8 @@ validate_render_inputs() {
   validate_bind_address
   validate_no_whitespace DOLLHOUSE_HTTP_ALLOWED_HOSTS "${ALLOWED_HOSTS}"
   validate_trusted_proxy_list DOLLHOUSE_TRUSTED_PROXIES "${TRUSTED_PROXIES}"
+  validate_persisted_caddy_fields
+  validate_caddy_selection "${CADDY_IMAGE}" "${CADDY_DATA_VOLUME}" "${CADDY_CONFIG_VOLUME}"
   validate_bool DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG "${CADDY_ACCESS_LOG}"
   validate_cidr_list DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES "${CADDY_TRUSTED_PROXIES}"
   validate_render_value DOLLHOUSE_HOSTED_IMAGE_TAG "${IMAGE_TAG}"

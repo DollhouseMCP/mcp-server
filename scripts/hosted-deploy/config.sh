@@ -109,6 +109,9 @@ hosted_deploy_init_config() {
   # App trusted proxies describe the direct hop into the app container
   # (usually Caddy on Docker). Caddy trusted proxies describe the public edge
   # hop, such as Cloudflare, that Caddy may trust for real client IP headers.
+  CADDY_IMAGE="${DOLLHOUSE_HOSTED_CADDY_IMAGE:-}"
+  CADDY_DATA_VOLUME="${DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME:-}"
+  CADDY_CONFIG_VOLUME="${DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME:-}"
   CADDY_ACCESS_LOG="${DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG:-}"
   CADDY_ACCESS_LOG_SET="false"
   if hosted_deploy_nonempty_env DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG; then
@@ -145,6 +148,11 @@ hosted_deploy_init_config() {
   APP_CONTAINER_NAME=""
   POSTGRES_CONTAINER_NAME=""
   CADDY_CONTAINER_NAME=""
+  CADDY_RECOVERY_VERIFIED="false"
+  CADDY_KEEP_PROXY="false"
+  PREVIOUS_BUNDLE=""
+  CADDY_ADMISSION_RECEIPT=""
+  CADDY_TRANSITION_TOKEN=""
 
   return 0
 }
@@ -159,6 +167,8 @@ Usage:
   scripts/hosted-deploy.sh [--dry-run] [--quiet|--debug|--log-level LEVEL] update
   scripts/hosted-deploy.sh [--dry-run] [--quiet|--debug|--log-level LEVEL] migrate
   scripts/hosted-deploy.sh [--dry-run] [--quiet|--debug|--log-level LEVEL] bootstrap-admin
+  scripts/hosted-deploy.sh [--dry-run] [--quiet|--debug|--log-level LEVEL] clone-caddy-volumes
+  scripts/hosted-deploy.sh [--dry-run] [--quiet|--debug|--log-level LEVEL] recover-caddy-proxy
   scripts/hosted-deploy.sh [--dry-run] [--quiet|--debug|--log-level LEVEL] rollback
   scripts/hosted-deploy.sh [--dry-run] [--quiet|--debug|--log-level LEVEL] verify
 
@@ -168,6 +178,8 @@ Actions:
   scripts/hosted-deploy.sh update
   scripts/hosted-deploy.sh migrate
   scripts/hosted-deploy.sh bootstrap-admin
+  scripts/hosted-deploy.sh clone-caddy-volumes
+  scripts/hosted-deploy.sh recover-caddy-proxy
   scripts/hosted-deploy.sh rollback
   scripts/hosted-deploy.sh verify
 
@@ -184,6 +196,9 @@ Common environment:
   DOLLHOUSE_HOSTED_BIND_ADDRESS=0.0.0.0
   DOLLHOUSE_HOSTED_HTTP_BIND_PORT=80
   DOLLHOUSE_HOSTED_HTTPS_BIND_PORT=443
+  DOLLHOUSE_HOSTED_CADDY_IMAGE=registry/repository@sha256:<64 lowercase hex>
+  DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME=<prequalified named volume>
+  DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME=<prequalified named volume>
   DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG=true|false
   DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES=173.245.48.0/20,2606:4700::/32
   DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_SIZE=25m

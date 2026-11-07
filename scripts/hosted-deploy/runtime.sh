@@ -8,7 +8,14 @@ ensure_docker_prerequisites() {
   return 0
 }
 
+ensure_supported_python() {
+  need_command python3
+  python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3,11) else 1)' ||
+    die "Python 3.11 or newer is required before deployment"
+}
+
 ensure_runtime_prerequisites() {
+  ensure_supported_python
   ensure_docker_prerequisites
   need_command openssl
 
@@ -53,7 +60,10 @@ validate_verify_timeout() {
 wait_for_postgres() {
   validate_postgres_timeout
   log "starting postgres"
-  compose up -d postgres
+  if ! docker image inspect postgres:17-alpine >/dev/null 2>&1; then
+    compose pull postgres
+  fi
+  compose up -d --pull never postgres
 
   log "waiting for postgres to become ready"
   local elapsed=0
@@ -134,13 +144,160 @@ run_database_migrations() {
 refresh_caddy_image() {
   log "refreshing caddy image"
   compose pull caddy
+  CADDY_ADMISSION_RECEIPT="$(python3 "${HOSTED_DEPLOY_LIB_DIR}/caddy_image_admission.py" "${CADDY_IMAGE}")" || \
+    die "Caddy image did not match the retained qualification"
 
   return 0
 }
 
+caddy_request_json() {
+  HOSTED_CADDY_REQUEST_ROOT="${DEPLOY_DIR}" HOSTED_CADDY_REQUEST_INSTANCE="${INSTANCE_NAME}" \
+    HOSTED_CADDY_REQUEST_DATA="${CADDY_DATA_VOLUME}" HOSTED_CADDY_REQUEST_CONFIG="${CADDY_CONFIG_VOLUME}" \
+    python3 -c 'import json, os; print(json.dumps({"deploy_dir":os.environ["HOSTED_CADDY_REQUEST_ROOT"], "instance":os.environ["HOSTED_CADDY_REQUEST_INSTANCE"], "data_volume":os.environ["HOSTED_CADDY_REQUEST_DATA"], "config_volume":os.environ["HOSTED_CADDY_REQUEST_CONFIG"]}))'
+}
+
+clone_caddy_volumes() {
+  ensure_runtime_prerequisites
+  validate_persisted_caddy_fields
+  resolve_mode_defaults
+  validate_caddy_selection "${CADDY_IMAGE}" "${CADDY_DATA_VOLUME}" "${CADDY_CONFIG_VOLUME}"
+  caddy_request_json | python3 "${HOSTED_DEPLOY_LIB_DIR}/caddy_clone_action.py"
+}
+
+acquire_caddy_deployment_lock() {
+  need_command flock
+  python3 -c 'import os, stat, sys; p=sys.argv[1]; s=os.lstat(p); sys.exit(0 if stat.S_ISDIR(s.st_mode) and s.st_uid == os.geteuid() and not s.st_mode & 0o022 and os.path.realpath(p) == p else 1)' "${DEPLOY_DIR}" || \
+    die "deployment directory must be canonical and protected"
+  [[ ! -L "${DEPLOY_DIR}/.caddy-deploy.lock" ]] || die "deployment lock must not be a symlink"
+  local old_umask
+  old_umask="$(umask)"
+  umask 077
+  exec 9>>"${DEPLOY_DIR}/.caddy-deploy.lock"
+  HOSTED_CADDY_LOCK_FD=9
+  umask "${old_umask}"
+  python3 -c 'import os, stat, sys; f=os.fstat(int(sys.argv[1])); p=os.lstat(sys.argv[2]); sys.exit(0 if stat.S_ISREG(f.st_mode) and f.st_uid == os.geteuid() and f.st_nlink == 1 and not f.st_mode & 0o077 and (f.st_dev, f.st_ino) == (p.st_dev, p.st_ino) else 1)' \
+    "${HOSTED_CADDY_LOCK_FD}" "${DEPLOY_DIR}/.caddy-deploy.lock" || die "deployment lock is unsafe"
+  flock --nonblock "${HOSTED_CADDY_LOCK_FD}" || die "another Caddy deployment operation holds the lock"
+}
+
+verify_prepared_caddy() {
+  PREVIOUS_BUNDLE="$(caddy_request_json | python3 "${HOSTED_DEPLOY_LIB_DIR}/caddy_prepared_action.py")" || \
+    die "no safe prepared Caddy clone matches this source; run clone-caddy-volumes with the proxy stopped"
+  [[ "${PREVIOUS_BUNDLE}" == "${DEPLOY_DIR}/server.prev-"* ]] || die "invalid previous bundle destination"
+  CADDY_RECOVERY_VERIFIED=true
+}
+
+caddy_unchanged_request_json() {
+  local expected_hash
+  expected_hash="$(caddyfile_content | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
+  HOSTED_CADDY_REQUEST_ROOT="${DEPLOY_DIR}" HOSTED_CADDY_REQUEST_INSTANCE="${INSTANCE_NAME}" \
+    HOSTED_CADDY_REQUEST_DATA="${CADDY_DATA_VOLUME}" HOSTED_CADDY_REQUEST_CONFIG="${CADDY_CONFIG_VOLUME}" \
+    HOSTED_CADDY_REQUEST_IMAGE="${CADDY_IMAGE}" HOSTED_CADDY_EXPECTED_HASH="${expected_hash}" \
+    HOSTED_CADDY_PROXY_MODE="${PROXY_MODE}" HOSTED_CADDY_BIND="${BIND_ADDRESS}" \
+    HOSTED_CADDY_HTTP_PORT="${HTTP_BIND_PORT}" HOSTED_CADDY_HTTPS_PORT="${HTTPS_BIND_PORT}" \
+    python3 -c 'import json, os; e=os.environ; print(json.dumps({"deploy_dir":e["HOSTED_CADDY_REQUEST_ROOT"], "instance":e["HOSTED_CADDY_REQUEST_INSTANCE"], "data_volume":e["HOSTED_CADDY_REQUEST_DATA"], "config_volume":e["HOSTED_CADDY_REQUEST_CONFIG"], "image":e["HOSTED_CADDY_REQUEST_IMAGE"], "expected_caddy_sha256":e["HOSTED_CADDY_EXPECTED_HASH"], "proxy_mode":e["HOSTED_CADDY_PROXY_MODE"], "bind_address":e["HOSTED_CADDY_BIND"], "http_port":e["HOSTED_CADDY_HTTP_PORT"], "https_port":e["HOSTED_CADDY_HTTPS_PORT"]}))'
+}
+
+prepare_current_caddy() {
+  local observed observed_user observed_running
+  observed="$(docker inspect --format '{{.Config.User}}|{{.State.Running}}' "${CADDY_CONTAINER_NAME}")" || \
+    die "cannot identify the current Caddy proxy"
+  [[ "${observed}" == *'|'* ]] || die "invalid Caddy proxy state"
+  observed_user="${observed%|*}"
+  observed_running="${observed##*|}"
+  [[ "${observed_running}" == true || "${observed_running}" == false ]] || die "invalid Caddy proxy state"
+  if [[ "${observed_user}" == '1001:1001' && "${observed_running}" == true ]]; then
+    PREVIOUS_BUNDLE="$(caddy_unchanged_request_json | \
+      HOSTED_CADDY_LOCK_FD="${HOSTED_CADDY_LOCK_FD}" python3 "${HOSTED_DEPLOY_LIB_DIR}/caddy_unchanged_action.py")" || \
+      die "current hardened proxy differs from the requested profile; a separate offline migration is required"
+    [[ "${PREVIOUS_BUNDLE}" == "${DEPLOY_DIR}/server.prev-"* ]] || die "invalid previous bundle destination"
+    CADDY_KEEP_PROXY=true
+    CADDY_RECOVERY_VERIFIED=true
+  else
+    verify_prepared_caddy
+  fi
+}
+
+caddy_recovery_request_json() {
+  HOSTED_CADDY_REQUEST_ROOT="${DEPLOY_DIR}" HOSTED_CADDY_REQUEST_INSTANCE="${INSTANCE_NAME}" \
+    HOSTED_CADDY_REQUEST_DATA="${CADDY_DATA_VOLUME}" HOSTED_CADDY_REQUEST_CONFIG="${CADDY_CONFIG_VOLUME}" \
+    HOSTED_CADDY_REQUEST_PREVIOUS="$1" HOSTED_CADDY_REQUEST_IMAGE="${CADDY_IMAGE}" \
+    python3 -c 'import json, os; print(json.dumps({"deploy_dir":os.environ["HOSTED_CADDY_REQUEST_ROOT"], "instance":os.environ["HOSTED_CADDY_REQUEST_INSTANCE"], "data_volume":os.environ["HOSTED_CADDY_REQUEST_DATA"], "config_volume":os.environ["HOSTED_CADDY_REQUEST_CONFIG"], "previous":os.environ["HOSTED_CADDY_REQUEST_PREVIOUS"], "image":os.environ["HOSTED_CADDY_REQUEST_IMAGE"]}))'
+}
+
+caddy_transition_request_json() {
+  HOSTED_CADDY_REQUEST_ROOT="${DEPLOY_DIR}" HOSTED_CADDY_REQUEST_INSTANCE="${INSTANCE_NAME}" \
+    HOSTED_CADDY_REQUEST_DATA="${CADDY_DATA_VOLUME}" HOSTED_CADDY_REQUEST_CONFIG="${CADDY_CONFIG_VOLUME}" \
+    HOSTED_CADDY_REQUEST_IMAGE="${CADDY_IMAGE}" HOSTED_CADDY_REQUEST_PREVIOUS="${PREVIOUS_BUNDLE:-}" \
+    HOSTED_CADDY_TRANSITION_TOKEN="${CADDY_TRANSITION_TOKEN:-}" HOSTED_CADDY_ADMISSION="${CADDY_ADMISSION_RECEIPT:-}" \
+    python3 -c 'import json, os; e=os.environ; print(json.dumps({"deploy_dir":e["HOSTED_CADDY_REQUEST_ROOT"], "instance":e["HOSTED_CADDY_REQUEST_INSTANCE"], "data_volume":e["HOSTED_CADDY_REQUEST_DATA"], "config_volume":e["HOSTED_CADDY_REQUEST_CONFIG"], "image":e["HOSTED_CADDY_REQUEST_IMAGE"], "previous":e["HOSTED_CADDY_REQUEST_PREVIOUS"], "token":e["HOSTED_CADDY_TRANSITION_TOKEN"], "admission":json.loads(e["HOSTED_CADDY_ADMISSION"] or "null")}))'
+}
+
+caddy_transition() {
+  caddy_transition_request_json | \
+    HOSTED_CADDY_LOCK_FD="${HOSTED_CADDY_LOCK_FD:-}" python3 "${HOSTED_DEPLOY_LIB_DIR}/caddy_transition_action.py" "$1"
+}
+
+finish_caddy_transition() {
+  caddy_transition finish >/dev/null || die "the completed deployment could not be recorded; operator recovery is required"
+}
+
+caddy_fresh_request_json() {
+  HOSTED_CADDY_REQUEST_ROOT="${DEPLOY_DIR}" HOSTED_CADDY_REQUEST_INSTANCE="${INSTANCE_NAME}" \
+    HOSTED_CADDY_REQUEST_DATA="${CADDY_DATA_VOLUME}" HOSTED_CADDY_REQUEST_CONFIG="${CADDY_CONFIG_VOLUME}" \
+    HOSTED_CADDY_REQUEST_IMAGE="${CADDY_IMAGE}" \
+    python3 -c 'import json, os; print(json.dumps({"deploy_dir":os.environ["HOSTED_CADDY_REQUEST_ROOT"], "instance":os.environ["HOSTED_CADDY_REQUEST_INSTANCE"], "data_volume":os.environ["HOSTED_CADDY_REQUEST_DATA"], "config_volume":os.environ["HOSTED_CADDY_REQUEST_CONFIG"], "image":os.environ["HOSTED_CADDY_REQUEST_IMAGE"]}))'
+}
+
+prepare_fresh_caddy_volumes() {
+  caddy_fresh_request_json | \
+    HOSTED_CADDY_LOCK_FD="${HOSTED_CADDY_LOCK_FD}" python3 "${HOSTED_DEPLOY_LIB_DIR}/caddy_fresh_action.py"
+}
+
+recheck_caddy_transition() {
+  if [[ "$1" == true ]]; then
+    caddy_fresh_request_json | python3 "${HOSTED_DEPLOY_LIB_DIR}/caddy_fresh_recheck.py" >/dev/null || \
+      die "fresh Caddy volumes no longer match their receipt"
+  else
+    caddy_recovery_request_json "${PREVIOUS_BUNDLE}" | python3 "${HOSTED_DEPLOY_LIB_DIR}/caddy_prestart_action.py" >/dev/null || \
+      die "the original Caddy proxy or cloned volumes changed"
+  fi
+}
+
+recover_selected_caddy() {
+  local previous="$1"
+  caddy_recovery_request_json "${previous}" | \
+    HOSTED_CADDY_LOCK_FD="${HOSTED_CADDY_LOCK_FD}" python3 "${HOSTED_DEPLOY_LIB_DIR}/caddy_recover_action.py"
+}
+
+recover_caddy_proxy() {
+  local previous
+  ensure_runtime_prerequisites
+  validate_persisted_caddy_fields
+  resolve_mode_defaults
+  validate_caddy_selection "${CADDY_IMAGE}" "${CADDY_DATA_VOLUME}" "${CADDY_CONFIG_VOLUME}"
+  acquire_caddy_deployment_lock
+  previous="$(caddy_transition select-proxy)" || die "no unambiguous proxy recovery source is available"
+  if [[ "${previous}" == '@current' ]]; then
+    caddy_recovery_request_json "${previous}" | \
+      HOSTED_CADDY_LOCK_FD="${HOSTED_CADDY_LOCK_FD}" python3 "${HOSTED_DEPLOY_LIB_DIR}/caddy_pending_proxy_action.py"
+  else
+    recover_selected_caddy "${previous}"
+  fi
+}
+
+recheck_caddy_image() {
+  local current
+  [[ -n "${CADDY_ADMISSION_RECEIPT:-}" ]] || die "Caddy image admission is missing"
+  current="$(python3 "${HOSTED_DEPLOY_LIB_DIR}/caddy_image_admission.py" "${CADDY_IMAGE}")" || \
+    die "Caddy image recheck failed"
+  [[ "${current}" == "${CADDY_ADMISSION_RECEIPT}" ]] || die "Caddy image changed after admission"
+}
+
 restart_caddy_proxy() {
   log "refreshing caddy proxy"
-  compose up -d --no-deps --force-recreate caddy
+  recheck_caddy_image
+  compose up -d --pull never --no-deps --force-recreate caddy
 
   return 0
 }
@@ -204,23 +361,74 @@ gracefully_stop_existing_app() {
 
 start_or_update() {
   local service="${1:-all}"
+  local fresh="false"
+  local transition_status
   ensure_prerequisites
   validate_git_url_for_clone
+  resolve_public_base_url
+  resolve_hostname
+  resolve_allowed_hosts
+  validate_render_inputs
+  if [[ ! -d "${DEPLOY_DIR}" ]]; then
+    mkdir -p "${DEPLOY_DIR}"
+  fi
+  acquire_caddy_deployment_lock
+  transition_status="$(caddy_transition status)" || die "Caddy transition state is unavailable"
+  if [[ -d "${SERVER_DIR}" ]]; then
+    if [[ "${transition_status}" == fresh ]]; then
+      CADDY_TRANSITION_TOKEN="$(caddy_transition retry-fresh)" || die "pending first install cannot be retried safely"
+      caddy_transition retain-unstarted >/dev/null || die "unstarted source could not be retained safely"
+      fresh="true"
+    else
+      [[ "${transition_status}" == none ]] || die "a previous transition requires operator recovery"
+      prepare_current_caddy
+      CADDY_TRANSITION_TOKEN="$(caddy_transition begin-update)" || die "could not bind the pending source transition"
+    fi
+  else
+    fresh="true"
+    if [[ "${transition_status}" == fresh ]]; then
+      CADDY_TRANSITION_TOKEN="$(caddy_transition retry-fresh)" || die "pending first install cannot be retried safely"
+    else
+      [[ "${transition_status}" == none ]] || die "a previous transition requires operator recovery"
+      CADDY_TRANSITION_TOKEN="$(caddy_transition begin-fresh)" || die "could not record the first-install transition"
+    fi
+  fi
   render_files
+  if [[ "${CADDY_KEEP_PROXY:-false}" != true ]]; then
+    refresh_caddy_image
+    caddy_transition bind-admission >/dev/null || die "qualified Caddy image admission could not be recorded"
+  fi
+  if [[ "${fresh}" == true ]]; then
+    prepare_fresh_caddy_volumes
+  fi
   stage_source
+  caddy_transition stage >/dev/null || die "staged source identity could not be recorded"
   build_app_image
   prepare_postgres_before_app_stop
-  refresh_caddy_image
+  if [[ "${CADDY_KEEP_PROXY:-false}" == true ]]; then
+    caddy_recovery_request_json "${PREVIOUS_BUNDLE}" | python3 "${HOSTED_DEPLOY_LIB_DIR}/caddy_verify_noop_action.py" >/dev/null || \
+      die "the preserved Caddy proxy no longer matches its recovery receipt"
+  else
+    recheck_caddy_image
+    recheck_caddy_transition "${fresh}"
+  fi
   gracefully_stop_existing_app
   # Schema and identity writes require the successful drain fence. Failure here
   # leaves the app stopped; old-image restart needs a compatible recovery plan.
   run_database_migrations
   run_bootstrap_admin optional
   if [[ "${service}" == "app" ]]; then
-    compose up -d dollhousemcp
-    restart_caddy_proxy
+    compose up -d --pull never dollhousemcp
+    if [[ "${CADDY_KEEP_PROXY:-false}" != true ]]; then
+      recheck_caddy_transition "${fresh}"
+      restart_caddy_proxy
+    fi
+  elif [[ "${CADDY_KEEP_PROXY:-false}" == true ]]; then
+    compose up -d --pull never postgres dollhousemcp
   else
-    compose up -d
+    recheck_caddy_image
+    recheck_caddy_transition "${fresh}"
+    compose up -d --pull never
   fi
   printf '%s\n' "${STAGED_REVISION}" > "${DEPLOY_DIR}/DEPLOYED_REVISION"
   date -u +%Y-%m-%dT%H:%M:%SZ > "${DEPLOY_DIR}/DEPLOYED_AT"
@@ -349,10 +557,17 @@ rollback_server() {
   local previous timestamp current_backup previous_name
 
   ensure_runtime_prerequisites
-  render_files
-  previous="$(latest_previous_bundle)"
-  [[ -n "${previous}" ]] || die "no previous server bundle found in ${DEPLOY_DIR}"
+  validate_persisted_caddy_fields
+  resolve_mode_defaults
+  validate_caddy_selection "${CADDY_IMAGE}" "${CADDY_DATA_VOLUME}" "${CADDY_CONFIG_VOLUME}"
+  acquire_caddy_deployment_lock
+  previous="$(caddy_transition select-rollback)" || die "no unambiguous completed rollback source is available"
   [[ -d "${SERVER_DIR}" ]] || die "no current server bundle found at ${SERVER_DIR}"
+  PREVIOUS_BUNDLE="${previous}"
+  CADDY_TRANSITION_TOKEN="$(caddy_transition begin-rollback)" || die "could not record the rollback transition"
+  recover_selected_caddy "${previous}"
+  CADDY_RECOVERY_VERIFIED=true
+  render_files
 
   timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
   current_backup="${DEPLOY_DIR}/server.rollback-from-${timestamp}"
@@ -364,14 +579,14 @@ rollback_server() {
     mv "${current_backup}" "${SERVER_DIR}" || true
     die "failed to restore ${previous_name}; current server bundle was restored"
   fi
+  caddy_transition stage >/dev/null || die "rollback source identity could not be recorded"
 
   build_app_image
   prepare_postgres_before_app_stop
-  refresh_caddy_image
   # Prepare the selected rollback bundle and images while the current app is
   # healthy. A failed move/build/pull must not create an avoidable outage.
   gracefully_stop_existing_app
-  compose up -d dollhousemcp caddy
+  compose up -d --pull never dollhousemcp
   printf 'rollback:%s\n' "${previous_name}" > "${DEPLOY_DIR}/DEPLOYED_REVISION"
   date -u +%Y-%m-%dT%H:%M:%SZ > "${DEPLOY_DIR}/DEPLOYED_AT"
 
