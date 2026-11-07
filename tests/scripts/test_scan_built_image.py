@@ -12,6 +12,7 @@ import tarfile
 import tempfile
 import time
 import unittest
+from unittest import mock
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
@@ -121,6 +122,17 @@ class FrozenInputTests(unittest.TestCase):
                                ('z'*64, 'b'*64, complete), ('a'*64, 'b'*64, [None]*10)]:
             with self.subTest(a=a, b=b), self.assertRaises(ValueError):
                 scanner.validate_frozen_arguments(a, b, retained)
+
+    def test_caddy_refuses_missing_frozen_or_retained_arguments_before_io(self):
+        frozen = ['--frozen-db-manifest-sha256', 'a' * 64,
+                  '--frozen-grype-binary-sha256', 'b' * 64]
+        for flags in ([], frozen):
+            with self.subTest(flags=flags), mock.patch.object(sys, 'argv', [
+                    'scan-built-image.py', '/must-not-create', '--caddy', *flags]):
+                with mock.patch.object(scanner, 'prepare_scanner_output') as prepare:
+                    with self.assertRaises(scanner.FrozenArgumentsError):
+                        scanner.main()
+                    prepare.assert_not_called()
 
     def test_wrong_binary_hash_refuses_before_chmod(self):
         self.hashes['binary'] = '0' * 64

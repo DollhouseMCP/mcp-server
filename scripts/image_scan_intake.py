@@ -285,7 +285,7 @@ def validate_checkout(scanner_head, scanner_tree, github_sha, checkout):
         raise ValueError('Scanner checkout has modified or untracked files')
 
 
-def verify_intake_archive(tree, slot, doc, doc_identity, arch, record, staged, stage, inspect_descriptor, *, source_kind):
+def verify_intake_archive(tree, slot, doc, doc_identity, arch, record, staged, stage, inspect_descriptor, *, source_kind='application'):
     parent = tree.directory(tree.workfd, 'inputs') if staged else slot
     name = STAGED_ARCHIVE if staged else 'production-' + arch + '.docker.tar'
     stream, identity = tree.file(parent, name, MAX_ARCHIVE)
@@ -314,6 +314,7 @@ def verify_intake_archive(tree, slot, doc, doc_identity, arch, record, staged, s
         stage_verified(tree, stream, record['archive_bytes'], record['archive_sha256'], identity, parent, name)
     tree.check_file(doc, doc_identity, slot, INTAKE_DOCUMENT)
     return record, graph
+
 
 def validate_intake(document, expected_hash, archive, scanner_head, scanner_tree, github_sha, checkout, approved_target, *, staged=False, stage=False, source_kind='application', inspect_descriptor=_SKIP_INTAKE_INSPECTION):
     if not HEX.fullmatch(expected_hash) or (staged and stage):

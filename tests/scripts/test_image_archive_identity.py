@@ -280,6 +280,8 @@ class ImageGraphTests(unittest.TestCase):
                 else:
                     graph = verify_saved_image(path, store, size, expected_source=source, source_kind='caddy')
                     self.assertEqual(graph['store_id'], store)
+                    with self.assertRaisesRegex(ValueError, 'retained Caddy'):
+                        verify_saved_image(path, store, size, expected_source=None, source_kind='caddy')
                     with self.assertRaisesRegex(ValueError, 'source label mismatch'):
                         verify_saved_image(path, store, size, expected_source='b' * 40, source_kind='caddy')
 
