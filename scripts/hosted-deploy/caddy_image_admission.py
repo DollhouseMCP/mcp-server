@@ -65,6 +65,8 @@ def validate_observation(reference, image, graph, approved, daemon):
 
 def qualify(reference):
     if not REFERENCE.fullmatch(reference): raise ValueError('Invalid Caddy reference')
+    approved_path = Path(__file__).with_name('caddy-qualified-native-graphs.json')
+    approved = json.loads(approved_path.read_bytes(), object_pairs_hook=unique_object)
     status, raw, _, error = scanner.bounded_process(['docker', 'info', '--format', '{{json .}}'], 10, 1024 * 1024, stderr_maximum=65536)
     if status != 0 or error: raise ValueError('Docker daemon identity unavailable')
     daemon = json.loads(raw, object_pairs_hook=unique_object)
@@ -81,9 +83,9 @@ def qualify(reference):
         status, _, _, error = scanner.bounded_process(['docker', 'image', 'save', reference], 180, ARCHIVE_LIMIT, path, stderr_maximum=65536)
         if status != 0 or error: raise ValueError('Bounded Caddy image export failed')
         with path.open('rb') as stream:
-            graph = verify_saved_image_file(stream, image.get('Id'), GRAPH_LIMIT, image.get('Descriptor'), platform='linux/'+arch)
-    approved_path = Path(__file__).with_name('caddy-qualified-native-graphs.json')
-    approved = json.loads(approved_path.read_bytes(), object_pairs_hook=unique_object)
+            graph = verify_saved_image_file(stream, image.get('Id'), GRAPH_LIMIT, image.get('Descriptor'),
+                                            platform='linux/'+arch, expected_source=approved['tested_checkout'],
+                                            source_kind='caddy')
     return validate_observation(reference, image, graph, approved, daemon)
 
 

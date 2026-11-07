@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 module_path = Path(__file__).resolve().parents[2] / 'scripts/hosted-deploy/caddy_image_admission.py'
 spec = importlib.util.spec_from_file_location('caddy_admission', module_path)
@@ -54,6 +55,23 @@ class CaddyAdmissionTests(unittest.TestCase):
                     'registry.example.test/team/caddy@sha256:'+'a'*64+'$(touch x)'):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 admission.validate_observation(bad,self.image,self.graph,self.approved,self.daemon)
+
+    def test_qualify_passes_retained_source_and_caddy_kind_to_fd_verifier(self):
+        def fake_process(command, timeout, maximum, output_path=None, **kwargs):
+            if command[1] == 'info':
+                return 0, json.dumps(self.daemon).encode(), b'', None
+            if command[1:3] == ['image', 'inspect']:
+                return 0, json.dumps([self.image]).encode(), b'', None
+            if command[1:3] == ['image', 'save']:
+                Path(output_path).write_bytes(b'inert archive fixture')
+                return 0, b'', b'', None
+            raise AssertionError('unexpected command')
+        with patch.object(admission.scanner, 'bounded_process', side_effect=fake_process), \
+                patch.object(admission, 'verify_saved_image_file', return_value=self.graph) as verifier:
+            result = admission.qualify(self.ref)
+        self.assertEqual(result['reference'], self.ref)
+        self.assertEqual(verifier.call_args.kwargs['expected_source'], self.approved['tested_checkout'])
+        self.assertEqual(verifier.call_args.kwargs['source_kind'], 'caddy')
 
 
 if __name__ == '__main__': unittest.main()
