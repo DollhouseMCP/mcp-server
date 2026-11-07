@@ -188,6 +188,12 @@ def selected_proxy(root):
     pending = state['pending']
     if isinstance(pending, dict) and pending['kind'] in ('update', 'rollback'):
         previous = Path(pending['previous'])
+        if pending['phase'] == 'staged':
+            if (bundle_identity(previous) != pending['source']
+                    or bundle_identity(root / 'server') != pending['staged_source']
+                    or receipt_hash(Path(pending['receipt'])) != pending['receipt_sha256']):
+                raise ValueError('pending proxy source or receipt changed')
+            return '@current'
         if not previous.exists() and not previous.is_symlink():
             current = root / 'server'
             if pending['staged_source'] is not None or bundle_identity(current) != pending['source']:

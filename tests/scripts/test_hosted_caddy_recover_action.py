@@ -89,6 +89,12 @@ class RecoverActionTests(unittest.TestCase):
         self.assertEqual(result['preserved_replacement_id'], self.fx.current_id)
         self.assertFalse(self.current['State']['Running'])
         self.assertTrue(self.recovered['State']['Running'])
+        evidence = list((self.fx.root / '.caddy-transactions').glob('success-*.json'))
+        self.assertEqual(len(evidence), 1)
+        record = json.loads(evidence[0].read_bytes())
+        self.assertEqual(record['preserved_replacement_id'], self.fx.current_id)
+        self.assertEqual(record['restored_id'], self.new_id)
+        self.assertEqual(evidence[0].stat().st_mode & 0o777, 0o600)
         self.assertTrue((self.fx.previous / 'app').is_file())
         self.assertFalse(any('postgres' in item or 'dollhousemcp-migrate' in item for call in self.calls for item in call))
 
@@ -131,6 +137,28 @@ class RecoverActionTests(unittest.TestCase):
                 self.assertRaises(ValueError) as caught:
             self.recover()
         self.assertTrue(any('UNKNOWN' in note for note in caught.exception.__notes__))
+        self.assertFalse(any(call[1] == 'rm' and self.new_id in call for call in self.calls))
+
+    def test_success_evidence_failure_restores_replacement(self):
+        with patch.dict('os.environ', {'DOCKER_HOST': ''}), \
+                patch.object(caddy_recover_action, 'retain_success_evidence', side_effect=OSError('fixture')), \
+                self.assertRaises(OSError):
+            self.recover()
+        self.assertTrue(self.current['State']['Running'])
+        self.assertIsNone(self.recovered)
+
+    def test_wrong_owned_candidate_label_is_never_removed(self):
+        self.fail_start = True
+        original = self.run_docker
+
+        def altered(argv, timeout, limit):
+            if argv[1:3] == ['container', 'inspect'] and argv[3] == self.new_id:
+                self.recovered['Config']['Labels']['org.dollhousemcp.proxy-recovery-token'] = 'wrong'
+            return original(argv, timeout, limit)
+
+        with patch.dict('os.environ', {'DOCKER_HOST': ''}), self.assertRaises(ValueError):
+            caddy_recover_action.recover_locked(self.fx.root, 'site', self.fx.previous,
+                                                self.fx.reference, altered, self.fx.qualify)
         self.assertFalse(any(call[1] == 'rm' and self.new_id in call for call in self.calls))
 
 

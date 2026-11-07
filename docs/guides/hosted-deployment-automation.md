@@ -540,7 +540,11 @@ The replaced proxy container is retained stopped after a successful recovery.
 That can leave more than one container with the same Compose service labels;
 later Caddy automation refuses the ambiguous selection until an operator has
 reviewed and resolved it. The helper does not delete the retained container or
-its volumes automatically.
+its volumes automatically. A private `.caddy-transactions/success-*.json` record
+binds the retained container ID and its validated image and runtime profile to
+the prior source receipt. Inspect that exact stopped container and the active
+proxy before resolving duplicate labels. Preserve the record, images and both
+sets of volumes; do not remove volumes when resolving the container ambiguity.
 
 The non-force graceful-stop fence precedes migrations, grants, and optional admin bootstrap. Those writes cannot safely run alongside an old app without a separately established compatibility contract. Migration, grant, or bootstrap failure leaves the app stopped. Replacement or proxy failure can leave a partially replaced stack; inspect its actual state before deliberate recovery from a compatible image and database point. The helper does not automatically restart the old app against a possibly changed schema. Keep ingress closed during recovery and verify the selected recovery state before reopening it.
 

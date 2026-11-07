@@ -5,7 +5,8 @@ from pathlib import Path
 import re
 
 from caddy_bundle_identity import bundle_identity
-from caddy_legacy_profile import default_command, legacy_mounts
+from caddy_hardened_profile import validate_hardened_profile
+from caddy_legacy_profile import default_command, legacy_network
 from caddy_prepared_action import PREVIOUS, read_candidate
 from caddy_recovery_receipt import private_directory, read_receipt
 from caddy_service_guard import unique_proxy
@@ -63,7 +64,7 @@ def validate_old_image(image, profile, admit):
         raise ValueError('previous proxy image defaults changed')
 
 
-def validate_replacement(container, instance, image_reference, admission, record, caddyfile):
+def validate_replacement(container, image, instance, image_reference, admission, record, caddyfile):
     if not isinstance(container, dict) or container.get('Name') != '/' + instance + '-caddy':
         raise ValueError('replacement proxy is not the selected service')
     if container.get('Image') != admission['store_id']:
@@ -74,16 +75,19 @@ def validate_replacement(container, instance, image_reference, admission, record
     labels = config.get('Labels')
     if not isinstance(labels, dict) or labels.get('com.docker.compose.project') != instance or labels.get('com.docker.compose.service') != 'caddy':
         raise ValueError('replacement proxy does not belong to the selected Compose service')
-    names = legacy_mounts(container.get('Mounts'), str(caddyfile))
-    if names != [item['name'] for item in record['clone']['volumes'][2:]]:
-        raise ValueError('replacement proxy mounts do not match the clone receipt')
+    names = [item['name'] for item in record['clone']['volumes'][2:]]
+    host = container.get('HostConfig')
+    if not isinstance(host, dict):
+        raise ValueError('replacement proxy host settings are unavailable')
+    ports, _ = legacy_network(container, host, instance + '_default')
+    profile = validate_hardened_profile(container, image, admission, instance, str(caddyfile), names, ports)
     identifier = container.get('Id')
     if not isinstance(identifier, str) or not re.fullmatch(r'[0-9a-f]{64}', identifier):
         raise ValueError('replacement proxy identity is unavailable')
     state = container.get('State')
     if not isinstance(state, dict) or not isinstance(state.get('Running'), bool):
         raise ValueError('replacement proxy state is unavailable')
-    return identifier, state['Running']
+    return identifier, state['Running'], profile
 
 
 def preflight(root, instance, previous, image_reference, run, qualify):
@@ -95,7 +99,8 @@ def preflight(root, instance, previous, image_reference, run, qualify):
     verify_original_volumes(run, record['clone'], helper, os.environ.get('DOCKER_HOST'))
     admission = qualify(image_reference)
     current = inspect_one(run, 'container', unique_proxy(run, instance))
-    current_id, current_running = validate_replacement(current, instance, image_reference, admission, record, root / 'Caddyfile')
+    current_image = inspect_one(run, 'image', image_reference)
+    current_id, current_running, current_profile = validate_replacement(current, current_image, instance, image_reference, admission, record, root / 'Caddyfile')
     return {'receipt': path, 'record': record, 'previous': previous, 'current_id': current_id,
-            'current_running': current_running,
+            'current_running': current_running, 'current_profile': current_profile,
             'image_reference': image_reference, 'admission': admission, 'caddyfile': root / 'Caddyfile'}

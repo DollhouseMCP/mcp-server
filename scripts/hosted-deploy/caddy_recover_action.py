@@ -223,8 +223,7 @@ def named_containers(run, instance):
     return identifiers
 
 
-def retain_candidate_evidence(plan, token, candidate):
-    """Commit protected ownership evidence before removing our failed candidate."""
+def write_recovery_evidence(plan, token, kind, record):
     receipt_fd = private_directory(plan['receipt'])
     try:
         source = read_private(receipt_fd, 'receipt.json', MAX_RECORD)
@@ -238,20 +237,35 @@ def retain_candidate_evidence(plan, token, candidate):
         pass
     directory = private_directory(evidence)
     try:
-        record = {'schema': 'caddy-recovery-candidate-v1', 'token': token,
-                  'candidate_id': candidate, 'original_proxy_id': plan['current_id'],
-                  'candidate_image_id': plan['record']['profile']['image_id'],
-                  'previous_bundle': str(plan['previous']),
-                  'source_receipt_sha256': hashlib.sha256(source).hexdigest()}
+        record['previous_bundle'] = str(plan['previous'])
+        record['source_receipt_sha256'] = hashlib.sha256(source).hexdigest()
         payload = json.dumps(record, sort_keys=True, separators=(',', ':')).encode()
-        pending = '.candidate-' + token + '.pending'
-        final = 'candidate-' + token + '.json'
+        pending = '.' + kind + '-' + token + '.pending'
+        final = kind + '-' + token + '.json'
         write_exclusive(directory, pending, payload)
         os.link(pending, final, src_dir_fd=directory, dst_dir_fd=directory, follow_symlinks=False)
         os.unlink(pending, dir_fd=directory)
         os.fsync(directory)
     finally:
         os.close(directory)
+
+
+def retain_candidate_evidence(plan, token, candidate):
+    """Commit protected ownership evidence before removing our failed candidate."""
+    write_recovery_evidence(plan, token, 'candidate', {
+        'schema': 'caddy-recovery-candidate-v1', 'token': token,
+        'candidate_id': candidate, 'original_proxy_id': plan['current_id'],
+        'candidate_image_id': plan['record']['profile']['image_id'],
+    })
+
+
+def retain_success_evidence(plan, token, restored):
+    write_recovery_evidence(plan, token, 'success', {
+        'schema': 'caddy-recovery-success-v1', 'token': token,
+        'restored_id': restored, 'preserved_replacement_id': plan['current_id'],
+        'replacement_reference': plan['image_reference'],
+        'replacement_profile': plan['current_profile'],
+    })
 
 
 def restore_replacement(run, plan, instance, token, backup):
@@ -268,7 +282,10 @@ def restore_replacement(run, plan, instance, token, backup):
         raise ValueError('previous replacement proxy identity is UNKNOWN')
     normalized = copy.deepcopy(current)
     normalized['Name'] = '/' + instance + '-caddy'
-    validate_replacement(normalized, instance, plan['image_reference'], plan['admission'], plan['record'], plan['caddyfile'])
+    image = inspect_one(run, 'image', plan['image_reference'])
+    _, _, profile = validate_replacement(normalized, image, instance, plan['image_reference'], plan['admission'], plan['record'], plan['caddyfile'])
+    if profile != plan['current_profile']:
+        raise ValueError('replacement proxy profile changed during recovery')
     if current['Name'] == '/' + backup:
         run(['docker', 'rename', plan['current_id'], instance + '-caddy'], 10, 65536)
     current = inspect_one(run, 'container', plan['current_id'])
@@ -278,8 +295,8 @@ def restore_replacement(run, plan, instance, token, backup):
     if plan['current_running'] and state.get('Running') is False:
         run(['docker', 'start', plan['current_id']], 20, 65536)
     final = inspect_one(run, 'container', plan['current_id'])
-    _, running = validate_replacement(final, instance, plan['image_reference'], plan['admission'], plan['record'], plan['caddyfile'])
-    if running != plan['current_running']:
+    _, running, profile = validate_replacement(final, image, instance, plan['image_reference'], plan['admission'], plan['record'], plan['caddyfile'])
+    if running != plan['current_running'] or profile != plan['current_profile']:
         raise ValueError('replacement proxy state restoration is UNKNOWN')
 
 
@@ -305,6 +322,7 @@ def recover_locked(root, instance, previous, image_reference, run=docker_run, ad
         verify_recovered(run, raw, plan, instance, token, False, caddyfile, admit)
         run(['docker', 'start', raw], 20, 65536)
         verify_recovered(run, raw, plan, instance, token, True, caddyfile, admit)
+        retain_success_evidence(plan, token, raw)
     except BaseException as original:
         try:
             restore_replacement(run, plan, instance, token, backup)

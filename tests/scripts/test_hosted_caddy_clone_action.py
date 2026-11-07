@@ -15,9 +15,11 @@ import caddy_prepared_action
 import caddy_prestart_action
 import caddy_transition_action
 import caddy_pending_proxy_action
+import caddy_transition_state
 import copy
 import json
 import test_hosted_caddy_volume_migration as fixtures
+import test_hosted_caddy_hardened_profile as hardened_fixture
 
 
 class CloneActionTests(unittest.TestCase):
@@ -145,6 +147,45 @@ class CloneActionTests(unittest.TestCase):
         self.assertEqual((receipt / 'Caddyfile').stat().st_mode & 0o777, 0o600)
         self.assertEqual((self.root / 'Caddyfile').read_text(), 'changed config')
         self.assertFalse(self.fake.proxy['State']['Running'])
+        evidence = list((self.root / '.caddy-transactions').glob('success-*.json'))
+        self.assertEqual(len(evidence), 1)
+        self.assertEqual(json.loads(evidence[0].read_bytes())['preserved_original_id'], self.fake.proxy['Id'])
+        self.assertEqual(evidence[0].stat().st_mode & 0o777, 0o600)
+
+    def test_staged_failure_recovers_only_exact_original_proxy(self):
+        def run(argv, timeout, limit):
+            if argv[1:2] == ['start'] and self.fake.proxy['Id'] in argv:
+                self.fake.proxy['State']['Running'] = True
+                return b'started\n'
+            return self.run_docker(argv, timeout, limit)
+        _, _, admission, _ = hardened_fixture.hardened()
+        with patch.dict('os.environ', {'DOCKER_HOST': ''}):
+            caddy_clone_action.clone(self.request, run)
+            previous, _ = caddy_prepared_action.verify(self.request, run)
+            transition = dict(self.request, previous=str(previous), token='', image=admission['reference'])
+            token = caddy_transition_action.begin_update(transition, self.root)
+            caddy_transition_state.bind_admission(self.root, token, admission)
+            (self.root / 'server').rename(previous)
+            (self.root / 'server').mkdir()
+            (self.root / 'server' / 'app').write_text('next source')
+            caddy_transition_state.mark_staged(self.root, token, caddy_bundle_identity.bundle_identity(self.root / 'server'))
+            self.assertEqual(caddy_transition_action.selected_proxy(self.root), '@current')
+            with patch.object(caddy_pending_proxy_action, 'unique_proxy', return_value='f' * 64), \
+                    patch.object(caddy_pending_proxy_action, 'recover_locked', side_effect=ValueError('wrong replacement')) as replacement, \
+                    self.assertRaises(ValueError):
+                caddy_pending_proxy_action.recover_pending(self.root, 'site', admission['reference'], run)
+            replacement.assert_called_once()
+            for failed_phase in ('build', 'readiness', 'migration'):
+                with self.subTest(failed_phase=failed_phase):
+                    self.fake.proxy['State']['Running'] = False
+                    result = caddy_pending_proxy_action.recover_pending(self.root, 'site', admission['reference'], run)
+                    self.assertEqual(result['container_id'], self.fake.proxy['Id'])
+                    self.assertTrue(self.fake.proxy['State']['Running'])
+            self.fake.proxy['State']['Running'] = False
+            self.fake.proxy['HostConfig']['ReadonlyRootfs'] = True
+            with self.assertRaises(ValueError):
+                caddy_pending_proxy_action.recover_pending(self.root, 'site', admission['reference'], run)
+            self.assertFalse(self.fake.proxy['State']['Running'])
 
     def test_running_proxy_refuses_before_volume_creation(self):
         self.fake.proxy['State']['Running'] = True
