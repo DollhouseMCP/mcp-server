@@ -111,7 +111,7 @@ def old_proxy_args(plan, instance, token, caddyfile):
                         '--tmpfs', '/tmp:noexec,nosuid,nodev,size=64M,mode=1777'])
     for alias in profile['aliases']:
         if alias == profile['container_id'][:12]:
-            raise ValueError('recovery of a volatile legacy container-ID alias is unsupported')
+            continue
         command.extend(['--network-alias', alias])
     for port in profile['ports']:
         command.extend(['--publish', published_port(port)])
@@ -142,10 +142,11 @@ def verify_recovered(run, identifier, plan, instance, token, running, caddyfile,
     else:
         actual = validate_legacy_profile(container, image, str(caddyfile), instance + '_default')
     expected = copy.deepcopy(plan['record']['profile'])
+    old_short_id = expected['container_id'][:12]
     expected['container_id'] = identifier
-    # The daemon may add the new immutable container's short ID as an alias.
-    if identifier[:12] in actual['aliases'] and identifier[:12] not in expected['aliases']:
-        actual['aliases'].remove(identifier[:12])
+    # Container-ID aliases are daemon-assigned and change across recreation.
+    expected['aliases'] = [alias for alias in expected['aliases'] if alias != old_short_id]
+    actual['aliases'] = [alias for alias in actual['aliases'] if alias != identifier[:12]]
     if actual != expected:
         raise ValueError('recovered proxy differs from its recorded runtime contract')
     return container

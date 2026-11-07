@@ -98,6 +98,27 @@ class RecoverActionTests(unittest.TestCase):
         self.assertTrue((self.fx.previous / 'app').is_file())
         self.assertFalse(any('postgres' in item or 'dollhousemcp-migrate' in item for call in self.calls for item in call))
 
+    def test_recovery_replaces_volatile_container_alias(self):
+        old = self.fx.fx.fake.proxy
+        old['NetworkSettings']['Networks']['site_default']['Aliases'].append(old['Id'][:12])
+        receipt_path = self.fx.receipt / 'receipt.json'
+        record = json.loads(receipt_path.read_bytes())
+        record['profile']['aliases'].append(old['Id'][:12])
+        receipt_path.write_text(json.dumps(record))
+        def run(argv, timeout, limit):
+            result = self.run_docker(argv, timeout, limit)
+            if argv[1:2] == ['create'] and self.recovered:
+                aliases = self.recovered['NetworkSettings']['Networks']['site_default']['Aliases']
+                aliases.remove(old['Id'][:12])
+                aliases.append(self.new_id[:12])
+            return result
+        with patch.dict('os.environ', {'DOCKER_HOST': ''}):
+            result = caddy_recover_action.recover_locked(self.fx.root, 'site', self.fx.previous,
+                                                         self.fx.reference, run, self.fx.qualify)
+        self.assertEqual(result['restored_id'], self.new_id)
+        create = next(call for call in self.calls if call[1:2] == ['create'] and 'site-caddy' in call)
+        self.assertNotIn(old['Id'][:12], create)
+
     def test_bad_receipt_refuses_before_mutation(self):
         (self.fx.previous / 'app').write_text('changed')
         with self.assertRaises(ValueError):

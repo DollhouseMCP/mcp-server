@@ -12,11 +12,18 @@ if [[ "${1:-}" == "--case" ]]; then
   EVENTS="${DEPLOY_DIR}/events"
   source "${REPO_ROOT}/scripts/hosted-deploy/source.sh"
   source "${REPO_ROOT}/scripts/hosted-deploy/runtime.sh"
+  source "${REPO_ROOT}/scripts/hosted-deploy/render.sh"
 
   log() { :; }
   die() { printf '%s\n' "$*" >&2; exit 1; }
   ensure_runtime_prerequisites() { :; }
-  render_files() { :; }
+  render_files() {
+    if [[ "${MODE}" == noop-* ]]; then
+      CADDY_FILE="${DEPLOY_DIR}/Caddyfile"
+      caddyfile_content() { printf '%s\n' "${REQUESTED_CONFIG}"; }
+      require_safe_caddyfile_change
+    fi
+  }
   validate_persisted_caddy_fields() { :; }
   resolve_mode_defaults() { :; }
   validate_caddy_selection() { :; }
@@ -34,7 +41,14 @@ if [[ "${1:-}" == "--case" ]]; then
   recover_selected_caddy() {
     local previous="$1"
     printf 'proxy-recovery:%s\n' "$(basename "${previous}")" >> "${EVENTS}"
-    [[ "${MODE}" != "recovery-failure" ]]
+    [[ "${MODE}" != "recovery-failure" ]] || return 1
+    if [[ "${MODE}" == invalid-result ]]; then
+      printf '{"outcome":"unexpected"}\n'
+    elif [[ "${MODE}" == noop-* ]]; then
+      printf '{"outcome":"unchanged"}\n'
+    else
+      printf '{"restored_id":"%064d","preserved_replacement_id":"%064d"}\n' 1 2
+    fi
   }
   # Real moves exercise bundle restoration on failed promotion.
   mv() {
@@ -74,18 +88,20 @@ trap 'rm -rf -- "${TMP_ROOT}"' EXIT
 
 fail() { printf 'rollback-order test: %s\n' "$*" >&2; exit 1; }
 
-for mode in recovery-failure promotion-failure build-failure readiness-failure drain-refusal success; do
+for mode in recovery-failure promotion-failure build-failure readiness-failure drain-refusal success noop-same noop-changed invalid-result; do
   fixture="${TMP_ROOT}/${mode}"
   mkdir -p "${fixture}/server" "${fixture}/server.prev-20000101"
   printf 'current\n' > "${fixture}/server/version"
   printf 'previous\n' > "${fixture}/server.prev-20000101/version"
+  printf 'fixture-config\n' > "${fixture}/Caddyfile"
   printf 'current-revision\n' > "${fixture}/DEPLOYED_REVISION"
   printf '2000-01-01T00:00:00Z\n' > "${fixture}/DEPLOYED_AT"
   set +e
-  bash "$0" --case "${mode}" "${fixture}" > "${fixture}/stdout" 2> "${fixture}/stderr"
+  if [[ "${mode}" == noop-changed ]]; then requested=changed; else requested=fixture-config; fi
+  REQUESTED_CONFIG="${requested}" bash "$0" --case "${mode}" "${fixture}" > "${fixture}/stdout" 2> "${fixture}/stderr"
   status=$?
   set -e
-  if [[ "${mode}" == "success" ]]; then
+  if [[ "${mode}" == "success" || "${mode}" == "noop-same" ]]; then
     [[ "${status}" == 0 ]] || fail "success exited ${status}"
     # Compare the whole sequence, including the chosen source and image build.
     expected=$'proxy-recovery:server.prev-20000101\nmove:server\nmove:server.prev-20000101\ncompose:build dollhousemcp dollhousemcp-migrate\npostgres-ready\ngraceful-stop\ncompose:up -d --pull never dollhousemcp\nreplacement'
@@ -103,7 +119,7 @@ for mode in recovery-failure promotion-failure build-failure readiness-failure d
       fail "healthy app stopped before ${mode}"
     fi
   fi
-  if [[ "${mode}" == "promotion-failure" || "${mode}" == "recovery-failure" ]]; then
+  if [[ "${mode}" == "promotion-failure" || "${mode}" == "recovery-failure" || "${mode}" == "noop-changed" || "${mode}" == "invalid-result" ]]; then
     [[ "$(cat "${fixture}/server/version")" == "current" ]] || fail "failed promotion lost current bundle"
     [[ "$(cat "${fixture}/server.prev-20000101/version")" == "previous" ]] || fail "failed promotion lost previous bundle"
   else

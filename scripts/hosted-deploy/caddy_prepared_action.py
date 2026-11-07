@@ -68,16 +68,20 @@ def find_prepared(root, current_identity, caddyfile, destination_names):
 def verify(value, run=docker_run, admit=qualify):
     root = validate_request(value)
     check_local_daemon(run, os.environ.get('DOCKER_HOST'))
-    unique_proxy(run, value['instance'])
+    selected = unique_proxy(run, value['instance'])
     current = bundle_identity(root / 'server')
     caddyfile = read_current_caddyfile(root)
     destinations = [value['data_volume'], value['config_volume']]
     path, record = find_prepared(root, current, caddyfile, destinations)
+    if selected != record['profile']['container_id'] or unique_proxy(run, value['instance']) != selected:
+        raise ValueError('selected proxy differs from the prepared clone receipt')
     previous = Path(record['bundle'])
     if previous.exists() or previous.is_symlink():
         raise ValueError('recorded previous bundle destination already exists')
     helper = Path(__file__).with_name('caddy_volume_copy.mjs')
     verify_prepared(run, record['profile'], record['clone'], helper, str(root / 'Caddyfile'), os.environ.get('DOCKER_HOST'), admit)
+    if unique_proxy(run, value['instance']) != selected:
+        raise ValueError('selected proxy changed during clone verification')
     if bundle_identity(root / 'server') != current or read_current_caddyfile(root) != caddyfile:
         raise ValueError('source or Caddyfile changed during verification')
     return previous, path

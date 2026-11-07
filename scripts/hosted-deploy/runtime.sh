@@ -556,7 +556,7 @@ check_mcp_unauthenticated() {
 }
 
 rollback_server() {
-  local previous timestamp current_backup previous_name
+  local previous timestamp current_backup previous_name recovery_result recovery_kind
 
   ensure_runtime_prerequisites
   validate_persisted_caddy_fields
@@ -567,8 +567,13 @@ rollback_server() {
   [[ -d "${SERVER_DIR}" ]] || die "no current server bundle found at ${SERVER_DIR}"
   PREVIOUS_BUNDLE="${previous}"
   CADDY_TRANSITION_TOKEN="$(caddy_transition begin-rollback)" || die "could not record the rollback transition"
-  recover_selected_caddy "${previous}"
-  CADDY_RECOVERY_VERIFIED=true
+  recovery_result="$(recover_selected_caddy "${previous}")" || die "proxy recovery failed"
+  recovery_kind="$(printf '%s' "${recovery_result}" | python3 -c 'import json,re,sys; v=json.load(sys.stdin); same=isinstance(v,dict) and v=={"outcome":"unchanged"}; restored=isinstance(v,dict) and set(v)=={"restored_id","preserved_replacement_id"} and all(isinstance(v[k],str) and re.fullmatch("[0-9a-f]{64}",v[k]) for k in v); sys.exit(1) if not (same or restored) else print("unchanged" if same else "restored")')" || die "invalid proxy recovery result"
+  if [[ "${recovery_kind}" == unchanged ]]; then
+    CADDY_KEEP_PROXY=true
+  else
+    CADDY_RECOVERY_VERIFIED=true
+  fi
   render_files
 
   timestamp="$(date -u +%Y%m%dT%H%M%SZ)"

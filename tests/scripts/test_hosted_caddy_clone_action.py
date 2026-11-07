@@ -72,6 +72,15 @@ class CloneActionTests(unittest.TestCase):
                 caddy_prepared_action.verify(self.request, self.run_docker)
         self.assertFalse(any(call[1] == 'create' for call in self.fake.calls))
 
+    def test_prepared_clone_refuses_different_selected_proxy_before_helper(self):
+        with patch.dict('os.environ', {'DOCKER_HOST': ''}):
+            caddy_clone_action.clone(self.request, self.run_docker)
+            with patch.object(caddy_prepared_action, 'unique_proxy', return_value='f' * 64), \
+                    patch.object(caddy_prepared_action, 'verify_prepared') as verify, \
+                    self.assertRaises(ValueError):
+                caddy_prepared_action.verify(self.request, self.run_docker)
+        verify.assert_not_called()
+
     def test_prestart_rechecks_owned_proxy_and_cloned_volumes(self):
         with patch.dict('os.environ', {'DOCKER_HOST': ''}):
             caddy_clone_action.clone(self.request, self.run_docker)

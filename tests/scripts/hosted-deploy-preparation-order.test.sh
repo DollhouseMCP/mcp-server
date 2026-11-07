@@ -73,7 +73,8 @@ if [[ "${1:-}" == --case ]]; then
   }
   recover_selected_caddy() {
     printf 'proxy-recovery\n' >> "${EVENTS}"
-    [[ "${MODE}" != recovery-failure ]]
+    [[ "${MODE}" != recovery-failure ]] || return 1
+    printf '{"restored_id":"%064d","preserved_replacement_id":"%064d"}\n' 1 2
   }
   refresh_caddy_image() { compose pull caddy; }
   prepare_fresh_caddy_volumes() { printf 'fresh-volumes\n' >> "${EVENTS}"; }
