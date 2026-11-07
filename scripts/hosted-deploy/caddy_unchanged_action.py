@@ -31,7 +31,7 @@ def expected_ports(value):
     host = str(ipaddress.ip_address(host))
     http = value['http_port']
     https = value['https_port']
-    if any(not isinstance(port, str) or not re.fullmatch(r'[1-9][0-9]{0,4}', port) or int(port) > 65535 for port in (http, https)):
+    if any(not isinstance(port, str) or not re.fullmatch(r'[1-9](?a:\d){0,4}', port) or int(port) > 65535 for port in (http, https)):
         raise ValueError('invalid expected Caddy ports')
     if value['proxy_mode'] == 'caddy-tls':
         return sorted([{'container_port': '80/tcp', 'host_ip': host, 'host_port': http},

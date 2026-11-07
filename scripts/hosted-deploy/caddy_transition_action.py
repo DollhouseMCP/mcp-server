@@ -183,23 +183,30 @@ def selected(root, allow_pending=False):
     return previous
 
 
+def validate_staged_proxy_source(root, pending, previous):
+    if (bundle_identity(previous) != pending['source']
+            or bundle_identity(root / 'server') != pending['staged_source']
+            or receipt_hash(Path(pending['receipt'])) != pending['receipt_sha256']):
+        raise ValueError('pending proxy source or receipt changed')
+
+
+def validate_unmoved_proxy_source(root, pending):
+    if pending['staged_source'] is not None or bundle_identity(root / 'server') != pending['source']:
+        raise ValueError('pending proxy source is ambiguous; operator recovery is required')
+    if receipt_hash(Path(pending['receipt'])) != pending['receipt_sha256']:
+        raise ValueError('pending proxy receipt changed')
+
+
 def selected_proxy(root):
     state = read_state(root)
     pending = state['pending']
     if isinstance(pending, dict) and pending['kind'] in ('update', 'rollback'):
         previous = Path(pending['previous'])
         if pending['phase'] == 'staged':
-            if (bundle_identity(previous) != pending['source']
-                    or bundle_identity(root / 'server') != pending['staged_source']
-                    or receipt_hash(Path(pending['receipt'])) != pending['receipt_sha256']):
-                raise ValueError('pending proxy source or receipt changed')
+            validate_staged_proxy_source(root, pending, previous)
             return '@current'
         if not previous.exists() and not previous.is_symlink():
-            current = root / 'server'
-            if pending['staged_source'] is not None or bundle_identity(current) != pending['source']:
-                raise ValueError('pending proxy source is ambiguous; operator recovery is required')
-            if receipt_hash(Path(pending['receipt'])) != pending['receipt_sha256']:
-                raise ValueError('pending proxy receipt changed')
+            validate_unmoved_proxy_source(root, pending)
             return '@current'
     return str(selected(root, allow_pending=True))
 
@@ -217,6 +224,20 @@ def begin_rollback(value, root, admit):
     return pending['token']
 
 
+def begin_fresh(value, root, run):
+    current = read_state(root)
+    if current['completed'] is not None:
+        raise ValueError('a previous completed deployment forbids a fresh install')
+    for name in ('.caddy-recovery', '.caddy-hardened-recovery', '.caddy-fresh'):
+        path = root / name
+        if path.exists() or path.is_symlink():
+            raise ValueError('existing Caddy evidence forbids an unbound fresh install')
+    check_fresh_absence(value, root, run)
+    pending = pending_base(value, 'fresh')
+    begin(root, pending)
+    return pending['token']
+
+
 def dispatch(action, value, run=docker_run, admit=None):
     root = validate_values(value)
     if action == 'status':
@@ -225,17 +246,7 @@ def dispatch(action, value, run=docker_run, admit=None):
     if action == 'begin-update':
         return begin_update(value, root)
     if action == 'begin-fresh':
-        current = read_state(root)
-        if current['completed'] is not None:
-            raise ValueError('a previous completed deployment forbids a fresh install')
-        for name in ('.caddy-recovery', '.caddy-hardened-recovery', '.caddy-fresh'):
-            path = root / name
-            if path.exists() or path.is_symlink():
-                raise ValueError('existing Caddy evidence forbids an unbound fresh install')
-        check_fresh_absence(value, root, run)
-        pending = pending_base(value, 'fresh')
-        begin(root, pending)
-        return pending['token']
+        return begin_fresh(value, root, run)
     if action == 'retry-fresh':
         return retry_fresh(value, root, run)
     if action == 'bind-admission':

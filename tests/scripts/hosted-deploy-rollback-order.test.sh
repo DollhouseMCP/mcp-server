@@ -23,15 +23,17 @@ if [[ "${1:-}" == "--case" ]]; then
   acquire_caddy_deployment_lock() { :; }
   CADDY_IMAGE=fixture CADDY_DATA_VOLUME=fixture_data CADDY_CONFIG_VOLUME=fixture_config
   caddy_transition() {
-    case "$1" in
+    local action="$1"
+    case "${action}" in
       select-rollback) printf '%s/server.prev-20000101\n' "${DEPLOY_DIR}" ;;
       begin-rollback) printf '%032d\n' 0 ;;
       stage) : ;;
-      *) die "unexpected transition action: $1" ;;
+      *) die "unexpected transition action: ${action}" ;;
     esac
   }
   recover_selected_caddy() {
-    printf 'proxy-recovery:%s\n' "$(basename "$1")" >> "${EVENTS}"
+    local previous="$1"
+    printf 'proxy-recovery:%s\n' "$(basename "${previous}")" >> "${EVENTS}"
     [[ "${MODE}" != "recovery-failure" ]]
   }
   # Real moves exercise bundle restoration on failed promotion.

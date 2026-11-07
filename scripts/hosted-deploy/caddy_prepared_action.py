@@ -28,6 +28,19 @@ def read_candidate(path):
     return json.loads(data, object_pairs_hook=unique_object)
 
 
+def validated_candidate(root, recovery, name):
+    if not re.fullmatch(r'proxy-[0-9a-f]{32}', name):
+        raise ValueError('unsupported recovery directory entry')
+    path = recovery / name
+    candidate = read_candidate(path)
+    if not isinstance(candidate, dict) or not isinstance(candidate.get('bundle'), str):
+        raise ValueError('invalid recovery receipt')
+    bundle = Path(candidate['bundle'])
+    if bundle.parent != root or not PREVIOUS.fullmatch(bundle.name):
+        raise ValueError('recovery bundle is outside the deployment')
+    return path, bundle, read_receipt(path, bundle, candidate.get('bundle_identity'))
+
+
 def find_prepared(root, current_identity, caddyfile, destination_names):
     recovery = root / '.caddy-recovery'
     directory = private_directory(recovery)
@@ -40,16 +53,7 @@ def find_prepared(root, current_identity, caddyfile, destination_names):
                     raise ValueError('recovery inventory exceeds limit')
         matches = []
         for name in sorted(names):
-            if not re.fullmatch(r'proxy-[0-9a-f]{32}', name):
-                raise ValueError('unsupported recovery directory entry')
-            path = recovery / name
-            candidate = read_candidate(path)
-            if not isinstance(candidate, dict) or not isinstance(candidate.get('bundle'), str):
-                raise ValueError('invalid recovery receipt')
-            bundle = Path(candidate['bundle'])
-            if bundle.parent != root or not PREVIOUS.fullmatch(bundle.name):
-                raise ValueError('recovery bundle is outside the deployment')
-            record = read_receipt(path, bundle, candidate.get('bundle_identity'))
+            path, _, record = validated_candidate(root, recovery, name)
             if (record['bundle_identity'] == current_identity
                     and record['caddyfile_sha256'] == hashlib.sha256(caddyfile).hexdigest()
                     and [v['name'] for v in record['clone']['volumes'][2:]] == destination_names):

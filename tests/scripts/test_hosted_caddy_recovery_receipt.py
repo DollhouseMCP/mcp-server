@@ -33,6 +33,19 @@ def sample_clone():
 
 
 class ReceiptTests(unittest.TestCase):
+    def test_ports_and_log_sizes_reject_non_ascii_digits(self):
+        receipt.validate_profile(sample_profile())
+        for digit in ('١', '１'):
+            for field in ('container_port', 'host_port'):
+                profile = sample_profile()
+                profile['ports'][0][field] = '8' + digit + ('/tcp' if field == 'container_port' else '')
+                with self.subTest(digit=digit, field=field), self.assertRaises(ValueError):
+                    receipt.validate_profile(profile)
+            for field in ('max-size', 'max-file'):
+                profile = sample_profile()
+                profile['logging'][field] = '1' + digit + ('m' if field == 'max-size' else '')
+                with self.subTest(digit=digit, field=field), self.assertRaises(ValueError):
+                    receipt.validate_profile(profile)
     def test_old_caddyfile_is_bounded_and_never_followed(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

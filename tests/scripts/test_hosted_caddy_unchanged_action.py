@@ -17,6 +17,12 @@ import test_hosted_caddy_hardened_profile as fixtures
 
 
 class UnchangedActionTests(unittest.TestCase):
+    def test_expected_ports_reject_non_ascii_digits(self):
+        value = {'bind_address': '127.0.0.1', 'http_port': '80', 'https_port': '443', 'proxy_mode': 'caddy-tls'}
+        self.assertEqual(len(caddy_unchanged_action.expected_ports(value)), 2)
+        for port in ('8١', '8１'):
+            with self.subTest(port=port), self.assertRaises(ValueError):
+                caddy_unchanged_action.expected_ports(dict(value, http_port=port))
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

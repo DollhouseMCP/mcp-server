@@ -21,6 +21,9 @@ from image_scan_intake import unique_object
 ID = re.compile(r'[0-9a-f]{64}\Z')
 
 
+FRESH_TOKEN_LABEL = 'org.dollhousemcp.caddy-fresh-token'
+
+
 def fresh_names(run, names, token):
     existing = run(['docker', 'volume', 'ls', '--format', '{{.Name}}'], 15, 1024 * 1024).decode('utf-8').splitlines()
     if any(name in existing for name in names):
@@ -31,7 +34,7 @@ def fresh_names(run, names, token):
         if returned != name:
             raise ValueError('fresh volume creation returned an unexpected name')
         labels = inspect_one(run, 'volume', name).get('Labels')
-        if not isinstance(labels, dict) or labels.get('org.dollhousemcp.caddy-fresh-token') != token:
+        if not isinstance(labels, dict) or labels.get(FRESH_TOKEN_LABEL) != token:
             raise ValueError('fresh volume ownership is unproven')
 
 
@@ -43,20 +46,24 @@ def seed_args(image, names, token):
             '--mount', 'type=volume,src=' + names[1] + ',dst=/config', image]
 
 
-def inspect_seed(run, selector, image_id, names, token):
-    seed = inspect_one(run, 'container', selector)
-    config, host, state = seed.get('Config'), seed.get('HostConfig'), seed.get('State')
-    identifier = seed.get('Id')
-    if not isinstance(identifier, str) or not ID.fullmatch(identifier) or seed.get('Name') != '/dollhouse-caddy-seed-' + token or seed.get('Image') != image_id:
-        raise ValueError('seed identity is unproven')
-    if not isinstance(config, dict) or not isinstance(config.get('Labels'), dict) or config['Labels'].get('org.dollhousemcp.caddy-fresh-token') != token or config.get('User') != '1001:1001':
-        raise ValueError('seed ownership is unproven')
+def validate_seed_isolation(host, state):
     if not isinstance(host, dict) or host.get('NetworkMode') != 'none' or host.get('ReadonlyRootfs') is not True or set(host.get('CapDrop') or []) != {'ALL'} or host.get('SecurityOpt') != ['no-new-privileges:true']:
         raise ValueError('seed isolation differs from the requested profile')
     if host.get('Privileged') is not False or host.get('AutoRemove') is not False or host.get('RestartPolicy', {}).get('Name') != 'no':
         raise ValueError('seed lifecycle differs from the requested profile')
     if not isinstance(state, dict) or state.get('Running') is not False:
         raise ValueError('seed container must never run')
+
+
+def inspect_seed(run, selector, image_id, names, token):
+    seed = inspect_one(run, 'container', selector)
+    config, host, state = seed.get('Config'), seed.get('HostConfig'), seed.get('State')
+    identifier = seed.get('Id')
+    if not isinstance(identifier, str) or not ID.fullmatch(identifier) or seed.get('Name') != '/dollhouse-caddy-seed-' + token or seed.get('Image') != image_id:
+        raise ValueError('seed identity is unproven')
+    if not isinstance(config, dict) or not isinstance(config.get('Labels'), dict) or config['Labels'].get(FRESH_TOKEN_LABEL) != token or config.get('User') != '1001:1001':
+        raise ValueError('seed ownership is unproven')
+    validate_seed_isolation(host, state)
     mounts = seed.get('Mounts')
     if not isinstance(mounts, list) or len(mounts) != 2:
         raise ValueError('seed mounts differ from the request')
@@ -107,6 +114,21 @@ def write_fresh_receipt(root, record):
         os.close(parent)
 
 
+def read_fresh_candidate(directory, name):
+    if not re.fullmatch(r'fresh-[0-9a-f]{32}\.json', name):
+        raise ValueError('unsupported fresh receipt entry')
+    data = read_private(directory, name, 1024 * 1024)
+    record = json.loads(data, object_pairs_hook=unique_object)
+    keys = {'schema', 'instance', 'admission', 'volumes', 'layout', 'token'}
+    if not isinstance(record, dict) or set(record) != keys or record['schema'] != 1 or isinstance(record['schema'], bool):
+        raise ValueError('invalid fresh volume receipt')
+    volumes, token = record['volumes'], record['token']
+    if (not isinstance(volumes, list) or len(volumes) != 2 or not all(isinstance(value, dict) for value in volumes)
+            or not isinstance(token, str) or not re.fullmatch(r'[0-9a-f]{32}', token)):
+        raise ValueError('invalid fresh volume receipt')
+    return record
+
+
 def find_fresh_receipt(root, instance, admission, names):
     path = root / '.caddy-fresh'
     if not path.exists() and not path.is_symlink():
@@ -121,18 +143,8 @@ def find_fresh_receipt(root, instance, admission, names):
                     raise ValueError('fresh receipt inventory exceeds limit')
         matches = []
         for name in sorted(entries):
-            if not re.fullmatch(r'fresh-[0-9a-f]{32}\.json', name):
-                raise ValueError('unsupported fresh receipt entry')
-            data = read_private(directory, name, 1024 * 1024)
-            record = json.loads(data, object_pairs_hook=unique_object)
-            keys = {'schema', 'instance', 'admission', 'volumes', 'layout', 'token'}
-            if not isinstance(record, dict) or set(record) != keys or record['schema'] != 1 or isinstance(record['schema'], bool):
-                raise ValueError('invalid fresh volume receipt')
-            volumes, token = record['volumes'], record['token']
-            if (not isinstance(volumes, list) or len(volumes) != 2 or not all(isinstance(value, dict) for value in volumes)
-                    or not isinstance(token, str) or not re.fullmatch(r'[0-9a-f]{32}', token)):
-                raise ValueError('invalid fresh volume receipt')
-            if record['instance'] == instance and record['admission'] == admission and [item.get('name') for item in volumes] == names:
+            record = read_fresh_candidate(directory, name)
+            if record['instance'] == instance and record['admission'] == admission and [item.get('name') for item in record['volumes']] == names:
                 matches.append((path / name, record))
         if len(matches) != 1:
             raise ValueError('exactly one matching managed fresh-volume receipt is required')
@@ -148,7 +160,7 @@ def verify_fresh(run, root, instance, admission, names, helper_id):
         raise ValueError('fresh volume identity changed')
     for name in names:
         labels = inspect_one(run, 'volume', name).get('Labels')
-        if not isinstance(labels, dict) or labels.get('org.dollhousemcp.caddy-fresh-token') != record['token']:
+        if not isinstance(labels, dict) or labels.get(FRESH_TOKEN_LABEL) != record['token']:
             raise ValueError('fresh volume ownership changed')
     refuse_writers(running_containers(run), volumes)
     helper = Path(__file__).with_name('caddy_volume_copy.mjs')

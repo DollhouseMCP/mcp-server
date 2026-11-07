@@ -32,8 +32,9 @@ class TransitionStateTests(unittest.TestCase):
             first = pending(root)
             state.begin(root, first)
             self.assertIsNone(state.read_state(root)['completed'])
+            duplicate = pending(root)
             with self.assertRaises(ValueError):
-                state.begin(root, pending(root))
+                state.begin(root, duplicate)
             state.mark_staged(root, first['token'], {'sha256': '1' * 64, 'entries': 1, 'bytes': 1})
             completed = state.finish(root, first['token'])['completed']
             self.assertEqual(completed['previous'], first['previous'])

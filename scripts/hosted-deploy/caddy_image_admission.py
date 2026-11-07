@@ -18,7 +18,7 @@ spec = importlib.util.spec_from_file_location('hosted_caddy_scanner_helpers', SC
 scanner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(scanner)
 
-REFERENCE = re.compile(r'[a-z0-9][a-z0-9.-]*(?::[0-9]+)?(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)+@sha256:[0-9a-f]{64}')
+REFERENCE = re.compile(r'[a-z0-9][a-z0-9.-]*(?::(?a:\d)+)?(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)+@sha256:[0-9a-f]{64}')
 IMAGE_ID = re.compile(r'sha256:[0-9a-f]{64}')
 GRAPH_LIMIT = 1024 ** 3
 ARCHIVE_LIMIT = GRAPH_LIMIT + 128 * 1024 ** 2

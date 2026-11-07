@@ -9,6 +9,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts/hosted-deploy'))
 import caddy_hardened_profile
+import caddy_hardened_receipt
 import test_hosted_caddy_legacy_profile as fixtures
 
 
@@ -37,6 +38,14 @@ def hardened():
 
 
 class HardenedProfileTests(unittest.TestCase):
+    def test_hardened_logging_requires_ascii_digits(self):
+        caddy_hardened_receipt.validate_hardened_logging({'max-size': '25m', 'max-file': '5'})
+        for digit in ('١', '１'):
+            for key in ('max-size', 'max-file'):
+                options = {'max-size': '25m', 'max-file': '5'}
+                options[key] = '1' + digit + ('m' if key == 'max-size' else '')
+                with self.subTest(digit=digit, key=key), self.assertRaises(ValueError):
+                    caddy_hardened_receipt.validate_hardened_logging(options)
     def validate(self, container, image, admission, ports):
         return caddy_hardened_profile.validate_hardened_profile(container, image, admission, 'site',
                                                                '/srv/site/Caddyfile', ['site_data', 'site_config'], ports)

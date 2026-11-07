@@ -37,6 +37,20 @@ def recovery_entry(item, kind):
     return read_receipt(item, Path(candidate['bundle']), candidate.get('bundle_identity'))
 
 
+def matching_recovery_entry(path, kind, root, previous, identity, name):
+    if not re.fullmatch(r'proxy-[0-9a-f]{32}', name):
+        raise ValueError('invalid recovery inventory entry')
+    record = recovery_entry(path / name, kind)
+    bundle = Path(record['bundle'])
+    if bundle.parent != root or not PREVIOUS.fullmatch(bundle.name):
+        raise ValueError('recovery bundle is outside the deployment')
+    if bundle != previous:
+        return None
+    if record['bundle_identity'] != identity:
+        raise ValueError('selected bundle differs from its receipt')
+    return kind, record, path / name
+
+
 def recovery_directory(path, kind, root, previous, identity):
     if not path.exists() and not path.is_symlink():
         return []
@@ -50,16 +64,9 @@ def recovery_directory(path, kind, root, previous, identity):
                     raise ValueError('recovery inventory exceeds limit')
         found = []
         for name in sorted(names):
-            if not re.fullmatch(r'proxy-[0-9a-f]{32}', name):
-                raise ValueError('invalid recovery inventory entry')
-            record = recovery_entry(path / name, kind)
-            bundle = Path(record['bundle'])
-            if bundle.parent != root or not PREVIOUS.fullmatch(bundle.name):
-                raise ValueError('recovery bundle is outside the deployment')
-            if bundle == previous:
-                if record['bundle_identity'] != identity:
-                    raise ValueError('selected bundle differs from its receipt')
-                found.append((kind, record, path / name))
+            result = matching_recovery_entry(path, kind, root, previous, identity, name)
+            if result is not None:
+                found.append(result)
         return found
     finally:
         os.close(directory)

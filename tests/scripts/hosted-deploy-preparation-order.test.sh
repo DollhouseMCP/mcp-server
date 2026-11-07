@@ -44,7 +44,8 @@ if [[ "${1:-}" == --case ]]; then
   }
   CADDY_CONTAINER_NAME=fixture-caddy HOSTED_CADDY_LOCK_FD=9
   caddy_transition() {
-    case "$1" in
+    local action="$1"
+    case "${action}" in
       status) if [[ "${MODE}" == fresh-retry ]]; then printf 'fresh\n'; else printf 'none\n'; fi ;;
       begin-update|begin-fresh|begin-rollback) printf 'transition-pending\n' >> "${EVENTS}"; printf '%032d\n' 0 ;;
       retry-fresh) printf 'transition-retry\n' >> "${EVENTS}"; printf '%032d\n' 0 ;;
@@ -52,17 +53,18 @@ if [[ "${1:-}" == --case ]]; then
       select-rollback) printf '%s/server.prev-20000101\n' "${DEPLOY_DIR}" ;;
       stage) printf 'transition-staged\n' >> "${EVENTS}" ;;
       bind-admission) printf 'admission-bound\n' >> "${EVENTS}" ;;
-      *) die "unexpected transition action: $1" ;;
+      *) die "unexpected transition action: ${action}" ;;
     esac
   }
   caddy_unchanged_request_json() { printf '{}\n'; }
   caddy_recovery_request_json() { printf '{}\n'; }
   python3() {
-    if [[ "$1" == */caddy_unchanged_action.py ]]; then
+    local command_path="$1"
+    if [[ "${command_path}" == */caddy_unchanged_action.py ]]; then
       cat >/dev/null
       printf 'prepared-clone\n' >> "${EVENTS}"
       printf '%s\n' "${DEPLOY_DIR}/server.prev-fixture"
-    elif [[ "$1" == */caddy_verify_noop_action.py ]]; then
+    elif [[ "${command_path}" == */caddy_verify_noop_action.py ]]; then
       cat >/dev/null
       printf 'hardened-recheck\n' >> "${EVENTS}"
     else

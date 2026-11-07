@@ -12,6 +12,10 @@ from caddy_recovery_receipt import MAX_RECORD, SHA256, VOLUME, read_private, uni
 PREVIOUS = re.compile(r'server\.prev-[0-9a-f]{32}\Z')
 
 
+STATE_DIRECTORY = '.caddy-state'
+STATE_FILE = 'state.json'
+
+
 def validate_identity(value, optional=False):
     if optional and value is None:
         return
@@ -70,6 +74,19 @@ def validate_completed(value, root):
     validate_identity(value['source'])
 
 
+def validate_transition_phase(value):
+    validate_identity(value['staged_source'], optional=True)
+    if value['phase'] not in ('prepared', 'admitted', 'staged'):
+        raise ValueError('invalid Caddy transition phase')
+    if value['phase'] == 'prepared':
+        if value['admission'] is not None or value['staged_source'] is not None:
+            raise ValueError('unadmitted transition has unexpected evidence')
+    else:
+        validate_admission(value['admission'], value['image'])
+        if (value['phase'] == 'staged') != (value['staged_source'] is not None):
+            raise ValueError('transition source phase is inconsistent')
+
+
 def validate_pending(value, root):
     if value is None:
         return
@@ -83,16 +100,7 @@ def validate_pending(value, root):
     volumes = value['volumes']
     if not isinstance(volumes, list) or len(volumes) != 2 or not all(isinstance(name, str) and VOLUME.fullmatch(name) for name in volumes) or volumes[0] == volumes[1]:
         raise ValueError('invalid transition volumes')
-    validate_identity(value['staged_source'], optional=True)
-    if value['phase'] not in ('prepared', 'admitted', 'staged'):
-        raise ValueError('invalid Caddy transition phase')
-    if value['phase'] == 'prepared':
-        if value['admission'] is not None or value['staged_source'] is not None:
-            raise ValueError('unadmitted transition has unexpected evidence')
-    else:
-        validate_admission(value['admission'], value['image'])
-        if (value['phase'] == 'staged') != (value['staged_source'] is not None):
-            raise ValueError('transition source phase is inconsistent')
+    validate_transition_phase(value)
     if value['kind'] == 'fresh':
         if any(value[key] is not None for key in ('previous', 'receipt', 'receipt_sha256', 'source')):
             raise ValueError('invalid fresh transition binding')
@@ -119,13 +127,13 @@ def state_directory(root, create):
             raise ValueError('deployment directory changed')
         if create:
             try:
-                os.mkdir('.caddy-state', 0o700, dir_fd=parent)
+                os.mkdir(STATE_DIRECTORY, 0o700, dir_fd=parent)
                 os.fsync(parent)
             except FileExistsError:
                 pass
-        directory = os.open('.caddy-state', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+        directory = os.open(STATE_DIRECTORY, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
         info = os.fstat(directory)
-        linked = os.stat('.caddy-state', dir_fd=parent, follow_symlinks=False)
+        linked = os.stat(STATE_DIRECTORY, dir_fd=parent, follow_symlinks=False)
         if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700
                 or (info.st_dev, info.st_ino) != (linked.st_dev, linked.st_ino)):
             os.close(directory)
@@ -137,15 +145,15 @@ def state_directory(root, create):
 
 def read_state(root):
     root = Path(root)
-    path = root / '.caddy-state'
+    path = root / STATE_DIRECTORY
     if not path.exists() and not path.is_symlink():
         return {'schema': 'caddy-transition-v1', 'completed': None, 'pending': None}
     directory = state_directory(root, False)
     try:
         names = os.listdir(directory)
-        if names != ['state.json']:
+        if names != [STATE_FILE]:
             raise ValueError('Caddy state directory is incomplete or ambiguous')
-        data = read_private(directory, 'state.json', MAX_RECORD)
+        data = read_private(directory, STATE_FILE, MAX_RECORD)
         return validate_state(json.loads(data, object_pairs_hook=unique_object), root)
     finally:
         os.close(directory)
@@ -161,12 +169,12 @@ def write_state(root, value):
     pending = '.state-' + secrets.token_hex(16) + '.pending'
     try:
         names = os.listdir(directory)
-        if names not in ([], ['state.json']):
+        if names not in ([], [STATE_FILE]):
             raise ValueError('Caddy state directory is incomplete or ambiguous')
         if names:
-            read_private(directory, 'state.json', MAX_RECORD)
+            read_private(directory, STATE_FILE, MAX_RECORD)
         write_exclusive(directory, pending, encoded)
-        os.replace(pending, 'state.json', src_dir_fd=directory, dst_dir_fd=directory)
+        os.replace(pending, STATE_FILE, src_dir_fd=directory, dst_dir_fd=directory)
         os.fsync(directory)
     finally:
         os.close(directory)

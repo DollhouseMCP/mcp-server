@@ -56,6 +56,11 @@ class CaddyAdmissionTests(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 admission.validate_observation(bad,self.image,self.graph,self.approved,self.daemon)
 
+    def test_reference_port_requires_ascii_digits(self):
+        for port in ('8١', '8１'):
+            self.assertIsNone(admission.REFERENCE.fullmatch('registry.example.test:' + port + '/team/caddy@sha256:' + 'a' * 64))
+        self.assertIsNotNone(admission.REFERENCE.fullmatch('registry.example.test:8080/team/caddy@sha256:' + 'a' * 64))
+
     def test_qualify_passes_retained_source_and_caddy_kind_to_fd_verifier(self):
         def fake_process(command, timeout, maximum, output_path=None, **kwargs):
             if command[1] == 'info':

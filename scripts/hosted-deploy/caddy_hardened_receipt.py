@@ -13,11 +13,10 @@ from caddy_recovery_receipt import (IMAGE_ID, MAX_RECORD, MAX_CADDYFILE, SHA256,
 NAME = re.compile(r'proxy-[0-9a-f]{32}\Z')
 
 
-def validate_hardened_profile_values(profile):
-    fields = {'kind', 'container_id', 'image_id', 'reference', 'data_volume', 'config_volume',
-              'network', 'ports', 'aliases', 'logging', 'admission'}
-    if not isinstance(profile, dict) or set(profile) != fields or profile['kind'] != 'hardened':
-        raise ValueError('invalid hardened proxy profile')
+PENDING_RECEIPT = '.receipt.pending'
+
+
+def validate_hardened_identity(profile):
     if not isinstance(profile['admission'], dict) or not isinstance(profile['container_id'], str) or not SHA256.fullmatch(profile['container_id']):
         raise ValueError('invalid hardened proxy identity')
     if (not isinstance(profile['image_id'], str) or not IMAGE_ID.fullmatch(profile['image_id'])
@@ -25,6 +24,23 @@ def validate_hardened_profile_values(profile):
         raise ValueError('invalid hardened image identity')
     if profile['admission'].get('reference') != profile['reference'] or profile['admission'].get('store_id') != profile['image_id']:
         raise ValueError('hardened image admission does not match its profile')
+
+
+def validate_hardened_logging(logging):
+    if not isinstance(logging, dict) or set(logging) != {'max-size', 'max-file'}:
+        raise ValueError('invalid hardened logging')
+    if not isinstance(logging['max-size'], str) or not re.fullmatch(r'[1-9](?a:\d)*[kKmMgG]', logging['max-size']):
+        raise ValueError('invalid hardened log size')
+    if not isinstance(logging['max-file'], str) or not re.fullmatch(r'[1-9](?a:\d)*', logging['max-file']):
+        raise ValueError('invalid hardened log retention')
+
+
+def validate_hardened_profile_values(profile):
+    fields = {'kind', 'container_id', 'image_id', 'reference', 'data_volume', 'config_volume',
+              'network', 'ports', 'aliases', 'logging', 'admission'}
+    if not isinstance(profile, dict) or set(profile) != fields or profile['kind'] != 'hardened':
+        raise ValueError('invalid hardened proxy profile')
+    validate_hardened_identity(profile)
     for key in ('data_volume', 'config_volume', 'network'):
         if not isinstance(profile[key], str) or not VOLUME.fullmatch(profile[key]):
             raise ValueError('invalid hardened proxy name')
@@ -38,13 +54,7 @@ def validate_hardened_profile_values(profile):
     if not isinstance(profile['ports'], list):
         raise ValueError('invalid hardened proxy ports')
     validate_ports(profile['ports'])
-    logging = profile['logging']
-    if not isinstance(logging, dict) or set(logging) != {'max-size', 'max-file'}:
-        raise ValueError('invalid hardened logging')
-    if not isinstance(logging['max-size'], str) or not re.fullmatch(r'[1-9][0-9]*[kKmMgG]', logging['max-size']):
-        raise ValueError('invalid hardened log size')
-    if not isinstance(logging['max-file'], str) or not re.fullmatch(r'[1-9][0-9]*', logging['max-file']):
-        raise ValueError('invalid hardened log retention')
+    validate_hardened_logging(profile['logging'])
 
 
 def validate_hardened_bundle(record):
@@ -62,18 +72,22 @@ def validate_hardened_bundle(record):
         raise ValueError('invalid hardened Caddyfile hash')
 
 
+def validate_hardened_volume(volume):
+    if set(volume) != {'name', 'driver', 'created_at', 'mountpoint', 'device', 'inode'} or volume['driver'] != 'local':
+        raise ValueError('invalid hardened volume metadata')
+    if not isinstance(volume['mountpoint'], str) or not os.path.isabs(volume['mountpoint']):
+        raise ValueError('invalid hardened mountpoint')
+    if not isinstance(volume['created_at'], str) or not volume['created_at']:
+        raise ValueError('invalid hardened creation identity')
+    if any(isinstance(volume[key], bool) or not isinstance(volume[key], int) or volume[key] < 0 for key in ('device', 'inode')):
+        raise ValueError('invalid hardened filesystem identity')
+
+
 def validate_hardened_volumes(volumes, profile):
     if not isinstance(volumes, list) or len(volumes) != 2 or not all(isinstance(item, dict) for item in volumes):
         raise ValueError('invalid hardened volume identities')
     for volume in volumes:
-        if set(volume) != {'name', 'driver', 'created_at', 'mountpoint', 'device', 'inode'} or volume['driver'] != 'local':
-            raise ValueError('invalid hardened volume metadata')
-        if not isinstance(volume['mountpoint'], str) or not os.path.isabs(volume['mountpoint']):
-            raise ValueError('invalid hardened mountpoint')
-        if not isinstance(volume['created_at'], str) or not volume['created_at']:
-            raise ValueError('invalid hardened creation identity')
-        if any(isinstance(volume[key], bool) or not isinstance(volume[key], int) or volume[key] < 0 for key in ('device', 'inode')):
-            raise ValueError('invalid hardened filesystem identity')
+        validate_hardened_volume(volume)
     if [item.get('name') for item in volumes] != [profile['data_volume'], profile['config_volume']]:
         raise ValueError('hardened volume identities disagree')
 
@@ -103,9 +117,9 @@ def write_hardened_receipt(parent, record, caddyfile):
         try:
             os.fchmod(directory, 0o700)
             write_exclusive(directory, 'Caddyfile', caddyfile)
-            write_exclusive(directory, '.receipt.pending', data)
-            os.link('.receipt.pending', 'receipt.json', src_dir_fd=directory, dst_dir_fd=directory, follow_symlinks=False)
-            os.unlink('.receipt.pending', dir_fd=directory)
+            write_exclusive(directory, PENDING_RECEIPT, data)
+            os.link(PENDING_RECEIPT, 'receipt.json', src_dir_fd=directory, dst_dir_fd=directory, follow_symlinks=False)
+            os.unlink(PENDING_RECEIPT, dir_fd=directory)
             os.fsync(directory)
         finally:
             os.close(directory)

@@ -15,6 +15,9 @@ IMAGE_ID = re.compile(r'sha256:[0-9a-f]{64}\Z')
 VOLUME = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z')
 
 
+PENDING_RECEIPT = '.receipt.pending'
+
+
 def stable(st):
     return (st.st_dev, st.st_ino, st.st_mode, st.st_uid, st.st_nlink,
             st.st_size, st.st_mtime_ns, st.st_ctime_ns)
@@ -103,11 +106,29 @@ def validate_ports(ports):
         if not isinstance(entry, dict) or set(entry) != {'container_port', 'host_ip', 'host_port'}:
             raise ValueError('invalid proxy port binding')
         target, published = entry['container_port'], entry['host_port']
-        if not isinstance(target, str) or not re.fullmatch(r'[1-9][0-9]{0,4}/tcp', target) or int(target[:-4]) > 65535:
+        if not isinstance(target, str) or not re.fullmatch(r'[1-9](?a:\d){0,4}/tcp', target) or int(target[:-4]) > 65535:
             raise ValueError('invalid proxy container port')
-        if not isinstance(published, str) or not re.fullmatch(r'[1-9][0-9]{0,4}', published) or int(published) > 65535:
+        if not isinstance(published, str) or not re.fullmatch(r'[1-9](?a:\d){0,4}', published) or int(published) > 65535:
             raise ValueError('invalid proxy host port')
         ipaddress.ip_address(entry['host_ip'])
+
+
+def validate_legacy_logging(logging):
+    if (not isinstance(logging, dict) or set(logging) != {'max-size', 'max-file'}
+            or not re.fullmatch(r'[1-9](?a:\d)*[kKmMgG]', logging.get('max-size', ''))
+            or not re.fullmatch(r'[1-9](?a:\d)*', logging.get('max-file', ''))):
+        raise ValueError('invalid proxy logging')
+
+
+def validate_legacy_configuration(profile):
+    env, aliases, ports = profile['public_env'], profile['aliases'], profile['ports']
+    if not isinstance(env, dict) or not isinstance(aliases, list) or not isinstance(ports, list):
+        raise ValueError('invalid proxy configuration')
+    if not set(env) <= {'PATH', 'CADDY_VERSION', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME'} or not all(isinstance(value, str) and value and not any(c in value for c in '\n\r\x00') for value in env.values()):
+        raise ValueError('invalid proxy environment')
+    if not all(isinstance(value, str) and VOLUME.fullmatch(value) for value in aliases) or len(set(aliases)) != len(aliases):
+        raise ValueError('invalid proxy aliases')
+    validate_ports(ports)
 
 
 def validate_profile(profile):
@@ -132,22 +153,26 @@ def validate_profile(profile):
         raise ValueError('invalid proxy network')
     if profile['platform'] not in ('linux/amd64', 'linux/arm64'):
         raise ValueError('invalid proxy platform')
-    logging = profile['logging']
-    if (not isinstance(logging, dict) or set(logging) != {'max-size', 'max-file'}
-            or not re.fullmatch(r'[1-9][0-9]*[kKmMgG]', logging.get('max-size', ''))
-            or not re.fullmatch(r'[1-9][0-9]*', logging.get('max-file', ''))):
-        raise ValueError('invalid proxy logging')
+    validate_legacy_logging(profile['logging'])
     digests = profile['repo_digests']
     if not isinstance(digests, list) or not all(isinstance(value, str) and re.fullmatch(r'[^\s@]+@sha256:[0-9a-f]{64}', value) for value in digests):
         raise ValueError('invalid proxy registry digests')
-    env, aliases, ports = profile['public_env'], profile['aliases'], profile['ports']
-    if not isinstance(env, dict) or not isinstance(aliases, list) or not isinstance(ports, list):
-        raise ValueError('invalid proxy configuration')
-    if not set(env) <= {'PATH', 'CADDY_VERSION', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME'} or not all(isinstance(value, str) and value and not any(c in value for c in '\n\r\x00') for value in env.values()):
-        raise ValueError('invalid proxy environment')
-    if not all(isinstance(value, str) and VOLUME.fullmatch(value) for value in aliases) or len(set(aliases)) != len(aliases):
-        raise ValueError('invalid proxy aliases')
-    validate_ports(ports)
+    validate_legacy_configuration(profile)
+
+
+def validate_clone_volume(volume):
+    fields = {'name', 'driver', 'created_at', 'mountpoint', 'device', 'inode'}
+    if not isinstance(volume, dict) or set(volume) != fields:
+        raise ValueError('invalid clone volume identity')
+    if not isinstance(volume['name'], str) or not VOLUME.fullmatch(volume['name']) or volume['driver'] != 'local':
+        raise ValueError('invalid clone volume')
+    if not isinstance(volume['created_at'], str) or not volume['created_at']:
+        raise ValueError('invalid clone volume creation identity')
+    if not isinstance(volume['mountpoint'], str) or not os.path.isabs(volume['mountpoint']):
+        raise ValueError('invalid clone mountpoint')
+    if any(isinstance(volume[key], bool) or not isinstance(volume[key], int) or volume[key] < 0 for key in ('device', 'inode')):
+        raise ValueError('invalid clone filesystem identity')
+    return volume['name']
 
 
 def validate_clone(clone, profile):
@@ -156,20 +181,7 @@ def validate_clone(clone, profile):
     volumes = clone['volumes']
     if not isinstance(volumes, list) or len(volumes) != 4:
         raise ValueError('invalid clone volume identities')
-    names = []
-    for volume in volumes:
-        fields = {'name', 'driver', 'created_at', 'mountpoint', 'device', 'inode'}
-        if not isinstance(volume, dict) or set(volume) != fields:
-            raise ValueError('invalid clone volume identity')
-        if not isinstance(volume['name'], str) or not VOLUME.fullmatch(volume['name']) or volume['driver'] != 'local':
-            raise ValueError('invalid clone volume')
-        if not isinstance(volume['created_at'], str) or not volume['created_at']:
-            raise ValueError('invalid clone volume creation identity')
-        if not isinstance(volume['mountpoint'], str) or not os.path.isabs(volume['mountpoint']):
-            raise ValueError('invalid clone mountpoint')
-        if any(isinstance(volume[key], bool) or not isinstance(volume[key], int) or volume[key] < 0 for key in ('device', 'inode')):
-            raise ValueError('invalid clone filesystem identity')
-        names.append(volume['name'])
+    names = [validate_clone_volume(volume) for volume in volumes]
     if len(set(names)) != 4 or names[:2] != [profile['data_volume'], profile['config_volume']]:
         raise ValueError('clone does not bind the original proxy volumes')
     from caddy_volume_migration import validate_copy_receipt
@@ -254,10 +266,10 @@ def create_receipt(parent, record, caddyfile):
         try:
             os.fchmod(directory, 0o700)
             write_exclusive(directory, 'Caddyfile', caddyfile)
-            write_exclusive(directory, '.receipt.pending', encoded)
+            write_exclusive(directory, PENDING_RECEIPT, encoded)
             # A link creates the commit name atomically and refuses an existing name.
-            os.link('.receipt.pending', 'receipt.json', src_dir_fd=directory, dst_dir_fd=directory, follow_symlinks=False)
-            os.unlink('.receipt.pending', dir_fd=directory)
+            os.link(PENDING_RECEIPT, 'receipt.json', src_dir_fd=directory, dst_dir_fd=directory, follow_symlinks=False)
+            os.unlink(PENDING_RECEIPT, dir_fd=directory)
             os.fsync(directory)
         finally:
             os.close(directory)

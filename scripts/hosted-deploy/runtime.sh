@@ -234,8 +234,9 @@ caddy_transition_request_json() {
 }
 
 caddy_transition() {
+  local action="$1"
   caddy_transition_request_json | \
-    HOSTED_CADDY_LOCK_FD="${HOSTED_CADDY_LOCK_FD:-}" python3 "${HOSTED_DEPLOY_LIB_DIR}/caddy_transition_action.py" "$1"
+    HOSTED_CADDY_LOCK_FD="${HOSTED_CADDY_LOCK_FD:-}" python3 "${HOSTED_DEPLOY_LIB_DIR}/caddy_transition_action.py" "${action}"
 }
 
 finish_caddy_transition() {
@@ -255,7 +256,8 @@ prepare_fresh_caddy_volumes() {
 }
 
 recheck_caddy_transition() {
-  if [[ "$1" == true ]]; then
+  local fresh="$1"
+  if [[ "${fresh}" == true ]]; then
     caddy_fresh_request_json | python3 "${HOSTED_DEPLOY_LIB_DIR}/caddy_fresh_recheck.py" >/dev/null || \
       die "fresh Caddy volumes no longer match their receipt"
   else

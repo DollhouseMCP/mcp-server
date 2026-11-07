@@ -7,8 +7,8 @@ import re
 from caddy_bundle_identity import bundle_identity
 from caddy_hardened_profile import validate_hardened_profile
 from caddy_legacy_profile import default_command, legacy_network
-from caddy_prepared_action import PREVIOUS, read_candidate
-from caddy_recovery_receipt import private_directory, read_receipt
+from caddy_prepared_action import PREVIOUS, validated_candidate
+from caddy_recovery_receipt import private_directory
 from caddy_service_guard import unique_proxy
 from caddy_volume_migration import inspect_one, verify_original_volumes
 
@@ -28,16 +28,7 @@ def find_previous_receipt(root, previous):
                     raise ValueError('recovery inventory exceeds limit')
         matches = []
         for name in sorted(names):
-            if not re.fullmatch(r'proxy-[0-9a-f]{32}', name):
-                raise ValueError('unsupported recovery directory entry')
-            path = recovery / name
-            candidate = read_candidate(path)
-            if not isinstance(candidate, dict) or not isinstance(candidate.get('bundle'), str):
-                raise ValueError('invalid recovery receipt')
-            candidate_path = Path(candidate['bundle'])
-            if candidate_path.parent != root or not PREVIOUS.fullmatch(candidate_path.name):
-                raise ValueError('recovery bundle is outside the deployment')
-            record = read_receipt(path, candidate_path, candidate.get('bundle_identity'))
+            path, candidate_path, record = validated_candidate(root, recovery, name)
             if candidate_path == previous and record['bundle_identity'] == identity:
                 matches.append((path, record))
         if len(matches) != 1:

@@ -28,14 +28,7 @@ def validate_isolation(config, host):
     validate_tmpfs(host)
 
 
-def validate_hardened_profile(container, image, admission, instance, caddyfile, volumes, ports):
-    if not isinstance(container, dict) or not isinstance(image, dict) or not isinstance(admission, dict):
-        raise ValueError('Caddy observations are incomplete')
-    if container.get('Name') != '/' + instance + '-caddy' or container.get('Image') != admission.get('store_id'):
-        raise ValueError('Caddy service identity differs from admission')
-    config, host, image_config = container.get('Config'), container.get('HostConfig'), image.get('Config')
-    if not all(isinstance(item, dict) for item in (config, host, image_config)):
-        raise ValueError('Caddy configuration is incomplete')
+def validate_service_defaults(config, image_config, image, admission, instance):
     labels = config.get('Labels')
     if not isinstance(labels, dict) or labels.get('com.docker.compose.project') != instance or labels.get('com.docker.compose.service') != 'caddy':
         raise ValueError('Caddy is not the selected Compose service')
@@ -44,6 +37,17 @@ def validate_hardened_profile(container, image, admission, instance, caddyfile, 
     for key in ('Cmd', 'Entrypoint', 'Env', 'WorkingDir'):
         if config.get(key) != image_config.get(key):
             raise ValueError('Caddy runtime overrides image defaults')
+
+
+def validate_hardened_profile(container, image, admission, instance, caddyfile, volumes, ports):
+    if not isinstance(container, dict) or not isinstance(image, dict) or not isinstance(admission, dict):
+        raise ValueError('Caddy observations are incomplete')
+    if container.get('Name') != '/' + instance + '-caddy' or container.get('Image') != admission.get('store_id'):
+        raise ValueError('Caddy service identity differs from admission')
+    config, host, image_config = container.get('Config'), container.get('HostConfig'), image.get('Config')
+    if not all(isinstance(item, dict) for item in (config, host, image_config)):
+        raise ValueError('Caddy configuration is incomplete')
+    validate_service_defaults(config, image_config, image, admission, instance)
     validate_isolation(config, host)
     logging = legacy_restart_and_logging(host)
     if legacy_mounts(container.get('Mounts'), caddyfile) != volumes:

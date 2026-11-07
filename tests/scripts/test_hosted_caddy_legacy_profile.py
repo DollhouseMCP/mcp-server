@@ -33,6 +33,18 @@ def fixture():
 
 
 class LegacyProfileTests(unittest.TestCase):
+    def test_legacy_port_and_log_digits_remain_ascii(self):
+        binding = [{'HostIp': '127.0.0.1', 'HostPort': '80'}]
+        profile.legacy_port('80/tcp', binding)
+        for digit in ('١', '１'):
+            with self.subTest(digit=digit), self.assertRaises(ValueError):
+                profile.legacy_port('8' + digit + '/tcp', binding)
+            with self.subTest(digit=digit), self.assertRaises(ValueError):
+                profile.legacy_port('80/tcp', [{'HostIp': '127.0.0.1', 'HostPort': '8' + digit}])
+            container, _ = fixture()
+            container['HostConfig']['LogConfig']['Config']['max-size'] = '1' + digit + 'm'
+            with self.subTest(digit=digit), self.assertRaises(ValueError):
+                profile.legacy_restart_and_logging(container['HostConfig'])
     def test_exact_image_defaults_and_mounts(self):
         container, image = fixture()
         result = profile.validate_legacy_profile(container, image, '/srv/site/Caddyfile', 'site_default')

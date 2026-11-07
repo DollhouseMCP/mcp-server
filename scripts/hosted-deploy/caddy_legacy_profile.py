@@ -6,13 +6,19 @@ trusted daemon. This module never persists or prints arbitrary container env.
 import re
 import ipaddress
 
+CADDYFILE_MOUNT = '/etc/caddy/Caddyfile'
+DATA_MOUNT = '/data'
+CONFIG_MOUNT = '/config'
+INVALID_PORT_BINDING = 'unsupported legacy port binding'
+INVALID_HOST_PROFILE = 'unsupported legacy host profile'
+
 DIGEST = re.compile(r'sha256:[0-9a-f]{64}\Z')
 CONTAINER_ID = re.compile(r'[0-9a-f]{64}\Z')
 VOLUME = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z')
 PUBLIC_ENV = {'PATH', 'CADDY_VERSION', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME'}
 COMMANDS = (
-    (('caddy',), ('run', '--config', '/etc/caddy/Caddyfile', '--adapter', 'caddyfile')),
-    ((), ('caddy', 'run', '--config', '/etc/caddy/Caddyfile', '--adapter', 'caddyfile')),
+    (('caddy',), ('run', '--config', CADDYFILE_MOUNT, '--adapter', 'caddyfile')),
+    ((), ('caddy', 'run', '--config', CADDYFILE_MOUNT, '--adapter', 'caddyfile')),
 )
 MASKED_PATHS = ['/proc/asound', '/proc/acpi', '/proc/kcore', '/proc/keys', '/proc/latency_stats',
                 '/proc/timer_list', '/proc/timer_stats', '/proc/sched_debug', '/proc/scsi',
@@ -33,7 +39,7 @@ def public_environment(values):
         result[key] = text
     if 'PATH' not in result or 'CADDY_VERSION' not in result:
         raise ValueError('missing legacy public environment')
-    if result.get('XDG_CONFIG_HOME', '/config') != '/config' or result.get('XDG_DATA_HOME', '/data') != '/data':
+    if result.get('XDG_CONFIG_HOME', CONFIG_MOUNT) != CONFIG_MOUNT or result.get('XDG_DATA_HOME', DATA_MOUNT) != DATA_MOUNT:
         raise ValueError('unsupported legacy storage environment')
     return result
 
@@ -59,13 +65,13 @@ def legacy_mounts(mounts, caddyfile):
     if not isinstance(mounts, list) or len(mounts) != 3:
         raise ValueError('unsupported legacy mounts')
     by_target = {m.get('Destination'): m for m in mounts if isinstance(m, dict)}
-    if set(by_target) != {'/data', '/config', '/etc/caddy/Caddyfile'}:
+    if set(by_target) != {DATA_MOUNT, CONFIG_MOUNT, CADDYFILE_MOUNT}:
         raise ValueError('unsupported legacy mount destinations')
-    conf = by_target['/etc/caddy/Caddyfile']
+    conf = by_target[CADDYFILE_MOUNT]
     if conf.get('Type') != 'bind' or conf.get('RW') is not False or conf.get('Source') != caddyfile:
         raise ValueError('unsupported legacy Caddyfile mount')
     names = []
-    for target in ('/data', '/config'):
+    for target in (DATA_MOUNT, CONFIG_MOUNT):
         mount = by_target[target]
         name = mount.get('Name')
         if mount.get('Type') != 'volume' or mount.get('RW') is not True or not isinstance(name, str) or not VOLUME.fullmatch(name):
@@ -95,17 +101,17 @@ def legacy_aliases(container, host, expected_network):
 
 
 def legacy_port(port, entries):
-    if not re.fullmatch(r'[1-9][0-9]{0,4}/tcp', port) or int(port[:-4]) > 65535:
+    if not re.fullmatch(r'[1-9](?a:\d){0,4}/tcp', port) or int(port[:-4]) > 65535:
         raise ValueError('unsupported legacy port')
     if not isinstance(entries, list) or len(entries) != 1 or not isinstance(entries[0], dict):
-        raise ValueError('unsupported legacy port binding')
+        raise ValueError(INVALID_PORT_BINDING)
     entry = entries[0]
     if set(entry) != {'HostIp', 'HostPort'}:
-        raise ValueError('unsupported legacy port binding')
+        raise ValueError(INVALID_PORT_BINDING)
     ipaddress.ip_address(entry['HostIp'])
     value = entry['HostPort']
-    if not isinstance(value, str) or not re.fullmatch(r'[1-9][0-9]{0,4}', value) or int(value) > 65535:
-        raise ValueError('unsupported legacy port binding')
+    if not isinstance(value, str) or not re.fullmatch(r'[1-9](?a:\d){0,4}', value) or int(value) > 65535:
+        raise ValueError(INVALID_PORT_BINDING)
     return {'container_port': port, 'host_ip': entry['HostIp'], 'host_port': value}
 
 
@@ -120,11 +126,7 @@ def legacy_network(container, host, expected_network):
     return result, aliases
 
 
-def validate_common_host(host):
-    for key in ('Devices', 'DeviceRequests', 'ExtraHosts', 'GroupAdd', 'Links',
-                'VolumesFrom', 'Dns', 'DnsOptions', 'DnsSearch'):
-        if host.get(key) not in (None, []):
-            raise ValueError('unsupported legacy host profile')
+def validate_common_namespaces(host):
     if host.get('PidMode') not in ('', None) or host.get('IpcMode') not in ('private', '', None):
         raise ValueError('unsupported legacy namespace')
     if any(host.get(key) not in ('', None) for key in ('UsernsMode', 'UTSMode')):
@@ -135,6 +137,14 @@ def validate_common_host(host):
         raise ValueError('unsupported legacy cgroup namespace')
     if host.get('MaskedPaths') != MASKED_PATHS or host.get('ReadonlyPaths') != READONLY_PATHS:
         raise ValueError('unsupported legacy proc filesystem restrictions')
+
+
+def validate_common_host(host):
+    for key in ('Devices', 'DeviceRequests', 'ExtraHosts', 'GroupAdd', 'Links',
+                'VolumesFrom', 'Dns', 'DnsOptions', 'DnsSearch'):
+        if host.get(key) not in (None, []):
+            raise ValueError(INVALID_HOST_PROFILE)
+    validate_common_namespaces(host)
     for key in ('Memory', 'MemorySwap', 'MemoryReservation', 'KernelMemory', 'CpuShares',
                 'CpuPeriod', 'CpuQuota', 'NanoCpus', 'PidsLimit'):
         if host.get(key) not in (None, 0):
@@ -149,10 +159,10 @@ def validate_host_profile(host):
     validate_common_host(host)
     for key in ('Privileged', 'ReadonlyRootfs'):
         if host.get(key) is not False:
-            raise ValueError('unsupported legacy host profile')
+            raise ValueError(INVALID_HOST_PROFILE)
     for key in ('CapAdd', 'CapDrop', 'SecurityOpt'):
         if host.get(key) not in (None, []):
-            raise ValueError('unsupported legacy host profile')
+            raise ValueError(INVALID_HOST_PROFILE)
     if host.get('Sysctls') not in (None, {}):
         raise ValueError('unsupported legacy runtime')
 
@@ -167,7 +177,7 @@ def legacy_restart_and_logging(host):
     options = logging['Config']
     if set(options) != {'max-size', 'max-file'}:
         raise ValueError('unsupported legacy logging options')
-    if not re.fullmatch(r'[1-9][0-9]*[kKmMgG]', options.get('max-size', '')) or not re.fullmatch(r'[1-9][0-9]*', options.get('max-file', '')):
+    if not re.fullmatch(r'[1-9](?a:\d)*[kKmMgG]', options.get('max-size', '')) or not re.fullmatch(r'[1-9](?a:\d)*', options.get('max-file', '')):
         raise ValueError('invalid legacy logging options')
     return dict(options)
 

@@ -20,6 +20,10 @@ NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z')
 ID = re.compile(r'[0-9a-f]{64}\Z')
 
 
+COPY_SCRIPT_PATH = '/caddy-volume-copy.mjs'
+CLONE_TOKEN_LABEL = 'org.dollhousemcp.caddy-clone-token'
+
+
 def docker_json(run, args, timeout=15, limit=1024 * 1024):
     raw = run(['docker', *args], timeout, limit)
     return json.loads(raw, object_pairs_hook=unique_object)
@@ -107,20 +111,13 @@ def helper_args(names, helper_path, token, mode=None):
             mount += ',readonly'
         args.extend(['--mount', mount])
     args.extend(['--mount', 'type=bind,src=' + source + ',dst=/caddy-volume-copy.mjs,readonly',
-                 HELPER_IMAGE, 'node', '/caddy-volume-copy.mjs'])
+                 HELPER_IMAGE, 'node', COPY_SCRIPT_PATH])
     if mode:
         args.append(mode)
     return args
 
 
-def validate_helper_runtime(config, host, token, mode):
-    if not isinstance(config, dict) or config.get('Labels', {}).get('org.dollhousemcp.caddy-clone-token') != token:
-        raise ValueError('owned helper label is missing')
-    command = ['node', '/caddy-volume-copy.mjs'] + ([mode] if mode else [])
-    if config.get('Image') != HELPER_IMAGE or config.get('User') != '0:0' or config.get('Cmd') != command:
-        raise ValueError('owned helper command changed')
-    if not isinstance(host, dict) or host.get('NetworkMode') != 'none' or host.get('ReadonlyRootfs') is not True:
-        raise ValueError('owned helper isolation changed')
+def validate_helper_host(host):
     if host.get('Privileged') is not False or host.get('AutoRemove') is not False:
         raise ValueError('owned helper lifecycle settings changed')
     if not isinstance(host.get('RestartPolicy'), dict) or host['RestartPolicy'].get('Name') != 'no':
@@ -133,6 +130,17 @@ def validate_helper_runtime(config, host, token, mode):
         raise ValueError('owned helper privilege setting changed')
 
 
+def validate_helper_runtime(config, host, token, mode):
+    if not isinstance(config, dict) or config.get('Labels', {}).get(CLONE_TOKEN_LABEL) != token:
+        raise ValueError('owned helper label is missing')
+    command = ['node', COPY_SCRIPT_PATH] + ([mode] if mode else [])
+    if config.get('Image') != HELPER_IMAGE or config.get('User') != '0:0' or config.get('Cmd') != command:
+        raise ValueError('owned helper command changed')
+    if not isinstance(host, dict) or host.get('NetworkMode') != 'none' or host.get('ReadonlyRootfs') is not True:
+        raise ValueError('owned helper isolation changed')
+    validate_helper_host(host)
+
+
 def validate_helper_mounts(mounts, names, helper_path, mode):
     if not isinstance(mounts, list) or len(mounts) != 5:
         raise ValueError('owned helper mounts changed')
@@ -141,7 +149,7 @@ def validate_helper_mounts(mounts, names, helper_path, mode):
         item = by_target.get(target, {})
         if item.get('Type') != 'volume' or item.get('Name') != names[index] or item.get('RW') is not (index >= 2 and not mode):
             raise ValueError('owned helper volume mounts changed')
-    helper = by_target.get('/caddy-volume-copy.mjs', {})
+    helper = by_target.get(COPY_SCRIPT_PATH, {})
     if helper.get('Type') != 'bind' or helper.get('RW') is not False or helper.get('Source') != str(Path(helper_path).resolve(strict=True)):
         raise ValueError('owned helper script mount changed')
 
@@ -232,7 +240,7 @@ def create_destinations(run, source_names, destination_names, token):
         if created != name:
             raise ValueError('destination creation returned an unexpected name')
         labels = inspect_one(run, 'volume', name).get('Labels')
-        if not isinstance(labels, dict) or labels.get('org.dollhousemcp.caddy-clone-token') != token:
+        if not isinstance(labels, dict) or labels.get(CLONE_TOKEN_LABEL) != token:
             raise ValueError('destination is not owned by this transaction')
 
 
@@ -252,7 +260,7 @@ def migrate_volumes(run, profile, admitted_sources, destination_names, token, he
         raise ValueError('original volume identity differs from recovery receipt')
     for name in destination_names:
         labels = inspect_one(run, 'volume', name).get('Labels')
-        if not isinstance(labels, dict) or labels.get('org.dollhousemcp.caddy-clone-token') != token:
+        if not isinstance(labels, dict) or labels.get(CLONE_TOKEN_LABEL) != token:
             raise ValueError('destination is not owned by this fresh-volume transaction')
     validate_volume_pair(before)
     refuse_writers(running_containers(run), before)

@@ -439,19 +439,22 @@ validate_docker_log_max_file() {
 }
 
 validate_caddy_image_reference() {
-  [[ "$1" =~ ^[a-z0-9][a-z0-9.-]*(:[0-9]+)?(/[a-z0-9]+([._-][a-z0-9]+)*)+@sha256:[0-9a-f]{64}$ ]] ||
+  local image="$1"
+  [[ "${image}" =~ ^[a-z0-9][a-z0-9.-]*(:[0-9]+)?(/[a-z0-9]+([._-][a-z0-9]+)*)+@sha256:[0-9a-f]{64}$ ]] ||
     die "DOLLHOUSE_HOSTED_CADDY_IMAGE must be a registry/repository@sha256 digest reference"
 }
 
 validate_caddy_volume_name() {
-  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]] || die "Caddy volume must be an explicit safe name"
+  local name="$1"
+  [[ "${name}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]] || die "Caddy volume must be an explicit safe name"
 }
 
 validate_caddy_selection() {
-  validate_caddy_image_reference "$1"
-  validate_caddy_volume_name "$2"
-  validate_caddy_volume_name "$3"
-  [[ "$2" != "$3" ]] || die "Caddy data and config require distinct explicit named volumes"
+  local image="$1" data_volume="$2" config_volume="$3"
+  validate_caddy_image_reference "${image}"
+  validate_caddy_volume_name "${data_volume}"
+  validate_caddy_volume_name "${config_volume}"
+  [[ "${data_volume}" != "${config_volume}" ]] || die "Caddy data and config require distinct explicit named volumes"
 }
 
 validate_persisted_caddy_fields() {
@@ -467,6 +470,7 @@ validate_persisted_caddy_fields() {
       DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME=*) config_count=$((config_count+1)); value="${line#*=}"; validate_caddy_volume_name "${value}" ;;
       *DOLLHOUSE_HOSTED_CADDY_IMAGE=*|*DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME=*|*DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME=*)
         die "Caddy deployment environment fields must use literal unquoted assignments" ;;
+      *) : ;;
     esac
   done < "${ENV_FILE}"
   (( image_count <= 1 && data_count <= 1 && config_count <= 1 )) || die "Duplicate Caddy deployment fields are forbidden"
