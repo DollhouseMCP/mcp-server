@@ -520,7 +520,8 @@ def select_scanner_target(supplied, args, source_root, approved_target, inspect_
     retained = all(supplied)
     if retained:
         record, _ = validate_intake(args.retained_intake, args.intake_sha256, args.retained_archive,
-                                                args.scanner_head, args.scanner_tree, os.environ.get('GITHUB_SHA'), source_root, approved_target)
+                                                args.scanner_head, args.scanner_tree, os.environ.get('GITHUB_SHA'), source_root, approved_target,
+                                                source_kind='caddy' if args.caddy else 'application')
         target = {"store_id": record['store_id'], "architecture": record['platform'].split('/')[1], "os": "linux"}
         image_id = target['store_id']
         target_descriptor = record['descriptor']
@@ -671,7 +672,8 @@ def prepare_downloaded_inputs(inputs, reports, deadline):
 def confirm_target_archive(root, image_id, target_graph, target_descriptor, target, args, retained, admitted_hash):
     final_graph, archive_hash = verify_trusted_image(root, "target", image_id, TARGET_MAX_BYTES, target_descriptor, include_hash=True,
                                                       platform="linux/" + target["architecture"],
-                                                      expected_source=args.target_source if retained else None)
+                                                      expected_source=args.target_source if retained else None,
+                                                      source_kind='caddy' if args.caddy else 'application')
     if final_graph != target_graph or archive_hash != admitted_hash:
         raise ValueError("Target archive identity or admitted bytes changed before scanner creation")
     return archive_hash
@@ -733,6 +735,7 @@ def main():
     source_root, scanner_config, offline_runner, runner_reference = scanner_source_paths()
     parser = argparse.ArgumentParser()
     parser.add_argument('root')
+    parser.add_argument('--caddy', action='store_true', help='Admit a retained Caddy qualification archive')
     parser.add_argument('--retained-intake')
     parser.add_argument('--intake-sha256')
     parser.add_argument('--scanner-head')
@@ -748,6 +751,8 @@ def main():
     args = parser.parse_args()
     supplied = [args.retained_intake, args.intake_sha256, args.scanner_head, args.scanner_tree, args.retained_archive, args.target_source, args.target_tree, args.target_run_id, args.target_attempt, args.runtime_receipt_sha256]
     frozen = validate_frozen_arguments(args.frozen_db_manifest_sha256, args.frozen_grype_binary_sha256, supplied)
+    if args.caddy and frozen is None:
+        raise FrozenArgumentsError('Caddy qualification requires frozen inputs and retained intake')
     validate_intake_arguments(supplied, args.target_attempt)
     approved_target = {'source': args.target_source, 'tree': args.target_tree, 'run_id': args.target_run_id, 'attempt': args.target_attempt, 'runtime_receipt_sha256': args.runtime_receipt_sha256}
     root = trusted_work_root(args.root, create=True)
@@ -771,7 +776,8 @@ def main():
 
     if retained:
         record, target_graph = validate_intake(args.retained_intake, args.intake_sha256, args.retained_archive,
-                                                args.scanner_head, args.scanner_tree, os.environ.get('GITHUB_SHA'), source_root, approved_target, stage=True)
+                                                args.scanner_head, args.scanner_tree, os.environ.get('GITHUB_SHA'), source_root, approved_target, stage=True,
+                                                source_kind='caddy' if args.caddy else 'application')
         (reports / "target-archive-identity.json").write_text(json.dumps(target_graph, indent=2))
         admitted_hash = record["archive_sha256"]
     else:

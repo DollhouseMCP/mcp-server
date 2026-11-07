@@ -151,7 +151,7 @@ def write_failure_report(work_root, payload):
         tree.check_directories()
 
 
-def verify_trusted_image(work_root, kind, store_id, unpacked_cap, descriptor=None, *, include_hash=False, platform='linux/amd64', expected_source=None, inspection_descriptor=NO_INSPECTION_DESCRIPTOR):
+def verify_trusted_image(work_root, kind, store_id, unpacked_cap, descriptor=None, *, include_hash=False, platform='linux/amd64', expected_source=None, source_kind='application', inspection_descriptor=NO_INSPECTION_DESCRIPTOR):
     """Verify one literal output slot under the independently trusted runner root."""
     runner = os.environ.get('RUNNER_TEMP') or ''
     if Path(work_root) != trusted_work_root(os.path.join(runner, 'image-security')):
@@ -161,7 +161,7 @@ def verify_trusted_image(work_root, kind, store_id, unpacked_cap, descriptor=Non
     with TrustedTree(Path(work_root)) as tree:
         parent = tree.directory(tree.workfd, 'inputs')
         stream, identity = tree.file(parent, names[kind], MAX_ARCHIVE)
-        graph = verify_saved_image_file(stream, store_id, unpacked_cap, descriptor, platform=platform, expected_source=expected_source, inspection_descriptor=inspection_descriptor)
+        graph = verify_saved_image_file(stream, store_id, unpacked_cap, descriptor, platform=platform, expected_source=expected_source, source_kind=source_kind, inspection_descriptor=inspection_descriptor)
         tree.check_file(stream, identity, parent, names[kind])
         if not include_hash: return graph
         stream.seek(0)
@@ -285,7 +285,7 @@ def validate_checkout(scanner_head, scanner_tree, github_sha, checkout):
         raise ValueError('Scanner checkout has modified or untracked files')
 
 
-def verify_intake_archive(tree, slot, doc, doc_identity, arch, record, staged, stage, inspect_descriptor):
+def verify_intake_archive(tree, slot, doc, doc_identity, arch, record, staged, stage, inspect_descriptor, *, source_kind='application'):
     parent = tree.directory(tree.workfd, 'inputs') if staged else slot
     name = STAGED_ARCHIVE if staged else 'production-' + arch + '.docker.tar'
     stream, identity = tree.file(parent, name, MAX_ARCHIVE)
@@ -296,13 +296,13 @@ def verify_intake_archive(tree, slot, doc, doc_identity, arch, record, staged, s
     tree.check_file(stream, identity, parent, name)
     stream.seek(0)
     graph = verify_saved_image_file(stream, record['store_id'], 1024**3, record['descriptor'],
-                                    platform=record['platform'], expected_source=record['source'])
+                                    platform=record['platform'], expected_source=record['source'], source_kind=source_kind)
     tree.check_file(stream, identity, parent, name)
     tree.check_file(doc, doc_identity, slot, INTAKE_DOCUMENT)
     if inspect_descriptor is not _SKIP_INTAKE_INSPECTION:
         stream.seek(0)
         inspected_graph = verify_saved_image_file(stream, record['store_id'], 1024**3, record['descriptor'],
-                                             platform=record['platform'], expected_source=record['source'],
+                                             platform=record['platform'], expected_source=record['source'], source_kind=source_kind,
                                              inspection_descriptor=inspect_descriptor)
         tree.check_file(stream, identity, parent, name)
         if inspected_graph != graph: raise ValueError('Materialized image descriptor differs from admitted graph')
@@ -315,7 +315,8 @@ def verify_intake_archive(tree, slot, doc, doc_identity, arch, record, staged, s
     tree.check_file(doc, doc_identity, slot, INTAKE_DOCUMENT)
     return record, graph
 
-def validate_intake(document, expected_hash, archive, scanner_head, scanner_tree, github_sha, checkout, approved_target, *, staged=False, stage=False, inspect_descriptor=_SKIP_INTAKE_INSPECTION):
+
+def validate_intake(document, expected_hash, archive, scanner_head, scanner_tree, github_sha, checkout, approved_target, *, staged=False, stage=False, source_kind='application', inspect_descriptor=_SKIP_INTAKE_INSPECTION):
     if not HEX.fullmatch(expected_hash) or (staged and stage):
         raise ValueError('Invalid independent intake binding')
     runner = os.environ.get('RUNNER_TEMP') or ''
@@ -332,4 +333,4 @@ def validate_intake(document, expected_hash, archive, scanner_head, scanner_tree
         record = validate_record(json.loads(raw, object_pairs_hook=unique_object), approved_target)
         if record['platform'] != 'linux/' + arch: raise ValueError('Intake platform differs from trusted slot')
         validate_checkout(scanner_head, scanner_tree, github_sha, checkout)
-        return verify_intake_archive(tree, slot, doc, doc_identity, arch, record, staged, stage, inspect_descriptor)
+        return verify_intake_archive(tree, slot, doc, doc_identity, arch, record, staged, stage, inspect_descriptor, source_kind=source_kind)

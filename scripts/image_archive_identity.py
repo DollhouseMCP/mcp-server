@@ -204,14 +204,24 @@ def select_oci_graph(archive, store_id, descriptor, config_bytes, config_digest,
     return root['digest'], selected, role, descriptors
 
 
-def saved_config(archive, expected_source):
+SOURCE_LABELS = {
+    'application': 'org.dollhousemcp.engine-proof-source',
+    'caddy': 'org.opencontainers.image.revision',
+}
+
+
+def saved_config(archive, expected_source, source_kind):
     docker = json.loads(archive.read('manifest.json'))
     if not isinstance(docker, list) or len(docker) != 1:
         raise ValueError('Expected exactly one Docker compatibility manifest')
     docker = docker[0]
     config_bytes = archive.read(docker['Config'])
     config = json.loads(config_bytes)
-    if expected_source is not None and config.get('config', {}).get('Labels', {}).get('org.dollhousemcp.engine-proof-source') != expected_source:
+    labels = config.get('config', {}).get('Labels') or {}
+    if source_kind == 'caddy' and (expected_source is None or
+            labels.get('org.dollhousemcp.caddy.distribution') != 'source-rebuilt-security-candidate'):
+        raise ValueError('Expected a retained Caddy qualification image')
+    if expected_source is not None and labels.get(SOURCE_LABELS[source_kind]) != expected_source:
         raise ValueError('Saved target source label mismatch')
     if (config.get('os'), config.get('architecture')) != archive.platform:
         raise ValueError('Saved target platform mismatch')
@@ -241,14 +251,16 @@ def _validate_external_descriptors(descriptor, inspection_descriptor):
         raise ValueError('Inspection descriptor must be an object or null')
 
 
-def _verify_saved_image(path, store_id, unpacked_cap, descriptor=None, *, platform=DEFAULT_PLATFORM, expected_source=None, fileobj=None, inspection_descriptor=NO_INSPECTION_DESCRIPTOR):
+def _verify_saved_image(path, store_id, unpacked_cap, descriptor=None, *, platform=DEFAULT_PLATFORM, expected_source=None, source_kind='application', fileobj=None, inspection_descriptor=NO_INSPECTION_DESCRIPTOR):
     """The opaque store ID must bind to its exact role, never an arbitrary digest."""
+    if source_kind not in SOURCE_LABELS:
+        raise ValueError('Unknown image source kind')
     _validate_external_descriptors(descriptor, inspection_descriptor)
     if not DIGEST.fullmatch(store_id):
         raise ValueError('Invalid local store identifier')
     archive = SavedImage(path, platform, fileobj)
     try:
-        docker, config_bytes, config = saved_config(archive, expected_source)
+        docker, config_bytes, config = saved_config(archive, expected_source, source_kind)
         config_digest = sha(config_bytes)
         selected = None; root_digest = None
         if INDEX_FILE in archive.members:
@@ -271,18 +283,18 @@ def _verify_saved_image(path, store_id, unpacked_cap, descriptor=None, *, platfo
         archive.close()
 
 
-def verify_saved_image(path, store_id, unpacked_cap, descriptor=None, *, platform=DEFAULT_PLATFORM, expected_source=None):
+def verify_saved_image(path, store_id, unpacked_cap, descriptor=None, *, platform=DEFAULT_PLATFORM, expected_source=None, source_kind='application'):
     """Verify a library caller's trusted path; CLI callers must use the FD API."""
-    return _verify_saved_image(path, store_id, unpacked_cap, descriptor, platform=platform, expected_source=expected_source)
+    return _verify_saved_image(path, store_id, unpacked_cap, descriptor, platform=platform, expected_source=expected_source, source_kind=source_kind)
 
 
-def verify_saved_image_file(stream, store_id, unpacked_cap, descriptor=None, *, platform=DEFAULT_PLATFORM, expected_source=None, inspection_descriptor=NO_INSPECTION_DESCRIPTOR):
+def verify_saved_image_file(stream, store_id, unpacked_cap, descriptor=None, *, platform=DEFAULT_PLATFORM, expected_source=None, source_kind='application', inspection_descriptor=NO_INSPECTION_DESCRIPTOR):
     """Verify an already admitted open file object without reopening its name."""
     try: info = os.fstat(stream.fileno())
     except (AttributeError, OSError, ValueError, TypeError) as error:
         raise ValueError('Saved-image FD must be an open regular file') from error
     if not stat.S_ISREG(info.st_mode): raise ValueError('Saved-image FD must be an open regular file')
-    return _verify_saved_image(None, store_id, unpacked_cap, descriptor, platform=platform, expected_source=expected_source, fileobj=stream, inspection_descriptor=inspection_descriptor)
+    return _verify_saved_image(None, store_id, unpacked_cap, descriptor, platform=platform, expected_source=expected_source, source_kind=source_kind, fileobj=stream, inspection_descriptor=inspection_descriptor)
 
 
 def verify_fixed_runner(evidence, reference_directory):
