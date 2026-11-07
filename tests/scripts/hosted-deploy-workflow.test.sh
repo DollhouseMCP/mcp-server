@@ -8,7 +8,9 @@ HOSTED_DEPLOY="${REPO_ROOT}/scripts/hosted-deploy.sh"
 export DOLLHOUSE_HOSTED_CADDY_IMAGE="${DOLLHOUSE_HOSTED_CADDY_IMAGE:-registry.example.test/team/caddy@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
 export DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME="${DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME:-fixture_data}"
 export DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME="${DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME:-fixture_config}"
-DOLLHOUSE_FAKE_PYTHON="$(command -v python3)"
+# The fake delegates non-mocked Python calls to this explicit real interpreter.
+DOLLHOUSE_FAKE_PYTHON="${DOLLHOUSE_FAKE_PYTHON:-$(command -v python3)}"
+"${DOLLHOUSE_FAKE_PYTHON}" -c 'import sys; sys.exit("Python 3.11 or newer required" if sys.version_info < (3, 11) else 0)'
 export DOLLHOUSE_FAKE_PYTHON
 TMP_ROOT="$(mktemp -d)"
 TMP_ROOT="$(cd "${TMP_ROOT}" && pwd -P)"
@@ -193,7 +195,8 @@ case "${1:-}" in
       *) exit 1 ;;
     esac
     ;;
-  */caddy_fresh_action.py|*/caddy_fresh_recheck.py|*/caddy_prestart_action.py|*/caddy_recover_action.py|*/caddy_verify_noop_action.py) cat >/dev/null; printf '{}\n' ;;
+  */caddy_recover_action.py) cat >/dev/null; printf '{"restored_id":"%064d","preserved_replacement_id":"%064d"}\n' 1 2 ;;
+  */caddy_fresh_action.py|*/caddy_fresh_recheck.py|*/caddy_prestart_action.py|*/caddy_verify_noop_action.py) cat >/dev/null; printf '{}\n' ;;
   */caddy_unchanged_action.py)
     cat >/dev/null
     printf '%s/server.prev-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' "${DOLLHOUSE_HOSTED_DEPLOY_DIR:?}"
