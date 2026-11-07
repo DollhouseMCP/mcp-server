@@ -8,6 +8,7 @@ import { execFile, execFileSync, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { waitForReady, hardenedRuntimeConfig } from './export-tested-caddy-image.mjs';
+import { writeNativeCaddyfile } from './caddy-native-render.mjs';
 
 const [image, fixtureImage, inspectorFile, connection] = process.argv.slice(2);
 assert.match(image ?? '', /^(?:sha256:)?[a-f0-9]{64}$/);
@@ -84,12 +85,7 @@ async function assertRefused(id, expected, allowLaunchFailure = false) {
 
 function render(mode, trusted) {
   const file = path.join(work, 'Caddyfile');
-  execFileSync('/bin/bash', ['-c', 'source "$1"; write_caddyfile', 'render', renderer], {
-    env: { ...process.env, PROXY_MODE: mode, HOSTNAME: 'fixture.local',
-      HTTP_BIND_PORT: '80', MCP_PORT: '8081', CADDY_FILE: file,
-      CADDY_ACCESS_LOG: 'true', CADDY_TRUSTED_PROXIES: trusted },
-    encoding: 'utf8', timeout: 10_000,
-  });
+  writeNativeCaddyfile(work, file, mode, trusted);
   let text = fs.readFileSync(file, 'utf8');
   const adjustments = [];
   if (mode === 'caddy-tls') {

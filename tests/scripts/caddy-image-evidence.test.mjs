@@ -1,9 +1,25 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { bindSource, verifyRuntimeConfig, waitForReady, hardenedRuntimeConfig } from '../../scripts/ci/export-tested-caddy-image.mjs';
+import { writeNativeCaddyfile } from '../../scripts/ci/caddy-native-render.mjs';
+
+test('native renderer uses its private work directory and propagates failures', () => {
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'caddy-render-test-'));
+  try {
+    const file = path.join(work, 'Caddyfile');
+    writeNativeCaddyfile(work, file, 'caddy-http', '');
+    assert.match(fs.readFileSync(file, 'utf8'), /http:\/\/fixture\.local:80/);
+    assert.equal(fs.statSync(file).mode & 0o777, 0o644);
+    assert.throws(() => writeNativeCaddyfile(path.join(work, 'missing'), file, 'caddy-http', ''));
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+});
 
 const tree = 'a'.repeat(40);
 const checkout = 'b'.repeat(40);
