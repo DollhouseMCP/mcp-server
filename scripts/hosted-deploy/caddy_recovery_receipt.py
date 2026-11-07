@@ -131,6 +131,15 @@ def validate_legacy_configuration(profile):
     validate_ports(ports)
 
 
+def validate_legacy_identity(profile):
+    if (not isinstance(profile['container_id'], str) or not SHA256.fullmatch(profile['container_id'])
+            or not isinstance(profile['image_id'], str) or not IMAGE_ID.fullmatch(profile['image_id'])):
+        raise ValueError('invalid proxy identity')
+    diff_ids = profile['diff_ids']
+    if not isinstance(diff_ids, list) or not diff_ids or not all(isinstance(item, str) and IMAGE_ID.fullmatch(item) for item in diff_ids):
+        raise ValueError('invalid proxy layers')
+
+
 def validate_profile(profile):
     if isinstance(profile, dict) and profile.get('kind') == 'hardened':
         from caddy_hardened_receipt import validate_hardened_profile_values
@@ -140,12 +149,7 @@ def validate_profile(profile):
               'public_env', 'network', 'aliases', 'ports', 'platform', 'repo_digests', 'logging'}
     if not isinstance(profile, dict) or set(profile) != fields:
         raise ValueError('invalid proxy profile')
-    if (not isinstance(profile['container_id'], str) or not SHA256.fullmatch(profile['container_id'])
-            or not isinstance(profile['image_id'], str) or not IMAGE_ID.fullmatch(profile['image_id'])):
-        raise ValueError('invalid proxy identity')
-    diff_ids = profile['diff_ids']
-    if not isinstance(diff_ids, list) or not diff_ids or not all(isinstance(item, str) and IMAGE_ID.fullmatch(item) for item in diff_ids):
-        raise ValueError('invalid proxy layers')
+    validate_legacy_identity(profile)
     volumes = [profile['data_volume'], profile['config_volume']]
     if not all(isinstance(item, str) and VOLUME.fullmatch(item) for item in volumes) or volumes[0] == volumes[1]:
         raise ValueError('invalid proxy volumes')
