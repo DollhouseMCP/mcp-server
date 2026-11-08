@@ -71,8 +71,27 @@ jobs:
           fixture_id=$(docker image inspect --format '{{.Id}}' docker.io/library/node:24.22.1-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea)
           docker build --platform "linux/${TARGET_ARCH}" --target qualification-tools \
             --file docker/caddy/Dockerfile --output "type=local,dest=${RUNNER_TEMP}/caddy-tools" docker/caddy
-          node scripts/ci/caddy-image-runtime.mjs "$CADDY_TEST_IMAGE_ID" "$fixture_id" \
-            "${RUNNER_TEMP}/caddy-tools/inspect-runtime"
+          diagnostic_dir="${RUNNER_TEMP}/caddy-runtime-diagnostics-${TARGET_ARCH}"
+          mkdir -m 700 "$diagnostic_dir"
+          if node scripts/ci/caddy-image-runtime.mjs "$CADDY_TEST_IMAGE_ID" "$fixture_id" \
+            "${RUNNER_TEMP}/caddy-tools/inspect-runtime" >"$diagnostic_dir/stdout.log" 2>"$diagnostic_dir/stderr.log"; then
+            status=0
+          else
+            status=$?
+          fi
+          printf '{"head":"%s","checkout":"%s","architecture":"%s","imageId":"%s","exitCode":%s}\n' \
+            "${{ github.event.pull_request.head.sha || github.sha }}" "$GITHUB_SHA" "$TARGET_ARCH" "$CADDY_TEST_IMAGE_ID" "$status" > "$diagnostic_dir/receipt.json"
+          tail -c 8192 "$diagnostic_dir/stdout.log"
+          tail -c 8192 "$diagnostic_dir/stderr.log" >&2
+          exit "$status"
+      - name: Retain native runtime diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2, existing project pin
+        with:
+          name: caddy-runtime-diagnostics-${{ matrix.arch }}
+          path: ${{ runner.temp }}/caddy-runtime-diagnostics-${{ matrix.arch }}/
+          if-no-files-found: ignore
+          retention-days: 1
       - name: Export exact tested final image and source metadata
         shell: bash
         env:

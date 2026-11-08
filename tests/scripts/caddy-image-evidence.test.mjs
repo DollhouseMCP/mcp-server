@@ -9,7 +9,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { bindSource, verifyRuntimeConfig, waitForReady, hardenedRuntimeConfig } from '../../scripts/ci/export-tested-caddy-image.mjs';
 import { writeNativeCaddyfile } from '../../scripts/ci/caddy-native-render.mjs';
-import { observeStream, observeUnsettledExit, observeRequestClose, parseClientOutput } from '../../scripts/ci/caddy-stream-guard.mjs';
+import { clientExecFailure, collectOwnedDiagnostics, observeStream, observeUnsettledExit, observeRequestClose, parseClientOutput } from '../../scripts/ci/caddy-stream-guard.mjs';
 import { clientSource } from '../../scripts/ci/caddy-stream-client.mjs';
 
 test('actual client refuses a truncated local HTTP stream', { timeout: 5000 }, async () => {
@@ -44,6 +44,13 @@ test('actual client refuses a truncated local HTTP stream', { timeout: 5000 }, a
     assert.equal(lines.length, 1);
     const failure = JSON.parse(lines[0]);
     assert.equal(failure.success, false);
+    assert.equal(failure.status, 200);
+    assert.equal(failure.protocol, 'http/1.1');
+    assert.equal(failure.headers['content-type'], 'text/event-stream');
+    assert.equal(failure.receivedBytes, Buffer.byteLength('event: start\ndata: partial\n\n'));
+    assert.equal(failure.eventCount, 1);
+    assert.ok(failure.elapsedMs >= 0);
+    assert.ok(!stderr.includes('partial'));
     assert.ok(['response-aborted', 'response-error', 'response-closed-before-end'].includes(failure.reason));
   } finally {
     if (child && child.exitCode === null && child.signalCode === null) child.kill();
@@ -193,4 +200,41 @@ test('build identity refuses missing, duplicate, altered or unbound modules and 
     good + '\t=>\tgithub.com/go-jose/go-jose/v3\tv3.0.5\n']) {
     assert.equal(check(value), 1);
   }
+});
+
+
+test('diagnostics inspect only exact owned containers and bound failures', () => {
+  const first = 'a'.repeat(64);
+  const second = 'b'.repeat(64);
+  const calls = [];
+  const run = args => {
+    calls.push(args);
+    if (args[0] === 'inspect') return { status:0, stdout:JSON.stringify({ Running:true, Status:'running', Error:'', Secret:'not retained' }) };
+    return { status:0, stdout:'x'.repeat(70000), stderr:'' };
+  };
+  for (const ids of [[first, first], [first, second, first], ['bad'], [second]]) {
+    assert.deepEqual(collectOwnedDiagnostics(ids, [first], run), { error:'invalid-owned-diagnostic-targets' });
+  }
+  assert.equal(calls.length, 0);
+  const result = collectOwnedDiagnostics([first], [first], run);
+  assert.deepEqual(calls, [['inspect', '--format', '{{json .State}}', first], ['logs', '--tail', '80', first]]);
+  assert.deepEqual(result[0].state, { Running:true, Status:'running', Error:'' });
+  assert.equal(result[0].logs.stdout.length, 65536);
+  const failures = collectOwnedDiagnostics([first], [first], args => {
+    if (args[0] === 'inspect') return { status:0, stdout:'not JSON' };
+    throw new Error('timed out');
+  });
+  assert.deepEqual(failures, [{ id:first, stateError:'unavailable', logs:{ error:'unavailable' } }]);
+});
+
+
+test('client failure context preserves all bounded framing headers', () => {
+  const names = ['content-type', 'content-length', 'transfer-encoding', 'content-encoding', 'connection'];
+  const headers = Object.fromEntries(names.map(name => [name, 'a'.repeat(128)]));
+  const stderr = JSON.stringify({ success:false, reason:'response-aborted', status:200, protocol:'http/1.1', headers, receivedBytes:7, eventCount:1 });
+  const detail = JSON.parse(clientExecFailure({method:'POST'}, {stdout:'', stderr}, 10));
+  const context = JSON.parse(detail.stderrTail);
+  assert.equal(context.status, 200);
+  assert.deepEqual(context.headers, headers);
+  assert.ok(!detail.stderrTail.includes('payload-marker'));
 });
