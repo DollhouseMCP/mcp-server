@@ -298,7 +298,7 @@ assert_contains "${DRY_RUN_OUTPUT}" "would retain a verified unchanged hardened 
 assert_contains "${DRY_RUN_OUTPUT}" "retaining an unchanged qualified caddy proxy when applicable"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would apply post-migration database grants"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would write ${DRY_RUN_DEPLOY_DIR}/apply-post-migration-grants.sh to pass grant passwords through container environment"
-assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would write ${DRY_RUN_DEPLOY_DIR}/bootstrap-admin.sh to use the admin database URL inside the maintenance container"
+assert_contains "${DRY_RUN_OUTPUT}" "dry-run: hosted bootstrap requires the administrator database URL inside the maintenance container"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would verify https://mcp.example.com/healthz"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would warn, not fail, if /readyz reports bootstrap_required"
 PATH="${FAKE_BIN}:${PATH}" \
@@ -385,7 +385,7 @@ if grep -Fq "${COMPOSE_CMD} pull caddy" "${DOCKER_LOG}"; then fail "unchanged pr
 log "running bootstrap-admin workflow"
 DOCKER_LOG="${TMP_ROOT}/docker-bootstrap.log"
 run_hosted_with_bootstrap bootstrap-admin octocat
-assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} run --rm dollhousemcp-migrate /usr/local/bin/dollhouse-bootstrap-admin --method github --github-username octocat"
+assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} run --rm dollhousemcp-migrate node dist/cli/admin-bootstrap.js --require-admin-url --method github --github-username octocat"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} exec -T postgres /usr/local/bin/apply-post-migration-grants"
 
 log "running rollback workflow"

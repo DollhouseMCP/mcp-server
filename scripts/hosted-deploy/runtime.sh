@@ -338,7 +338,7 @@ run_bootstrap_admin() {
   log "bootstrapping GitHub admin"
   compose run --rm \
     dollhousemcp-migrate \
-    /usr/local/bin/dollhouse-bootstrap-admin "${args[@]}"
+    node dist/cli/admin-bootstrap.js --require-admin-url "${args[@]}"
 
   return 0
 }
@@ -588,7 +588,8 @@ rollback_server() {
   fi
   caddy_transition stage >/dev/null || die "rollback source identity could not be recorded"
 
-  build_app_image
+  # Rollback does not run migrations; previous source may predate the slim target.
+  compose build dollhousemcp
   prepare_postgres_before_app_stop
   # Prepare the selected rollback bundle and images while the current app is
   # healthy. A failed move/build/pull must not create an avoidable outage.

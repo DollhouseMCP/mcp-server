@@ -570,7 +570,7 @@ Renders files, rebuilds the current `dollhousemcp` image if needed, waits for Po
 docker compose --env-file .env.production run --rm dollhousemcp-migrate
 ```
 
-The `dollhousemcp-migrate` service is built from the Dockerfile `builder` target so `drizzle-kit` and the Drizzle config are available without adding migration tooling to the runtime production image.
+The `dollhousemcp-migrate` service uses the shell-free `migration` target. It requires `DOLLHOUSE_DATABASE_ADMIN_URL` and runs the compiled Drizzle ORM migrator against the same SQL journal and migration history table. The hosted bootstrap command also requires that administrator URL and runs directly with Node. The separate builder target remains available for development; it is not the hosted maintenance image. URL `sslmode` settings are preserved; conflicting explicit `DOLLHOUSE_DATABASE_SSL` settings and URL-specified certificate or key file paths are refused rather than silently ignored. A receipt-bound rollback builds only the selected application image and does not run migrations; assess schema compatibility before rolling back.
 
 Use this when the database needs to be brought current without staging new source:
 

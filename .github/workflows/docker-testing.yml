@@ -28,7 +28,7 @@ jobs:
     permissions:
       contents: read
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    timeout-minutes: 30
 
     strategy:
       fail-fast: false
@@ -660,6 +660,118 @@ jobs:
           echo "Duration: ${TOOLS_DURATION}s"
           echo "========================================="
 
+
+      - name: Build and qualify the native slim migration image
+        shell: bash
+        env:
+          EVIDENCE_PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          platform_tag=$(echo "$EVIDENCE_PLATFORM" | sed 's/\//-/g')
+          builder_tag="dollhousemcp:builder-${platform_tag}"
+          migration_tag="dollhousemcp:migration-${platform_tag}"
+          docker buildx build --platform "$EVIDENCE_PLATFORM" --target migration --load \
+            --tag "$migration_tag" --label "org.dollhousemcp.engine-proof-source=${GITHUB_SHA}" \
+            --file docker/Dockerfile .
+          builder_id=$(docker image inspect --format '{{.Id}}' "$builder_tag")
+          migration_id=$(docker image inspect --format '{{.Id}}' "$migration_tag")
+          [[ "$builder_id" =~ ^sha256:[a-f0-9]{64}$ && "$migration_id" =~ ^sha256:[a-f0-9]{64}$ ]]
+          printf '%s\n' "$migration_id" > "$RUNNER_TEMP/beta3-tested-migration.id"
+          bash tests/scripts/migration-image-native.sh "$builder_id" "$migration_id" "$GITHUB_SHA" "$RUNNER_TEMP/slim-migration-proof.json"
+          test "$(docker image inspect --format '{{.Id}}' "$migration_tag")" = "$migration_id"
+
+      - name: Retain exact tested migration image
+        shell: bash
+        env:
+          EVIDENCE_PLATFORM: ${{ matrix.platform }}
+          EVIDENCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python3 scripts/ci/export-tested-migration-image.py
+
+      - name: Upload tested migration image evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2; existing repository pin
+        with:
+          name: tested-migration-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/beta3-migration-evidence/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 1
+
+      - name: Qualify prebuilt production and migration from the bound builder dist
+        shell: bash
+        env:
+          EVIDENCE_PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          platform_tag=$(echo "$EVIDENCE_PLATFORM" | sed 's/\//-/g')
+          builder_id=$(docker image inspect --format '{{.Id}}' "dollhousemcp:builder-${platform_tag}")
+          [[ "$builder_id" =~ ^sha256:[a-f0-9]{64}$ ]]
+          context_root=$(mktemp -d "$RUNNER_TEMP/prebuilt-context.XXXXXXXX")
+          builder_container=''
+          cleanup() {
+            local result=$?
+            trap - EXIT
+            if [[ -n "$builder_container" ]]; then timeout 15s docker rm --force --volumes "$builder_container" >/dev/null || result=1; fi
+            if [[ "$context_root" == "$RUNNER_TEMP/prebuilt-context."* ]]; then rm -rf -- "$context_root"; else result=1; fi
+            exit "$result"
+          }
+          trap cleanup EXIT
+          mkdir "$context_root/context"
+          git archive "$GITHUB_SHA" > "$context_root/source.tar"
+          source_archive_sha=$(sha256sum "$context_root/source.tar" | cut -d ' ' -f 1)
+          tar -xf "$context_root/source.tar" -C "$context_root/context"
+          builder_container=$(docker create "$builder_id" node --version)
+          [[ "$builder_container" =~ ^[a-f0-9]{64}$ ]]
+          docker cp "$builder_container:/app/dist" "$context_root/context/dist"
+          timeout 15s docker rm --force --volumes "$builder_container" >/dev/null
+          builder_container=''
+          test -z "$(find "$context_root/context/dist" ! -type d ! -type f -print -quit)"
+          (cd "$context_root/context" && find dist -type f -print0 | sort -z | xargs -0 sha256sum) > "$RUNNER_TEMP/prebuilt-dist-sha256.txt"
+          test -s "$RUNNER_TEMP/prebuilt-dist-sha256.txt"
+          dist_manifest_sha=$(sha256sum "$RUNNER_TEMP/prebuilt-dist-sha256.txt" | cut -d ' ' -f 1)
+          prebuilt_tag="dollhousemcp:prebuilt-production-${platform_tag}"
+          default_tag="dollhousemcp:prebuilt-default-${platform_tag}"
+          migration_tag="dollhousemcp:prebuilt-migration-${platform_tag}"
+          docker buildx build --platform "$EVIDENCE_PLATFORM" --target production --load --tag "$prebuilt_tag" \
+            --label "org.dollhousemcp.engine-proof-source=${GITHUB_SHA}" \
+            --file "$context_root/context/docker/Dockerfile.prebuilt" "$context_root/context"
+          docker buildx build --platform "$EVIDENCE_PLATFORM" --load --tag "$default_tag" \
+            --label "org.dollhousemcp.engine-proof-source=${GITHUB_SHA}" \
+            --file "$context_root/context/docker/Dockerfile.prebuilt" "$context_root/context"
+          production_id=$(docker image inspect --format '{{.Id}}' "$prebuilt_tag")
+          [[ "$production_id" =~ ^sha256:[a-f0-9]{64}$ ]]
+          test "$(docker image inspect --format '{{.Id}}' "$default_tag")" = "$production_id"
+          docker run --rm --platform "$EVIDENCE_PLATFORM" --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --mount "type=bind,src=${GITHUB_WORKSPACE}/tests/scripts/docker/runtime-contract.cjs,dst=/runtime-contract.cjs,readonly" \
+            "$production_id" node /runtime-contract.cjs
+          python3 tests/scripts/memory-upgrade-docker-engine.py "$production_id" "$GITHUB_SHA" > "$RUNNER_TEMP/prebuilt-drain-proof.json"
+          docker buildx build --platform "$EVIDENCE_PLATFORM" --target migration --load --tag "$migration_tag" \
+            --label "org.dollhousemcp.engine-proof-source=${GITHUB_SHA}" \
+            --file "$context_root/context/docker/Dockerfile.prebuilt" "$context_root/context"
+          migration_id=$(docker image inspect --format '{{.Id}}' "$migration_tag")
+          [[ "$migration_id" =~ ^sha256:[a-f0-9]{64}$ ]]
+          printf '%s\n' "$migration_id" > "$RUNNER_TEMP/beta3-tested-prebuilt-migration.id"
+          bash tests/scripts/migration-image-native.sh "$builder_id" "$migration_id" "$GITHUB_SHA" "$RUNNER_TEMP/slim-prebuilt-migration-proof.json"
+          test "$(docker image inspect --format '{{.Id}}' "$migration_tag")" = "$migration_id"
+          printf '{"source":"%s","tree":"%s","builder":"%s","sourceArchiveSha256":"%s","distManifestSha256":"%s","production":"%s","migration":"%s"}\n' \
+            "$GITHUB_SHA" "$(git rev-parse HEAD^{tree})" "$builder_id" "$source_archive_sha" "$dist_manifest_sha" "$production_id" "$migration_id" > "$RUNNER_TEMP/prebuilt-source-proof.json"
+
+      - name: Retain exact tested prebuilt migration image
+        shell: bash
+        env:
+          EVIDENCE_PLATFORM: ${{ matrix.platform }}
+          EVIDENCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          MIGRATION_EVIDENCE_ROLE: prebuilt-migration
+        run: python3 scripts/ci/export-tested-migration-image.py
+
+      - name: Upload tested prebuilt migration image evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2; existing repository pin
+        with:
+          name: tested-prebuilt-migration-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/beta3-prebuilt-migration-evidence/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 1
 
       - name: Preserve the exact tested production image for static qualification
         shell: bash

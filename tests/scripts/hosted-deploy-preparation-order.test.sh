@@ -103,7 +103,7 @@ if [[ "${1:-}" == --case ]]; then
     [[ "${MODE}" != replacement-failure ]]
   }
   maintenance_command() {
-    if [[ "$*" == *dollhouse-bootstrap-admin* ]]; then
+    if [[ "$*" == *dist/cli/admin-bootstrap.js* ]]; then
       printf 'bootstrap\n' >> "${EVENTS}"
       [[ "${MODE}" != bootstrap-failure ]]
     else
