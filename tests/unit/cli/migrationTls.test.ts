@@ -3,12 +3,12 @@ import { migrationTlsOptions } from '../../../src/cli/migrationTls.js';
 describe('migration TLS settings', () => {
   const base = 'postgres://fixture:private-marker@database.test/fixture';
   it.each(['require', 'verify-full', 'verify-ca'])('keeps explicit URL sslmode %s', (mode) => {
-    expect(migrationTlsOptions(`${base}?sslmode=${mode}`)).toEqual({});
+    expect(migrationTlsOptions(`${base}?sslmode=${mode}`)).toEqual({ url: `${base}?sslmode=${mode}` });
   });
   it('uses the configured mode only when the URL has no TLS selection', () => {
-    expect(migrationTlsOptions(base, 'disable')).toEqual({ ssl: false });
-    expect(migrationTlsOptions(base, 'require')).toEqual({ ssl: 'require' });
-    expect(migrationTlsOptions(base)).toEqual({});
+    expect(migrationTlsOptions(base, 'disable')).toEqual({ url: base, ssl: false });
+    expect(migrationTlsOptions(base, 'require')).toEqual({ url: base, ssl: 'require' });
+    expect(migrationTlsOptions(base)).toEqual({ url: base });
   });
   it('refuses conflicting, duplicated and unsupported certificate settings without exposing the URL', () => {
     for (const [url, mode] of [
@@ -30,6 +30,6 @@ describe('migration TLS settings', () => {
     }
   });
   it('preserves a system root certificate request', () => {
-    expect(migrationTlsOptions(`${base}?sslrootcert=system`)).toEqual({});
+    expect(migrationTlsOptions(`${base}?sslrootcert=system`)).toEqual({ url: base, ssl: 'verify-full' });
   });
 });

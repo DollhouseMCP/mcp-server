@@ -1,5 +1,5 @@
 /** Preserve explicit URL TLS policy and refuse ambiguous certificate settings. */
-export function migrationTlsOptions(adminUrl: string, explicitMode?: string): { ssl?: false | 'prefer' | 'require' } {
+export function migrationTlsOptions(adminUrl: string, explicitMode?: string): { url: string; ssl?: false | 'prefer' | 'require' | 'verify-full' } {
   let url: URL;
   try {
     url = new URL(adminUrl);
@@ -25,8 +25,11 @@ export function migrationTlsOptions(adminUrl: string, explicitMode?: string): { 
   if (explicitMode !== undefined && ((urlMode && urlMode !== explicitMode) || rootCert === 'system')) {
     throw new Error('Conflicting database TLS settings');
   }
-  // URL settings are consumed by postgres-js; do not override them with a weaker default.
-  if (urlMode || rootCert) return {};
-  if (explicitMode === undefined) return {};
-  return { ssl: explicitMode === 'disable' ? false : explicitMode as 'prefer' | 'require' };
+  // postgres-js otherwise sends sslrootcert to PostgreSQL as a startup parameter.
+  if (rootCert === 'system') {
+    params.delete('sslrootcert');
+    return { url: url.toString(), ssl: 'verify-full' };
+  }
+  if (urlMode || explicitMode === undefined) return { url: adminUrl };
+  return { url: adminUrl, ssl: explicitMode === 'disable' ? false : explicitMode as 'prefer' | 'require' };
 }

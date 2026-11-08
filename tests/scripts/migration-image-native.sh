@@ -36,7 +36,7 @@ postgres_id=$(docker create --network "$network_id" --network-alias fixture-db \
 docker start "$postgres_id" >/dev/null
 ready=false
 for _ in {1..60}; do
-  if timeout 5s docker exec "$postgres_id" pg_isready -U dollhouse -d dollhousemcp >/dev/null; then ready=true; break; fi
+  if timeout 5s docker exec "$postgres_id" pg_isready -h 127.0.0.1 -U dollhouse -d dollhousemcp >/dev/null; then ready=true; break; fi
   sleep 1
 done
 [[ "$ready" == true ]]
@@ -70,7 +70,8 @@ kit_admin="$(admin_url kit_fixture)"
 run_image "$migration_image" fresh "$fresh_admin" "$wrong_app" ''
 run_image "$builder_image" kit "$kit_admin" "$kit_admin" '' npm run db:migrate
 history() {
-  timeout 10s docker exec "$postgres_id" psql -v ON_ERROR_STOP=1 -U dollhouse -d "$1" -Atc \
+  local database="$1"
+  timeout 10s docker exec "$postgres_id" psql -v ON_ERROR_STOP=1 -U dollhouse -d "$database" -Atc \
     'SELECT created_at, hash FROM drizzle.__drizzle_migrations ORDER BY created_at, id'
 }
 history dollhousemcp > "$work/fresh.history"

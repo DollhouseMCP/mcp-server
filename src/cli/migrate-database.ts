@@ -11,9 +11,10 @@ import { migrationTlsOptions } from './migrationTls.js';
 export async function migrateDatabase(source: NodeJS.ProcessEnv = process.env): Promise<void> {
   const adminUrl = requireAdminDatabaseUrl(source);
   const tls = migrationTlsOptions(adminUrl, source.DOLLHOUSE_DATABASE_SSL);
-  const client = postgres(adminUrl, {
+  const { url, ...ssl } = tls;
+  const client = postgres(url, {
     max: 1,
-    ...tls,
+    ...ssl,
     connect_timeout: 10,
     idle_timeout: 20,
     max_lifetime: 60 * 30,
@@ -30,9 +31,11 @@ export async function migrateDatabase(source: NodeJS.ProcessEnv = process.env): 
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  migrateDatabase().catch(() => {
+  try {
+    await migrateDatabase();
+  } catch {
     // Driver errors can contain the connection URL; never print those details.
     process.stderr.write('Database migration failed. Check the administrator connection and migration state.\n');
     process.exitCode = 1;
-  });
+  }
 }

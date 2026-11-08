@@ -14,6 +14,7 @@ on:
 permissions: {}
 
 env:
+  DOCKER_IMAGE_ID_FORMAT: '{{.Id}}'
   NODE_OPTIONS: --max-old-space-size=4096
   CI: true
   TEST_PERSONAS_DIR: ${{ github.workspace }}/test-personas
@@ -673,12 +674,12 @@ jobs:
           docker buildx build --platform "$EVIDENCE_PLATFORM" --target migration --load \
             --tag "$migration_tag" --label "org.dollhousemcp.engine-proof-source=${GITHUB_SHA}" \
             --file docker/Dockerfile .
-          builder_id=$(docker image inspect --format '{{.Id}}' "$builder_tag")
-          migration_id=$(docker image inspect --format '{{.Id}}' "$migration_tag")
+          builder_id=$(docker image inspect --format "$DOCKER_IMAGE_ID_FORMAT" "$builder_tag")
+          migration_id=$(docker image inspect --format "$DOCKER_IMAGE_ID_FORMAT" "$migration_tag")
           [[ "$builder_id" =~ ^sha256:[a-f0-9]{64}$ && "$migration_id" =~ ^sha256:[a-f0-9]{64}$ ]]
           printf '%s\n' "$migration_id" > "$RUNNER_TEMP/beta3-tested-migration.id"
           bash tests/scripts/migration-image-native.sh "$builder_id" "$migration_id" "$GITHUB_SHA" "$RUNNER_TEMP/slim-migration-proof.json"
-          test "$(docker image inspect --format '{{.Id}}' "$migration_tag")" = "$migration_id"
+          test "$(docker image inspect --format "$DOCKER_IMAGE_ID_FORMAT" "$migration_tag")" = "$migration_id"
 
       - name: Retain exact tested migration image
         shell: bash
@@ -703,7 +704,7 @@ jobs:
         run: |
           set -euo pipefail
           platform_tag=$(echo "$EVIDENCE_PLATFORM" | sed 's/\//-/g')
-          builder_id=$(docker image inspect --format '{{.Id}}' "dollhousemcp:builder-${platform_tag}")
+          builder_id=$(docker image inspect --format "$DOCKER_IMAGE_ID_FORMAT" "dollhousemcp:builder-${platform_tag}")
           [[ "$builder_id" =~ ^sha256:[a-f0-9]{64}$ ]]
           context_root=$(mktemp -d "$RUNNER_TEMP/prebuilt-context.XXXXXXXX")
           builder_container=''
@@ -737,9 +738,9 @@ jobs:
           docker buildx build --platform "$EVIDENCE_PLATFORM" --load --tag "$default_tag" \
             --label "org.dollhousemcp.engine-proof-source=${GITHUB_SHA}" \
             --file "$context_root/context/docker/Dockerfile.prebuilt" "$context_root/context"
-          production_id=$(docker image inspect --format '{{.Id}}' "$prebuilt_tag")
+          production_id=$(docker image inspect --format "$DOCKER_IMAGE_ID_FORMAT" "$prebuilt_tag")
           [[ "$production_id" =~ ^sha256:[a-f0-9]{64}$ ]]
-          test "$(docker image inspect --format '{{.Id}}' "$default_tag")" = "$production_id"
+          test "$(docker image inspect --format "$DOCKER_IMAGE_ID_FORMAT" "$default_tag")" = "$production_id"
           docker run --rm --platform "$EVIDENCE_PLATFORM" --network none --read-only --cap-drop ALL \
             --security-opt no-new-privileges \
             --mount "type=bind,src=${GITHUB_WORKSPACE}/tests/scripts/docker/runtime-contract.cjs,dst=/runtime-contract.cjs,readonly" \
@@ -748,11 +749,11 @@ jobs:
           docker buildx build --platform "$EVIDENCE_PLATFORM" --target migration --load --tag "$migration_tag" \
             --label "org.dollhousemcp.engine-proof-source=${GITHUB_SHA}" \
             --file "$context_root/context/docker/Dockerfile.prebuilt" "$context_root/context"
-          migration_id=$(docker image inspect --format '{{.Id}}' "$migration_tag")
+          migration_id=$(docker image inspect --format "$DOCKER_IMAGE_ID_FORMAT" "$migration_tag")
           [[ "$migration_id" =~ ^sha256:[a-f0-9]{64}$ ]]
           printf '%s\n' "$migration_id" > "$RUNNER_TEMP/beta3-tested-prebuilt-migration.id"
           bash tests/scripts/migration-image-native.sh "$builder_id" "$migration_id" "$GITHUB_SHA" "$RUNNER_TEMP/slim-prebuilt-migration-proof.json"
-          test "$(docker image inspect --format '{{.Id}}' "$migration_tag")" = "$migration_id"
+          test "$(docker image inspect --format "$DOCKER_IMAGE_ID_FORMAT" "$migration_tag")" = "$migration_id"
           printf '{"source":"%s","tree":"%s","builder":"%s","sourceArchiveSha256":"%s","distManifestSha256":"%s","production":"%s","migration":"%s"}\n' \
             "$GITHUB_SHA" "$(git rev-parse HEAD^{tree})" "$builder_id" "$source_archive_sha" "$dist_manifest_sha" "$production_id" "$migration_id" > "$RUNNER_TEMP/prebuilt-source-proof.json"
 
