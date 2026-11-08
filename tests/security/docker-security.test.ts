@@ -5,25 +5,10 @@
  */
 
 import { describe, it, expect, beforeAll } from '@jest/globals';
-import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 
-const DOCKER_AVAILABLE = (() => {
-  if (process.env.DOCKER_AVAILABLE === 'false') {
-    return false;
-  }
-  try {
-    execSync('docker --version', { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-})();
-
-const suite = DOCKER_AVAILABLE ? describe : describe.skip;
-
-suite('Docker Security Hardening', () => {
+describe('Docker Security Hardening', () => {
   const dockerfilePath = path.join(process.cwd(), 'docker/Dockerfile');
   const dockerComposePath = path.join(process.cwd(), 'docker/docker-compose.yml');
   
@@ -35,16 +20,15 @@ suite('Docker Security Hardening', () => {
     });
     
     it('should use a non-root user', () => {
-      expect(dockerfileContent).toContain('USER dollhouse');
-      expect(dockerfileContent).toMatch(/useradd.*-u\s+1001.*dollhouse/);
-      expect(dockerfileContent).toMatch(/groupadd.*-g\s+1001.*nodejs/);
+      expect(dockerfileContent).toContain('USER 1001:1001');
+      expect(dockerfileContent).toContain('COPY --from=runtime-assets --chown=1001:1001 /app /app');
     });
     
     it('should remove unnecessary packages', () => {
-      expect(dockerfileContent).toContain('apt-get remove');
-      expect(dockerfileContent).toContain('curl');
-      expect(dockerfileContent).toContain('wget');
-      expect(dockerfileContent).toContain('git');
+      const production = dockerfileContent.split(' AS production')[1];
+      expect(production).toBeDefined();
+      expect(production).not.toMatch(/^RUN /m);
+      expect(production).not.toContain('/usr/local/lib/node_modules/npm');
     });
     
     it('should use --no-install-recommends flag', () => {
@@ -54,11 +38,10 @@ suite('Docker Security Hardening', () => {
     it('should clean up package lists and caches', () => {
       expect(dockerfileContent).toContain('rm -rf /var/lib/apt/lists/*');
       expect(dockerfileContent).toContain('apt-get clean');
-      expect(dockerfileContent).toContain('apt-get autoremove');
     });
     
     it('should set restricted shell for non-root user', () => {
-      expect(dockerfileContent).toContain('-s /bin/false');
+      expect(dockerfileContent).toContain('dollhouse:x:1001:1001:Dollhouse:/home/dollhouse:/sbin/nologin');
     });
     
     it('should set proper directory permissions', () => {
@@ -67,7 +50,7 @@ suite('Docker Security Hardening', () => {
     
     it('should create writable directories with restricted permissions', () => {
       expect(dockerfileContent).toContain('mkdir -p /app/tmp /app/logs');
-      expect(dockerfileContent).toContain('chmod -R 700 /app/tmp /app/logs');
+      expect(dockerfileContent).toContain('chmod 700 /app/tmp /app/logs /app/.memory-upgrade-control /home/dollhouse');
     });
     
     it('should include security labels', () => {
@@ -136,47 +119,9 @@ suite('Docker Security Hardening', () => {
     });
   });
   
-  describe('Docker Build Validation', () => {
-    // Skip these tests in CI as they require Docker
-    const skipInCI = process.env.CI ? it.skip : it;
-    
-    skipInCI('should build the Docker image successfully', () => {
-      try {
-        execSync('docker build -t claude-mcp-test-env:test -f docker/Dockerfile .', {
-          stdio: 'pipe',
-          encoding: 'utf-8'
-        });
-      } catch (error: any) {
-        throw new Error(`Docker build failed: ${error.message}`);
-      }
-    });
-    
-    skipInCI('should not include development tools in production image', () => {
-      try {
-        const output = execSync(
-          'docker run --rm claude-mcp-test-env:test which curl || echo "not found"',
-          { encoding: 'utf-8' }
-        );
-        expect(output.trim()).toBe('not found');
-      } catch (error: any) {
-        // Command failing is expected
-        expect(error.status).toBe(1);
-      }
-    });
-    
-    skipInCI('should run as non-root user', () => {
-      try {
-        const output = execSync(
-          'docker run --rm claude-mcp-test-env:test id -u',
-          { encoding: 'utf-8' }
-        );
-        expect(output.trim()).toBe('1001');
-      } catch (error: any) {
-        throw new Error(`Failed to check user ID: ${error.message}`);
-      }
-    });
-  });
-  
+  // Native build success, UID and missing-tool checks run against the exact
+  // built image on both CI architectures in runtime-contract.cjs.
+
   describe('Security Best Practices', () => {
     let composeContent: string;
 

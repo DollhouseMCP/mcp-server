@@ -109,7 +109,7 @@ jobs:
         run: |
           test "$(node --version)" = "v24.22.1"
           test "$(npm --version)" = "11.19.1"
-          node --test tests/scripts/prepare-global-npm.test.mjs tests/scripts/stage-global-npm-vendor-patches.test.mjs
+          node --test tests/scripts/prepare-global-npm.test.mjs tests/scripts/stage-global-npm-vendor-patches.test.mjs tests/scripts/runtime-dockerfile-contract.test.mjs
 
       - name: 🔧 Set up QEMU (AMD64 only - ARM64 uses native runner)
         uses: docker/setup-qemu-action@v3
@@ -305,19 +305,18 @@ jobs:
           docker image inspect --format '{{.Id}}' "dollhousemcp:latest-${PLATFORM_TAG}" > "$RUNNER_TEMP/beta3-tested-production.id"
 
       - name: Verify private drain hold against native Docker restart manager
-        if: matrix.platform == 'linux/amd64'
         shell: bash
         run: |
           set -euo pipefail
-          image_id=$(docker image inspect --format '{{.Id}}' dollhousemcp:latest-linux-amd64)
-          python3 tests/scripts/memory-upgrade-docker-engine.py "$image_id" "$GITHUB_SHA" | tee /tmp/memory-upgrade-engine-proof.json
+          image_id=$(cat "$RUNNER_TEMP/beta3-tested-production.id")
+          python3 tests/scripts/memory-upgrade-docker-engine.py "$image_id" "$GITHUB_SHA" | tee "$RUNNER_TEMP/memory-upgrade-engine-proof.json"
 
       - name: Preserve owned Docker drain proof
-        if: always() && matrix.platform == 'linux/amd64'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: memory-upgrade-engine-${{ github.run_id }}-${{ github.run_attempt }}
-          path: /tmp/memory-upgrade-engine-proof.json
+          name: memory-upgrade-engine-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/memory-upgrade-engine-proof.json
           if-no-files-found: ignore
 
       - name: Scan Docker image for vulnerabilities
@@ -352,11 +351,19 @@ jobs:
 
           echo "\n🧪 Container Preparation Test:"
           echo "Testing basic container creation for platform ${{ matrix.platform }}..."
-          docker run --rm --platform ${{ matrix.platform }} dollhousemcp:latest-${PLATFORM_TAG} echo "Container creation test passed" || {
+          docker run --rm --platform ${{ matrix.platform }} dollhousemcp:latest-${PLATFORM_TAG} node -e "console.log('Container creation test passed')" || {
             echo "❌ CRITICAL: Cannot create basic container for platform ${{ matrix.platform }}!"
             echo "This indicates a fundamental platform compatibility issue."
             exit 1
           }
+
+          # Exercise the actual shell-free runtime and native addon under the
+          # same unprivileged/read-only constraints as the MCP fixture.
+          docker run --rm --platform ${{ matrix.platform }} --network none \
+            --read-only --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --mount "type=bind,src=${GITHUB_WORKSPACE}/tests/scripts/docker/runtime-contract.cjs,dst=/runtime-contract.cjs,readonly" \
+            dollhousemcp:latest-${PLATFORM_TAG} node /runtime-contract.cjs
 
           echo "\n📝 Constructing MCP Test Command:"
           MCP_JSON_REQUEST='{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"1.0.0","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}'
@@ -705,7 +712,8 @@ jobs:
           require(checkout == os.environ['GITHUB_SHA'], 'Checkout differs from the tested workflow source')
           require(output('git', 'status', '--porcelain', '--untracked-files=no') == '', 'Tracked source changed during tests')
           config = image['Config']
-          require(config['User'] == 'dollhouse' and config['Cmd'] == ['node', '--trace-warnings', 'dist/index.js'],
+          require(config['User'] == '1001:1001' and config['Cmd'] == ['node', '--trace-warnings', 'dist/index.js']
+                  and config.get('Entrypoint') in (None, []),
                   'Refuse builder or unexpected runtime command')
           require(config.get('Labels', {}).get('org.dollhousemcp.engine-proof-source') == checkout,
                   'Image source label differs from tested checkout')
@@ -713,11 +721,12 @@ jobs:
           # may enter the image config. No workflow credential or runtime environment is passed.
           environment = dict(item.split('=', 1) for item in config['Env'])
           expected_environment = {
-              'NODE_VERSION': '24.22.1', 'YARN_VERSION': '1.22.22', 'NODE_ENV': 'production',
+              'SSL_CERT_FILE': '/etc/ssl/certs/ca-certificates.crt', 'HOME': '/home/dollhouse',
+              'NODE_ENV': 'production',
               'PERSONAS_DIR': '/app/data/personas', 'NODE_OPTIONS': '--max-old-space-size=256',
               'DOLLHOUSE_DISABLE_UPDATES': 'true', 'DOLLHOUSE_SECURITY_MODE': 'strict',
               'DOLLHOUSE_PORTFOLIO_DIR': '/app/tmp/portfolio', 'DOLLHOUSE_CACHE_DIR': '/app/tmp/cache',
-              'PATH': '/app/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+              'PATH': '/app/node_modules/.bin:/nodejs/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
           }
           require(len(config['Env']) == len(expected_environment) and environment == expected_environment,
                   'Unexpected production image environment; do not upload')
@@ -740,7 +749,7 @@ jobs:
               'rootFsDiffIds': image['RootFS']['Layers'], 'archive': archive.name,
               'archiveSha256': sha, 'archiveBytes': archive.stat().st_size,
               'collectedAfterRequiredRuntimeTests': True,
-              'nativeDockerRestartWitness': 'passed' if expected == 'linux/amd64' else 'not-selected',
+              'nativeDockerRestartWitness': 'passed',
               'imageEnvironmentCheckedAgainstPublicConstants': True,
               'runtimeWritableLayerIncluded': False, 'builderImageIncluded': False,
           }
