@@ -24,10 +24,12 @@ describe('Docker Security Hardening', () => {
       expect(dockerfileContent).toContain('COPY --from=runtime-assets --chown=1001:1001 /app /app');
     });
     
-    it('should remove unnecessary packages', () => {
+    it('keeps the final runtime free of shell and global npm setup', () => {
       const production = dockerfileContent.split(' AS production')[1];
       expect(production).toBeDefined();
-      expect(production).not.toMatch(/^RUN /m);
+      const commands = production.match(/^RUN .+$/gm) ?? [];
+      expect(commands).toHaveLength(1);
+      expect(commands[0]).toContain('RUN ["/nodejs/bin/node", "-e",');
       expect(production).not.toContain('/usr/local/lib/node_modules/npm');
     });
     
@@ -40,7 +42,7 @@ describe('Docker Security Hardening', () => {
       expect(dockerfileContent).toContain('apt-get clean');
     });
     
-    it('should set restricted shell for non-root user', () => {
+    it('should record a non-login account for the runtime user', () => {
       expect(dockerfileContent).toContain('dollhouse:x:1001:1001:Dollhouse:/home/dollhouse:/sbin/nologin');
     });
     

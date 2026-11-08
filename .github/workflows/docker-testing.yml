@@ -109,7 +109,7 @@ jobs:
         run: |
           test "$(node --version)" = "v24.22.1"
           test "$(npm --version)" = "11.19.1"
-          node --test tests/scripts/prepare-global-npm.test.mjs tests/scripts/stage-global-npm-vendor-patches.test.mjs tests/scripts/runtime-dockerfile-contract.test.mjs
+          node --test tests/scripts/prepare-global-npm.test.mjs tests/scripts/stage-global-npm-vendor-patches.test.mjs tests/scripts/runtime-dockerfile-contract.test.mjs tests/scripts/runtime-inventory.test.cjs
 
       - name: 🔧 Set up QEMU (AMD64 only - ARM64 uses native runner)
         uses: docker/setup-qemu-action@v3
@@ -711,6 +711,16 @@ jobs:
                   'Recorded source head is not the tested checkout or its direct PR parent')
           require(checkout == os.environ['GITHUB_SHA'], 'Checkout differs from the tested workflow source')
           require(output('git', 'status', '--porcelain', '--untracked-files=no') == '', 'Tracked source changed during tests')
+          proof_path = pathlib.Path(os.environ['RUNNER_TEMP'], 'memory-upgrade-engine-proof.json')
+          with proof_path.open('rb') as proof_file:
+              proof_bytes = proof_file.read(1024 * 1024 + 1)
+          require(len(proof_bytes) <= 1024 * 1024, 'Restart witness exceeds evidence limit')
+          proof = json.loads(proof_bytes)
+          require(isinstance(proof, dict) and proof.get('success') is True and proof.get('phase') == 'complete'
+                  and proof.get('source') == checkout and proof.get('image') == image_id
+                  and proof.get('networkRemoved') is True and proof.get('unsettledHelperResourcesRetained') is False,
+                  'Restart witness is incomplete or bound to a different image/source')
+          proof_sha256 = hashlib.sha256(proof_bytes).hexdigest()
           config = image['Config']
           require(config['User'] == '1001:1001' and config['Cmd'] == ['node', '--trace-warnings', 'dist/index.js']
                   and config.get('Entrypoint') in (None, []),
@@ -749,7 +759,7 @@ jobs:
               'rootFsDiffIds': image['RootFS']['Layers'], 'archive': archive.name,
               'archiveSha256': sha, 'archiveBytes': archive.stat().st_size,
               'collectedAfterRequiredRuntimeTests': True,
-              'nativeDockerRestartWitness': 'passed',
+              'nativeDockerRestartWitness': 'passed', 'nativeDockerRestartWitnessSha256': proof_sha256,
               'imageEnvironmentCheckedAgainstPublicConstants': True,
               'runtimeWritableLayerIncluded': False, 'builderImageIncluded': False,
           }

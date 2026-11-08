@@ -1,0 +1,202 @@
+{
+  "purpose": "PRELIMINARY_SELECTED_BASE_ONLY_NOT_FINAL_IMAGE",
+  "reference": "gcr.io/distroless/nodejs24-debian13@sha256:b8cec4b2f2126ff7bd034ec9ac207ffb3272667dfdc48376e3b035d3270549ba",
+  "platform": "linux/amd64",
+  "index": "sha256:b8cec4b2f2126ff7bd034ec9ac207ffb3272667dfdc48376e3b035d3270549ba",
+  "manifest": "sha256:1dfdd0613f3163fe913861ded2540584525b281d65541749726c7d3906382c06",
+  "config": "sha256:07449a630778994edbb259abe9779e4fb2cddd680bd071c6bf55287dc22cc9e7",
+  "archive": "/private/tmp/beta3-caddy-live.lfcjGu/distroless-base-prelim-20261108/distroless-node24-debian13-amd64-base.saved.tar",
+  "archive_sha256": "6d5e69803f4ba9bddeda3ddbb4c0f05af7c1c04125acdce1420c18ceb6d54c66",
+  "downloaded_bytes": 55464824,
+  "diff_ids": [
+    "sha256:9486261b5a13f63ca6904b36721527ac8f19df53d300560138d69ae9b4c203de",
+    "sha256:621c35e751a51a9a9dc3e80aa0b7fe8be2a93402ea6ccd307d30852cd7776cda",
+    "sha256:b64fe4bb89ff075efc03878811052cbaf4f9dd891aed968e9ed6993fedf1f4a7",
+    "sha256:b5764396d8d3f88c6c91b8e97022f147ec721afcf85710d96775922e0df881af",
+    "sha256:275a30dd8ce958b21daa9ad962c6fbc09f98306ee2f486b65c9075dc257b1412",
+    "sha256:4d049f83d9cf21d1f5cc0e11deaf36df02790d0e60c1a3829538fb4b61685368",
+    "sha256:af5aa97ebe6ce1604747ec1e21af7136ded391bcabe4acef882e718a87c86bcc",
+    "sha256:6f1cdceb6a3146f0ccb986521156bef8a422cdbb0863396f7f751f575ba308f4",
+    "sha256:bd3cdfae1d3fdd83a2231d608969b38b82349777c2fff9a7c12d54f8ac5c9b38",
+    "sha256:4cde6b0bb6f50a5f255eef7b2a42162c661cf776b803225dcac9a659e396bb6b",
+    "sha256:ad51d0769d16ba578106a177987dfe3d2e02c1668c852b795b2f6b024068242a",
+    "sha256:187cfc6d1e3e8a40a5e64653bcd3239c140807dcf1c09e48021178705a5a6139",
+    "sha256:0762a1f6557d1e88a761ab05aa7f65a10dc0e559913ea13befb873d907e1a396",
+    "sha256:8a3b315d45080ecb38e39d42d28e951303c67c2ce7482bcdbbc3b5424be19013",
+    "sha256:2cef49adb7d7902c61ecdd385036e3c7fb7c9f0ada96a41901797c77b7daedd7",
+    "sha256:c0e409312adc366898967307565f692bb33d43a439d3de48e27d14b742389725",
+    "sha256:e4ba966d7f0527dfe0fcb559e4e18d4da42c4e6beae924719255e0dedb554ed0",
+    "sha256:1f5d28bd51650f429293f7730ede274b81dc0744aa918bc887133c4ad610258c",
+    "sha256:6e18ad80f3d64a8cbbcd1ff2e8a0d5ce7282cf664e816b86183a59d30a618e8a",
+    "sha256:c16b2ec4b1493bad1b1de23d659c899e60abb166bda756d02792f0a03ba54a43",
+    "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614",
+    "sha256:aab4d03f9ffb120416f5d6ba25295195d938100085fe5ed50e798fb837cd0a56"
+  ],
+  "scanner_sha256": "1de9d74fff477a652408406b45786ed5694e3030c89dc75805ffe9424c802d36",
+  "db_unchanged": true,
+  "scan_attempts": 1,
+  "exit": 2,
+  "counts": {
+    "High": 13,
+    "Negligible": 7,
+    "Medium": 22,
+    "Low": 3
+  },
+  "critical_high": [
+    {
+      "id": "CVE-2026-76844",
+      "severity": "High",
+      "package": "zlib1g",
+      "version": "1:1.3.dfsg+really1.3.1-1+b1",
+      "fix": {
+        "versions": [],
+        "state": "not-fixed"
+      }
+    },
+    {
+      "id": "CVE-2026-85091",
+      "severity": "High",
+      "package": "zlib1g",
+      "version": "1:1.3.dfsg+really1.3.1-1+b1",
+      "fix": {
+        "versions": [],
+        "state": "not-fixed"
+      }
+    },
+    {
+      "id": "CVE-2026-95619",
+      "severity": "High",
+      "package": "gcc-14-base",
+      "version": "14.2.0-19",
+      "fix": {
+        "versions": [],
+        "state": "wont-fix"
+      }
+    },
+    {
+      "id": "CVE-2026-95619",
+      "severity": "High",
+      "package": "libgcc-s1",
+      "version": "14.2.0-19",
+      "fix": {
+        "versions": [],
+        "state": "wont-fix"
+      }
+    },
+    {
+      "id": "CVE-2026-95619",
+      "severity": "High",
+      "package": "libgomp1",
+      "version": "14.2.0-19",
+      "fix": {
+        "versions": [],
+        "state": "wont-fix"
+      }
+    },
+    {
+      "id": "CVE-2026-95619",
+      "severity": "High",
+      "package": "libstdc++6",
+      "version": "14.2.0-19",
+      "fix": {
+        "versions": [],
+        "state": "wont-fix"
+      }
+    },
+    {
+      "id": "CVE-2026-102010",
+      "severity": "High",
+      "package": "gcc-14-base",
+      "version": "14.2.0-19",
+      "fix": {
+        "versions": [],
+        "state": "wont-fix"
+      }
+    },
+    {
+      "id": "CVE-2026-102010",
+      "severity": "High",
+      "package": "libgcc-s1",
+      "version": "14.2.0-19",
+      "fix": {
+        "versions": [],
+        "state": "wont-fix"
+      }
+    },
+    {
+      "id": "CVE-2026-102010",
+      "severity": "High",
+      "package": "libgomp1",
+      "version": "14.2.0-19",
+      "fix": {
+        "versions": [],
+        "state": "wont-fix"
+      }
+    },
+    {
+      "id": "CVE-2026-102010",
+      "severity": "High",
+      "package": "libstdc++6",
+      "version": "14.2.0-19",
+      "fix": {
+        "versions": [],
+        "state": "wont-fix"
+      }
+    },
+    {
+      "id": "CVE-2026-19499",
+      "severity": "High",
+      "package": "libc6",
+      "version": "2.41-12+deb13u4",
+      "fix": {
+        "versions": [],
+        "state": "wont-fix"
+      }
+    },
+    {
+      "id": "CVE-2026-84243",
+      "severity": "High",
+      "package": "libc6",
+      "version": "2.41-12+deb13u4",
+      "fix": {
+        "versions": [],
+        "state": "wont-fix"
+      }
+    },
+    {
+      "id": "CVE-2026-5435",
+      "severity": "High",
+      "package": "libc6",
+      "version": "2.41-12+deb13u4",
+      "fix": {
+        "versions": [],
+        "state": "wont-fix"
+      }
+    }
+  ],
+  "db": {
+    "schemaVersion": "v6.1.10",
+    "from": "manual import",
+    "built": "2026-11-06T06:21:59Z",
+    "path": "/private/tmp/beta3-caddy-live.lfcjGu/db/6/vulnerability.db",
+    "valid": true
+  },
+  "elapsed_seconds": 15.53,
+  "method_limits": [
+    "PRELIMINARY_BASE_ONLY: no application layers/nativeABI/runtimequalification.",
+    "No registry authentication, executable image launch, VM/Podman mutation, build or push.",
+    "Frozen existing DB selected; auto-update false, offline sandbox denies allnetwork. db_unchanged means no update performed/configured; no independent before/after3.39GB DBbytehash recorded.",
+    "Layers retained compressed only; existing archiveverifier streameddecompressiontohashDiffIDs, didnotextractfilesystem.",
+    "Exactlyone Grypeinvocation; fail-onHigh exit2 retainedrawunsuppressedmatches; ignores/excludes empty."
+  ],
+  "scanner_config_sha256": "fdb23e30658c2279bf5db0f6cc7a9fe8fa7f9027f79e01e312805eb72855a59c",
+  "sandbox_sha256": "cca75894ab2f41ec3c4203a7cc7eb266a131d571c7c448ab48d548e7e9d2529e",
+  "frozen_db_import_metadata": {
+    "digest": "xxh64:43d7a0ea5d4222da",
+    "source": "manual import",
+    "client_version": "v6.1.10"
+  },
+  "owned_evidence_disk_bytes": 111224990,
+  "download_cap_bytes": 536870912,
+  "archive_unpacked_verify_cap_bytes": 1073741824
+}

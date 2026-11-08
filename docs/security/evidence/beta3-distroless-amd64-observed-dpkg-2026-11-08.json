@@ -1,0 +1,133 @@
+{
+  "archive": "/private/tmp/beta3-caddy-live.lfcjGu/distroless-base-prelim-20261108/distroless-node24-debian13-amd64-base.saved.tar",
+  "config_sha256": "07449a630778994edbb259abe9779e4fb2cddd680bd071c6bf55287dc22cc9e7",
+  "basis": "Actual status.d file bytes in retained exact AMD64 base archive, not SPDX. Does not prove final application image or runtime function use.",
+  "records": [
+    {
+      "path": "var/lib/dpkg/status.d/base-files",
+      "layer": 0,
+      "record_sha256": "e13087b841618232056233ebbb6602001a88d80e7cb4fc457e05aea4391d648a",
+      "package": "base-files",
+      "version": "13.8+deb13u7",
+      "architecture": "amd64",
+      "source": null
+    },
+    {
+      "path": "var/lib/dpkg/status.d/netbase",
+      "layer": 1,
+      "record_sha256": "1b44f4feb536c195a150c6b83001dfa016cb40f35ed1a5972248eddd8677a254",
+      "package": "netbase",
+      "version": "6.5",
+      "architecture": "all",
+      "source": null
+    },
+    {
+      "path": "var/lib/dpkg/status.d/tzdata",
+      "layer": 2,
+      "record_sha256": "1d27b1d691bc7663341d7024bef3d2657592390d2869d86d1508a43c8bd4555d",
+      "package": "tzdata",
+      "version": "2026f-0+deb13u1",
+      "architecture": "all",
+      "source": null
+    },
+    {
+      "path": "var/lib/dpkg/status.d/tzdata-legacy",
+      "layer": 3,
+      "record_sha256": "ef3dcd5e5a6542aa6121d6a2dfd0a30a27ffe59a44ac4f9b7fe45633e0cf34fa",
+      "package": "tzdata-legacy",
+      "version": "2026f-0+deb13u1",
+      "architecture": "all",
+      "source": "tzdata"
+    },
+    {
+      "path": "var/lib/dpkg/status.d/media-types",
+      "layer": 4,
+      "record_sha256": "60e871d56cfcc834fe0a8d0436f98996e1bb196d3ddf8f2109d0f05266a816ce",
+      "package": "media-types",
+      "version": "13.0.0",
+      "architecture": "all",
+      "source": null
+    },
+    {
+      "path": "var/lib/dpkg/status.d/ca-certificates",
+      "layer": 12,
+      "record_sha256": "3a43b8ed7f1a6116af114b5ad9f2c1b1dd462e39483e5181f2aa3e270acda128",
+      "package": "ca-certificates",
+      "version": "20250419+deb13u1",
+      "architecture": "all",
+      "source": null
+    },
+    {
+      "path": "var/lib/dpkg/status.d/libc6",
+      "layer": 13,
+      "record_sha256": "77d08ed11ba8db4ea027adfdaf1b84a64a3d233d065fd839ce0ec7b0f4d99bc1",
+      "package": "libc6",
+      "version": "2.41-12+deb13u4",
+      "architecture": "amd64",
+      "source": "glibc"
+    },
+    {
+      "path": "var/lib/dpkg/status.d/libssl3t64",
+      "layer": 14,
+      "record_sha256": "2febb91c5ba0f976fc387ac45883cede2476889b7720aa7ae1881708d551bdfd",
+      "package": "libssl3t64",
+      "version": "3.5.7-1~deb13u3",
+      "architecture": "amd64",
+      "source": "openssl"
+    },
+    {
+      "path": "var/lib/dpkg/status.d/libzstd1",
+      "layer": 15,
+      "record_sha256": "8a963d286e933559193528d86006b777d03e26973c38f7d74d733e832f914636",
+      "package": "libzstd1",
+      "version": "1.5.7+dfsg-1",
+      "architecture": "amd64",
+      "source": "libzstd"
+    },
+    {
+      "path": "var/lib/dpkg/status.d/zlib1g",
+      "layer": 16,
+      "record_sha256": "34e862c1ccb0bac6c37bc7a6d165e8c9dd60d32f43daeffb9b1bd29377ca65ba",
+      "package": "zlib1g",
+      "version": "1:1.3.dfsg+really1.3.1-1+b1",
+      "architecture": "amd64",
+      "source": "zlib (1:1.3.dfsg+really1.3.1-1)"
+    },
+    {
+      "path": "var/lib/dpkg/status.d/libgomp1",
+      "layer": 17,
+      "record_sha256": "106b14a05701bf88cadc607287ec1f3bcac81c2b2cc9ac018379dcfef4e288a4",
+      "package": "libgomp1",
+      "version": "14.2.0-19",
+      "architecture": "amd64",
+      "source": "gcc-14"
+    },
+    {
+      "path": "var/lib/dpkg/status.d/libstdc++6",
+      "layer": 18,
+      "record_sha256": "b11c92c5307bf79ac50b489ee7bff067417b6e8b33d6d0c99da897d37e004c19",
+      "package": "libstdc++6",
+      "version": "14.2.0-19",
+      "architecture": "amd64",
+      "source": "gcc-14"
+    },
+    {
+      "path": "var/lib/dpkg/status.d/libgcc-s1",
+      "layer": 19,
+      "record_sha256": "4ba5fe45998229ab1aefccdec602b925977e53cc97bbb28fc12412ac165459fc",
+      "package": "libgcc-s1",
+      "version": "14.2.0-19",
+      "architecture": "amd64",
+      "source": "gcc-14"
+    },
+    {
+      "path": "var/lib/dpkg/status.d/gcc-14-base",
+      "layer": 20,
+      "record_sha256": "3ab3a11930c188172cc07ca122c7646b8d2c832e1403e37f993c53ceb838df28",
+      "package": "gcc-14-base",
+      "version": "14.2.0-19",
+      "architecture": "amd64",
+      "source": "gcc-14"
+    }
+  ]
+}

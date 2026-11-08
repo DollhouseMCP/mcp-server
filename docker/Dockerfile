@@ -83,8 +83,8 @@ RUN npm ci --omit=dev --ignore-scripts \
 
 # Production stage with security hardening
 # Using slim (Debian-based) instead of Alpine for better ARM64 compatibility
-# Prepare owned runtime assets in the full builder environment. No package
-# manager, shell, or ownership mutation is needed in the final image.
+# Prepare owned runtime assets in the full builder environment. The final
+# image uses no package manager or shell.
 FROM node-base AS runtime-assets
 WORKDIR /app
 COPY package*.json ./
@@ -104,11 +104,15 @@ RUN rm -rf ./dist/test ./dist/__tests__ ./dist/**/*.test.js ./dist/**/*.spec.js 
 
 # Distroless Node 24 Debian 13; immutable multi-platform index. Its age and
 # signature/source qualification remain release gates, not implied by this pin.
-FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:b8cec4b2f2126ff7bd034ec9ac207ffb3272667dfdc48376e3b035d3270549ba AS production
+FROM gcr.io/distroless/nodejs24-debian13@sha256:b8cec4b2f2126ff7bd034ec9ac207ffb3272667dfdc48376e3b035d3270549ba AS production
 COPY --from=runtime-assets --chown=1001:1001 /app /app
 COPY --from=runtime-assets --chown=1001:1001 /home/dollhouse /home/dollhouse
 COPY --from=runtime-assets /tmp/runtime-passwd /etc/passwd
 COPY --from=runtime-assets /tmp/runtime-group /etc/group
+# COPY may materialize an empty destination directory with default mode. Repair
+# only the four fixed directories using Node, with no shell or package manager.
+USER 0:0
+RUN ["/nodejs/bin/node", "-e", "const fs=require('node:fs'); for (const p of ['/app/tmp','/app/logs','/app/.memory-upgrade-control','/home/dollhouse']) { const s=fs.lstatSync(p); if (!s.isDirectory() || s.isSymbolicLink()) throw new Error('Unsafe runtime directory: '+p); fs.chownSync(p,1001,1001); fs.chmodSync(p,0o700); const v=fs.lstatSync(p); if (!v.isDirectory() || v.uid!==1001 || v.gid!==1001 || (v.mode&0o777)!==0o700) throw new Error('Runtime directory verification failed: '+p); }"]
 WORKDIR /app
 USER 1001:1001
 # Clear the base entrypoint so the existing node command and overrides work.
