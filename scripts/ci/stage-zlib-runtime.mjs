@@ -59,7 +59,7 @@ export function validatePayload(root, md5sums, arch) {
   visit(rootReal);
   const lines = md5sums.trimEnd().split('\n'); const seen = new Set();
   for (const line of lines) {
-    const match = /^([a-f0-9]{32})  ([A-Za-z0-9+._/-]+)$/.exec(line);
+    const match = /^([a-f0-9]{32})[ ]{2}([A-Za-z0-9+._/-]+)$/.exec(line);
     requireValue(match, 'Invalid md5 entry'); const [, digest, rel] = match; safeRelative(rel);
     requireValue(!seen.has(rel) && files.get(rel) === digest, 'Payload checksum mismatch'); seen.add(rel);
   }
@@ -95,13 +95,19 @@ export function stage(archive, arch, overlay, controlDir) {
   return { package: 'zlib1g', version: VERSION, source: 'zlib', architecture: arch,
     debSha256: hash('sha256', archiveBytes), ...inventory };
 }
+export function validateWorkspace(path, owner = 0) {
+  const st = lstatSync(path);
+  requireValue(st.isDirectory() && !st.isSymbolicLink() && st.uid === owner && (st.mode & 0o7777) === 0o700,
+    'Unsafe zlib workspace');
+}
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  validateWorkspace('/root/zlib-runtime');
   const arch = execFileSync('/usr/bin/dpkg', ['--print-architecture'], { encoding: 'utf8' }).trim();
   requireValue((process.arch === 'x64' && arch === 'amd64') ||
     (process.arch === 'arm64' && arch === 'arm64'), 'Runtime and package architectures differ');
-  const receipt = stage('/tmp/zlib-download/zlib.deb', arch, '/tmp/zlib-overlay', '/tmp/zlib-control');
+  const receipt = stage('/root/zlib-runtime/download/zlib.deb', arch, '/root/zlib-runtime/overlay', '/root/zlib-runtime/control');
   const serialized = JSON.stringify(receipt) + '\n';
   requireValue(Buffer.byteLength(serialized) <= 64 * 1024, 'Receipt exceeds limit');
-  writeFileSync('/tmp/zlib-receipt.json', serialized, { flag: 'wx' });
+  writeFileSync('/root/zlib-runtime/receipt.json', serialized, { flag: 'wx' });
   console.log(JSON.stringify(receipt));
 }

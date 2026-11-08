@@ -9,10 +9,10 @@ for (const file of ['docker/Dockerfile', 'docker/Dockerfile.prebuilt']) {
     const [builder, runtime] = source.split(' AS production\n');
     assert.ok(runtime && builder.includes(`nodejs24-debian13@${digest}`));
     assert.match(builder, /FROM node-base AS runtime-assets/);
-    assert.match(builder, /FROM node-base AS runtime-security/);
-    assert.match(builder, /node \/tmp\/stage-zlib-runtime\.mjs/);
-    assert.match(runtime, /COPY --from=runtime-security \/tmp\/zlib-overlay\/ \//);
-    assert.match(runtime, /COPY --from=runtime-security --chown=1001:1001 --chmod=0640 \/tmp\/zlib-receipt\.json/);
+    assert.match(builder, /FROM node-base AS runtime-security\nUSER 0:0\nRUN mkdir -m 0700 \/root\/zlib-runtime && mkdir -m 0700 \/root\/zlib-runtime\/download/);
+    assert.match(builder, /node \/root\/zlib-runtime\/stage-zlib-runtime\.mjs/);
+    assert.match(runtime, /COPY --from=runtime-security \/root\/zlib-runtime\/overlay\/ \//);
+    assert.match(runtime, /COPY --from=runtime-security --chown=1001:1001 --chmod=0640 \/root\/zlib-runtime\/receipt\.json/);
     assert.match(builder, /apt=3\.0\.4/);
     assert.match(builder, /libapt-pkg7\.0=3\.0\.4/);
     assert.match(builder, /chmod 700 \/app\/tmp \/app\/logs \/app\/\.memory-upgrade-control \/home\/dollhouse/);

@@ -105,19 +105,21 @@ RUN rm -rf ./dist/test ./dist/__tests__ ./dist/**/*.test.js ./dist/**/*.spec.js 
 # Stage the exact signed-index security package and its complete payload.
 # The final image receives neither APT nor package-management executables.
 FROM node-base AS runtime-security
-WORKDIR /tmp/zlib-download
+USER 0:0
+RUN mkdir -m 0700 /root/zlib-runtime && mkdir -m 0700 /root/zlib-runtime/download
+WORKDIR /root/zlib-runtime/download
 RUN apt-get update && apt-get download 'zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1' \
     && set -- zlib1g_*.deb && test "$#" -eq 1 && test -f "$1" \
     && mv "$1" zlib.deb
-COPY scripts/ci/stage-zlib-runtime.mjs /tmp/stage-zlib-runtime.mjs
-RUN node /tmp/stage-zlib-runtime.mjs
+COPY scripts/ci/stage-zlib-runtime.mjs /root/zlib-runtime/stage-zlib-runtime.mjs
+RUN node /root/zlib-runtime/stage-zlib-runtime.mjs
 
 # Distroless Node 24 Debian 13; immutable multi-platform index. Its age and
 # signature/source qualification remain release gates, not implied by this pin.
 FROM gcr.io/distroless/nodejs24-debian13@sha256:b8cec4b2f2126ff7bd034ec9ac207ffb3272667dfdc48376e3b035d3270549ba AS production
-COPY --from=runtime-security /tmp/zlib-overlay/ /
+COPY --from=runtime-security /root/zlib-runtime/overlay/ /
 COPY --from=runtime-assets --chown=1001:1001 /app /app
-COPY --from=runtime-security --chown=1001:1001 --chmod=0640 /tmp/zlib-receipt.json /app/.zlib-runtime-receipt.json
+COPY --from=runtime-security --chown=1001:1001 --chmod=0640 /root/zlib-runtime/receipt.json /app/.zlib-runtime-receipt.json
 COPY --from=runtime-assets --chown=1001:1001 /home/dollhouse /home/dollhouse
 COPY --from=runtime-assets /tmp/runtime-passwd /etc/passwd
 COPY --from=runtime-assets /tmp/runtime-group /etc/group

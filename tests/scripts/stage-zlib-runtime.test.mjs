@@ -4,7 +4,7 @@ import { chmodSync, lstatSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, unli
 import os from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
-import { SHA256, VERSION, stage, validateControl, validateDigest, validatePayload } from '../../scripts/ci/stage-zlib-runtime.mjs';
+import { SHA256, VERSION, stage, validateControl, validateDigest, validatePayload, validateWorkspace } from '../../scripts/ci/stage-zlib-runtime.mjs';
 
 const control = `Package: zlib1g\nSource: zlib (${VERSION})\nVersion: ${VERSION}\nArchitecture: amd64\nDescription: test\n`;
 
@@ -42,6 +42,9 @@ test('requires complete checksummed payload, native ELF and confined zlib link',
   writeFileSync(library, elf); const link = join(dirname(library), 'libz.so.1'); symlinkSync('libz.so.1.3.1', link);
   const sums = `${createHash('md5').update(elf).digest('hex')}  ${relative}\n`;
   assert.equal(validatePayload(root, sums, 'amd64').files, 1);
+  for (const separator of [' ', '   ', '\t\t']) {
+    assert.throws(() => validatePayload(root, sums.replace('  ', separator), 'amd64'));
+  }
   const wrongMachine = Buffer.from(elf); wrongMachine.writeUInt16LE(183, 18);
   writeFileSync(library, wrongMachine);
   const wrongMachineSums = `${createHash('md5').update(wrongMachine).digest('hex')}  ${relative}\n`;
@@ -54,4 +57,20 @@ test('requires complete checksummed payload, native ELF and confined zlib link',
   writeFileSync(join(root, 'unlisted'), 'unexpected'); assert.throws(() => validatePayload(root, sums, 'amd64'));
   unlinkSync(join(root, 'unlisted')); unlinkSync(link); symlinkSync('../../../../outside', link);
   assert.throws(() => validatePayload(root, sums, 'amd64'));
+});
+
+
+test('workspace requires a private, owned, non-symlink directory', (t) => {
+  const root = mkdtempSync(join(os.tmpdir(), 'zlib-workspace-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const owner = process.getuid();
+  validateWorkspace(root, owner);
+  assert.throws(() => validateWorkspace(root, owner + 1));
+  chmodSync(root, 0o755);
+  assert.throws(() => validateWorkspace(root, owner));
+  chmodSync(root, 0o700);
+  const link = `${root}-link`;
+  symlinkSync(root, link);
+  t.after(() => unlinkSync(link));
+  assert.throws(() => validateWorkspace(link, owner));
 });
