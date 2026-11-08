@@ -10,6 +10,7 @@ if [[ "${1:-}" == --case ]]; then
   DEPLOY_DIR="$4"
   SERVICE="$5"
   SERVER_DIR="${DEPLOY_DIR}/server"
+  HOSTED_DEPLOY_LIB_DIR="${REPO_ROOT}/scripts/hosted-deploy"
   SOURCE_DIR="${DEPLOY_DIR}/source"
   POST_MIGRATION_GRANTS_FILE="${DEPLOY_DIR}/grants.sql"
   POSTGRES_READY_TIMEOUT=1
@@ -27,7 +28,59 @@ if [[ "${1:-}" == --case ]]; then
   ensure_prerequisites() { :; }
   ensure_runtime_prerequisites() { :; }
   validate_git_url_for_clone() { :; }
-  render_files() { :; }
+  resolve_public_base_url() { :; }
+  resolve_hostname() { :; }
+  resolve_allowed_hosts() { :; }
+  validate_render_inputs() { :; }
+  validate_persisted_caddy_fields() { :; }
+  resolve_mode_defaults() { :; }
+  validate_caddy_selection() { :; }
+  acquire_caddy_deployment_lock() { :; }
+  CADDY_IMAGE=fixture CADDY_DATA_VOLUME=fixture_data CADDY_CONFIG_VOLUME=fixture_config
+  verify_prepared_caddy() {
+    printf 'prepared-clone\n' >> "${EVENTS}"
+    [[ "${MODE}" != clone-refusal ]] || return 1
+    PREVIOUS_BUNDLE="${DEPLOY_DIR}/server.prev-fixture"
+  }
+  CADDY_CONTAINER_NAME=fixture-caddy HOSTED_CADDY_LOCK_FD=9
+  caddy_transition() {
+    local action="$1"
+    case "${action}" in
+      status) if [[ "${MODE}" == fresh-retry ]]; then printf 'fresh\n'; else printf 'none\n'; fi ;;
+      begin-update|begin-fresh|begin-rollback) printf 'transition-pending\n' >> "${EVENTS}"; printf '%032d\n' 0 ;;
+      retry-fresh) printf 'transition-retry\n' >> "${EVENTS}"; printf '%032d\n' 0 ;;
+      retain-unstarted) mv "${SERVER_DIR}" "${DEPLOY_DIR}/server.unstarted-fixture" ;;
+      select-rollback) printf '%s/server.prev-20000101\n' "${DEPLOY_DIR}" ;;
+      stage) printf 'transition-staged\n' >> "${EVENTS}" ;;
+      bind-admission) printf 'admission-bound\n' >> "${EVENTS}" ;;
+      *) die "unexpected transition action: ${action}" ;;
+    esac
+  }
+  caddy_unchanged_request_json() { printf '{}\n'; }
+  caddy_recovery_request_json() { printf '{}\n'; }
+  python3() {
+    local command_path="$1"
+    if [[ "${command_path}" == */caddy_unchanged_action.py ]]; then
+      cat >/dev/null
+      printf 'prepared-clone\n' >> "${EVENTS}"
+      printf '%s\n' "${DEPLOY_DIR}/server.prev-fixture"
+    elif [[ "${command_path}" == */caddy_verify_noop_action.py ]]; then
+      cat >/dev/null
+      printf 'hardened-recheck\n' >> "${EVENTS}"
+    else
+      command python3 "$@"
+    fi
+  }
+  recover_selected_caddy() {
+    printf 'proxy-recovery\n' >> "${EVENTS}"
+    [[ "${MODE}" != recovery-failure ]] || return 1
+    printf '{"restored_id":"%064d","preserved_replacement_id":"%064d"}\n' 1 2
+  }
+  refresh_caddy_image() { compose pull caddy; }
+  prepare_fresh_caddy_volumes() { printf 'fresh-volumes\n' >> "${EVENTS}"; }
+  recheck_caddy_image() { printf 'caddy-rechecked\n' >> "${EVENTS}"; }
+  recheck_caddy_transition() { printf 'caddy-transition-rechecked\n' >> "${EVENTS}"; }
+  render_files() { printf 'render\n' >> "${EVENTS}"; }
   sleep() { :; }
   stage_from_source_dir() {
     local incoming="$1"
@@ -35,7 +88,7 @@ if [[ "${1:-}" == --case ]]; then
     printf 'new-revision\n'
   }
   selected_postgres() {
-    if [[ "${MODE}" == missing-pg || "${MODE}" == fresh-install ]]; then
+    if [[ "${MODE}" == missing-pg || "${MODE}" == fresh-install || "${MODE}" == fresh-retry ]]; then
       [[ -f "${DEPLOY_DIR}/pg-started" ]] || return 0
     fi
     if [[ -f "${DEPLOY_DIR}/selection-changed" ]]; then
@@ -46,7 +99,7 @@ if [[ "${1:-}" == --case ]]; then
   }
   record_replacement() {
     printf 'replacement\n' >> "${EVENTS}"
-    [[ -f "${DEPLOY_DIR}/stopped" || "${MODE}" == fresh-install ]] || die "replacement without drain"
+    [[ -f "${DEPLOY_DIR}/stopped" || "${MODE}" == fresh-install || "${MODE}" == fresh-retry ]] || die "replacement without drain"
     [[ "${MODE}" != replacement-failure ]]
   }
   maintenance_command() {
@@ -66,14 +119,14 @@ if [[ "${1:-}" == --case ]]; then
       ps)
         local service="$3"
         if [[ "${service}" == postgres ]]; then selected_postgres
-        elif [[ "${MODE}" != fresh-install ]]; then printf '%s\n' "${APP_ID}"
+        elif [[ "${MODE}" != fresh-install && "${MODE}" != fresh-retry ]]; then printf '%s\n' "${APP_ID}"
         fi
         ;;
       build) [[ "${MODE}" != build-failure ]] ;;
       pull) [[ "${MODE}" != pull-failure ]] ;;
       up)
-        if [[ "$*" == 'up -d postgres' ]]; then
-          [[ "${MODE}" == fresh-install ]] || die "existing PG recreation"
+        if [[ "$*" == 'up -d --pull never postgres' ]]; then
+          [[ "${MODE}" == fresh-install || "${MODE}" == fresh-retry ]] || die "existing PG recreation"
           touch "${DEPLOY_DIR}/pg-started"
         else record_replacement
         fi
@@ -89,10 +142,14 @@ if [[ "${1:-}" == --case ]]; then
     if [[ "${operation}" == inspect ]]; then
       [[ "${MODE}" != inspect-failure ]] || return 1
       local format="$3" inspect_target="$4"
-      if [[ "${format}" == '{{.Id}}' ]]; then printf '%s\n' "${inspect_target}"
+      if [[ "${format}" == '{{.Config.User}}|{{.State.Running}}' ]]; then
+        if [[ "${MODE}" == hardened ]]; then printf '1001:1001|true\n'; else printf '|false\n'; fi
+      elif [[ "${format}" == '{{.Id}}' ]]; then printf '%s\n' "${inspect_target}"
       elif [[ "${inspect_target}" == "${PG_ID}" && "${MODE}" == stopped-pg ]]; then printf 'false\n'
       else printf 'true\n'
       fi
+    elif [[ "${operation}" == image && "${2:-}" == inspect ]]; then
+      return 0
     elif [[ "${operation}" == exec ]]; then
       local exec_target="$2"
       [[ "${exec_target}" == "${PG_ID}" ]] || die "unexpected docker operation"
@@ -113,6 +170,7 @@ if [[ "${1:-}" == --case ]]; then
 fi
 
 TMP_ROOT="$(mktemp -d)"
+TMP_ROOT="$(cd "${TMP_ROOT}" && pwd -P)"
 trap 'rm -rf -- "${TMP_ROOT}"' EXIT
 fail() { printf 'preparation-order test: %s\n' "$*" >&2; exit 1; }
 assert_order() {
@@ -134,6 +192,7 @@ check_fixture() {
   mkdir -p "${fixture}/server" "${fixture}/server.prev-20000101" "${fixture}/source"
   printf 'current\n' > "${fixture}/server/version"
   printf 'previous\n' > "${fixture}/server.prev-20000101/version"
+  if [[ "${mode}" == fresh-install ]]; then rm -rf "${fixture}/server"; fi
   printf 'SELECT 1;\n' > "${fixture}/grants.sql"
   printf 'old-revision\n' > "${fixture}/DEPLOYED_REVISION"
   printf '2000-01-01T00:00:00Z\n' > "${fixture}/DEPLOYED_AT"
@@ -141,9 +200,22 @@ check_fixture() {
   bash "$0" --case "${action}" "${mode}" "${fixture}" "${service}" > "${fixture}/stdout" 2> "${fixture}/stderr"
   status=$?
   set -e
-  if [[ "${mode}" == success || "${mode}" == fresh-install ]]; then
+  if [[ "${mode}" == success || "${mode}" == fresh-install || "${mode}" == fresh-retry || "${mode}" == hardened ]]; then
     [[ "${status}" == 0 ]] || fail "${action}/${service}/${mode} exited ${status}"
-    assert_order "${fixture}/events" 'compose:pull caddy' graceful-stop
+    if [[ "${mode}" == fresh-retry ]]; then
+      assert_order "${fixture}/events" transition-retry render
+    else
+      assert_order "${fixture}/events" transition-pending render
+    fi
+    if [[ "${mode}" == hardened ]]; then
+      assert_order "${fixture}/events" prepared-clone graceful-stop
+      assert_order "${fixture}/events" hardened-recheck graceful-stop
+      if grep -q '^compose:pull caddy$' "${fixture}/events"; then fail "unchanged proxy was pulled"; fi
+    elif [[ "${action}" == rollback ]]; then
+      assert_order "${fixture}/events" proxy-recovery graceful-stop
+    else
+      assert_order "${fixture}/events" 'compose:pull caddy' graceful-stop
+    fi
     assert_order "${fixture}/events" graceful-stop replacement
     if [[ "${action}" == rollback ]]; then expected_revision='rollback:server.prev-20000101'
     else expected_revision=new-revision; assert_order "${fixture}/events" graceful-stop migration
@@ -160,7 +232,7 @@ check_fixture() {
     esac
     if [[ "${mode}" != replacement-failure ]] && grep -q '^replacement$' "${fixture}/events"; then fail "replacement after failure"; fi
   fi
-  if [[ "${mode}" != fresh-install ]] && grep -q '^compose:up -d postgres$' "${fixture}/events"; then fail "existing database recreated"; fi
+  if [[ "${mode}" != fresh-install && "${mode}" != fresh-retry ]] && grep -q '^compose:up -d --pull never postgres$' "${fixture}/events"; then fail "existing database recreated"; fi
   # Stage/move real bundles: the prior running source is recoverable even when
   # prepared source and image tags differ from the unchanged running image.
   if [[ "${action}" == rollback ]]; then
@@ -169,17 +241,53 @@ check_fixture() {
     prior=("${fixture}"/server.prev-*)
     prior=("${prior[@]:1}")
   fi
-  [[ "${#prior[@]}" == 1 && "$(cat "${prior[0]}/version")" == current ]] || fail "prior source not recoverable"
+  if [[ "${mode}" == fresh-retry ]]; then
+    [[ "$(cat "${fixture}/server.unstarted-fixture/version")" == current ]] || fail "unstarted source was not retained"
+  elif [[ "${mode}" == pull-failure || ( "${action}" == update && "${mode}" == inspect-failure ) ]]; then
+    [[ "$(cat "${fixture}/server/version")" == current ]] || fail "preparation failure changed current source"
+  elif [[ "${mode}" != fresh-install ]]; then
+    [[ "${#prior[@]}" == 1 && "$(cat "${prior[0]}/version")" == current ]] || fail "prior source not recoverable"
+  fi
   printf 'preparation-order PASS %s/%s/%s\n' "${action}" "${service}" "${mode}"
 }
 
 for action in update rollback; do
-  for mode in build-failure readiness-failure pull-failure drain-refusal missing-pg stopped-pg identity-change inspect-failure success; do
+  for mode in build-failure readiness-failure drain-refusal missing-pg stopped-pg identity-change inspect-failure success; do
     check_fixture "${action}" "${mode}" app
   done
 done
+check_fixture update pull-failure app
+check_fixture update hardened app
+check_fixture update fresh-retry app
 for service in app all; do
   for mode in migration-failure bootstrap-failure replacement-failure success fresh-install; do
     check_fixture update "${mode}" "${service}"
   done
+done
+
+# Exercise the real root creation and lock validation before any transition.
+for mode in fresh-000 fresh-002 existing-unsafe; do
+  root="${TMP_ROOT}/${mode}"
+  if [[ "${mode}" == existing-unsafe ]]; then mkdir "${root}"; chmod 0777 "${root}"; fi
+  mask="${mode#fresh-}"
+  [[ "${mode}" != existing-unsafe ]] || mask=077
+  if (umask "${mask}"; bash -c '
+    source "$1"
+    DEPLOY_DIR="$2"; SERVER_DIR="$2/server"
+    ensure_prerequisites() { :; }; validate_git_url_for_clone() { :; }
+    resolve_public_base_url() { :; }; resolve_hostname() { :; }
+    resolve_allowed_hosts() { :; }; validate_render_inputs() { :; }
+    need_command() { :; }; flock() { :; }; die() { exit 1; }
+    caddy_transition() { return 1; }
+    start_or_update
+  ' _ "${REPO_ROOT}/scripts/hosted-deploy/runtime.sh" "${root}"); then
+    fail "root fixture unexpectedly advanced past transition"
+  fi
+  if [[ "${mode}" == existing-unsafe ]]; then
+    [[ ! -e "${root}/.caddy-deploy.lock" ]] || fail "unsafe existing root was modified"
+  else
+    [[ -f "${root}/.caddy-deploy.lock" ]] || fail "fresh root did not reach lock"
+    python3 -c 'import os,stat,sys; sys.exit(0 if stat.S_IMODE(os.stat(sys.argv[1]).st_mode)==0o700 else 1)' "${root}" || fail "fresh root is not private"
+  fi
+  printf 'preparation-order PASS root/%s\n' "${mode}"
 done

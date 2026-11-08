@@ -13,10 +13,12 @@ run_action() {
     install)
       start_or_update all
       verify_deploy allow-bootstrap-required
+      finish_caddy_transition
       ;;
     update)
       start_or_update app
       verify_deploy allow-bootstrap-required
+      finish_caddy_transition
       ;;
     migrate)
       run_migrations
@@ -24,9 +26,16 @@ run_action() {
     bootstrap-admin)
       bootstrap_admin
       ;;
+    clone-caddy-volumes)
+      clone_caddy_volumes
+      ;;
+    recover-caddy-proxy)
+      recover_caddy_proxy
+      ;;
     rollback)
       rollback_server
       verify_deploy allow-bootstrap-required
+      finish_caddy_transition
       ;;
     verify)
       verify_deploy

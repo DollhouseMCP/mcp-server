@@ -1,0 +1,103 @@
+{
+  "schema": "caddy-qualified-native-graphs-v1",
+  "tested_checkout": "d3d98ce39abf8e3e57548c58c3d651032271733b",
+  "source_head": "b0f14c5990ecc108e2c1879f827f69d173798dc0",
+  "workflow_run": "42314348806",
+  "attempt": 1,
+  "architectures": {
+    "amd64": {
+      "manifest_digest": "sha256:3ef9d5588e4f04f350c0e8a33953f48dff224f733f2192939116d341d203d47f",
+      "config_digest": "sha256:563a749551ba9194ce98f2e14cd842e9e16d45b29defdb962ea1eeb6adb64522",
+      "diff_ids": [
+        "sha256:89a54c903e250bde8b1e10b63056c78796f79a8d8e65ce1c780c5222f1670890",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ],
+      "image_config": {
+        "User": "1001:1001",
+        "ExposedPorts": {
+          "2019/tcp": {},
+          "443/tcp": {},
+          "443/udp": {},
+          "80/tcp": {}
+        },
+        "Env": [
+          "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+          "CADDY_VERSION=v2.11.9",
+          "XDG_CONFIG_HOME=/config",
+          "XDG_DATA_HOME=/data"
+        ],
+        "Cmd": [
+          "caddy",
+          "run",
+          "--config",
+          "/etc/caddy/Caddyfile",
+          "--adapter",
+          "caddyfile"
+        ],
+        "WorkingDir": "/srv",
+        "Labels": {
+          "org.dollhousemcp.caddy.distribution": "source-rebuilt-security-candidate",
+          "org.dollhousemcp.caddy.go": "1.26.10",
+          "org.dollhousemcp.caddy.go-jose-v4": "v4.1.9",
+          "org.dollhousemcp.caddy.upstream-source": "0d98caea58f794f88e709b1bef2880996a471bca",
+          "org.dollhousemcp.caddy.x-net": "v0.62.0",
+          "org.opencontainers.image.revision": "d3d98ce39abf8e3e57548c58c3d651032271733b"
+        },
+        "ArgsEscaped": true
+      }
+    },
+    "arm64": {
+      "manifest_digest": "sha256:6601f8589f66f11072a0eb834e1f630bc3581b925b30d09f271dabc2cdf7ec80",
+      "config_digest": "sha256:8f20fb3b672c28542e1a018c798558c71c99ee77aa5f86b0e13217c47d1cb8fa",
+      "diff_ids": [
+        "sha256:ef4704b23762af240636dc6508c22ae7ae33cc5fa2c687fc10ff487c13bd21f3",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ],
+      "image_config": {
+        "Hostname": "",
+        "Domainname": "",
+        "User": "1001:1001",
+        "AttachStdin": false,
+        "AttachStdout": false,
+        "AttachStderr": false,
+        "ExposedPorts": {
+          "2019/tcp": {},
+          "443/tcp": {},
+          "443/udp": {},
+          "80/tcp": {}
+        },
+        "Tty": false,
+        "OpenStdin": false,
+        "StdinOnce": false,
+        "Env": [
+          "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+          "CADDY_VERSION=v2.11.9",
+          "XDG_CONFIG_HOME=/config",
+          "XDG_DATA_HOME=/data"
+        ],
+        "Cmd": [
+          "caddy",
+          "run",
+          "--config",
+          "/etc/caddy/Caddyfile",
+          "--adapter",
+          "caddyfile"
+        ],
+        "ArgsEscaped": true,
+        "Image": "",
+        "Volumes": null,
+        "WorkingDir": "/srv",
+        "Entrypoint": null,
+        "OnBuild": null,
+        "Labels": {
+          "org.dollhousemcp.caddy.distribution": "source-rebuilt-security-candidate",
+          "org.dollhousemcp.caddy.go": "1.26.10",
+          "org.dollhousemcp.caddy.go-jose-v4": "v4.1.9",
+          "org.dollhousemcp.caddy.upstream-source": "0d98caea58f794f88e709b1bef2880996a471bca",
+          "org.dollhousemcp.caddy.x-net": "v0.62.0",
+          "org.opencontainers.image.revision": "d3d98ce39abf8e3e57548c58c3d651032271733b"
+        }
+      }
+    }
+  }
+}

@@ -68,6 +68,19 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/scripts/test_image_scan_intake.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/scripts/test_image_applicability.py
 
+      - name: Verify hosted Caddy support contracts
+        if: matrix.os == 'ubuntu-latest'
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          python3 -c 'import sys; assert sys.version_info >= (3, 11), "Python 3.11 or newer required"'
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests/scripts -p 'test_hosted_caddy*.py'
+          node --test tests/scripts/caddy-volume-copy.test.mjs
+          npm run test:hosted-deploy
+          bash tests/scripts/hosted-deploy-preparation-order.test.sh
+          bash tests/scripts/hosted-deploy-rollback-order.test.sh
+          bash tests/scripts/hosted-deploy-transition-order.test.sh
+
       - name: Set cross-platform TEST_PERSONAS_DIR
         shell: bash
         run: |
