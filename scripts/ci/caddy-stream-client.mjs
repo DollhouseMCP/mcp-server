@@ -16,7 +16,8 @@ const fail = (reason, error) => {
  if (settled) return;
  settled = true;
  const code = typeof error?.code === 'string' && /^[A-Z0-9_]{1,32}$/.test(error.code) ? error.code : 'UNKNOWN';
- console.error(JSON.stringify({ success:false, reason, code }));
+ console.error(JSON.stringify({ success:false, reason, code, status, protocol, headers:responseHeaders,
+  receivedBytes, eventCount:eventTimesMs.length, elapsedMs:performance.now()-started }));
  process.exitCode = 1;
  terminate();
 };
@@ -24,11 +25,19 @@ observeUnsettledExit(process, () => settled, fail);
 let body = '';
 let status;
 let protocol;
+let receivedBytes = 0;
+let responseHeaders = {};
+const headerNames = ['content-type','content-length','transfer-encoding','content-encoding','connection'];
+const captureHeaders = headers => Object.fromEntries(headerNames.flatMap(name => {
+ const value=headers[name];
+ return typeof value === 'string' || typeof value === 'number' ? [[name, String(value).slice(0,128)]] : [];
+}));
 const started = performance.now();
 let firstDataMs;
 let cursor=0;
 const eventTimesMs=[];
 const data = bytes => {
+ receivedBytes += Buffer.byteLength(bytes);
  firstDataMs ??= performance.now()-started;
  body+=bytes;
  let boundary=body.indexOf('\n\n',cursor);
@@ -48,7 +57,7 @@ if (options.h2) {
   observeStream(req, fail);
   terminate = () => { req.destroy(); session.destroy(); };
   req.setTimeout(80000, () => { req.destroy(new Error('qualification request timeout')); });
-  req.on('response', headers => { status=headers[':status']; protocol=session.alpnProtocol; });
+  req.on('response', headers => { status=headers[':status']; protocol=session.alpnProtocol; responseHeaders=captureHeaders(headers); });
   req.on('data', data);
   req.on('end', () => { done(); session.close(); });
   req.on('error', error => { fail('request-error', error); session.destroy(); });
@@ -63,6 +72,7 @@ if (options.h2) {
     observeStream(res, fail);
     status=res.statusCode;
     protocol='http/'+res.httpVersion;
+    responseHeaders=captureHeaders(res.headers);
     res.on('data', data);
     res.on('end', () => { if (res.complete) done(); else fail('response-incomplete'); });
   });

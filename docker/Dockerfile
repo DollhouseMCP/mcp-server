@@ -4,6 +4,8 @@
 # Apply supported Trixie fixes to every target, including the migration builder.
 FROM node@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea AS node-base
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    apt=3.0.4 \
+    libapt-pkg7.0=3.0.4 \
     libc-bin=2.41-12+deb13u4 \
     libc6=2.41-12+deb13u4 \
     libssl3t64=3.5.7-1~deb13u3 \
@@ -81,79 +83,57 @@ RUN npm ci --omit=dev --ignore-scripts \
 
 # Production stage with security hardening
 # Using slim (Debian-based) instead of Alpine for better ARM64 compatibility
-FROM node-base AS production
-
-# Install only essential runtime dependencies and remove unnecessary packages
-# This reduces attack surface by removing tools commonly used in exploits
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    && apt-get remove -y --purge \
-    curl \
-    wget \
-    git \
-    && apt-get autoremove -y \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /usr/local/lib/node_modules/npm
-
-# Remove only unused final-image diagnostics and mount CLIs; retain the builder,
-# package metadata, other commands and shared libraries. Guard all four paths first.
-COPY docker/remove-optional-runtime-tools.mjs /tmp/remove-optional-runtime-tools.mjs
-# Create non-root user for security
-# Using specific UID/GID for consistency across containers
-RUN node /tmp/remove-optional-runtime-tools.mjs && \
-    rm /tmp/remove-optional-runtime-tools.mjs && \
-    groupadd -g 1001 nodejs && \
-    useradd -u 1001 -g nodejs -s /bin/false -m dollhouse && \
-    mkdir -p /app && \
-    chown -R dollhouse:nodejs /app
-
-# Set working directory
+# Prepare owned runtime assets in the full builder environment. The final
+# image uses no package manager or shell.
+FROM node-base AS runtime-assets
 WORKDIR /app
-
-# Copy package files
 COPY package*.json ./
-
-# Copy the prepared production dependencies; do not reinstall workspace tools.
 COPY --from=runtime-dependencies /app/node_modules ./node_modules
-COPY --from=runtime-dependencies /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
-# Verify the final copied bundle too; no stale base-package files may survive.
-COPY scripts/ci/prepare-global-npm.mjs scripts/ci/stage-global-npm-vendor-patches.mjs scripts/ci/check-global-npm-cache.cjs scripts/ci/smoke-global-npm.mjs /tmp/npm-tooling/
-RUN node --test /tmp/npm-tooling/check-global-npm-cache.cjs \
-    && node /tmp/npm-tooling/smoke-global-npm.mjs && rm -rf /tmp/npm-tooling
-
-# Copy built application from builder stage (excluding test files)
+COPY --from=runtime-dependencies /app/packages ./packages
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/data/personas ./data/personas
 COPY --from=builder /app/oauth-state-coordinator.mjs ./oauth-state-coordinator.mjs
 COPY oauth-helper.mjs ./oauth-helper.mjs
-# Copy built workspace packages (required for local file: dependencies)
-COPY --from=runtime-dependencies /app/packages ./packages
+RUN rm -rf ./dist/test ./dist/__tests__ ./dist/**/*.test.js ./dist/**/*.spec.js \
+    && mkdir -p /app/tmp /app/logs /app/.memory-upgrade-control /home/dollhouse \
+    && chmod -R 750 /app \
+    && chmod 700 /app/tmp /app/logs /app/.memory-upgrade-control /home/dollhouse \
+    && chown -R 1001:1001 /app /home/dollhouse \
+    && printf 'root:x:0:0:root:/root:/sbin/nologin\ndollhouse:x:1001:1001:Dollhouse:/home/dollhouse:/sbin/nologin\n' > /tmp/runtime-passwd \
+    && printf 'root:x:0:\ndollhouse:x:1001:\n' > /tmp/runtime-group
 
-# Remove test files that shouldn't be in production image
-# These files can cause Docker build to hang due to large pathological test datasets
-RUN rm -rf ./dist/test ./dist/__tests__ ./dist/**/*.test.js ./dist/**/*.spec.js || true
+# Stage the exact signed-index security package and its complete payload.
+# The final image receives neither APT nor package-management executables.
+FROM node-base AS runtime-security
+USER 0:0
+RUN mkdir -m 0700 /root/zlib-runtime && mkdir -m 0700 /root/zlib-runtime/download
+WORKDIR /root/zlib-runtime/download
+RUN apt-get update && apt-get download 'zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1' \
+    && set -- zlib1g_*.deb && test "$#" -eq 1 && test -f "$1" \
+    && mv "$1" zlib.deb
+COPY scripts/ci/stage-zlib-runtime.mjs /root/zlib-runtime/stage-zlib-runtime.mjs
+RUN node /root/zlib-runtime/stage-zlib-runtime.mjs
 
-# Security hardening - Set proper permissions
-RUN chmod -R 750 /app && \
-    chown -R dollhouse:nodejs /app
-
-# Create writable directories with restricted permissions
-RUN mkdir -p /app/tmp /app/logs /app/.memory-upgrade-control && \
-    chown -R dollhouse:nodejs /app/tmp /app/logs /app/.memory-upgrade-control && \
-    chmod -R 700 /app/tmp /app/logs /app/.memory-upgrade-control
-
-# Switch to non-root user
-USER dollhouse
-
-# HTTP transport port (documentation hint — does not publish the port)
+# Distroless Node 24 Debian 13; immutable multi-platform index. Its age and
+# signature/source qualification remain release gates, not implied by this pin.
+FROM gcr.io/distroless/nodejs24-debian13@sha256:b8cec4b2f2126ff7bd034ec9ac207ffb3272667dfdc48376e3b035d3270549ba AS production
+COPY --from=runtime-security /root/zlib-runtime/overlay/ /
+COPY --from=runtime-assets --chown=1001:1001 /app /app
+COPY --from=runtime-security --chown=1001:1001 --chmod=0640 /root/zlib-runtime/receipt.json /app/.zlib-runtime-receipt.json
+COPY --from=runtime-assets --chown=1001:1001 /home/dollhouse /home/dollhouse
+COPY --from=runtime-assets /tmp/runtime-passwd /etc/passwd
+COPY --from=runtime-assets /tmp/runtime-group /etc/group
+# COPY may materialize destination directories with default modes. Normalize
+# only the six fixed directories using Node, with no shell or package manager.
+USER 0:0
+RUN ["/nodejs/bin/node", "-e", "const fs=require('node:fs'); for (const [p,m] of [['/app',0o750],['/app/dist',0o750],['/app/tmp',0o700],['/app/logs',0o700],['/app/.memory-upgrade-control',0o700],['/home/dollhouse',0o700]]) { const s=fs.lstatSync(p); if (!s.isDirectory() || s.isSymbolicLink()) throw new Error('Unsafe runtime directory: '+p); fs.chownSync(p,1001,1001); fs.chmodSync(p,m); const v=fs.lstatSync(p); if (!v.isDirectory() || v.uid!==1001 || v.gid!==1001 || (v.mode&0o777)!==m) throw new Error('Runtime directory verification failed: '+p); }"]
+WORKDIR /app
+USER 1001:1001
+# Clear the base entrypoint so the existing node command and overrides work.
+ENTRYPOINT []
 EXPOSE 3000
-
-# Health check for HTTP transport mode.
-# Uses Node.js fetch (no curl needed — curl is stripped for security).
-# In stdio mode, the check fails gracefully (no HTTP server listening),
-# which is acceptable since stdio containers are short-lived.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD node -e "fetch('http://localhost:'+(process.env.DOLLHOUSE_HTTP_PORT||3000)+'/healthz').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"
+  CMD ["/nodejs/bin/node", "-e", "fetch('http://localhost:'+(process.env.DOLLHOUSE_HTTP_PORT||3000)+'/healthz').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"]
 
 # Add security labels for container metadata
 LABEL org.dollhousemcp.memory-upgrade-drain="v2"
@@ -169,7 +149,8 @@ ENV NODE_ENV=production \
     DOLLHOUSE_SECURITY_MODE=strict \
     DOLLHOUSE_PORTFOLIO_DIR=/app/tmp/portfolio \
     DOLLHOUSE_CACHE_DIR=/app/tmp/cache \
-    PATH="/app/node_modules/.bin:$PATH"
+    HOME=/home/dollhouse \
+    PATH="/app/node_modules/.bin:/nodejs/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 # Default command with explicit platform handling
 CMD ["node", "--trace-warnings", "dist/index.js"]

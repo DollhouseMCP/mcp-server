@@ -9,7 +9,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { waitForReady, hardenedRuntimeConfig } from './export-tested-caddy-image.mjs';
 import { writeNativeCaddyfile } from './caddy-native-render.mjs';
-import { parseClientOutput } from './caddy-stream-guard.mjs';
+import { clientExecFailure, collectOwnedDiagnostics, parseClientOutput } from './caddy-stream-guard.mjs';
 import { clientSource } from './caddy-stream-client.mjs';
 
 const [image, fixtureImage, inspectorFile, connection] = process.argv.slice(2);
@@ -40,6 +40,8 @@ let processProfile;
 let negativeWithoutCapability;
 let legacyVolumeRefusal;
 let streamOutcomes;
+let upstreamDiagnosticId;
+let proxyDiagnosticId;
 const observations = [];
 const configSources = [];
 let primaryError;
@@ -162,6 +164,7 @@ try {
     '--network-alias', 'dollhousemcp', '--read-only', '--cap-drop', 'ALL',
     '--security-opt', 'no-new-privileges', '--tmpfs', '/tmp:rw,noexec,nosuid,size=16m',
     '--user', '65534:65534', '--entrypoint', 'node', fixtureImage, '-e', upstreamSource]);
+  upstreamDiagnosticId = upstream;
   engine(['start', upstream]);
   const upstreamInfo = inspect(upstream);
   const addresses = Object.values(upstreamInfo.NetworkSettings.Networks).map(x => x.IPAddress).filter(Boolean);
@@ -175,11 +178,7 @@ try {
       return parseClientOutput(options, result, performance.now() - start);
     } catch (error) {
       if (error.stdout !== undefined || error.stderr !== undefined) {
-        const stderr = String(error.stderr ?? '');
-        throw new Error(JSON.stringify({ phase:'client-exec-failed', protocol:options.h2 ? 'h2' : 'http/1.1',
-          method:options.method ?? 'GET', elapsedMs:performance.now() - start,
-          stdoutBytes:Buffer.byteLength(String(error.stdout ?? '')), stderrBytes:Buffer.byteLength(stderr),
-          stderrTail:stderr.slice(-512).replace(/[^\x20-\x7e\n]/g, '?') }));
+        throw new Error(clientExecFailure(options, error, performance.now() - start));
       }
       throw error;
     }
@@ -191,6 +190,7 @@ try {
     '--cap-add', 'NET_BIND_SERVICE', '--security-opt', 'no-new-privileges',
     '--sysctl', 'net.ipv4.ip_unprivileged_port_start=1024',
     '--tmpfs', '/tmp:rw,noexec,nosuid,nodev,size=32m', image]);
+  proxyDiagnosticId = proxy;
   const installConfig = (mode, trusted) => {
     const text = fs.readFileSync(render(mode, trusted), 'utf8');
     // Model the deployment's read-only Caddyfile mount. Only a separate
@@ -287,7 +287,7 @@ try {
   const streams=await Promise.allSettled([requestAsync({...post,tls:true}),requestAsync({...post,h2:true})]);
   streamOutcomes = streams.map((result, index) => {
     if (result.status === 'rejected') return { protocol:index ? 'h2' : 'http/1.1', status:'rejected',
-      diagnostic:String(result.reason?.message ?? result.reason).slice(0, 2048) };
+      diagnostic:String(result.reason?.message ?? result.reason).slice(0, 8192) };
     const value = result.value;
     return { protocol:value.protocol, status:'fulfilled', httpStatus:value.status, method:value.method,
       eventCount:value.eventTimesMs?.length, eventTimesMs:value.eventTimesMs, quietGapMs:value.quietGapMs };
@@ -322,7 +322,13 @@ try {
     productionActions:false }, null, 2));
 } catch (error) {
   primaryError = error;
-  console.error(JSON.stringify({ qualificationFailure:true, rendererSha256:rendererSha, harnessSha256:harnessSha, guardSha256:guardSha, clientSha256:clientSha, configSources, observations, streamOutcomes, processProfile, negativeWithoutCapability, legacyVolumeRefusal, normalStop }));
+  let containerDiagnostics;
+  try {
+    const ids = [upstreamDiagnosticId, proxyDiagnosticId].filter(Boolean);
+    containerDiagnostics = collectOwnedDiagnostics(ids, ownedContainers, args => spawnSync(
+      engineExecutable, [...engineArgs, ...args], { encoding:'utf8', timeout:3000, maxBuffer:65536 }));
+  } catch { containerDiagnostics = { error:'unavailable' }; }
+  console.error(JSON.stringify({ containerDiagnostics, qualificationFailure:true, rendererSha256:rendererSha, harnessSha256:harnessSha, guardSha256:guardSha, clientSha256:clientSha, configSources, observations, streamOutcomes, processProfile, negativeWithoutCapability, legacyVolumeRefusal, normalStop }));
 } finally {
   // Every identity here was created by this invocation; no broad pruning.
   const errors = primaryError ? [primaryError] : [];
