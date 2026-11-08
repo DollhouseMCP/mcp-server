@@ -124,7 +124,7 @@ cmp "$work/kit.history" "$work/kit-after.history"
 status=0
 run_image "$migration_image" missing-admin '' "$fresh_admin" '' || status=$?
 [[ "$status" == 1 ]] || { echo 'missing admin did not produce the expected CLI refusal' >&2; exit 1; }
-grep -Fq 'Database migration failed.' "$work/missing-admin.out"
+grep -Fq 'DOLLHOUSE_DATABASE_ADMIN_URL is required' "$work/missing-admin.out"
 status=0
 run_image "$migration_image" missing-bootstrap '' "$fresh_admin" '' node dist/cli/admin-bootstrap.js --require-admin-url --method github --github-id 123456789 || status=$?
 [[ "$status" == 1 ]] || { echo 'missing bootstrap admin did not refuse' >&2; exit 1; }

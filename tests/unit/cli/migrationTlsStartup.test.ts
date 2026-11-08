@@ -43,6 +43,7 @@ it.each([false, true])('observes the real TLS startup with sanitized=%s', async 
     cert: readFileSync(certificate),
   });
   const sockets = new Set<Socket>();
+  let packetReceived = false;
   let resolvePacket: (value: Buffer) => void = () => {};
   let rejectPacket: (error: Error) => void = () => {};
   const packet = new Promise<Buffer>((done, reject) => { resolvePacket = done; rejectPacket = reject; });
@@ -56,7 +57,9 @@ it.each([false, true])('observes the real TLS startup with sanitized=%s', async 
       const secure = new TLSSocket(socket, { isServer: true, secureContext: context });
       sockets.add(secure);
       secure.on('error', rejectPacket);
-      resolvePacket(await readPacket(secure, 8, 65536));
+      const received = await readPacket(secure, 8, 65536);
+      packetReceived = true;
+      resolvePacket(received);
     })().catch(rejectPacket);
   });
   await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
@@ -67,10 +70,15 @@ it.each([false, true])('observes the real TLS startup with sanitized=%s', async 
   expect(settings.ssl).toBe('verify-full');
   const child = spawn(process.execPath, ['tests/fixtures/postgres/startup-client.mjs', settings.url, String(settings.ssl)], {
     env: { ...process.env, NODE_EXTRA_CA_CERTS: certificate },
-    stdio: 'ignore',
+    stdio: ['ignore', 'ignore', 'pipe'],
   });
   child.once('error', rejectPacket);
-  const closed = new Promise<void>((done) => child.once('close', () => done()));
+  let stderr = '';
+  child.stderr.on('data', (chunk: Buffer) => { stderr = (stderr + chunk.toString('utf8')).slice(-1024); });
+  const closed = new Promise<void>((done) => child.once('close', () => {
+    if (!packetReceived) rejectPacket(new Error(`fixture TLS startup failed: ${stderr}`));
+    done();
+  }));
   let timer: NodeJS.Timeout | undefined;
   try {
     const received = await Promise.race([

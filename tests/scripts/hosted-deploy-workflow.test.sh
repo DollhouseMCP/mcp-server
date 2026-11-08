@@ -226,11 +226,12 @@ EOF
 
 create_source_repo() {
   SOURCE_REPO="${TMP_ROOT}/source"
-  mkdir -p "${SOURCE_REPO}/docker"
+  mkdir -p "${SOURCE_REPO}/docker" "${SOURCE_REPO}/src/cli"
   git -C "${SOURCE_REPO}" init -q
   git -C "${SOURCE_REPO}" config user.email "test@example.com"
   git -C "${SOURCE_REPO}" config user.name "Hosted Deploy Test"
-  printf 'FROM scratch\n' > "${SOURCE_REPO}/docker/Dockerfile"
+  printf 'FROM scratch\nFROM production AS migration\n' > "${SOURCE_REPO}/docker/Dockerfile"
+  : > "${SOURCE_REPO}/src/cli/migrate-database.ts"
   printf '{"scripts":{"db:migrate":"echo migrate"}}\n' > "${SOURCE_REPO}/package.json"
   printf 'v1' > "${SOURCE_REPO}/version.txt"
   git -C "${SOURCE_REPO}" add .

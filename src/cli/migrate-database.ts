@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import postgres from 'postgres';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
-import { requireAdminDatabaseUrl } from './adminDatabase.js';
+import { maintenanceErrorMessage, requireAdminDatabaseUrl } from './adminDatabase.js';
 import { migrationTlsOptions } from './migrationTls.js';
 
 export async function migrateDatabase(source: NodeJS.ProcessEnv = process.env): Promise<void> {
@@ -33,9 +33,9 @@ export async function migrateDatabase(source: NodeJS.ProcessEnv = process.env): 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
     await migrateDatabase();
-  } catch {
-    // Driver errors can contain the connection URL; never print those details.
-    process.stderr.write('Database migration failed. Check the administrator connection and migration state.\n');
+  } catch (error) {
+    // Only our own fixed validation messages are safe; driver errors can contain URLs.
+    process.stderr.write(`${maintenanceErrorMessage(error)}\n`);
     process.exitCode = 1;
   }
 }

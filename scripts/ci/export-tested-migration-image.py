@@ -19,6 +19,24 @@ def require(condition, message):
         raise SystemExit(message)
 
 
+def validate_environment(config, role):
+    expected_environment = {
+        'SSL_CERT_FILE': '/etc/ssl/certs/ca-certificates.crt', 'HOME': '/home/dollhouse',
+        'NODE_ENV': 'production', 'PERSONAS_DIR': '/app/data/personas',
+        'NODE_OPTIONS': '--max-old-space-size=256', 'DOLLHOUSE_DISABLE_UPDATES': 'true',
+        'DOLLHOUSE_SECURITY_MODE': 'strict',
+        'PATH': '/app/node_modules/.bin:/nodejs/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+    }
+    if role == 'migration':
+        expected_environment.update(DOLLHOUSE_PORTFOLIO_DIR='/app/tmp/portfolio',
+                                    DOLLHOUSE_CACHE_DIR='/app/tmp/cache')
+    env = config.get('Env')
+    require(isinstance(env, list) and all(isinstance(item, str) and '=' in item for item in env),
+            'Invalid migration image environment')
+    environment = dict(item.split('=', 1) for item in env)
+    require(len(env) == len(expected_environment) and environment == expected_environment,
+            'Unexpected migration image environment; do not upload')
+
 def main():
     expected = os.environ['EVIDENCE_PLATFORM']
     require(expected in {'linux/amd64', 'linux/arm64'}, 'Unexpected platform')
@@ -50,6 +68,7 @@ def main():
     require(config.get('User') == '1001:1001' and config.get('Entrypoint') in (None, []) and
             config.get('Cmd') == ['node', 'dist/cli/migrate-database.js'] and
             config.get('Healthcheck', {}).get('Test') == ['NONE'], 'Unexpected migration runtime')
+    validate_environment(config, role)
     proof_bytes = (root / ('slim-' + role + '-proof.json')).read_bytes()
     require(len(proof_bytes) <= 65536, 'Fixture proof exceeds limit')
     proof = json.loads(proof_bytes)
@@ -80,7 +99,8 @@ def main():
                 'testedCheckoutTree': tree, 'testedCheckoutParents': parents, 'runId': os.environ['GITHUB_RUN_ID'],
                 'runAttempt': os.environ['GITHUB_RUN_ATTEMPT'], 'rootFsDiffIds': image['RootFS']['Layers'],
                 'archive': archive.name, 'archiveSha256': sha, 'archiveBytes': size,
-                'fixtureProofSha256': hashlib.sha256(proof_bytes).hexdigest(), 'runtimeWritableLayerIncluded': False}
+                'fixtureProofSha256': hashlib.sha256(proof_bytes).hexdigest(), 'environmentVerified': True,
+                'runtimeWritableLayerIncluded': False}
     if role == 'prebuilt-migration':
         source_bytes = (root / 'prebuilt-source-proof.json').read_bytes()
         dist_bytes = (root / 'prebuilt-dist-sha256.txt').read_bytes()

@@ -84,6 +84,9 @@ if [[ "${1:-}" == --case ]]; then
   sleep() { :; }
   stage_from_source_dir() {
     local incoming="$1"
+    mkdir -p "${incoming}/docker" "${incoming}/src/cli"
+    printf 'FROM production AS migration\n' > "${incoming}/docker/Dockerfile"
+    : > "${incoming}/src/cli/migrate-database.ts"
     printf 'new\n' > "${incoming}/version"
     printf 'new-revision\n'
   }

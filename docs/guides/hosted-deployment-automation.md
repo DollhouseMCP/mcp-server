@@ -607,6 +607,8 @@ DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com npm run hosted:deploy -- rollback
 
 Rollback restores the application source bundle only. It does not roll database schema backward; use it for ordinary failed app deploys, not for a migration that requires a planned database restore.
 
+After rolling back to a source bundle that predates slim maintenance, `migrate` and `bootstrap-admin` are unavailable until the server is rolled forward to a supported source and rendered again. Rollback builds only the application image and does not run migrations.
+
 A preparation failure leaves the running app and deployed revision/timestamp markers in place; `server` and image tags may already contain the prepared rollback candidate, while `server.rollback-from-*` retains the current source. The prepared source/tag may therefore differ from the running image; this is not a completed rollback or a restored active source pointer. Use the retained bundle for source recovery. Deployed markers change only after successful replacement. A drain refusal prevents replacement and retains the old process and its work. No forced stop follows that refusal.
 
 ### `verify`
