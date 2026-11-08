@@ -22,6 +22,8 @@ Grype 0.120.1 scanned the unchanged archives offline with the database built `20
 
 These statuses are the frozen scanner database's observations: 58 rows marked `wont-fix`, two `not-fixed`, and two `fixed`. They are not acceptance of residual risk or an independent statement of current Debian policy. A later assessment must retain raw findings and independently check advisory, package version, affected component and fix status.
 
+The later candidate changes builder APT pins and the final runtime; signed-index and native-image qualification are still pending.
+
 ## Proposed next investigation
 
 1. Inspect authenticated Debian Trixie release metadata and signed package indexes for both architectures, source/version relationships and actual package publication dates. In particular, establish whether exact `apt` and `libapt-pkg7.0` 3.0.4 are available and appropriate before qualifying the later candidate pin. The reported fix date alone does not establish package age or provenance; the applicable dependency-age policy and any needed decision remain separate gates.

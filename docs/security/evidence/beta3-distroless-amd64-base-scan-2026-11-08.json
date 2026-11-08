@@ -1,5 +1,5 @@
 {
-  "purpose": "PRELIMINARY_SELECTED_BASE_ONLY_NOT_FINAL_IMAGE",
+  "purpose": "Preliminary selected-base scan only; not a final-image result.",
   "reference": "gcr.io/distroless/nodejs24-debian13@sha256:b8cec4b2f2126ff7bd034ec9ac207ffb3272667dfdc48376e3b035d3270549ba",
   "platform": "linux/amd64",
   "index": "sha256:b8cec4b2f2126ff7bd034ec9ac207ffb3272667dfdc48376e3b035d3270549ba",
@@ -183,11 +183,11 @@
   },
   "elapsed_seconds": 15.53,
   "method_limits": [
-    "PRELIMINARY_BASE_ONLY: no application layers/nativeABI/runtimequalification.",
-    "No registry authentication, executable image launch, VM/Podman mutation, build or push.",
-    "Frozen existing DB selected; auto-update false, offline sandbox denies allnetwork. db_unchanged means no update performed/configured; no independent before/after3.39GB DBbytehash recorded.",
-    "Layers retained compressed only; existing archiveverifier streameddecompressiontohashDiffIDs, didnotextractfilesystem.",
-    "Exactlyone Grypeinvocation; fail-onHigh exit2 retainedrawunsuppressedmatches; ignores/excludes empty."
+    "Preliminary selected base only: no application layers, native ABI or runtime qualification.",
+    "No registry authentication, executable image launch, VM or Podman mutation, build, or push.",
+    "Frozen existing database; auto-update disabled and offline sandbox denies network. Database unchanged means no update performed or configured; no independent before/after hash of the 3.39 GB database was recorded.",
+    "Layers retained compressed; the existing archive verifier streamed decompression to hash DiffIDs without extracting the filesystem.",
+    "Exactly one Grype invocation; fail-on High exit 2 and raw matches retained. Explicit ignore and exclude lists were empty; built-in rules are disclosed in the raw report."
   ],
   "scanner_config_sha256": "fdb23e30658c2279bf5db0f6cc7a9fe8fa7f9027f79e01e312805eb72855a59c",
   "sandbox_sha256": "cca75894ab2f41ec3c4203a7cc7eb266a131d571c7c448ab48d548e7e9d2529e",
@@ -198,5 +198,6 @@
   },
   "owned_evidence_disk_bytes": 111224990,
   "download_cap_bytes": 536870912,
-  "archive_unpacked_verify_cap_bytes": 1073741824
+  "archive_unpacked_verify_cap_bytes": 1073741824,
+  "raw_report_sha256": "29be6999839d701b9241b1533cc57699b787990befadfd14cbabffc8cbd1e5a9"
 }

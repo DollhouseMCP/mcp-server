@@ -129,5 +129,6 @@
       "architecture": "amd64",
       "source": "gcc-14"
     }
-  ]
+  ],
+  "archive_sha256": "6d5e69803f4ba9bddeda3ddbb4c0f05af7c1c04125acdce1420c18ceb6d54c66"
 }

@@ -2,6 +2,7 @@
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const { createHash } = require('node:crypto');
 const os = require('node:os');
 const { createRequire } = require('node:module');
 
@@ -21,7 +22,7 @@ function readDebianInventory(inventoryRoot) {
     if (entry.name.endsWith('.md5sums')) { md5sumFileCount++; continue; }
     const text = fs.readFileSync(path, 'utf8');
     const field = (name) => {
-      const matches = [...text.matchAll(new RegExp(`^${name}: ([^\\r\\n]+)$`, 'gm'))];
+      const matches = [...text.matchAll(new RegExp(String.raw`^${name}: ([^\r\n]+)$`, 'gm'))];
       assert.equal(matches.length, 1, `Invalid Debian ${name} field`);
       const value = matches[0][1];
       assert.match(value, /^[A-Za-z0-9.+:~_-]{1,256}$/);
@@ -47,7 +48,7 @@ async function main() {
   assert.equal(process.env.HOME, '/home/dollhouse');
   assert.equal(process.env.SSL_CERT_FILE, '/etc/ssl/certs/ca-certificates.crt');
   assert.ok(fs.statSync(process.env.SSL_CERT_FILE).isFile());
-  const paths = ['/app/tmp', '/app/logs', '/app/.memory-upgrade-control', '/home/dollhouse'];
+  const paths = ['/app', '/app/dist', '/app/tmp', '/app/logs', '/app/.memory-upgrade-control', '/home/dollhouse'];
   const directories = paths.map((path) => {
     try {
       const stat = fs.lstatSync(path);
@@ -64,9 +65,40 @@ async function main() {
     assert.equal(item.symlink, false, `${item.path} must not be a symlink`);
     assert.equal(item.uid, 1001, `${item.path} owner`);
     assert.equal(item.gid, 1001, `${item.path} group`);
-    assert.equal(item.mode, 0o700, `${item.path} mode`);
+    const expectedMode = item.path === '/app' || item.path === '/app/dist' ? 0o750 : 0o700;
+    assert.equal(item.mode, expectedMode, `${item.path} mode`);
   }
-  console.log(JSON.stringify({ debianInventory: readDebianInventory('/var/lib/dpkg/status.d') }));
+  const index = fs.lstatSync('/app/dist/index.js');
+  assert.ok(index.isFile() && !index.isSymbolicLink(), '/app/dist/index.js must be a regular file');
+  const debianInventory = readDebianInventory('/var/lib/dpkg/status.d');
+  const zlibRecords = debianInventory.packages.filter((item) => item.package === 'zlib1g');
+  assert.equal(zlibRecords.length, 1, 'Expected one zlib1g record');
+  assert.equal(zlibRecords[0].version, '1:1.3.dfsg+really1.3.1-1+deb13u1');
+  const arch = process.arch === 'x64' ? 'amd64' : process.arch;
+  assert.ok(arch === 'amd64' || arch === 'arm64');
+  assert.equal(zlibRecords[0].architecture, arch);
+  const receiptPath = '/app/.zlib-runtime-receipt.json';
+  const receiptStat = fs.lstatSync(receiptPath);
+  assert.ok(receiptStat.isFile() && !receiptStat.isSymbolicLink() && receiptStat.size <= 64 * 1024,
+    'Invalid zlib receipt');
+  const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
+  const expectedDeb = {
+    amd64: '8c27c342230503b73dfde629642c3b352e87b554e06d60cf58772f236a305ceb',
+    arm64: '0e41b3d7ad8ad7fcd36dd4d61ca91a70018478fc4af652e044f4be770784ddff',
+  };
+  assert.equal(receipt.package, 'zlib1g');
+  assert.equal(receipt.version, zlibRecords[0].version);
+  assert.equal(receipt.architecture, arch);
+  assert.equal(receipt.debSha256, expectedDeb[arch]);
+  const triplet = arch === 'amd64' ? 'x86_64-linux-gnu' : 'aarch64-linux-gnu';
+  const library = `/usr/lib/${triplet}/libz.so.1`;
+  assert.equal(fs.readlinkSync(library), 'libz.so.1.3.1');
+  const libraryStat = fs.statSync(library);
+  assert.ok(libraryStat.isFile() && libraryStat.size <= 16 * 1024 * 1024, 'Invalid zlib library');
+  const libraryBytes = fs.readFileSync(library);
+  assert.equal(libraryBytes.length, libraryStat.size);
+  assert.equal(createHash('sha256').update(libraryBytes).digest('hex'), receipt.librarySha256);
+  console.log(JSON.stringify({ debianInventory, zlibRuntime: receipt }));
   for (const path of ['/bin/sh', '/usr/bin/curl', '/usr/bin/apt-get', '/usr/bin/dpkg', '/usr/local/bin/npm', '/nodejs/bin/npm']) {
     assert.equal(fs.existsSync(path), false, `Unexpected runtime tool: ${path}`);
   }
