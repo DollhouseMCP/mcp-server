@@ -5,10 +5,6 @@ name: Docker Testing
 # This eliminates the 10-22x performance penalty of QEMU emulation for TypeScript compilation
 
 on:
-  push:
-    branches: [main, develop, beta]
-  pull_request:
-    branches: [main, develop, beta]
   workflow_dispatch:
 
 permissions: {}
@@ -16,6 +12,8 @@ permissions: {}
 env:
   NODE_OPTIONS: --max-old-space-size=4096
   CI: true
+  QUALIFIED_SOURCE_SHA: d26704f8b44cc566dca73316dd4fc2ac07e0ebe5
+  QUALIFIED_SOURCE_TREE: 952005c00f54f1b2b3b951292be7dd720106f3f4
   TEST_PERSONAS_DIR: ${{ github.workspace }}/test-personas
   # Enhanced debugging environment variables
   BUILDX_NO_DEFAULT_ATTESTATIONS: 1
@@ -90,7 +88,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          ref: d26704f8b44cc566dca73316dd4fc2ac07e0ebe5
           fetch-depth: 1
+          persist-credentials: false
+
+      - name: Bind exact source and native architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$QUALIFIED_SOURCE_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$QUALIFIED_SOURCE_TREE"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          case "${{ matrix.platform }}:$(uname -m)" in
+            linux/amd64:x86_64|linux/arm64:aarch64) ;;
+            *) echo 'Non-native or unexpected architecture' >&2; exit 1 ;;
+          esac
 
       - name: Verify optional runtime tool hardening offline
         shell: bash
@@ -110,12 +122,6 @@ jobs:
           test "$(node --version)" = "v24.22.1"
           test "$(npm --version)" = "11.19.1"
           node --test tests/scripts/prepare-global-npm.test.mjs tests/scripts/stage-global-npm-vendor-patches.test.mjs tests/scripts/runtime-dockerfile-contract.test.mjs tests/scripts/runtime-inventory.test.cjs tests/scripts/stage-zlib-runtime.test.mjs
-
-      - name: 🔧 Set up QEMU (AMD64 only - ARM64 uses native runner)
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: linux/amd64
-        if: matrix.platform == 'linux/amd64'
 
       - name: 🔧 Set up Docker Buildx (with diagnostics)
         shell: bash
@@ -146,10 +152,6 @@ jobs:
           echo "\nSupported platforms:"
           docker buildx inspect | grep -A 10 "Platforms:" || echo "Platform info not available"
 
-          echo "\n🧪 Platform Test:"
-          echo "Testing basic platform compatibility..."
-          docker buildx build --platform ${{ matrix.platform }} - <<< 'FROM alpine:latest' || echo "Platform test failed"
-
           echo "======================================"
           echo "⏰ Buildx Setup Complete: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           echo "======================================"
@@ -172,7 +174,7 @@ jobs:
           echo "======================================"
 
           # Convert platform to tag-safe format (replace / with -)
-          PLATFORM_TAG=$(echo "${{ matrix.platform }}" | sed 's/\//-/g')
+          PLATFORM_TAG=${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
           echo "🏷️ Platform Tag: ${PLATFORM_TAG}"
 
           echo "\n🔍 Pre-Build Environment:"
@@ -195,7 +197,8 @@ jobs:
           docker buildx build \
             --platform ${{ matrix.platform }} \
             --target builder \
-            --tag dollhousemcp:builder-${PLATFORM_TAG} \
+            --tag ghcr.io/dollhousemcp/mcp-server-hosted:beta3-d26704f8b44c-op20261108-01-migrate-${PLATFORM_TAG} \
+            --label org.dollhousemcp.engine-proof-source=d26704f8b44cc566dca73316dd4fc2ac07e0ebe5 \
             --cache-from type=local,src=/tmp/.buildx-cache \
             --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
             --progress=plain \
@@ -236,6 +239,70 @@ jobs:
 
           set -e  # Re-enable exit on error
 
+      - name: Verify builder migration and bootstrap against owned PostgreSQL fixture
+        shell: bash
+        env:
+          TARGET_ARCH: ${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
+        run: |
+          set -euo pipefail
+          builder_tag="ghcr.io/dollhousemcp/mcp-server-hosted:beta3-d26704f8b44c-op20261108-01-migrate-${TARGET_ARCH}"
+          builder_id=$(docker image inspect --format '{{.Id}}' "$builder_tag")
+          [[ "$builder_id" =~ ^sha256:[a-f0-9]{64}$ ]]
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.dollhousemcp.engine-proof-source" }}' "$builder_id")" = "$QUALIFIED_SOURCE_SHA"
+          printf '%s\n' "$builder_id" > "$RUNNER_TEMP/beta3-tested-builder.id"
+          network_id=''
+          postgres_id=''
+          child_id=''
+          cleanup() {
+            local result=$?
+            trap - EXIT
+            if [[ -n "$child_id" ]]; then timeout 15s docker rm --force "$child_id" >/dev/null || result=1; fi
+            if [[ -n "$postgres_id" ]]; then timeout 15s docker rm --force --volumes "$postgres_id" >/dev/null || result=1; fi
+            if [[ -n "$network_id" ]]; then timeout 15s docker network rm "$network_id" >/dev/null || result=1; fi
+            exit "$result"
+          }
+          trap cleanup EXIT
+          network_id=$(docker network create --internal "beta3-fixture-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${TARGET_ARCH}")
+          [[ "$network_id" =~ ^[a-f0-9]{64}$ ]]
+          postgres_id=$(docker create --network "$network_id" --network-alias fixture-db \
+            -e POSTGRES_USER=fixture -e POSTGRES_PASSWORD=fixture-only-password -e POSTGRES_DB=fixture \
+            'postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73')
+          [[ "$postgres_id" =~ ^[a-f0-9]{64}$ ]]
+          docker start "$postgres_id" >/dev/null
+          ready=false
+          for _ in {1..60}; do
+            if timeout 5s docker exec "$postgres_id" pg_isready -U fixture -d fixture >/dev/null; then ready=true; break; fi
+            sleep 1
+          done
+          test "$ready" = true
+          BOOTSTRAP_ADMIN_SCRIPT_FILE="$RUNNER_TEMP/beta3-bootstrap-admin.sh"
+          source scripts/hosted-deploy/render.sh
+          write_bootstrap_admin_script
+          run_builder() {
+            child_id=$(docker create --network "$network_id" \
+              --mount "type=bind,src=${BOOTSTRAP_ADMIN_SCRIPT_FILE},dst=/usr/local/bin/dollhouse-bootstrap-admin,readonly" \
+              -e NODE_ENV=production -e DOLLHOUSE_DATABASE_SSL=disable \
+              -e DOLLHOUSE_AUTH_STORAGE_BACKEND=postgres \
+              -e DOLLHOUSE_DATABASE_ADMIN_URL='postgres://fixture:fixture-only-password@fixture-db:5432/fixture' \
+              -e DOLLHOUSE_DATABASE_URL='postgres://fixture:fixture-only-password@fixture-db:5432/fixture' \
+              "$builder_id" "$@")
+            [[ "$child_id" =~ ^[a-f0-9]{64}$ ]]
+            timeout 120s docker start --attach "$child_id"
+            test "$(docker inspect --format '{{.State.ExitCode}}' "$child_id")" = 0
+            docker rm "$child_id" >/dev/null
+            child_id=''
+          }
+          run_builder node -e 'if(process.version!=="v24.22.1")process.exitCode=1'
+          run_builder npm --version
+          run_builder node -e 'const a=require("argon2"); (async()=>{const h=await a.hash("fixture"); if(!await a.verify(h,"fixture") || await a.verify(h,"wrong"))process.exitCode=1})().catch(()=>{process.exitCode=1})'
+          run_builder npm run db:migrate
+          run_builder /usr/local/bin/dollhouse-bootstrap-admin --method github --github-id 123456789
+          result=$(timeout 10s docker exec "$postgres_id" psql -U fixture -d fixture -Atc \
+            "SELECT payload->>'adminSub' FROM auth_kv WHERE model='AuthBootstrap' AND id='state' AND payload->>'completed'='true'")
+          test "$result" = github_123456789
+          test "$(docker image inspect --format '{{.Id}}' "$builder_tag")" = "$builder_id"
+          printf '%s\n' "$QUALIFIED_SOURCE_SHA $builder_id $TARGET_ARCH" > "$RUNNER_TEMP/beta3-builder-proof.txt"
+
       - name: 🏗️ Build Docker image (production stage) - VERBOSE
         shell: bash
         run: |
@@ -245,7 +312,7 @@ jobs:
           echo "======================================"
 
           # Convert platform to tag-safe format (replace / with -)
-          PLATFORM_TAG=$(echo "${{ matrix.platform }}" | sed 's/\//-/g')
+          PLATFORM_TAG=${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
           echo "🏷️ Platform Tag: ${PLATFORM_TAG}"
 
           echo "\n🔍 Pre-Production Build State:"
@@ -264,8 +331,8 @@ jobs:
           docker buildx build \
             --platform ${{ matrix.platform }} \
             --target production \
-            --tag dollhousemcp:latest-${PLATFORM_TAG} \
-            --label org.dollhousemcp.engine-proof-source=${{ github.sha }} \
+            --tag ghcr.io/dollhousemcp/mcp-server-hosted:beta3-d26704f8b44c-op20261108-01-${PLATFORM_TAG} \
+            --label org.dollhousemcp.engine-proof-source=d26704f8b44cc566dca73316dd4fc2ac07e0ebe5 \
             --cache-from type=local,src=/tmp/.buildx-cache \
             --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
             --progress=plain \
@@ -288,7 +355,7 @@ jobs:
           docker images | grep dollhousemcp || echo "No dollhousemcp images found"
 
           echo "\nImage layers and size:"
-          docker history dollhousemcp:latest-${PLATFORM_TAG} || echo "Could not inspect image history"
+          docker history ghcr.io/dollhousemcp/mcp-server-hosted:beta3-d26704f8b44c-op20261108-01-${PLATFORM_TAG} || echo "Could not inspect image history"
 
           # Exit with the actual build exit code
           if [ $PROD_EXIT_CODE -ne 0 ]; then
@@ -302,14 +369,49 @@ jobs:
 
           set -e  # Re-enable exit on error
           # Capture the immutable production identity before any runtime tests.
-          docker image inspect --format '{{.Id}}' "dollhousemcp:latest-${PLATFORM_TAG}" > "$RUNNER_TEMP/beta3-tested-production.id"
+          docker image inspect --format '{{.Id}}' "ghcr.io/dollhousemcp/mcp-server-hosted:beta3-d26704f8b44c-op20261108-01-${PLATFORM_TAG}" > "$RUNNER_TEMP/beta3-tested-production.id"
+
+      - name: Verify actual production HTTP health on the native runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_id=$(cat "$RUNNER_TEMP/beta3-tested-production.id")
+          [[ "$image_id" =~ ^sha256:[a-f0-9]{64}$ ]]
+          container_id=''
+          cleanup() {
+            local result=$?
+            trap - EXIT
+            if [[ -n "$container_id" ]]; then timeout 15s docker rm --force "$container_id" >/dev/null || result=1; fi
+            exit "$result"
+          }
+          trap cleanup EXIT
+          container_id=$(docker create --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --tmpfs /tmp:noexec,nosuid,mode=1777 --tmpfs /app/tmp:noexec,nosuid,mode=1777 \
+            --tmpfs /app/logs:noexec,nosuid,mode=1777 \
+            -e DOLLHOUSE_TRANSPORT=streamable-http -e DOLLHOUSE_HTTP_HOST=127.0.0.1 \
+            -e DOLLHOUSE_PORTFOLIO_DIR=/app/tmp/portfolio -e DOLLHOUSE_CACHE_DIR=/app/tmp/cache \
+            "$image_id")
+          [[ "$container_id" =~ ^[a-f0-9]{64}$ ]]
+          test "$(docker inspect --format '{{.Image}}' "$container_id")" = "$image_id"
+          test "$(docker inspect --format '{{.Config.User}}' "$container_id")" = '1001:1001'
+          docker start "$container_id" >/dev/null
+          healthy=false
+          for _ in {1..90}; do
+            state=$(timeout 5s docker inspect --format '{{.State.Health.Status}}' "$container_id")
+            if [[ "$state" = healthy ]]; then healthy=true; break; fi
+            if [[ "$state" = unhealthy ]]; then break; fi
+            sleep 1
+          done
+          test "$healthy" = true
+          timeout 20s docker stop --time 10 "$container_id" >/dev/null
+          test "$(docker inspect --format '{{.State.ExitCode}}' "$container_id")" = 0
 
       - name: Verify private drain hold against native Docker restart manager
         shell: bash
         run: |
           set -euo pipefail
           image_id=$(cat "$RUNNER_TEMP/beta3-tested-production.id")
-          python3 tests/scripts/memory-upgrade-docker-engine.py "$image_id" "$GITHUB_SHA" | tee "$RUNNER_TEMP/memory-upgrade-engine-proof.json"
+          python3 tests/scripts/memory-upgrade-docker-engine.py "$image_id" "$QUALIFIED_SOURCE_SHA" | tee "$RUNNER_TEMP/memory-upgrade-engine-proof.json"
 
       - name: Preserve owned Docker drain proof
         if: always()
@@ -318,15 +420,6 @@ jobs:
           name: memory-upgrade-engine-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/memory-upgrade-engine-proof.json
           if-no-files-found: ignore
-
-      - name: Scan Docker image for vulnerabilities
-        uses: anchore/scan-action@v3
-        with:
-          image: dollhousemcp:latest-linux-amd64
-          fail-build: false  # Don't fail build on vulnerabilities, just report
-          severity-cutoff: high
-        continue-on-error: true
-        if: matrix.platform == 'linux/amd64'  # Only scan AMD64 to save time on ARM64 builds
 
       - name: 🚀 Test MCP server initialization - ULTRA VERBOSE
         shell: bash
@@ -338,7 +431,7 @@ jobs:
           echo "========================================="
 
           # Convert platform to tag-safe format (replace / with -)
-          PLATFORM_TAG=$(echo "${{ matrix.platform }}" | sed 's/\//-/g')
+          PLATFORM_TAG=${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
           echo "🏷️ Platform Tag: ${PLATFORM_TAG}"
 
           echo "\n🔍 Pre-Test Environment Check:"
@@ -351,7 +444,7 @@ jobs:
 
           echo "\n🧪 Container Preparation Test:"
           echo "Testing basic container creation for platform ${{ matrix.platform }}..."
-          docker run --rm --platform ${{ matrix.platform }} dollhousemcp:latest-${PLATFORM_TAG} node -e "console.log('Container creation test passed')" || {
+          docker run --rm --platform ${{ matrix.platform }} ghcr.io/dollhousemcp/mcp-server-hosted:beta3-d26704f8b44c-op20261108-01-${PLATFORM_TAG} node -e "console.log('Container creation test passed')" || {
             echo "❌ CRITICAL: Cannot create basic container for platform ${{ matrix.platform }}!"
             echo "This indicates a fundamental platform compatibility issue."
             exit 1
@@ -363,7 +456,7 @@ jobs:
             --read-only --cap-drop ALL \
             --security-opt no-new-privileges \
             --mount "type=bind,src=${GITHUB_WORKSPACE}/tests/scripts/docker/runtime-contract.cjs,dst=/runtime-contract.cjs,readonly" \
-            dollhousemcp:latest-${PLATFORM_TAG} node /runtime-contract.cjs
+            ghcr.io/dollhousemcp/mcp-server-hosted:beta3-d26704f8b44c-op20261108-01-${PLATFORM_TAG} node /runtime-contract.cjs
 
           echo "\n📝 Constructing MCP Test Command:"
           MCP_JSON_REQUEST='{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"1.0.0","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}'
@@ -381,7 +474,7 @@ jobs:
             --env DOLLHOUSE_PORTFOLIO_DIR=/app/tmp/portfolio \
             --env DOLLHOUSE_CACHE_DIR=/app/tmp/cache \
             --env NODE_ENV=test \
-            dollhousemcp:latest-${PLATFORM_TAG}"
+            ghcr.io/dollhousemcp/mcp-server-hosted:beta3-d26704f8b44c-op20261108-01-${PLATFORM_TAG}"
 
           echo "\nDocker Command: $DOCKER_CMD"
 
@@ -529,7 +622,7 @@ jobs:
           echo "========================================="
 
           # Convert platform to tag-safe format (replace / with -)
-          PLATFORM_TAG=$(echo "${{ matrix.platform }}" | sed 's/\//-/g')
+          PLATFORM_TAG=${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
           echo "🏷️ Platform Tag: ${PLATFORM_TAG}"
 
           echo "\n📝 Constructing Tools/List Test Command:"
@@ -570,7 +663,7 @@ jobs:
             --env DOLLHOUSE_PORTFOLIO_DIR=/app/tmp/portfolio \
             --env DOLLHOUSE_CACHE_DIR=/app/tmp/cache \
             --env NODE_ENV=test \
-            dollhousemcp:latest-${PLATFORM_TAG} 2>&1" || true)
+            ghcr.io/dollhousemcp/mcp-server-hosted:beta3-d26704f8b44c-op20261108-01-${PLATFORM_TAG} 2>&1" || true)
 
           tools_exit_code=$?
           TOOLS_END=$(date +%s)
@@ -665,7 +758,7 @@ jobs:
         shell: bash
         env:
           EVIDENCE_PLATFORM: ${{ matrix.platform }}
-          EVIDENCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVIDENCE_HEAD_SHA: d26704f8b44cc566dca73316dd4fc2ac07e0ebe5
         run: |
           set -euo pipefail
           python3 - <<'PY_EVIDENCE'
@@ -691,7 +784,7 @@ jobs:
           require(expected in {'linux/amd64', 'linux/arm64'}, 'Unexpected evidence platform')
           image_id = pathlib.Path(os.environ['RUNNER_TEMP'], 'beta3-tested-production.id').read_text().strip()
           require(re.fullmatch(r'sha256:[a-f0-9]{64}', image_id), 'Invalid tested production identity')
-          tag = 'dollhousemcp:latest-' + expected.replace('/', '-')
+          tag = 'ghcr.io/dollhousemcp/mcp-server-hosted:beta3-d26704f8b44c-op20261108-01-' + expected.split('/')[1]
           require(output('docker', 'image', 'inspect', '--format', '{{.Id}}', tag) == image_id,
                   'Production tag changed after runtime tests')
           image = json.loads(output('docker', 'image', 'inspect', image_id))[0]
@@ -709,7 +802,8 @@ jobs:
           require(all(re.fullmatch(r'[a-f0-9]{40}', parent) for parent in parents), 'Invalid checkout parent')
           require(head == checkout or (os.environ['GITHUB_EVENT_NAME'] == 'pull_request' and head in parents),
                   'Recorded source head is not the tested checkout or its direct PR parent')
-          require(checkout == os.environ['GITHUB_SHA'], 'Checkout differs from the tested workflow source')
+          require(checkout == os.environ['QUALIFIED_SOURCE_SHA'] and checkout_tree == os.environ['QUALIFIED_SOURCE_TREE'],
+                  'Checkout differs from the fixed image source')
           require(output('git', 'status', '--porcelain', '--untracked-files=no') == '', 'Tracked source changed during tests')
           proof_path = pathlib.Path(os.environ['RUNNER_TEMP'], 'memory-upgrade-engine-proof.json')
           with proof_path.open('rb') as proof_file:
@@ -751,11 +845,15 @@ jobs:
                   digest.update(block)
           sha = digest.hexdigest()
           (folder / 'SHA256SUMS').write_text(sha + '  ' + archive.name + '\n')
+          config_bytes = (json.dumps(config, sort_keys=True, indent=2) + '\n').encode()
+          (folder / 'inspect-config.json').write_bytes(config_bytes)
           metadata = {
-              'formatVersion': 1, 'imageId': image_id, 'platform': expected, 'nativeRunnerArch': platform.machine(),
+              'formatVersion': 1, 'imageId': image_id, 'inspectConfigSnapshotSha256': hashlib.sha256(config_bytes).hexdigest(),
+              'platform': expected, 'nativeRunnerArch': platform.machine(),
               'sourceHeadSha': head, 'testedCheckoutSha': checkout, 'testedCheckoutTree': checkout_tree,
               'testedCheckoutParents': parents,
               'runId': os.environ['GITHUB_RUN_ID'], 'runAttempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'operationWorkflowSha': os.environ['GITHUB_SHA'],
               'rootFsDiffIds': image['RootFS']['Layers'], 'archive': archive.name,
               'archiveSha256': sha, 'archiveBytes': archive.stat().st_size,
               'collectedAfterRequiredRuntimeTests': True,
@@ -776,120 +874,78 @@ jobs:
           retention-days: 1
           compression-level: 1
 
-      - name: Cleanup containers
-        if: always()
+      - name: Preserve exact tested builder image for separate qualification
         shell: bash
+        env:
+          EVIDENCE_PLATFORM: ${{ matrix.platform }}
         run: |
-          echo "🧹 Cleaning up any dangling containers..."
-          docker system prune -f --volumes || true
+          set -euo pipefail
+          python3 - <<'PY_BUILDER'
+          import hashlib, json, os, pathlib, platform, re, resource, subprocess
+          def output(*args):
+              return subprocess.check_output(args, text=True, timeout=30).strip()
+          def require(condition, message):
+              if not condition:
+                  raise SystemExit(message)
+          expected = os.environ['EVIDENCE_PLATFORM']
+          require(expected in {'linux/amd64', 'linux/arm64'}, 'Unexpected platform')
+          arch = expected.split('/')[1]
+          require(platform.machine().lower() in {'amd64': {'x86_64', 'amd64'}, 'arm64': {'aarch64', 'arm64'}}[arch], 'Non-native runner')
+          source = os.environ['QUALIFIED_SOURCE_SHA']
+          tree = os.environ['QUALIFIED_SOURCE_TREE']
+          require(output('git', 'rev-parse', 'HEAD') == source and output('git', 'rev-parse', 'HEAD^{tree}') == tree, 'Wrong source')
+          require(not output('git', 'status', '--porcelain', '--untracked-files=no'), 'Tracked source changed')
+          image_id = pathlib.Path(os.environ['RUNNER_TEMP'], 'beta3-tested-builder.id').read_text().strip()
+          require(re.fullmatch(r'sha256:[a-f0-9]{64}', image_id), 'Invalid builder ID')
+          tag = 'ghcr.io/dollhousemcp/mcp-server-hosted:beta3-d26704f8b44c-op20261108-01-migrate-' + arch
+          require(output('docker', 'image', 'inspect', '--format', '{{.Id}}', tag) == image_id, 'Builder tag drift')
+          image = json.loads(output('docker', 'image', 'inspect', image_id))[0]
+          require(image['Id'] == image_id and image['Os'] + '/' + image['Architecture'] == expected, 'Image platform mismatch')
+          config = image['Config']
+          require(config.get('Labels', {}).get('org.dollhousemcp.engine-proof-source') == source, 'Image source label mismatch')
+          require(config.get('WorkingDir') == '/app', 'Unexpected builder working directory')
+          env = config.get('Env') or []
+          names = [item.split('=', 1)[0] for item in env]
+          require(len(names) == len(set(names)) and set(names) == {'PATH', 'NODE_VERSION', 'YARN_VERSION'}, 'Unexpected builder environment')
+          proof_bytes = pathlib.Path(os.environ['RUNNER_TEMP'], 'beta3-builder-proof.txt').read_bytes()
+          require(proof_bytes.decode().strip() == f'{source} {image_id} {arch}', 'Builder fixture proof mismatch')
+          folder = pathlib.Path(os.environ['RUNNER_TEMP'], 'beta3-builder-evidence')
+          folder.mkdir(mode=0o700)
+          archive = folder / ('builder-linux-' + arch + '.docker.tar')
+          def limit():
+              resource.setrlimit(resource.RLIMIT_FSIZE, (4 * 1024**3, 4 * 1024**3))
+          subprocess.run(['docker', 'image', 'save', '--output', str(archive), image_id], check=True, timeout=240, preexec_fn=limit)
+          size = archive.stat().st_size
+          require(0 < size <= 4 * 1024**3, 'Builder archive exceeds size budget')
+          digest = hashlib.sha256()
+          with archive.open('rb') as stream:
+              for block in iter(lambda: stream.read(1024 * 1024), b''):
+                  digest.update(block)
+          sha = digest.hexdigest()
+          (folder / 'SHA256SUMS').write_text(sha + '  ' + archive.name + '\n')
+          (folder / 'fixture-proof.txt').write_bytes(proof_bytes)
+          config_bytes = (json.dumps(config, sort_keys=True, indent=2) + '\n').encode()
+          (folder / 'inspect-config.json').write_bytes(config_bytes)
+          metadata = {'formatVersion': 1, 'role': 'builder-migration', 'imageId': image_id,
+              'inspectConfigSnapshotSha256': hashlib.sha256(config_bytes).hexdigest(), 'platform': expected,
+              'nativeRunnerArch': platform.machine(), 'sourceHeadSha': source, 'testedCheckoutSha': source,
+              'testedCheckoutTree': tree, 'operationWorkflowSha': os.environ['GITHUB_SHA'],
+              'runId': os.environ['GITHUB_RUN_ID'], 'runAttempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'rootFsDiffIds': image['RootFS']['Layers'], 'archive': archive.name, 'archiveSha256': sha,
+              'archiveBytes': size, 'fixtureMigrationAndBootstrap': 'passed',
+              'fixtureProofSha256': hashlib.sha256(proof_bytes).hexdigest(), 'runtimeWritableLayerIncluded': False}
+          (folder / 'metadata.json').write_text(json.dumps(metadata, indent=2) + '\n')
+          print(json.dumps(metadata))
+          PY_BUILDER
 
-      - name: Move cache
-        if: always()
-        shell: bash
-        run: |
-          rm -rf /tmp/.buildx-cache
-          mv /tmp/.buildx-cache-new /tmp/.buildx-cache || true
+      - name: Upload tested builder image evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: tested-builder-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/beta3-builder-evidence/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 1
 
       - name: Docker testing complete
-        shell: bash
-        run: |
-          echo "✅ Docker Testing Complete for ${{ matrix.platform }}!"
-          echo "Platform: ${{ matrix.platform }}"
-          echo "All tests passed successfully"
-
-  docker-compose-test:
-    name: Docker Compose Test
-    permissions:
-      contents: read
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    env:
-      COMPOSE_PROJECT_NAME: dollhouse-${{ github.run_id }}-${{ github.run_attempt }}-github
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Test MINIMAL Docker Compose (hello world test)
-        shell: bash
-        run: |
-          echo "🧪 Testing MINIMAL Docker Compose to verify Docker works at all..."
-          echo "This should just echo 'Hello' and exit successfully"
-          docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.minimal.yml build minimal-test
-          docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.minimal.yml run --rm minimal-test
-          echo "✅ Minimal Docker test passed!"
-
-      - name: Test Docker Compose build
-        shell: bash
-        run: |
-          echo "🐳 Testing Docker Compose build..."
-          echo "📁 Verifying directory structure before Docker build:"
-          echo "Current directory: $(pwd)"
-          echo "Checking if src/ exists:"
-          ls -la src/ | head -5 || echo "src/ directory not found!"
-          echo "Checking docker/ directory:"
-          ls -la docker/ || echo "docker/ directory not found!"
-          echo "Using docker-compose.yml with proper tmpfs permissions"
-          # Build using the regular Dockerfile which compiles TypeScript inside Docker
-          docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml build dollhousemcp
-
-      - name: Test Docker Compose startup
-        shell: bash
-        run: |
-          echo "🚀 Testing Docker Compose startup..."
-
-          # Run MCP server with initialize command via Docker Compose
-          echo "⏳ Running MCP server via Docker Compose with initialize command..."
-          # Portfolio directory is already set to /app/tmp/portfolio in docker-compose.yml
-          # Use timeout since MCP server runs indefinitely
-          docker_output=$(timeout 10 sh -c 'printf "%s\n" '"'"'{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"1.0.0","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}'"'"' | docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml run --rm --interactive -T dollhousemcp 2>&1' || true)
-          exit_code=$?
-
-          echo "Docker Compose run completed with exit code: $exit_code"
-          echo "Output captured:"
-          echo "$docker_output"
-
-          # Check for successful MCP response from Docker Compose
-          if echo "$docker_output" | grep -q '"jsonrpc":"2.0".*"id":1'; then
-            echo "✅ Docker Compose MCP server returned valid JSON-RPC response"
-            if echo "$docker_output" | grep -q '"serverInfo":{"name":"dollhousemcp"'; then
-              echo "✅ Response contains correct serverInfo - server is working"
-            else
-              echo "❌ FAILED: Docker Compose initialize response is missing expected serverInfo"
-              exit 1
-            fi
-          else
-            echo "❌ FAILED: Docker Compose MCP server did not return a JSON-RPC response"
-            echo "The server is not responding to API calls through Docker Compose"
-            exit 1
-          fi
-
-      - name: Cleanup Docker Compose
-        if: always()
-        shell: bash
-        run: |
-          echo "🧹 Cleaning up Docker Compose..."
-          cleanup_ok=false
-          for attempt in 1 2 3; do
-            if docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml down --remove-orphans; then
-              cleanup_ok=true
-              break
-            fi
-            echo "::warning::Docker Compose cleanup attempt $attempt failed; waiting for endpoints to detach"
-            docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml ps || true
-            sleep 2
-          done
-
-          if [ "$cleanup_ok" != "true" ]; then
-            echo "::warning::Docker Compose network cleanup remained busy after retries; continuing because test execution already completed"
-          fi
-
-          docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml rm -f || true
-
-      - name: Docker Compose testing complete
-        shell: bash
-        run: |
-          echo "✅ Docker Compose Testing Complete!"
-          echo "All tests passed successfully"
+        run: echo "Native production and builder qualification completed"
