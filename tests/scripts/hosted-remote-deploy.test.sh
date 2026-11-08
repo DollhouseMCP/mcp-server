@@ -93,6 +93,7 @@ remote_command="${command_args[*]}"
 if [[ "${DOLLHOUSE_FAKE_REMOTE_STALE_CADDY_ENV:-false}" == "true" ]]; then
   export DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG=stale
   export DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES=198.51.100.0/24
+  export DOLLHOUSE_HOSTED_CADDY_IMAGE=stale DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME=stale_data DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME=stale_config
 fi
 bash -c "${remote_command}"
 EOF
@@ -207,6 +208,16 @@ if [[ "${1:-}" == "clone" ]]; then
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${DOLLHOUSE_FAKE_VALIDATE_CADDY:-false}" == true ]]; then
+  source "${DOLLHOUSE_FAKE_VALIDATION:?}"
+  die() { printf '%s\n' "$*" >&2; exit 1; }
+  env_file="${DOLLHOUSE_HOSTED_DEPLOY_DIR}/.env.production"
+  persisted() { local key="$1"; if [[ -f "${env_file}" ]]; then sed -n "s/^${key}=//p" "${env_file}"; fi; }
+  validate_caddy_selection "${DOLLHOUSE_HOSTED_CADDY_IMAGE:-$(persisted DOLLHOUSE_HOSTED_CADDY_IMAGE)}" \
+    "${DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME:-$(persisted DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME)}" \
+    "${DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME:-$(persisted DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME)}"
+fi
+
 {
   printf 'hosted action=%s ref=%s source=%s deploy=%s ' \
     "${1:-}" "${DOLLHOUSE_HOSTED_GIT_REF:-}" "${DOLLHOUSE_HOSTED_SOURCE_DIR:-}" "${DOLLHOUSE_HOSTED_DEPLOY_DIR:-}"
@@ -230,6 +241,10 @@ set -euo pipefail
   printf 'caddy_access_log_set=%s caddy_access_log=%s caddy_trusted_proxies_set=%s caddy_trusted_proxies=%s ' \
     "${DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG+x}" "${DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG:-}" \
     "${DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES+x}" "${DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES:-}"
+  printf 'caddy_image_set=%s caddy_image=%s caddy_data_set=%s caddy_data=%s caddy_config_set=%s caddy_config=%s ' \
+    "${DOLLHOUSE_HOSTED_CADDY_IMAGE+x}" "${DOLLHOUSE_HOSTED_CADDY_IMAGE:-}" \
+    "${DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME+x}" "${DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME:-}" \
+    "${DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME+x}" "${DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME:-}"
   printf 'bootstrap_username_set=%s bootstrap_username=%s bootstrap_id_set=%s bootstrap_id=%s ' \
     "${DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME+x}" "${DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME:-}" "${DOLLHOUSE_BOOTSTRAP_GITHUB_ID+x}" "${DOLLHOUSE_BOOTSTRAP_GITHUB_ID:-}"
   printf 'auth_provider_set=%s auth_provider=%s auth_issuer_set=%s auth_issuer=%s auth_audience_set=%s auth_audience=%s ' \
@@ -521,6 +536,60 @@ DOLLHOUSE_FAKE_REMOTE_STALE_CADDY_ENV=true \
 assert_contains "${REMOTE_LOG}" "caddy_access_log_set= caddy_access_log= caddy_trusted_proxies_set= caddy_trusted_proxies="
 assert_not_contains "${REMOTE_LOG}" "caddy_access_log=stale"
 assert_not_contains "${REMOTE_LOG}" "caddy_trusted_proxies=198.51.100.0/24"
+assert_contains "${REMOTE_LOG}" "caddy_image_set= caddy_image= caddy_data_set= caddy_data= caddy_config_set= caddy_config="
+
+log "checking remote Caddy image and volume selection"
+CADDY_TEST_IMAGE="registry.example.test/team/caddy@sha256:$(printf 'a%.0s' {1..64})"
+CADDY_OTHER_IMAGE="registry.example.test/team/caddy@sha256:$(printf 'b%.0s' {1..64})"
+DOLLHOUSE_FAKE_VALIDATION="${REPO_ROOT}/scripts/hosted-deploy/validation.sh"
+export DOLLHOUSE_FAKE_VALIDATION
+reset_fake_state
+DOLLHOUSE_FAKE_VALIDATE_CADDY=true \
+DOLLHOUSE_TEST_DEPLOY_DIR="${TMP_ROOT}/fresh-caddy" \
+DOLLHOUSE_HOSTED_CADDY_IMAGE="${CADDY_TEST_IMAGE}" \
+DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME=fixture_data \
+DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME=fixture_config \
+  run_remote --skip-backup install > "${TMP_ROOT}/fresh-caddy.out"
+assert_contains "${REMOTE_LOG}" "caddy_image_set=x caddy_image=${CADDY_TEST_IMAGE} caddy_data_set=x caddy_data=fixture_data caddy_config_set=x caddy_config=fixture_config"
+
+cp "${DEPLOY_DIR}/.env.production" "${TMP_ROOT}/original.env"
+printf 'DOLLHOUSE_HOSTED_CADDY_IMAGE=%s\nDOLLHOUSE_HOSTED_CADDY_DATA_VOLUME=persist_data\nDOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME=persist_config\n' "${CADDY_TEST_IMAGE}" >> "${DEPLOY_DIR}/.env.production"
+cp "${DEPLOY_DIR}/.env.production" "${TMP_ROOT}/expected.env"
+reset_fake_state
+DOLLHOUSE_FAKE_VALIDATE_CADDY=true DOLLHOUSE_FAKE_REMOTE_STALE_CADDY_ENV=true \
+  run_remote --skip-backup update > "${TMP_ROOT}/caddy-fallback.out"
+assert_contains "${REMOTE_LOG}" "caddy_image_set= caddy_image= caddy_data_set= caddy_data= caddy_config_set= caddy_config="
+cmp -s "${DEPLOY_DIR}/.env.production" "${TMP_ROOT}/expected.env" || fail "fallback changed persisted Caddy selection"
+reset_fake_state
+DOLLHOUSE_FAKE_VALIDATE_CADDY=true DOLLHOUSE_HOSTED_CADDY_IMAGE="${CADDY_OTHER_IMAGE}" \
+  run_remote --skip-backup update > "${TMP_ROOT}/caddy-partial.out"
+assert_contains "${REMOTE_LOG}" "caddy_image_set=x caddy_image=${CADDY_OTHER_IMAGE} caddy_data_set= caddy_data= caddy_config_set= caddy_config="
+reset_fake_state
+DOLLHOUSE_FAKE_VALIDATE_CADDY=true DOLLHOUSE_HOSTED_CADDY_IMAGE="${CADDY_OTHER_IMAGE}" \
+DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME=other_data DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME=other_config \
+  run_remote --skip-backup update > "${TMP_ROOT}/caddy-override.out"
+assert_contains "${REMOTE_LOG}" "caddy_image_set=x caddy_image=${CADDY_OTHER_IMAGE} caddy_data_set=x caddy_data=other_data caddy_config_set=x caddy_config=other_config"
+
+sentinel="${TMP_ROOT}/injection-sentinel"
+for invalid in 'caddy:latest' "\$(touch ${sentinel})" "\`touch ${sentinel}\`" "registry.example.test/'quote" $'registry.example.test/team/caddy\ninvalid'; do
+  reset_fake_state
+  if DOLLHOUSE_FAKE_VALIDATE_CADDY=true DOLLHOUSE_HOSTED_CADDY_IMAGE="${invalid}" \
+    DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME=fixture_data DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME=fixture_config \
+      run_remote --skip-backup update > "${TMP_ROOT}/invalid-caddy.out" 2>&1; then
+    fail "invalid remote Caddy image unexpectedly accepted"
+  fi
+  assert_contains "${TMP_ROOT}/invalid-caddy.out" 'DOLLHOUSE_HOSTED_CADDY_IMAGE must be a registry/repository@sha256 digest reference'
+done
+for invalid in 'bad/name' '-leading' $'bad\nname' 'other_config'; do
+  reset_fake_state
+  if DOLLHOUSE_FAKE_VALIDATE_CADDY=true DOLLHOUSE_HOSTED_CADDY_IMAGE="${CADDY_TEST_IMAGE}" \
+    DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME="${invalid}" DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME=other_config \
+      run_remote --skip-backup update > "${TMP_ROOT}/invalid-caddy-volume.out" 2>&1; then
+    fail "invalid remote Caddy volume unexpectedly accepted"
+  fi
+done
+[[ ! -e "${sentinel}" ]] || fail "remote Caddy input executed"
+cp "${TMP_ROOT}/original.env" "${DEPLOY_DIR}/.env.production"
 
 log "checking remote runtime overrides reach hosted helper"
 reset_fake_state

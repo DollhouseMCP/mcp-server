@@ -56,6 +56,9 @@ ALLOWED_HOSTS="${DOLLHOUSE_HTTP_ALLOWED_HOSTS:-}"
 TRUSTED_PROXIES="${DOLLHOUSE_TRUSTED_PROXIES:-}"
 CADDY_ACCESS_LOG="${DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG:-}"
 CADDY_TRUSTED_PROXIES="${DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES:-}"
+CADDY_IMAGE="${DOLLHOUSE_HOSTED_CADDY_IMAGE:-}"
+CADDY_DATA_VOLUME="${DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME:-}"
+CADDY_CONFIG_VOLUME="${DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME:-}"
 BOOTSTRAP_GITHUB_USERNAME="${DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME:-}"
 BOOTSTRAP_GITHUB_ID="${DOLLHOUSE_BOOTSTRAP_GITHUB_ID:-}"
 HOSTNAME="${DOLLHOUSE_HOSTED_HOSTNAME:-}"
@@ -1057,6 +1060,9 @@ run_remote_action() {
     "${helper_bootstrap_github_username}"
     "${helper_bootstrap_github_id}"
     "${helper_auth_generation}"
+    "${CADDY_IMAGE}"
+    "${CADDY_DATA_VOLUME}"
+    "${CADDY_CONFIG_VOLUME}"
   )
   remote_command="bash -s --"
   for remote_payload_arg in "${remote_payload_args[@]}"; do
@@ -1128,6 +1134,9 @@ caddy_trusted_proxies="${37}"
 bootstrap_github_username="${38}"
 bootstrap_github_id="${39}"
 auth_generation="${40}"
+caddy_image="${41}"
+caddy_data_volume="${42}"
+caddy_config_volume="${43}"
 workdir=""
 
 remote_log() {
@@ -1409,6 +1418,9 @@ run_hosted_helper() {
   [[ -z "${trusted_proxies}" ]] || helper_env+=("DOLLHOUSE_TRUSTED_PROXIES=${trusted_proxies}")
   [[ -z "${caddy_access_log}" ]] || helper_env+=("DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG=${caddy_access_log}")
   [[ -z "${caddy_trusted_proxies}" ]] || helper_env+=("DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES=${caddy_trusted_proxies}")
+  [[ -z "${caddy_image}" ]] || helper_env+=("DOLLHOUSE_HOSTED_CADDY_IMAGE=${caddy_image}")
+  [[ -z "${caddy_data_volume}" ]] || helper_env+=("DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME=${caddy_data_volume}")
+  [[ -z "${caddy_config_volume}" ]] || helper_env+=("DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME=${caddy_config_volume}")
   [[ -z "${bootstrap_github_username}" ]] || helper_env+=("DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME=${bootstrap_github_username}")
   [[ -z "${bootstrap_github_id}" ]] || helper_env+=("DOLLHOUSE_BOOTSTRAP_GITHUB_ID=${bootstrap_github_id}")
   [[ -z "${deploy_mode}" ]] || helper_env+=("DOLLHOUSE_HOSTED_MODE=${deploy_mode}")
@@ -1446,6 +1458,9 @@ run_hosted_helper() {
     unset DOLLHOUSE_TRUSTED_PROXIES
     unset DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG
     unset DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES
+    unset DOLLHOUSE_HOSTED_CADDY_IMAGE
+    unset DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME
+    unset DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME
     unset DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME
     unset DOLLHOUSE_BOOTSTRAP_GITHUB_ID
     unset DOLLHOUSE_AUTH_PROVIDER
