@@ -9,6 +9,8 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { waitForReady, hardenedRuntimeConfig } from './export-tested-caddy-image.mjs';
 import { writeNativeCaddyfile } from './caddy-native-render.mjs';
+import { parseClientOutput } from './caddy-stream-guard.mjs';
+import { clientSource } from './caddy-stream-client.mjs';
 
 const [image, fixtureImage, inspectorFile, connection] = process.argv.slice(2);
 assert.match(image ?? '', /^(?:sha256:)?[a-f0-9]{64}$/);
@@ -37,6 +39,7 @@ let normalStop;
 let processProfile;
 let negativeWithoutCapability;
 let legacyVolumeRefusal;
+let streamOutcomes;
 const observations = [];
 const configSources = [];
 let primaryError;
@@ -44,6 +47,8 @@ const root = fileURLToPath(new URL('../../', import.meta.url));
 const renderer = path.join(root, 'scripts/hosted-deploy/render.sh');
 const rendererSha = createHash('sha256').update(fs.readFileSync(renderer)).digest('hex');
 const harnessSha = createHash('sha256').update(fs.readFileSync(fileURLToPath(import.meta.url))).digest('hex');
+const guardSha = createHash('sha256').update(fs.readFileSync(new URL('./caddy-stream-guard.mjs', import.meta.url))).digest('hex');
+const clientSha = createHash('sha256').update(fs.readFileSync(new URL('./caddy-stream-client.mjs', import.meta.url))).digest('hex');
 const marker = 'CADDY_PUBLIC_QUALIFICATION_SECRET_MARKER';
 
 function container(args) {
@@ -102,56 +107,6 @@ function render(mode, trusted) {
     configSha256: createHash('sha256').update(text).digest('hex') });
   return file;
 }
-
-const clientSource = String.raw`
-const http = require('node:http');
-const https = require('node:https');
-const http2 = require('node:http2');
-const fs = require('node:fs');
-const options = JSON.parse(process.argv[1]);
-let body = '';
-let status;
-let protocol;
-const started = performance.now();
-let firstDataMs;
-let cursor=0;
-const eventTimesMs=[];
-const data = bytes => {
- firstDataMs ??= performance.now()-started;
- body+=bytes;
- let boundary=body.indexOf('\n\n',cursor);
- while(boundary!==-1){eventTimesMs.push(performance.now()-started);cursor=boundary+2;boundary=body.indexOf('\n\n',cursor);}
-};
-const done = () => {
- const elapsedMs=performance.now()-started;
- console.log(JSON.stringify({ status, body, protocol, method:options.method??'GET', elapsedMs, firstDataMs, eventTimesMs,
-  quietGapMs:(eventTimesMs[1]??elapsedMs)-eventTimesMs[0] }));
-};
-if (options.h2) {
-  const session = http2.connect('https://proxy:443', { servername: 'fixture.local', ca: fs.readFileSync('/tmp/qualification-ca.crt') });
-  session.on('error', error => { console.error(error.code); process.exitCode=1; });
-  const req = session.request({ ':path': options.path, ':authority': 'fixture.local', ':method':options.method??'GET', ...options.headers });
-  req.setTimeout(80000, () => { req.destroy(new Error('qualification request timeout')); });
-  req.on('response', headers => { status=headers[':status']; protocol=session.alpnProtocol; });
-  req.on('data', data);
-  req.on('end', () => { done(); session.close(); });
-  req.on('error', error => { console.error(error.code); session.destroy(); process.exitCode=1; });
-  req.end(options.body);
-} else {
-  const transport=options.tls?https:http;
-  const tlsOptions=options.tls?{ servername:'fixture.local',ca:fs.readFileSync('/tmp/qualification-ca.crt'),ALPNProtocols:['http/1.1'] }:{};
-  const req = transport.request({ hostname:'proxy', port:options.tls?443:80, path:options.path,method:options.method??'GET',...tlsOptions,
-    headers:{ host:'fixture.local', ...options.headers }, timeout:80000 }, res => {
-    status=res.statusCode;
-    protocol='http/'+res.httpVersion;
-    res.on('data', data);
-    res.on('end', done);
-  });
-  req.on('error', error => { console.error(error.code); process.exitCode=1; });
-  req.on('timeout', () => req.destroy(new Error('qualification request timeout')));
-  req.end(options.body);
-}
-`;
 
 const upstreamSource = String.raw`
 const http=require('node:http');
@@ -213,7 +168,22 @@ try {
   assert.equal(addresses.length, 1);
   assert.match(addresses[0], /^\d{1,3}(\.\d{1,3}){3}$/);
   const request = options => JSON.parse(engine(['exec', upstream, 'node', '-e', clientSource, JSON.stringify(options)]));
-  const requestAsync = async options => JSON.parse((await engineAsync(['exec', upstream, 'node', '-e', clientSource, JSON.stringify(options)])).stdout.trim());
+  const requestAsync = async options => {
+    const start = performance.now();
+    try {
+      const result = await engineAsync(['exec', upstream, 'node', '-e', clientSource, JSON.stringify(options)]);
+      return parseClientOutput(options, result, performance.now() - start);
+    } catch (error) {
+      if (error.stdout !== undefined || error.stderr !== undefined) {
+        const stderr = String(error.stderr ?? '');
+        throw new Error(JSON.stringify({ phase:'client-exec-failed', protocol:options.h2 ? 'h2' : 'http/1.1',
+          method:options.method ?? 'GET', elapsedMs:performance.now() - start,
+          stdoutBytes:Buffer.byteLength(String(error.stdout ?? '')), stderrBytes:Buffer.byteLength(stderr),
+          stderrTail:stderr.slice(-512).replace(/[^\x20-\x7e\n]/g, '?') }));
+      }
+      throw error;
+    }
+  };
   const proxy = container(['--name', `${prefix}-proxy`, '--network', network,
     '--network-alias', 'proxy', '--mount', `type=volume,source=${diagnosticVolume},target=/qualification,readonly`, '--volume', `${ownedVolumes[0]}:/data`,
     '--volume', `${ownedVolumes[1]}:/config`, '--volume', `${ownedVolumes[2]}:/etc/caddy:ro`,
@@ -315,6 +285,13 @@ try {
   observations.push('controlled root-owned legacy-volume fixture refuses unchanged; no automatic migration');
   const post={path:'/quiet',method:'POST',body:'{"jsonrpc":"2.0","id":1,"method":"qualification"}',headers:{'content-type':'application/json'}};
   const streams=await Promise.allSettled([requestAsync({...post,tls:true}),requestAsync({...post,h2:true})]);
+  streamOutcomes = streams.map((result, index) => {
+    if (result.status === 'rejected') return { protocol:index ? 'h2' : 'http/1.1', status:'rejected',
+      diagnostic:String(result.reason?.message ?? result.reason).slice(0, 2048) };
+    const value = result.value;
+    return { protocol:value.protocol, status:'fulfilled', httpStatus:value.status, method:value.method,
+      eventCount:value.eventTimesMs?.length, eventTimesMs:value.eventTimesMs, quietGapMs:value.quietGapMs };
+  });
   const failures=streams.filter(result=>result.status==='rejected').map(result=>result.reason);
   if(failures.length) throw new AggregateError(failures,'independent POST SSE streams failed');
   const quietStreams=streams.map(result=>result.value);
@@ -340,12 +317,12 @@ try {
   assert.equal((await waitForReady(request, { h2:true, path:'/after-restart' })).status, 200);
   observations.push('same private volumes preserve internal PKI across normal restart');
   console.log(JSON.stringify({ imageId:imageInfo.Id, architecture:imageInfo.Architecture,
-    nativeDaemonArchitecture:native, rendererSha256:rendererSha, harnessSha256:harnessSha, configSources, observations,
-    quietStreams:quietStreams.map(({body,...metrics})=>metrics), processProfile, negativeWithoutCapability, legacyVolumeRefusal, normalStop,
+    nativeDaemonArchitecture:native, rendererSha256:rendererSha, harnessSha256:harnessSha, guardSha256:guardSha, clientSha256:clientSha, configSources, observations,
+    quietStreams:quietStreams.map(({body,...metrics})=>metrics), streamOutcomes, processProfile, negativeWithoutCapability, legacyVolumeRefusal, normalStop,
     productionActions:false }, null, 2));
 } catch (error) {
   primaryError = error;
-  console.error(JSON.stringify({ qualificationFailure:true, rendererSha256:rendererSha, harnessSha256:harnessSha, configSources, observations, processProfile, negativeWithoutCapability, legacyVolumeRefusal, normalStop }));
+  console.error(JSON.stringify({ qualificationFailure:true, rendererSha256:rendererSha, harnessSha256:harnessSha, guardSha256:guardSha, clientSha256:clientSha, configSources, observations, streamOutcomes, processProfile, negativeWithoutCapability, legacyVolumeRefusal, normalStop }));
 } finally {
   // Every identity here was created by this invocation; no broad pruning.
   const errors = primaryError ? [primaryError] : [];

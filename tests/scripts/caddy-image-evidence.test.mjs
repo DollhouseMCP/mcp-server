@@ -3,10 +3,102 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import http from 'node:http';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { bindSource, verifyRuntimeConfig, waitForReady, hardenedRuntimeConfig } from '../../scripts/ci/export-tested-caddy-image.mjs';
 import { writeNativeCaddyfile } from '../../scripts/ci/caddy-native-render.mjs';
+import { observeStream, observeUnsettledExit, observeRequestClose, parseClientOutput } from '../../scripts/ci/caddy-stream-guard.mjs';
+import { clientSource } from '../../scripts/ci/caddy-stream-client.mjs';
+
+test('actual client refuses a truncated local HTTP stream', { timeout: 5000 }, async () => {
+  const server = http.createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'text/event-stream' });
+    response.write('event: start\ndata: partial\n\n');
+    setTimeout(() => response.destroy(), 25);
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  let child;
+  try {
+    const options = { host:'127.0.0.1', port:server.address().port, path:'/quiet', method:'POST' };
+    child = spawn(process.execPath, ['-e', clientSource, JSON.stringify(options)], { stdio:['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    const status = await new Promise((resolve, reject) => {
+      let timedOut = false;
+      const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, 4000);
+      child.once('error', error => { clearTimeout(timer); reject(error); });
+      child.once('close', code => {
+        clearTimeout(timer);
+        if (timedOut) reject(new Error('fixture child timed out'));
+        else resolve(code);
+      });
+    });
+    assert.equal(status, 1);
+    assert.equal(stdout, '');
+    const lines = stderr.trim().split('\n');
+    assert.equal(lines.length, 1);
+    const failure = JSON.parse(lines[0]);
+    assert.equal(failure.success, false);
+    assert.ok(['response-aborted', 'response-error', 'response-closed-before-end'].includes(failure.reason));
+  } finally {
+    if (child && child.exitCode === null && child.signalCode === null) child.kill();
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('stream guard distinguishes completion from aborted, failed and premature closes', () => {
+  for (const [events, expected] of [
+    [['end', 'close'], []],
+    [['aborted', 'close'], ['response-aborted']],
+    [['error'], ['response-error']],
+    [['close'], ['response-closed-before-end']],
+  ]) {
+    const stream = new EventEmitter();
+    const failures = [];
+    observeStream(stream, reason => failures.push(reason));
+    for (const event of events) stream.emit(event, ...(event === 'error' ? [new Error('fixture')] : []));
+    assert.deepEqual(failures, expected);
+  }
+});
+
+test('unsettled exit and invalid engine output remain explicit failures', () => {
+  for (const settled of [false, true]) {
+    const processObject = new EventEmitter();
+    const failures = [];
+    observeUnsettledExit(processObject, () => settled, reason => failures.push(reason));
+    processObject.emit('beforeExit');
+    assert.deepEqual(failures, settled ? [] : ['client-exited-before-completion']);
+  }
+  const options = { method:'POST', h2:false };
+  for (const [stdout, phase] of [['', 'engine-empty-output'], ['{', 'engine-invalid-output'], ['[]', 'engine-invalid-output']]) {
+    assert.throws(() => parseClientOutput(options, { stdout, stderr:'fixture\u0000error' }, 12), error => {
+      const detail = JSON.parse(error.message);
+      assert.equal(detail.phase, phase);
+      assert.equal(detail.protocol, 'http/1.1');
+      assert.equal(detail.method, 'POST');
+      assert.equal(detail.stdoutBytes, Buffer.byteLength(stdout));
+      assert.equal(detail.stderrTail, 'fixture?error');
+      return true;
+    });
+  }
+  assert.deepEqual(parseClientOutput({h2:true}, {stdout:'{"status":200}', stderr:''}, 1), {status:200});
+});
+
+test('request close before response is refused without rejecting normal close', () => {
+  for (const responded of [false, true]) {
+    const request = new EventEmitter();
+    const failures = [];
+    observeRequestClose(request, () => responded, reason => failures.push(reason));
+    request.emit('close');
+    assert.deepEqual(failures, responded ? [] : ['request-closed-before-response']);
+  }
+});
 
 test('native renderer uses its private work directory and propagates failures', () => {
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'caddy-render-test-'));
