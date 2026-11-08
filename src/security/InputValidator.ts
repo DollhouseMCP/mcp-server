@@ -526,6 +526,17 @@ export function validateInputLengths(
 }
 
 /**
+ * A storage reference is never rewritten: when the input sanitiser would change it, the
+ * reference is refused instead, so a caller gets a direct error and a stored file with such a
+ * name becomes a failed record under its real name rather than a read of a different file.
+ */
+export function assertUnsanitizedReference(reference: string, maxLength: number = 255): void {
+  if (sanitizeInput(reference, maxLength) !== reference) {
+    throw new Error('Reference contains characters that are not allowed');
+  }
+}
+
+/**
  * General input sanitization
  */
 export function sanitizeInput(input: string, maxLength: number = 1000): string {

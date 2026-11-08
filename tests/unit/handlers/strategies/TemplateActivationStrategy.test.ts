@@ -9,6 +9,7 @@ describe('TemplateActivationStrategy', () => {
   beforeEach(() => {
     mockTemplateManager = {
       list: jest.fn(),
+      findByName: jest.fn(async () => (await mockTemplateManager.list())?.[0]),
       get: jest.fn(),
     } as unknown as jest.Mocked<TemplateManager>;
 

@@ -75,7 +75,7 @@ describe('CollectionInstallService', () => {
     expect(result.headers?.ETag).toBeDefined();
     // The element is now in the user's portfolio (end-to-end through the store).
     const listed = await store.listByUser(USER_ID, { type: 'skills' });
-    expect(listed).toHaveLength(1);
+    expect(listed.items).toHaveLength(1);
   });
 
   it('passes the validated element straight to the store create input', async () => {

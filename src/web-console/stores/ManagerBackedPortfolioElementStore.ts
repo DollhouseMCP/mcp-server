@@ -1,4 +1,7 @@
 import { TenantMemoryOperationProvider } from '../../storage/TenantMemoryOperationProvider.js';
+import type { CollectionReport, CollectionFailure } from '../../elements/base/CollectionReport.js';
+import { ElementMissingError, elementReadFailure, GuardedReadConflict } from '../../elements/base/ElementReadError.js';
+import { visitSequentially } from '../../utils/visitSequentially.js';
 import type { ContextTracker } from '../../security/encryption/ContextTracker.js';
 import type { MemoryManager } from '../../elements/memories/MemoryManager.js';
 import type { Memory } from '../../elements/memories/Memory.js';
@@ -36,8 +39,11 @@ type PortfolioElementManager = Pick<BaseElementManager<IElement>,
   | 'getFileExtension'
   | 'importElement'
   | 'list'
+  | 'listReport'
   | 'save'
   | 'delete'
+  | 'deleteResolved'
+  | 'storageReferenceOf'
   | 'exportElement'
   | 'validate'
 >;
@@ -114,43 +120,50 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
     this.operationCheck?.();
   }
 
-  async summarizeByUser(userId: string): Promise<readonly ConsolePortfolioElementSummaryRecord[]> {
-    return (await this.listByUser(userId)).map(clonePortfolioElementSummaryRecord);
+  async summarizeByUser(userId: string): Promise<CollectionReport<ConsolePortfolioElementSummaryRecord>> {
+    return this.listByUser(userId);
   }
 
   async listByUser(
     userId: string,
     filters: ConsolePortfolioListFilters = {},
-  ): Promise<readonly ConsolePortfolioElementSummaryRecord[]> {
+  ): Promise<CollectionReport<ConsolePortfolioElementSummaryRecord>> {
     this.assertAmbientUser(userId);
     const types = filters.type ? [filters.type] : CONSOLE_PORTFOLIO_ELEMENT_TYPES;
     const records: ConsolePortfolioElementSummaryRecord[] = [];
-    for (const type of types) {
-      for (const element of await this.manager(type).list()) {
+    const failures: CollectionFailure[] = [];
+    await visitSequentially(types.values(), async type => {
+      const report = await this.manager(type).listReport();
+      this.assertOperationBinding();
+      // A failed definition has no trustworthy tags; its candidate names cannot prove provider membership.
+      failures.push(...report.failures);
+      await visitSequentially(report.items.values(), async element => {
         let record: ConsolePortfolioElementSummaryRecord;
+        let readFailure: CollectionFailure | undefined;
         try {
           record = await this.toRecord(userId, type, element);
         } catch (error) {
           this.assertOperationBinding();
-          // Listing is inert — no element is activated here — so a single
-          // element whose body fails content parsing/validation (e.g. a
-          // security/agent element that legitimately contains injection-like
-          // example text) must NOT 500 the whole portfolio. Surface it as
-          // 'invalid', built from in-memory metadata with the body withheld,
-          // so the user still sees it and knows it needs attention.
+          const failure = elementReadFailure(error, element.metadata.name);
+          if (failure instanceof GuardedReadConflict) throw failure;
+          readFailure = { reference: element.metadata.name, error: failure };
+          // Metadata is sufficient for filtering, but an unreadable item is reported only as a failure.
           record = this.toInvalidSummaryFallback(userId, type, element, error);
         }
         const filterTag = filters.tag;
         if (filterTag && !record.tags.some(tag => tag.toLowerCase() === filterTag.toLowerCase())) {
-          continue;
+          return;
+        }
+        if (readFailure) {
+          failures.push(readFailure);
+          return;
         }
         records.push(record);
-      }
-    }
+      });
+    });
     this.assertOperationBinding();
-    return [...records]
-      .sort((left, right) => left.type.localeCompare(right.type) || left.name.localeCompare(right.name))
-      .map(clonePortfolioElementSummaryRecord);
+    records.sort((left, right) => left.type.localeCompare(right.type) || left.name.localeCompare(right.name));
+    return { items: records.map(clonePortfolioElementSummaryRecord), failures, complete: failures.length === 0 };
   }
 
   async findByName(
@@ -203,8 +216,18 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
     // what a subsequent GET produces — the persist/reload round-trip can
     // normalize content, so hashing the pre-save in-memory element would yield
     // an ETag the next conditional write rejects with 412.
-    const persisted = (await this.findElement(input.type, canonicalName)) ?? element;
+    const persisted = await this.readBack(input.type, element.metadata.name);
     return clonePortfolioElementDetailRecord(await this.toRecord(input.userId, input.type, persisted));
+  }
+
+  /**
+   * The saved element as storage now holds it, found by the name it was saved under (a display-name
+   * edit renames it); a save that cannot be read back is a typed failure, never the pre-save record.
+   */
+  private async readBack(type: ConsolePortfolioElementType, savedName: string): Promise<IElement> {
+    const persisted = await this.findElement(type, savedName);
+    if (!persisted) throw new PortfolioElementUnreadableError(new Error('The saved portfolio element could not be read back'));
+    return persisted;
   }
 
   async update(input: ConsolePortfolioElementUpdateInput): Promise<ConsolePortfolioElementDetailRecord | null> {
@@ -239,7 +262,7 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
       throw error;
     }
     // Re-read so the returned record/ETag match a subsequent GET (see create()).
-    const persisted = (await this.findElement(input.type, existingRecord.canonicalName)) ?? updated;
+    const persisted = await this.readBack(input.type, updated.metadata.name);
     return clonePortfolioElementDetailRecord(await this.toRecord(input.userId, input.type, persisted));
   }
 
@@ -252,7 +275,10 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
     const existingRecord = await this.toRecord(input.userId, input.type, existing);
     this.assertExpectedHash(input.expectedContentHash, existingRecord);
     this.assertOperationBinding();
-    await manager.delete(elementPath(manager, existingRecord.canonicalName));
+    // Delete exactly the element whose hash was verified, by its own storage reference; its name
+    // is re-checked inside the delete, which refuses rather than remove a different definition.
+    await manager.deleteResolved({ kind: 'element', storageIdentity: manager.storageReferenceOf(existing), element: existing,
+      requestedReference: existing.metadata.name });
     this.assertOperationBinding();
     return clonePortfolioElementDetailRecord({
       ...existingRecord,
@@ -416,7 +442,7 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
   ): Promise<ConsolePortfolioElementDetailRecord> {
     if (type === 'skills' && capturedContent === undefined) {
       const snapshot = await this.manager(type).findForUpdate(element.metadata.name);
-      if (!snapshot) throw Object.assign(new Error('Skill definition is no longer available'), { code: 'ENOENT' });
+      if (!snapshot) throw new ElementMissingError(element.metadata.name, undefined);
       element = snapshot.element;
       capturedContent = snapshot.content;
     }

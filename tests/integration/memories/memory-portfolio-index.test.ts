@@ -199,20 +199,19 @@ shardInfo:
     const emptyMemoryPath = path.join(tempDir, '.dollhouse', 'portfolio', 'memories', '2025-09-28', 'empty-memory.yaml');
     await fs.writeFile(emptyMemoryPath, '');
 
-    // Rebuild index
-    await indexManager.rebuildIndex();
-    const index = await indexManager.getIndex();
+    await expect(indexManager.rebuildIndex()).rejects.toThrow('could not be read completely');
+    const report = await indexManager.getIndexReport();
+    expect(report.complete).toBe(false);
+    expect(report.failures.map(failure => failure.reference)).toContain(path.relative(containerContext.portfolioDir, emptyMemoryPath));
+    const index = report.items[0];
     const memories = index.byType.get(ElementType.MEMORY) || [];
 
     // Should still index other memories even if one is empty
     expect(memories.length).toBeGreaterThan(0);
 
-    // Empty file should not crash the indexer
     const emptyMemory = memories.find(m => m.metadata.name === 'empty-memory');
-    // It might create a default entry or skip it entirely - both are acceptable
-    if (emptyMemory) {
-      expect(emptyMemory.metadata.name).toBeDefined();
-    }
+    expect(emptyMemory).toBeUndefined();
+    await fs.unlink(emptyMemoryPath);
   });
 
   it('should handle malformed YAML gracefully', async () => {
@@ -224,9 +223,11 @@ tags: [unclosed bracket
 description: "Unclosed quote
     `);
 
-    // Rebuild index - should not crash
-    await indexManager.rebuildIndex();
-    const index = await indexManager.getIndex();
+    await expect(indexManager.rebuildIndex()).rejects.toThrow('could not be read completely');
+    const report = await indexManager.getIndexReport();
+    expect(report.complete).toBe(false);
+    expect(report.failures.map(failure => failure.reference)).toContain(path.relative(containerContext.portfolioDir, malformedPath));
+    const index = report.items[0];
     const memories = index.byType.get(ElementType.MEMORY) || [];
 
     // Other memories should still be indexed
@@ -235,6 +236,7 @@ description: "Unclosed quote
     // Malformed file should not appear in index
     const malformedMemory = memories.find(m => m.metadata.name === 'malformed memory');
     expect(malformedMemory).toBeUndefined();
+    await fs.unlink(malformedPath);
   });
 
   it('should handle mixed metadata structures', async () => {

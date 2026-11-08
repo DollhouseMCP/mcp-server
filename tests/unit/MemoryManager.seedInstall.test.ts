@@ -12,7 +12,7 @@
  * See: InstallMemoryBug.md for details
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from '@jest/globals';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, jest } from '@jest/globals';
 import { PortfolioManager } from '../../src/portfolio/PortfolioManager.js';
 import { FileLockManager } from '../../src/security/fileLockManager.js';
 import { FileOperationsService } from '../../src/services/FileOperationsService.js';
@@ -108,6 +108,18 @@ describe('MemoryManager - Seed Installation', () => {
   });
 
   describe('installSeedMemories', () => {
+    it('skips installation on an unclassified ENOENT instead of treating it as proven absence', async () => {
+      const cause = Object.assign(new Error('Auxiliary dependency missing'), { code: 'ENOENT' });
+      const read = jest.spyOn(memoryManager, 'loadStoredReference').mockRejectedValue(cause);
+      const save = jest.spyOn(memoryManager, 'save');
+      try {
+        await memoryManager.installSeedMemories();
+        expect(read).toHaveBeenCalled();
+        expect(save).not.toHaveBeenCalled();
+        await expect(fs.readdir(memoriesDir)).resolves.not.toContain('system');
+      } finally { read.mockRestore(); save.mockRestore(); }
+    });
+
     it('should install seed memory successfully', async () => {
       // Install seed memories
       await memoryManager.installSeedMemories();

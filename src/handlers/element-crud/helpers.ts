@@ -18,38 +18,6 @@ import {
 import { parseElementPolicy, analyzePatternSyntax, getGatekeeperAuthoringErrors } from '../mcp-aql/policies/ElementPolicies.js';
 import { findPatternConflicts } from '../../utils/patternMatcher.js';
 
-export function findElementFlexibly<T extends { metadata?: { name?: string } }>(
-  name: string,
-  elementList: T[]
-): T | undefined {
-  if (!name || !Array.isArray(elementList) || elementList.length === 0) {
-    return undefined;
-  }
-
-  const searchNameLower = name.toLowerCase();
-  const searchNameSlug = slugify(name);
-
-  let element = elementList.find(
-    (e) => e.metadata?.name?.toLowerCase() === searchNameLower
-  );
-
-  element ??= elementList.find((e) => {
-      const elementSlug = slugify(e.metadata?.name || '');
-      return elementSlug === searchNameSlug || elementSlug === searchNameLower;
-    });
-
-  element ??= elementList.find((e) => {
-      const elementName = e.metadata?.name || '';
-      const elementSlug = slugify(elementName);
-      return (
-        elementSlug.includes(searchNameSlug) ||
-        elementName.toLowerCase().includes(searchNameLower)
-      );
-    });
-
-  return element;
-}
-
 export function sanitizeMetadata(metadata: Record<string, any> | undefined): Record<string, any> {
   if (!metadata || typeof metadata !== 'object') {
     return {};
@@ -223,10 +191,9 @@ export function getElementFilename(type: ElementType, name: string): string {
   return `${safeSlug}${extension}`;
 }
 
+/** Every element manager resolves a name through its shared selector; there is no handler-side fallback. */
 export interface ElementManagerOperations<T> {
-  list?: () => Promise<T[]>;
-  find?: (predicate: (candidate: T) => boolean) => Promise<T | undefined>;
-  load?: (filePath: string) => Promise<T>;
+  findByName: (name: string) => Promise<T | undefined>;
 }
 
 type ElementWithOptionalName = { metadata?: { name?: string } };
@@ -589,91 +556,12 @@ export function formatElementResolutionWarnings(result: { ambiguous: Array<{ ele
   return lines.join('\n');
 }
 
-async function findElementFromList<T extends ElementWithOptionalName>(
-  manager: ElementManagerOperations<T>,
-  name: string
-): Promise<T | undefined> {
-  if (typeof manager.list !== 'function') {
-    return undefined;
-  }
-
-  const elements = await manager.list();
-  return Array.isArray(elements) && elements.length > 0
-    ? findElementFlexibly(name, elements)
-    : undefined;
-}
-
-function elementMatchesName<T extends ElementWithOptionalName>(
-  candidate: T,
-  loweredName: string,
-  nameSlug: string
-): boolean {
-  const candidateName = candidate.metadata?.name;
-  if (typeof candidateName !== 'string') {
-    return false;
-  }
-
-  const candidateSlug = slugify(candidateName);
-  return candidateName.toLowerCase() === loweredName || candidateSlug === nameSlug;
-}
-
-async function findElementWithPredicate<T extends ElementWithOptionalName>(
-  manager: ElementManagerOperations<T>,
-  name: string
-): Promise<T | undefined> {
-  if (typeof manager.find !== 'function') {
-    return undefined;
-  }
-
-  const loweredName = name.toLowerCase();
-  const nameSlug = slugify(name);
-  return manager.find(candidate => elementMatchesName(candidate, loweredName, nameSlug));
-}
-
-async function loadElementByFilename<T extends ElementWithOptionalName>(
-  manager: ElementManagerOperations<T>,
-  type: ElementType,
-  name: string
-): Promise<T | undefined> {
-  if (typeof manager.load !== 'function') {
-    return undefined;
-  }
-
-  const candidateFilename = getElementFilename(type, name);
-  try {
-    return await manager.load(candidateFilename);
-  } catch (error) {
-    logger.debug(`[ElementCRUD] Direct load failed for ${type}:${name}`, {
-      error: error instanceof Error ? error.message : String(error)
-    });
-    return undefined;
-  }
-}
-
 export async function resolveElementByName<T extends ElementWithOptionalName>(
   manager: ElementManagerOperations<T> | null | undefined,
-  type: ElementType,
   name: string
 ): Promise<T | undefined> {
   if (!manager) {
     return undefined;
   }
-
-  const listedElement = await findElementFromList(manager, name);
-  if (listedElement) {
-    return listedElement;
-  }
-
-  const foundElement = await findElementWithPredicate(manager, name);
-  if (foundElement) {
-    return foundElement;
-  }
-
-  const loadedElement = await loadElementByFilename(manager, type, name);
-  if (loadedElement) {
-    return loadedElement;
-  }
-
-  logger.debug(`[ElementCRUD] Unable to locate ${type}:${name} via available manager operations.`);
-  return undefined;
+  return manager.findByName(name);
 }

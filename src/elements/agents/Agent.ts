@@ -251,8 +251,7 @@ export class Agent extends BaseElement implements IElement {
     riskAssessment?: RiskAssessmentResult;
     outcome?: DecisionOutcome;
   }): AgentDecision {
-    const goal = this.state.goals.find(g => g.id === decision.goalId);
-    if (!goal) {
+    if (!this.state.goals.some(g => g.id === decision.goalId)) {
       throw ErrorHandler.createError(
         `Goal ${decision.goalId} not found`,
         ErrorCategory.VALIDATION_ERROR,
@@ -369,15 +368,19 @@ export class Agent extends BaseElement implements IElement {
 
     if (riskScore >= 50) {
       level = 'high';
-      mitigations.push('Request human approval before proceeding');
-      mitigations.push('Create backup/rollback plan');
-      mitigations.push('Enable detailed monitoring and logging');
-      mitigations.push('Consider breaking into smaller steps');
+      mitigations.push(
+        'Request human approval before proceeding',
+        'Create backup/rollback plan',
+        'Enable detailed monitoring and logging',
+        'Consider breaking into smaller steps',
+      );
     } else if (riskScore >= 25) {
       level = 'medium';
-      mitigations.push('Add progress checkpoints');
-      mitigations.push('Review results after completion');
-      mitigations.push('Monitor for unexpected outcomes');
+      mitigations.push(
+        'Add progress checkpoints',
+        'Review results after completion',
+        'Monitor for unexpected outcomes',
+      );
     } else {
       level = 'low';
       mitigations.push('Standard monitoring sufficient');

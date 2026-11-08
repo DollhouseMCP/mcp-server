@@ -4,6 +4,7 @@ const { listElements } = await import('../../../../src/handlers/element-crud/lis
 const { ElementType } = await import('../../../../src/portfolio/PortfolioManager.js');
 const { createElementQueryService } = await import('../../../../src/services/query/ElementQueryService.js');
 import type { ElementCrudContext } from '../../../../src/handlers/element-crud/types.js';
+import { ElementUnreadableError } from '../../../../src/elements/base/ElementReadError.js';
 
 describe('listElements helper', () => {
   let mockContext: ElementCrudContext;
@@ -33,6 +34,9 @@ describe('listElements helper', () => {
       getPersonaIndicator: jest.fn().mockReturnValue(''),
       elementQueryService: createElementQueryService(),
     } as any;
+    for (const key of ['skillManager', 'templateManager', 'agentManager', 'memoryManager', 'personaManager', 'ensembleManager'] as const) {
+      mockContext[key].listReport = jest.fn(async options => ({ items: await mockContext[key].list(options), failures: [], complete: true })) as any;
+    }
   });
 
   describe('type validation', () => {
@@ -110,6 +114,14 @@ describe('listElements helper', () => {
   });
 
   describe('empty state responses', () => {
+    it('discloses invalid definitions even when there are no readable elements', async () => {
+      mockContext.skillManager.listReport = jest.fn(async () => ({ items: [], complete: false,
+        failures: [{ reference: 'broken.md', error: new ElementUnreadableError('Invalid YAML') }] }));
+      await expect(listElements(mockContext, 'skills')).resolves.toMatchObject({
+        items: [], warnings: { invalid_elements_count: 1 }, complete: false,
+        failures: [{ reference: 'broken.md', reason: 'Invalid YAML' }],
+      });
+    });
     it('should return structured empty response when no skills installed', async () => {
       mockContext.skillManager.list = jest.fn().mockResolvedValue([]);
 

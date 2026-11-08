@@ -1,4 +1,3 @@
-import { logger } from '../../../utils/logger.js';
 import { canonicalizePortfolioName } from '../../../utils/portfolioName.js';
 import { recordedActivation } from '../../../state/activation-record-utils.js';
 import type { ResolvedActivationTarget } from '../../../state/PendingActivationDeletions.js';
@@ -69,7 +68,7 @@ export class RegistrySessionActivationStateAdapter implements ISessionActivation
     );
     const storedKey = storeRecord?.identity?.value ?? storeRecord?.filename ?? agentEntry?.[0];
     const target = manager?.hasPendingActivationDeletions(sessionId)
-      ? await this.resolvePendingTarget(manager, type, name, storedKey) : undefined;
+      ? await this.resolvePendingTarget(manager, name, storedKey) : undefined;
     const fallbackRecord = this.fallbackRecords.get(recordKey(sessionId, type, name));
     const activationKey = type === 'agents'
       ? storeRecord?.identity?.value ?? agentEntry?.[0] ?? name
@@ -135,23 +134,16 @@ export class RegistrySessionActivationStateAdapter implements ISessionActivation
 
   private async resolvePendingTarget(
     manager: ConsoleActivationManager,
-    type: ConsoleActivatableElementType, name: string, storedKey?: string,
+    name: string, storedKey?: string,
   ): Promise<ResolvedActivationTarget | undefined> {
-    try {
-      if (storedKey) return await manager.findByStorageIdentity(storedKey);
-      const exact = await manager.findByStorageIdentity(name);
-      if (exact) return exact;
-      const canonicalName = canonicalizePortfolioName(name);
-      const matches = await manager.findMany(element =>
-        canonicalizePortfolioName(element.metadata.name) === canonicalName);
-      // A discovery spelling is not storage authority: never select an ambiguous target.
-      return matches.length === 1 ? matches[0] : undefined;
-    } catch (error) {
-      logger.warn('[Activation] Pending-deletion enrollment lookup failed', {
-        type, name, error: error instanceof Error ? error.name : typeof error,
-      });
-      return undefined;
-    }
+    if (storedKey) return await manager.findByStorageIdentity(storedKey);
+    const exact = await manager.findByStorageIdentity(name);
+    if (exact) return exact;
+    const canonicalName = canonicalizePortfolioName(name);
+    const matches = await manager.findMany(element =>
+      canonicalizePortfolioName(element.metadata.name) === canonicalName);
+    // A discovery spelling is not storage authority: never select an ambiguous target.
+    return matches.length === 1 ? matches[0] : undefined;
   }
 
   private listFallbackRecords(sessionId: string): readonly SessionActivationRecord[] {

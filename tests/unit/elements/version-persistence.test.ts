@@ -110,6 +110,7 @@ describe('Version Persistence', () => {
       await skillManager.save(skill, 'test-skill.md');
       
       // Load the skill back
+      skillManager.clearCache();
       const loadedSkill = await skillManager.load('test-skill.md');
       
       // Verify version persisted
@@ -136,6 +137,7 @@ describe('Version Persistence', () => {
       await skillManager.save(skill, 'version-sync.md');
       
       // Load and verify
+      skillManager.clearCache();
       const loaded = await skillManager.load('version-sync.md');
       
       // Both should match the element.version value
@@ -162,6 +164,7 @@ describe('Version Persistence', () => {
       await expect(skillManager.save(skill, 'no-version.md')).resolves.not.toThrow();
       
       // Load and check default version applied
+      skillManager.clearCache();
       const loaded = await skillManager.load('no-version.md');
       
       // Should have default version
@@ -187,6 +190,7 @@ describe('Version Persistence', () => {
       await templateManager.save(template, 'test-template.md');
       
       // Load and verify
+      templateManager.clearCache();
       const loaded = await templateManager.load('test-template.md');
       
       expect(loaded.version).toBe('3.2.1');
@@ -207,6 +211,7 @@ describe('Version Persistence', () => {
       await agentManager.save(agent, 'test-agent.md');
       
       // Load and verify
+      agentManager.clearCache();
       const loaded = await agentManager.load('test-agent.md');
       
       expect(loaded.version).toBe('4.0.0');
@@ -310,6 +315,7 @@ describe('Version Persistence', () => {
       // Save should use element.version as source of truth
       await skillManager.save(skill, 'concurrent.md');
       
+      skillManager.clearCache();
       const loaded = await skillManager.load('concurrent.md');
       
       // Both should be synced to element.version value
@@ -337,6 +343,7 @@ describe('Version Persistence', () => {
       
       await skillManager.save(skill, 'metadata-sample.md');
       
+      skillManager.clearCache();
       const loaded = await skillManager.load('metadata-sample.md');
       
       expect(loaded.version).toBe('2.0.0');

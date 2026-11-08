@@ -1,3 +1,4 @@
+import type { CollectionReport } from '../../elements/base/CollectionReport.js';
 import {
   canonicalizePortfolioElementName,
   clonePortfolioElementDetailRecord,
@@ -25,26 +26,28 @@ export class InMemoryPortfolioElementStore implements IPortfolioElementStore {
     }
   }
 
-  async summarizeByUser(userId: string): Promise<readonly ConsolePortfolioElementSummaryRecord[]> {
+  async summarizeByUser(userId: string): Promise<CollectionReport<ConsolePortfolioElementSummaryRecord>> {
     await Promise.resolve();
     assertUuid(userId, 'userId');
-    return this.sortedRecords()
+    const items = this.sortedRecords()
       .filter(record => record.userId === userId)
       .map(clonePortfolioElementSummaryRecord);
+    return { items, failures: [], complete: true };
   }
 
   async listByUser(
     userId: string,
     filters: ConsolePortfolioListFilters = {},
-  ): Promise<readonly ConsolePortfolioElementSummaryRecord[]> {
+  ): Promise<CollectionReport<ConsolePortfolioElementSummaryRecord>> {
     await Promise.resolve();
     assertUuid(userId, 'userId');
     const tag = filters.tag?.toLowerCase();
-    return this.sortedRecords()
+    const items = this.sortedRecords()
       .filter(record => record.userId === userId)
       .filter(record => !filters.type || record.type === filters.type)
       .filter(record => !tag || record.tags.some(candidate => candidate.toLowerCase() === tag))
       .map(clonePortfolioElementSummaryRecord);
+    return { items, failures: [], complete: true };
   }
 
   async findByName(

@@ -15,7 +15,10 @@
  * - Error handling and logging
  */
 
-import * as path from 'path';
+import * as path from 'node:path';
+import { visitSequentially } from '../utils/visitSequentially.js';
+import { elementReadFailure, GuardedReadConflict } from '../elements/base/ElementReadError.js';
+import { collectionSurvivors, requireCompleteCollection, type CollectionReport, type CollectionFailure } from '../elements/base/CollectionReport.js';
 import * as yaml from 'js-yaml';
 import { logger } from '../utils/logger.js';
 import { ElementType } from './types.js';
@@ -23,7 +26,6 @@ import { PortfolioManager } from './PortfolioManager.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
-import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
 import { IndexConfigManager } from './config/IndexConfig.js';
 import { IFileOperationsService } from '../services/FileOperationsService.js';
 
@@ -96,6 +98,10 @@ interface BuildStats {
   processedFiles: number;
 }
 
+interface IndexBuild extends PortfolioIndex {
+  readonly failures: CollectionFailure[];
+}
+
 interface DirectoryEntries {
   directories: string[];
   yamlFiles: string[];
@@ -105,20 +111,16 @@ interface DirectoryEntries {
 export interface PortfolioMemoryIndexSource {
   readonly namespace: string;
   readonly assertCurrent: () => void;
-  readonly listEntries: () => Promise<readonly IndexEntry[]>;
+  readonly listEntries: () => Promise<CollectionReport<IndexEntry>>;
 }
 
 export class PortfolioIndexManager {
-  private readonly indexByNamespace = new Map<string, PortfolioIndex>();
+  private readonly indexByNamespace = new Map<string, IndexBuild>();
   private readonly lastBuiltByNamespace = new Map<string, Date>();
   private readonly TTL_MS: number;
   private readonly portfolioManager: PortfolioManager;
   private readonly fileOperations: IFileOperationsService;
-  private readonly buildingByNamespace = new Map<string, Promise<void>>();
-
-  // Retry configuration for file operations
-  private readonly MAX_RETRIES = 3;
-  private readonly RETRY_DELAY_MS = 100;
+  private readonly buildingByNamespace = new Map<string, Promise<CollectionReport<PortfolioIndex>>>();
 
   public constructor(
     private readonly indexConfigManager: IndexConfigManager,
@@ -132,63 +134,24 @@ export class PortfolioIndexManager {
     this.fileOperations = fileOperations;
   }
 
-  /**
-   * Retry wrapper for file system operations
-   * Handles transient file system errors with exponential backoff
-   */
-  private async retryFileOperation<T>(
-    operation: () => Promise<T>,
-    context: string,
-    retries: number = this.MAX_RETRIES
-  ): Promise<T | null> {
-    for (let attempt = 1; attempt <= retries; attempt++) {
-      try {
-        return await operation();
-      } catch (error) {
-        const isLastAttempt = attempt === retries;
-        const errorMessage = error instanceof Error ? error.message : String(error);
-
-        // Check if error is retryable (transient file system errors)
-        const isRetryable = errorMessage.includes('EBUSY') ||
-                           errorMessage.includes('EAGAIN') ||
-                           errorMessage.includes('ENOENT') ||
-                           errorMessage.includes('ETIMEDOUT');
-
-        if (isLastAttempt || !isRetryable) {
-          logger.warn(`File operation failed after ${attempt} attempts: ${context}`, {
-            error: errorMessage,
-            attempt,
-            context
-          });
-          return null;
-        }
-
-        // Exponential backoff
-        const delay = this.RETRY_DELAY_MS * Math.pow(2, attempt - 1);
-        logger.debug(`Retrying file operation: ${context}`, {
-          attempt,
-          nextDelay: delay,
-          error: errorMessage
-        });
-
-        await new Promise(resolve => setTimeout(resolve, delay));
-      }
-    }
-    return null;
-  }
 
   /**
    * Get the current index, building it if necessary
    */
   public async getIndex(): Promise<PortfolioIndex> {
+    return requireCompleteCollection(await this.getIndexReport())[0];
+  }
+
+  public async getIndexReport(): Promise<CollectionReport<PortfolioIndex>> {
     this.memorySource?.assertCurrent();
     // Check if we need to rebuild
     if (this.needsRebuild()) {
-      await this.buildIndex();
+      return this.buildIndex();
     }
     
     this.memorySource?.assertCurrent();
-    return this.indexByNamespace.get(this.currentNamespace())!;
+    const index = this.indexByNamespace.get(this.currentNamespace())!;
+    return { items: [index], failures: index.failures, complete: index.failures.length === 0 };
   }
 
   /**
@@ -245,6 +208,15 @@ export class PortfolioIndexManager {
    */
   public async search(query: string, options: SearchOptions = {}): Promise<SearchResult[]> {
     const index = await this.getIndex();
+    return this.searchIndex(index, query, options);
+  }
+
+  public async searchReport(query: string, options: SearchOptions = {}): Promise<CollectionReport<SearchResult>> {
+    const report = await this.getIndexReport();
+    return { ...report, items: this.searchIndex(report.items[0], query, options) };
+  }
+
+  private searchIndex(index: PortfolioIndex, query: string, options: SearchOptions): SearchResult[] {
     this.memorySource?.assertCurrent();
     const safeQuery = this.normalizeSearchQuery(query);
     if (!safeQuery) return [];
@@ -398,7 +370,7 @@ export class PortfolioIndexManager {
     const namespace = this.currentNamespace();
     this.indexByNamespace.delete(namespace);
     this.lastBuiltByNamespace.delete(namespace);
-    await this.buildIndex();
+    requireCompleteCollection(await this.buildIndex());
   }
 
   /**
@@ -434,20 +406,19 @@ export class PortfolioIndexManager {
   /**
    * Build the index by scanning all portfolio directories
    */
-  private async buildIndex(): Promise<void> {
+  private async buildIndex(): Promise<CollectionReport<PortfolioIndex>> {
     const namespace = this.currentNamespace();
     // Prevent concurrent builds
     const existingBuild = this.buildingByNamespace.get(namespace);
     if (existingBuild) {
-      await existingBuild;
-      return;
+      return existingBuild;
     }
     
     const buildPromise = this.performBuild(namespace);
     this.buildingByNamespace.set(namespace, buildPromise);
     
     try {
-      await buildPromise;
+      return await buildPromise;
     } finally {
       this.buildingByNamespace.delete(namespace);
     }
@@ -456,7 +427,7 @@ export class PortfolioIndexManager {
   /**
    * Perform the actual index building
    */
-  private async performBuild(namespace: string): Promise<void> {
+  private async performBuild(namespace: string): Promise<CollectionReport<PortfolioIndex>> {
     const startTime = Date.now();
     logger.debug('Building portfolio index...');
     
@@ -464,21 +435,29 @@ export class PortfolioIndexManager {
       const newIndex = this.createEmptyIndex();
       const stats: BuildStats = { totalFiles: 0, processedFiles: 0 };
 
-      for (const elementType of Object.values(ElementType)) {
-        this.addBuildStats(stats, await this.scanElementType(elementType, newIndex));
-        this.memorySource?.assertCurrent();
-      }
+      await visitSequentially(Object.values(ElementType).values(), async elementType => {
+        const typeIndex = this.createEmptyIndex();
+        await this.captureBuildFailure(typeIndex, elementType, async () => {
+          this.addBuildStats(stats, await this.scanElementType(elementType, typeIndex));
+        });
+        newIndex.failures.push(...typeIndex.failures);
+        // Name lookup is lossy when distinct files share a name; merge every typed entry.
+        const report = { items: typeIndex.byType.get(elementType) ?? [], failures: typeIndex.failures, complete: typeIndex.failures.length === 0 };
+        for (const entry of collectionSurvivors(report, entry => entry.metadata.name)) this.addToIndex(newIndex, entry);
+      });
       
+      const complete = newIndex.failures.length === 0;
       this.updateIndexAtomically(namespace, newIndex, stats, startTime);
+      return { items: [newIndex], failures: newIndex.failures, complete };
     } catch (error) {
-      if (this.memorySource) throw error;
-      ErrorHandler.logError('PortfolioIndexManager.performBuild', error);
-      throw ErrorHandler.wrapError(error, 'Failed to build portfolio index', ErrorCategory.SYSTEM_ERROR);
+      this.memorySource?.assertCurrent();
+      throw elementReadFailure(error);
     }
   }
 
-  private createEmptyIndex(): PortfolioIndex {
-    const newIndex: PortfolioIndex = {
+  private createEmptyIndex(): IndexBuild {
+    const newIndex: IndexBuild = {
+      failures: [],
       byName: new Map(),
       byFilename: new Map(),
       byType: new Map(),
@@ -494,13 +473,26 @@ export class PortfolioIndexManager {
     return newIndex;
   }
 
-  private async scanElementType(elementType: ElementType, newIndex: PortfolioIndex): Promise<BuildStats> {
+  private async captureBuildFailure(index: IndexBuild, reference: string, operation: () => Promise<void>): Promise<void> {
+    try {
+      await operation();
+    } catch (cause) {
+      const error = elementReadFailure(cause, reference);
+      if (error instanceof GuardedReadConflict) throw error;
+      index.failures.push({ reference, error });
+    } finally {
+      this.memorySource?.assertCurrent();
+    }
+  }
+
+  private async scanElementType(elementType: ElementType, newIndex: IndexBuild): Promise<BuildStats> {
     this.memorySource?.assertCurrent();
     if (elementType === ElementType.MEMORY && this.memorySource) {
-      const entries = await this.memorySource.listEntries();
+      const report = await this.memorySource.listEntries();
       this.memorySource.assertCurrent();
-      for (const entry of entries) this.addToIndex(newIndex, entry);
-      return { totalFiles: entries.length, processedFiles: entries.length };
+      newIndex.failures.push(...report.failures);
+      for (const entry of report.items) this.addToIndex(newIndex, entry);
+      return { totalFiles: report.items.length, processedFiles: report.items.length };
     }
     try {
       const elementDir = this.portfolioManager.getElementDir(elementType);
@@ -510,31 +502,30 @@ export class PortfolioIndexManager {
         return { totalFiles: 0, processedFiles: 0 };
       }
 
-      return elementType === ElementType.MEMORY
+      return await (elementType === ElementType.MEMORY
         ? this.scanMemoryDirectory(elementDir, newIndex)
-        : this.scanStandardElementDirectory(elementDir, elementType, newIndex);
+        : this.scanStandardElementDirectory(elementDir, elementType, newIndex));
     } catch (error) {
       this.memorySource?.assertCurrent();
-      logger.error(`Failed to scan element type: ${elementType}`, {
-        error: error instanceof Error ? error.message : String(error)
-      });
-      return { totalFiles: 0, processedFiles: 0 };
+      throw elementReadFailure(error, elementType);
     }
   }
 
   private async scanStandardElementDirectory(
     elementDir: string,
     elementType: ElementType,
-    newIndex: PortfolioIndex,
+    newIndex: IndexBuild,
   ): Promise<BuildStats> {
     const files = await this.fileOperations.listDirectory(elementDir);
     const mdFiles = files.filter(file => file.endsWith('.md'));
     let processedFiles = 0;
 
-    for (const file of mdFiles) {
-      const indexed = await this.indexStandardFile(elementDir, file, elementType, newIndex);
-      if (indexed) processedFiles++;
-    }
+    await visitSequentially(mdFiles.values(), async file => {
+      await this.captureBuildFailure(newIndex, path.join(elementType, file), async () => {
+        const indexed = await this.indexStandardFile(elementDir, file, elementType, newIndex);
+        if (indexed) processedFiles++;
+      });
+    });
 
     return { totalFiles: mdFiles.length, processedFiles };
   }
@@ -553,25 +544,20 @@ export class PortfolioIndexManager {
       this.addToIndex(newIndex, entry);
       return true;
     } catch (error) {
-      logger.warn(`Failed to index file: ${file}`, {
-        elementType,
-        error: error instanceof Error ? error.message : String(error)
-      });
-      return false;
+      throw elementReadFailure(error, file);
     }
   }
 
-  private async scanMemoryDirectory(elementDir: string, newIndex: PortfolioIndex): Promise<BuildStats> {
-    const rootEntries = await this.listDirectoryEntries(elementDir);
-    const stats = await this.indexMemoryFiles(elementDir, rootEntries.yamlFiles, newIndex, {
-      message: 'Failed to index root memory file',
-      location: 'root',
-    });
+  private async scanMemoryDirectory(elementDir: string, newIndex: IndexBuild): Promise<BuildStats> {
+    const rootEntries = await this.listDirectoryEntries(elementDir, newIndex);
+    const stats = await this.indexMemoryFiles(elementDir, rootEntries.yamlFiles, newIndex);
 
     const dateFolders = rootEntries.directories.filter(name => /^\d{4}-\d{2}-\d{2}$/.test(name));
-    for (const dateFolder of dateFolders) {
-      this.addBuildStats(stats, await this.indexMemoryDateFolder(elementDir, dateFolder, newIndex));
-    }
+    await visitSequentially(dateFolders.values(), async dateFolder => {
+      await this.captureBuildFailure(newIndex, path.join(ElementType.MEMORY, dateFolder), async () => {
+        this.addBuildStats(stats, await this.indexMemoryDateFolder(elementDir, dateFolder, newIndex));
+      });
+    });
 
     return stats;
   }
@@ -579,41 +565,39 @@ export class PortfolioIndexManager {
   private async indexMemoryDateFolder(
     elementDir: string,
     dateFolder: string,
-    newIndex: PortfolioIndex,
+    newIndex: IndexBuild,
   ): Promise<BuildStats> {
     const folderPath = path.join(elementDir, dateFolder);
-    const folderEntries = await this.listDirectoryEntries(folderPath);
-    const stats = await this.indexMemoryFiles(folderPath, folderEntries.yamlFiles, newIndex, {
-      message: 'Failed to index date folder memory file',
-      location: 'date-folder',
-      dateFolder,
-    });
+    const folderEntries = await this.listDirectoryEntries(folderPath, newIndex);
+    const stats = await this.indexMemoryFiles(folderPath, folderEntries.yamlFiles, newIndex);
 
-    for (const subDir of folderEntries.directories) {
-      this.addBuildStats(stats, await this.indexShardedMemory(folderPath, dateFolder, subDir, newIndex));
-    }
+    await visitSequentially(folderEntries.directories.values(), async subDir => {
+      await this.captureBuildFailure(newIndex, path.join(ElementType.MEMORY, dateFolder, subDir), async () => {
+        this.addBuildStats(stats, await this.indexShardedMemory(folderPath, dateFolder, subDir, newIndex));
+      });
+    });
 
     return stats;
   }
 
-  private async listDirectoryEntries(dir: string): Promise<DirectoryEntries> {
+  private async listDirectoryEntries(dir: string, newIndex: IndexBuild): Promise<DirectoryEntries> {
     const entryNames = await this.fileOperations.listDirectory(dir);
     const directories: string[] = [];
     const yamlFiles: string[] = [];
 
-    for (const entryName of entryNames) {
+    await visitSequentially(entryNames.values(), async entryName => {
       const entryPath = path.join(dir, entryName);
-      try {
+      const reference = path.join(ElementType.MEMORY,
+        path.relative(this.portfolioManager.getElementDir(ElementType.MEMORY), entryPath));
+      await this.captureBuildFailure(newIndex, reference, async () => {
         const entryStat = await this.fileOperations.stat(entryPath);
         if (entryStat.isDirectory()) {
           directories.push(entryName);
         } else if (entryName.endsWith('.yaml')) {
           yamlFiles.push(entryName);
         }
-      } catch {
-        // Skip entries we can't stat.
-      }
-    }
+      });
+    });
 
     return { directories, yamlFiles };
   }
@@ -621,18 +605,21 @@ export class PortfolioIndexManager {
   private async indexMemoryFiles(
     baseDir: string,
     files: string[],
-    newIndex: PortfolioIndex,
-    context: { message: string; location: string; dateFolder?: string },
+    newIndex: IndexBuild,
   ): Promise<BuildStats> {
     const stats: BuildStats = { totalFiles: 0, processedFiles: 0 };
 
-    for (const file of files) {
-      const indexed = await this.indexMemoryFile(baseDir, file, newIndex, context);
-      if (indexed) {
-        stats.processedFiles++;
-        stats.totalFiles++;
-      }
-    }
+    await visitSequentially(files.values(), async file => {
+      const reference = path.join(ElementType.MEMORY,
+        path.relative(this.portfolioManager.getElementDir(ElementType.MEMORY), path.join(baseDir, file)));
+      await this.captureBuildFailure(newIndex, reference, async () => {
+        const indexed = await this.indexMemoryFile(baseDir, file, newIndex);
+        if (indexed) {
+          stats.processedFiles++;
+          stats.totalFiles++;
+        }
+      });
+    });
 
     return stats;
   }
@@ -641,7 +628,6 @@ export class PortfolioIndexManager {
     baseDir: string,
     file: string,
     newIndex: PortfolioIndex,
-    context: { message: string; location: string; dateFolder?: string },
   ): Promise<boolean> {
     try {
       const filePath = path.join(baseDir, file);
@@ -651,15 +637,7 @@ export class PortfolioIndexManager {
       this.addToIndex(newIndex, entry);
       return true;
     } catch (error) {
-      logger.warn(context.message, {
-        file,
-        path: path.join(baseDir, file),
-        ...(context.dateFolder ? { dateFolder: context.dateFolder } : {}),
-        location: context.location,
-        error: error instanceof Error ? error.message : String(error),
-        errorType: error instanceof Error ? error.constructor.name : typeof error
-      });
-      return false;
+      throw elementReadFailure(error, file);
     }
   }
 
@@ -722,18 +700,7 @@ export class PortfolioIndexManager {
       this.addToIndex(newIndex, shardedEntry);
       return true;
     } catch (error) {
-      logger.warn('Failed to index sharded memory', {
-        subDir,
-        dateFolder,
-        path: path.join(subDirPath, metadataFile),
-        metadataFile,
-        shardCount: shardYamlFiles.length,
-        location: 'sharded-subdirectory',
-        error: error instanceof Error ? error.message : String(error),
-        errorType: error instanceof Error ? error.constructor.name : typeof error,
-        shardFiles: shardYamlFiles.slice(0, 5)
-      });
-      return false;
+      throw elementReadFailure(error, metadataFile);
     }
   }
 
@@ -744,7 +711,7 @@ export class PortfolioIndexManager {
 
   private updateIndexAtomically(
     namespace: string,
-    newIndex: PortfolioIndex,
+    newIndex: IndexBuild,
     stats: BuildStats,
     startTime: number,
   ): void {
@@ -824,10 +791,7 @@ export class PortfolioIndexManager {
       return entry;
       
     } catch (error) {
-      logger.debug(`Failed to create index entry for: ${filePath}`, {
-        error: error instanceof Error ? error.message : String(error)
-      });
-      return null;
+      throw elementReadFailure(error, path.basename(filePath));
     }
   }
 
@@ -851,8 +815,7 @@ export class PortfolioIndexManager {
 
       // Security validation: Check content size before parsing
       if (content.length > 1048576) { // 1MB limit
-        logger.warn(`Large memory file detected, skipping: ${filePath}`);
-        return null;
+        throw new Error('Memory exceeds the portfolio index size limit');
       }
 
       const rawParsed = yaml.load(content, {
@@ -861,8 +824,7 @@ export class PortfolioIndexManager {
 
       // Type safety: Ensure parsed result is a valid object
       if (!rawParsed || typeof rawParsed !== 'object' || Array.isArray(rawParsed)) {
-        logger.warn(`Invalid YAML structure in memory file: ${filePath}`);
-        return null;
+        throw new Error('Invalid YAML structure in memory file');
       }
 
       const parsed = rawParsed as Record<string, any>;
@@ -902,10 +864,7 @@ export class PortfolioIndexManager {
       return entry;
 
     } catch (error) {
-      logger.debug(`Failed to create memory index entry for: ${filePath}`, {
-        error: error instanceof Error ? error.message : String(error)
-      });
-      return null;
+      throw elementReadFailure(error, path.basename(filePath));
     }
   }
 

@@ -130,7 +130,7 @@ describe('tenant-bound console caller store',()=>{
     const f=await fixture();for(const id of [f.first,f.second])f.modes.set(id,[{protocol_version:1,profile:DATABASE_MEMORY_LEGACY_PROFILE,mode:'legacy',generation:'1'}]);
     const {provider,service,managers}=composed(f);const selected=await f.scope.run(f.second,()=>f.registry.resolve(f.registry.capture()));
     const memory=new Memory({name:'Selected Console Memory',description:'Selected tenant memory'},f.container.resolve('MetadataService'));
-    const rootList=jest.spyOn(managers.memories,'list').mockResolvedValue([]);const list=jest.spyOn(selected,'list').mockResolvedValue([memory]);
+    const rootList=jest.spyOn(managers.memories,'listReport').mockResolvedValue({items:[],failures:[],complete:true});const list=jest.spyOn(selected,'listReport').mockResolvedValue({items:[memory],failures:[],complete:true});
     const resolve=jest.spyOn(provider,'resolve');
     await f.scope.run(f.second,()=>f.tracker.runAsync(invocation(f.tracker,f.second),async()=>{
       const result=await service.listElements(request(f.second));expect(result.status).toBe(200);expect(JSON.stringify(result)).toContain('Selected Console Memory');
@@ -139,7 +139,7 @@ describe('tenant-bound console caller store',()=>{
   });
   it('refuses context drift during initialization before selected discovery',async()=>{
     const f=await fixture();const {service}=composed(f);const wait=deferred();f.setPause(wait.promise);
-    const list=jest.spyOn(MemoryManager.prototype,'list');const context=invocation(f.tracker,f.first);
+    const list=jest.spyOn(MemoryManager.prototype,'listReport');const context=invocation(f.tracker,f.first);
     await f.tracker.runAsync(context,async()=>{
       const pending=service.listElements(request(f.first));context.requestId=randomUUID();wait.resolve();
       await expect(pending).rejects.toThrow('context changed');
@@ -147,7 +147,7 @@ describe('tenant-bound console caller store',()=>{
   });
   it('does not turn drift during an awaited list into an empty or invalid-summary success',async()=>{
     const f=await fixture();const {service}=composed(f);const selected=await f.registry.resolve(f.registry.capture());
-    const entered=deferred();const release=deferred();jest.spyOn(selected,'list').mockImplementation(async()=>{entered.resolve();await release.promise;return [];});
+    const entered=deferred();const release=deferred();jest.spyOn(selected,'listReport').mockImplementation(async()=>{entered.resolve();await release.promise;return {items:[],failures:[],complete:true};});
     const context=invocation(f.tracker,f.first);
     await f.tracker.runAsync(context,async()=>{
       const pending=service.listElements(request(f.first));try{await Promise.race([entered.promise,pending.then(()=>{throw new Error('Listing completed before owned barrier');})]);context.requestId=randomUUID();}finally{release.resolve();}
@@ -173,7 +173,7 @@ describe('tenant-bound console caller store',()=>{
     const f=await fixture();f.modes.set(f.first,[{protocol_version:1,profile:DATABASE_MEMORY_LEGACY_PROFILE,mode:'legacy',generation:'1'}]);
     const {service}=composed(f);const manager=await f.registry.resolve(f.registry.capture());
     const memory=new Memory({name:'Parsing Memory',description:'Owned parsing memory'},f.container.resolve('MetadataService'));
-    jest.spyOn(manager,'list').mockResolvedValue([memory]);const entered=deferred();const release=deferred();
+    jest.spyOn(manager,'listReport').mockResolvedValue({items:[memory],failures:[],complete:true});const entered=deferred();const release=deferred();
     jest.spyOn(manager as unknown as {serializeElement(memory:Memory):Promise<string>},'serializeElement').mockImplementation(async()=>{entered.resolve();await release.promise;throw new Error('Owned parsing failure');});
     const context=invocation(f.tracker,f.first);
     await f.tracker.runAsync(context,async()=>{

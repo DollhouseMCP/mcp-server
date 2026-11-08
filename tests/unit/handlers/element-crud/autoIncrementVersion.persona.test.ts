@@ -102,6 +102,11 @@ describe('autoIncrementVersion for PersonaManager', () => {
       ensureInitialized: async () => {},
       getPersonaIndicator: () => '🎭'
     } as any;
+    context.getManagerForType = (type: string) => ({
+      [ElementType.PERSONA]: context.personaManager, [ElementType.SKILL]: context.skillManager,
+      [ElementType.TEMPLATE]: context.templateManager, [ElementType.AGENT]: context.agentManager,
+      [ElementType.MEMORY]: context.memoryManager, [ElementType.ENSEMBLE]: context.ensembleManager,
+    } as Record<string, unknown>)[type];
   });
 
   afterEach(async () => {

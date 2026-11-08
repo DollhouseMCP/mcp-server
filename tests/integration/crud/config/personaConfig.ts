@@ -21,7 +21,7 @@ function createPersonaTestData(overrides?: Partial<ElementData>): ElementData {
       version: '1.0.0',
       author: 'test-user',
       category: 'testing',
-      ...(overrides?.metadata || {})
+      ...overrides?.metadata
     }
   };
 
@@ -59,7 +59,7 @@ export const PERSONA_CONFIG: ElementTypeTestConfig = {
         version: '2.1.0',
         author: 'test-author',
         category: 'creative',
-        age_rating: 'general',
+        age_rating: 'all',
         license: 'CC-BY-4.0',
         ai_generated: false,
         content_flags: ['creative', 'writing']
@@ -197,7 +197,7 @@ export const PERSONA_CONFIG: ElementTypeTestConfig = {
       name: 'name-required',
       description: 'Name field must be present and non-empty',
       validate: (data) => ({
-        valid: Boolean(data.name && data.name.trim()),
+        valid: Boolean(data.name?.trim()),
         message: 'Persona name is required'
       }),
       severity: 'error'
@@ -206,7 +206,7 @@ export const PERSONA_CONFIG: ElementTypeTestConfig = {
       name: 'description-required',
       description: 'Description field must be present and non-empty',
       validate: (data) => ({
-        valid: Boolean(data.description && data.description.trim()),
+        valid: Boolean(data.description?.trim()),
         message: 'Persona description is required'
       }),
       severity: 'error'
@@ -215,7 +215,7 @@ export const PERSONA_CONFIG: ElementTypeTestConfig = {
       name: 'content-required',
       description: 'Content/instructions must be present and non-empty',
       validate: (data) => ({
-        valid: Boolean(data.content && data.content.trim()),
+        valid: Boolean(data.content?.trim()),
         message: 'Persona instructions (content) are required'
       }),
       severity: 'error'

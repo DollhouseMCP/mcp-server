@@ -3,6 +3,7 @@
  */
 
 import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
+import { ValidationError } from '../../../../src/security/errors.js';
 import { MEMORY_SECURITY_EVENTS } from '../../../../src/elements/memories/constants.js';
 import { jest } from '@jest/globals';
 import { MemoryManager } from '../../../../src/elements/memories/MemoryManager.js';
@@ -28,6 +29,7 @@ import { createTestStorageFactory } from '../../../helpers/createTestStorageFact
 const metadataService = createTestMetadataService();
 
 describe('MemoryManager', () => {
+  beforeEach(() => SecurityMonitor.clearAllEventsForTesting());
   let container: InstanceType<typeof DollhouseContainer>;
   let manager: InstanceType<typeof MemoryManager>;
   let testDir: string;
@@ -119,11 +121,13 @@ describe('MemoryManager', () => {
     const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
     const load = jest.spyOn(manager, 'load');
     try {
-      expect(await manager.list()).toEqual([]);
+      expect(await manager.listReport()).toMatchObject({ items: [], complete: false });
       expect(load).not.toHaveBeenCalled();
       const failures = audit.mock.calls.filter(([event]) => event.type === MEMORY_SECURITY_EVENTS.MEMORY_LIST_ITEM_FAILED);
       expect(failures).toHaveLength(1);
       expect(failures[0][0].details).toContain('parse-reason.yaml');
+      // The list reports the same classified reason a direct load gives: a content rejection, not a storage failure.
+      expect(failures[0][0].details).toContain('Definition content could not be read or validated');
       expect(failures[0][0].details).toMatch(/unexpected end|flow collection/);
       expect(failures[0][0].details).not.toContain(memoriesDir);
     } finally {
@@ -136,24 +140,21 @@ describe('MemoryManager', () => {
     await fs.writeFile(path.join(memoriesDir, 'broken.yaml'), 'metadata: [unfinished');
     let namespace = 'alice';
     const scope = jest.spyOn(manager as any, 'getCacheNamespace').mockImplementation(() => namespace);
-    const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
-    const failures = () => audit.mock.calls.filter(([event]) =>
-      event.type === MEMORY_SECURITY_EVENTS.MEMORY_LIST_ITEM_FAILED);
+    const failures = () => SecurityMonitor.getEventsByType(MEMORY_SECURITY_EVENTS.MEMORY_LIST_ITEM_FAILED);
     try {
-      await manager.list();
+      await manager.listReport();
       // Per-user suppression prevents another event for this caller's repeated failure.
-      await manager.list();
+      await manager.listReport();
       expect(failures()).toHaveLength(1);
       namespace = 'bob';
-      await manager.list();
-      await manager.list();
+      await manager.listReport();
+      await manager.listReport();
       expect(failures()).toHaveLength(2);
       namespace = 'alice';
-      await manager.list();
+      await manager.listReport();
       expect(failures()).toHaveLength(2);
     } finally {
       scope.mockRestore();
-      audit.mockRestore();
     }
   });
 
@@ -682,6 +683,22 @@ entries: []
       const exists = await manager.exists('does-not-exist.yaml');
       expect(exists).toBe(false);
     });
+
+    it('answers absence by construction for a non-memory extension and refuses a caller traversal directly', async () => {
+      await expect(manager.exists('note.txt')).resolves.toBe(false);
+      const refusal = await manager.exists(path.join('..', 'outside.yaml')).then(() => undefined, (error: Error) => error);
+      expect(refusal?.message).toContain('Path traversal detected');
+      expect(refusal?.name).not.toBe('ElementUnreadableError');
+    });
+  });
+
+  describe('delete by name', () => {
+    it('resolves a stored name containing dots through the index instead of refusing it as a path', async () => {
+      const memory = new Memory({ name: 'v1..2' }, metadataService);
+      await manager.save(memory, 'v1-2.yaml');
+      await manager.delete('v1..2');
+      await expect(manager.exists('v1-2.yaml')).resolves.toBe(false);
+    });
   });
   
   describe('create', () => {
@@ -1035,6 +1052,20 @@ data:
       }
     });
 
+    it('accepts every storage reference shape the memory layer owns, .yml included', async () => {
+      const folder = path.join(memoriesDir, '2026-01-01');
+      await fs.mkdir(folder, { recursive: true });
+      await fs.writeFile(path.join(folder, 'legacy.yml'), 'metadata:\n  name: legacy-notes\n  description: legacy\nentries: []\n');
+      const found = await manager.findByStorageIdentity('2026-01-01/legacy.yml');
+      expect(found?.metadata.name).toBe('legacy-notes');
+    });
+
+    it('refuses path-shaped caller text by name with the validation error every type raises', async () => {
+      const refusal = await manager.findByName('../../../etc/passwd').then(() => undefined, (error: Error) => error);
+      expect(refusal).toBeInstanceOf(ValidationError);
+      expect(refusal?.message).toBe('Invalid memory path: Invalid file path: Path traversal detected');
+    });
+
     it('should prevent absolute path access', async () => {
       // Only test Unix-style absolute paths on Unix systems
       const absolutePaths = process.platform === 'win32' ?
@@ -1199,9 +1230,9 @@ data:
 
       // Create files with "backup" in various cases
       const backupVariants = [
-        'my-backup-file.yaml',
-        'my-BACKUP-file.yaml',
-        'my-Backup-file.yaml',
+        'a-backup-file.yaml',
+        'b-BACKUP-file.yaml',
+        'c-Backup-file.yaml',
         'myBackupFile.yaml'
       ];
 

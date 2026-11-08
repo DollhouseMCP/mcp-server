@@ -23,6 +23,10 @@ import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { MetadataService } from '../services/MetadataService.js';
+import { canonicalElementName, defaultElementName, storedElementName } from '../storage/ElementNameKeys.js';
+
+/** How an element type's name relates to its stored text (see the BaseElement constructor). */
+export type ElementNameIdentity = 'canonical' | 'stored';
 
 /**
  * Normalizes version strings to full semver format (X.Y.Z)
@@ -40,7 +44,7 @@ import { MetadataService } from '../services/MetadataService.js';
  */
 export function normalizeVersion(version: string): string {
   // Extract base version and any prerelease/build metadata
-  const match = version.match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?([-+].+)?$/);
+  const match = /^(\d+)(?:\.(\d+))?(?:\.(\d+))?([-+].+)?$/.exec(version);
   
   if (!match) {
     // Return as-is if not a valid version format
@@ -94,14 +98,50 @@ export abstract class BaseElement implements IElement {
   
   // Constants
   private readonly MAX_FEEDBACK_HISTORY = 100;
+  private readonly nameIdentity: ElementNameIdentity;
+
+  /**
+   * The name this element carries for a given stored name: the shared stored-name rule for a
+   * 'canonical' type, the text as written for a 'stored' one. A blank name stays blank, so
+   * validation refuses it as a missing name.
+   */
+  protected identityName<N>(name: N, type: ElementType): N | string {
+    if (typeof name !== 'string' || !name.trim()) return name;
+    if (this.nameIdentity === 'canonical') return storedElementName(name, type);
+    // A 'stored' name keeps its text, unless nothing of it survives canonicalisation: then it takes
+    // the type's one default, the name the index holds it under, as for every type.
+    return canonicalElementName(name) === '' ? defaultElementName(type) : name;
+  }
+
+  /**
+   * Assign a name after construction (an edit, a repair) through the same rule the constructor
+   * applies, so the element carries the name the index and the stored definition hold.
+   */
+  public assignName(name: string): void {
+    this.metadata.name = this.identityName(name, this.type);
+  }
   
+  /**
+   * `nameIdentity` declares how the type's name relates to the stored text. 'canonical' (every
+   * type but personas): the element carries the one stored name the index holds, through
+   * storedElementName (canonicalElementName, or the type's default when it canonicalises to
+   * nothing), so a listed name and a lookup agree. A subclass's own one-pass sanitising before
+   * this is harmless: the fixed point of its first pass is the fixed point of the raw text.
+   * 'stored': the type keeps its name as written; only PersonaElement declares it, until personas
+   * share the canonical rule.
+   */
   constructor(
     type: ElementType,
-    metadata: Partial<IElementMetadata> = {},
-    metadataService: MetadataService  // Required injection for DI
+    givenMetadata: Partial<IElementMetadata> | undefined,
+    metadataService: MetadataService,  // Required injection for DI
+    nameIdentity: ElementNameIdentity = 'canonical'
   ) {
-    // Normalize common metadata via service (skip type-specific defaults)
-    const normalized = metadataService.normalizeMetadata(metadata, type, {
+    const metadata = givenMetadata ?? {};
+    // Normalize common metadata via service (skip type-specific defaults); the id below still
+    // follows whether a name was given at all.
+    this.nameIdentity = nameIdentity;
+    const named = { ...metadata, name: this.identityName(metadata.name, type) };
+    const normalized = metadataService.normalizeMetadata(named, type, {
       skipTypeDefaults: true  // Let element-specific classes handle their own defaults
     });
 
@@ -163,6 +203,27 @@ export abstract class BaseElement implements IElement {
     return `${typeSlug}_${nameSlug}_${timestamp}`;
   }
   
+  /** Each reference needs a URI; a title is recommended. */
+  private validateReferences(errors: ValidationError[], warnings: ValidationWarning[]): void {
+    if (this.references) {
+      this.references.forEach((ref, index) => {
+        if (!ref.uri || ref.uri.trim() === '') {
+          errors.push({
+            field: `references[${index}].uri`,
+            message: 'Reference URI is required'
+          });
+        }
+        if (!ref.title || ref.title.trim() === '') {
+          warnings.push({
+            field: `references[${index}].title`,
+            message: 'Reference title is recommended',
+            severity: 'low'
+          });
+        }
+      });
+    }
+  }
+
   /**
    * Core validation that all elements share.
    * Subclasses should override and call super.validate() first.
@@ -205,24 +266,8 @@ export abstract class BaseElement implements IElement {
     }
     
     // Validate references
-    if (this.references) {
-      this.references.forEach((ref, index) => {
-        if (!ref.uri || ref.uri.trim() === '') {
-          errors.push({ 
-            field: `references[${index}].uri`, 
-            message: 'Reference URI is required' 
-          });
-        }
-        if (!ref.title || ref.title.trim() === '') {
-          warnings.push({ 
-            field: `references[${index}].title`, 
-            message: 'Reference title is recommended',
-            severity: 'low'
-          });
-        }
-      });
-    }
-    
+    this.validateReferences(errors, warnings);
+
     // Validate ratings if present
     if (this.ratings) {
       if (this.ratings.aiRating < 0 || this.ratings.aiRating > 5) {
@@ -405,7 +450,7 @@ export abstract class BaseElement implements IElement {
       this.id = parsed.id;
       this.type = parsed.type;
       this.version = normalizeVersion(String(parsed.version ?? '1.0.0'));
-      this.metadata = parsed.metadata;
+      this.metadata = { ...parsed.metadata, name: this.identityName(parsed.metadata.name, parsed.type) };
       this.references = parsed.references || [];
       this.extensions = parsed.extensions || {};
       this.ratings = parsed.ratings;
@@ -454,17 +499,15 @@ export abstract class BaseElement implements IElement {
       }
     });
     
-    if (!this.ratings) {
-      this.ratings = {
-        aiRating: 0,
-        userRating: undefined,
-        ratingCount: 0,
-        lastEvaluated: new Date(),
-        confidence: 0,
-        trend: 'stable',
-        feedbackHistory: []
-      };
-    }
+    this.ratings ??= {
+      aiRating: 0,
+      userRating: undefined,
+      ratingCount: 0,
+      lastEvaluated: new Date(),
+      confidence: 0,
+      trend: 'stable',
+      feedbackHistory: []
+    };
     
     // Create feedback entry with normalized content
     const userFeedback: UserFeedback = {
@@ -477,9 +520,7 @@ export abstract class BaseElement implements IElement {
     };
     
     // Add to history with bounds checking
-    if (!this.ratings.feedbackHistory) {
-      this.ratings.feedbackHistory = [];
-    }
+    this.ratings.feedbackHistory ??= [];
     this.ratings.feedbackHistory.push(userFeedback);
     
     // Prevent unbounded growth
@@ -523,7 +564,8 @@ export abstract class BaseElement implements IElement {
     const lower = feedback.toLowerCase();
     
     // Look for explicit ratings
-    const ratingMatch = lower.match(/(\d+)\s*(stars?|\/5|out of 5)/);
+    // The lookbehind makes the whole digit run the rating ('1000 stars' is not 0).
+    const ratingMatch = /(?<!\d)(\d+)\s*(stars?|\/5|out of 5)/.exec(lower);
     if (ratingMatch) {
       const rating = Number.parseInt(ratingMatch[1]);
       if (rating >= 1 && rating <= 5) return rating;
@@ -594,28 +636,32 @@ export abstract class BaseElement implements IElement {
   /**
    * Default lifecycle methods - subclasses should override as needed.
    */
-  public async beforeActivate(): Promise<void> {
+  public beforeActivate(): Promise<void> {
     logger.debug(`Preparing to activate ${this.type} element: ${this.metadata.name}`);
     this._status = ElementStatus.ACTIVATING;
+    return Promise.resolve();
   }
   
-  public async activate(): Promise<void> {
+  public activate(): Promise<void> {
     if (this._status !== ElementStatus.ACTIVE) {
       logger.info(`Activating ${this.type} element: ${this.metadata.name}`);
     }
     // Re-activations of the same element are silent — no value in logging
     this._status = ElementStatus.ACTIVE;
+    return Promise.resolve();
   }
   
-  public async afterActivate(): Promise<void> {
+  public afterActivate(): Promise<void> {
     logger.debug(`Completed activation of ${this.type} element: ${this.metadata.name}`);
+    return Promise.resolve();
   }
   
-  public async deactivate(): Promise<void> {
+  public deactivate(): Promise<void> {
     logger.info(`Deactivating ${this.type} element: ${this.metadata.name}`);
     this._status = ElementStatus.DEACTIVATING;
     // Subclasses should implement cleanup logic
     this._status = ElementStatus.INACTIVE;
+    return Promise.resolve();
   }
   
   /**

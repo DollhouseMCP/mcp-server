@@ -123,20 +123,36 @@ export function formatNotFoundError(
 }
 
 /**
- * Issue #708: Format error for elements that exist on disk but failed validation.
- * Distinct from "not found" — the file is present but the server can't load it.
+ * The response for a lookup a storage failure interrupted: nothing is established about the
+ * definition, so it neither claims the file exists nor that it is absent.
  */
-export function formatValidationFailedError(
+export function formatUnavailableElementError(
   type: ElementType,
   name: string,
-  reason: string,
+  clientSafeReason: string,
+  reference?: string
+): McpToolResponse {
+  const typeLabel = getElementTypeLabel(type);
+  const locationHint = reference ? ` (reference: ${reference})` : '';
+  return formatErrorResponse(
+    `${typeLabel.charAt(0).toUpperCase() + typeLabel.slice(1)} Unavailable`,
+    `The ${typeLabel} "${name}" could not be read${locationHint}: ${clientSafeReason}`,
+    'Retry the request. Run `query_logs level="error"` for details.'
+  );
+}
+
+/** The invalid-element response for a reason that is already client-safe (a typed read failure's reason). */
+export function formatUnreadableElementError(
+  type: ElementType,
+  name: string,
+  clientSafeReason: string,
   filePath?: string
 ): McpToolResponse {
   const typeLabel = getElementTypeLabel(type);
   const locationHint = filePath ? ` (file: ${filePath})` : '';
   return formatErrorResponse(
     `${typeLabel.charAt(0).toUpperCase() + typeLabel.slice(1)} Invalid`,
-    `The ${typeLabel} "${name}" exists on disk but failed to load${locationHint}: ${reason}`,
+    `The ${typeLabel} "${name}" exists on disk but failed to load${locationHint}: ${clientSafeReason}`,
     'Fix the file manually or re-create the element. Run `query_logs level="error"` for details.'
   );
 }

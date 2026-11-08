@@ -20,6 +20,7 @@ import { elements } from '../database/schema/elements.js';
 import type { UserIdResolver } from '../database/UserContext.js';
 import { getErrorCode, isUniqueViolation, type DrizzleTx } from '../database/db-utils.js';
 import { FrontmatterParser, type FrontmatterData } from './FrontmatterParser.js';
+import { canonicalElementName } from './ElementNameKeys.js';
 import { RelationshipExtractor } from './RelationshipExtractor.js';
 import { AbstractDatabaseStorageLayer } from './AbstractDatabaseStorageLayer.js';
 import type { ElementWriteMetadata, WriteContentOptions } from './IStorageLayer.js';
@@ -84,13 +85,14 @@ export class DatabaseStorageLayer extends AbstractDatabaseStorageLayer {
     metadata: ElementWriteMetadata,
     options?: WriteContentOptions,
   ): Promise<string> {
-    const frontmatter = FrontmatterParser.extractMetadata(content);
+    const frontmatter = FrontmatterParser.extractMetadata(content, elementType);
     const contentHash = createHash('sha256').update(content, 'utf8').digest('hex');
     const byteSize = Buffer.byteLength(content, 'utf8');
     const bodyContent = extractBodyContent(content);
 
     // Use the caller-provided name as authoritative, falling back to frontmatter
-    const elementName = name || frontmatter.name;
+    // The stored name is canonical, the same name the hydrated element carries.
+    const elementName = canonicalElementName(name || frontmatter.name);
 
     const userId = this.userId;
     let elementId: string;

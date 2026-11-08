@@ -1,3 +1,4 @@
+import { resolveInputElementType } from '../../../../src/handlers/mcp-aql/shared.js';
 import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { MCPAQLHandler, type HandlerRegistry } from '../../../../src/handlers/mcp-aql/MCPAQLHandler.js';
@@ -69,7 +70,7 @@ describe('infrastructure-first operation enforcement', () => {
 
   it.each(INFRA_OPERATIONS)('%s reaches gatekeeper without acquiring broken element policies', async operation => {
     const f = fixture();
-    await expect(f.enforceOperation(operation)).resolves.toBeNull();
+    await expect(f.enforceOperation(operation)).resolves.toEqual({ failure: undefined, recovery: undefined });
     expect(f.collect).not.toHaveBeenCalled();
     expect(f.enforce).toHaveBeenCalledWith(expect.objectContaining({
       operation, activeElements: [], skipElementPolicies: true,
@@ -80,10 +81,35 @@ describe('infrastructure-first operation enforcement', () => {
       ? { allowed: false, confirmationPending: true } : { allowed: true }));
   });
 
+  it('applies type-scoped policy to params-only operations through the shared resolver', async () => {
+    const f = fixture();
+    const policy = { scopeRestrictions: { blockedTypes: ['skill'] } };
+    f.collect.mockResolvedValue([{ type: 'persona', name: 'guard', metadata: { gatekeeper: policy } }]);
+    const input = { operation: 'list_elements', params: { element_type: 'skills' } };
+    expect(resolveInputElementType(input)).toBe('skill');
+    const activeElements = [{ type: 'persona', name: 'guard', metadata: { name: 'guard', gatekeeper: policy } }];
+    expect(f.gatekeeper.enforce({ operation: input.operation, endpoint: 'READ', activeElements }, new OperationRegistry()).allowed).toBe(true);
+    await expect(f.handler['enforceOperationGatekeeper'](input, 'READ', 0)).rejects.toThrow('scope restrictions');
+  });
+
+  it('withholds untyped collection diagnostics from dashboard and enforcement', async () => {
+    const f = fixture();
+    const cause = new Error('Failed query private_table secret-token');
+    f.collect.mockRejectedValue(cause);
+    const handlers = { elementCRUD: { getPolicyElementsForReport: async () => { throw cause; } } } as unknown as HandlerRegistry;
+    const report = await f.handler['getPolicyReportElements'](undefined, handlers);
+    expect(report).toEqual({ items: [], complete: false,
+      failures: [{ type: 'collection', reason: 'Storage or validation operation failed' }] });
+    await expect(f.handler.getActiveElementsForGatekeeperPolicy()).rejects.toMatchObject({
+      cause, message: 'Failed to gather active elements for Gatekeeper policy evaluation: Storage or validation operation failed.',
+    });
+  });
+
   it('retains the ordinary operation collection error and cause', async () => {
     const f = fixture();
     await expect(f.enforceOperation('list_elements')).rejects.toMatchObject({
-      message: 'Failed to gather active elements for Gatekeeper policy evaluation: policy storage unavailable',
+      name: 'PolicyUnavailableError',
+      message: 'Failed to gather active elements for Gatekeeper policy evaluation: Storage or validation operation failed.',
       cause: FAILURE,
     });
     expect(f.collect).toHaveBeenCalledWith({ allowCoalescing: false });
@@ -95,7 +121,7 @@ describe('infrastructure-first operation enforcement', () => {
     const f = fixture();
     const policy = { deny: ['delete_element'] };
     f.collect.mockResolvedValue([{ type: 'skill', name: 'guard', metadata: { description: 'guard policy', gatekeeper: policy } }]);
-    await expect(f.enforceOperation('list_elements')).resolves.toBeNull();
+    await expect(f.enforceOperation('list_elements')).resolves.toEqual({ failure: undefined, recovery: undefined });
     expect(f.enforce).toHaveBeenCalledWith({ operation: 'list_elements', endpoint: 'READ', elementType: 'skill',
       activeElements: [{ type: 'skill', name: 'guard', metadata: { name: 'guard', description: 'guard policy', gatekeeper: policy } }],
       skipElementPolicies: false,
@@ -123,7 +149,7 @@ describe('infrastructure-first operation enforcement', () => {
     jest.replaceProperty(env, 'DOLLHOUSE_GATEKEEPER_ENABLED', false);
     const f = fixture();
     const validate = jest.spyOn(f.gatekeeper, 'validateRoute');
-    await expect(f.enforceOperation('list_elements')).resolves.toBeNull();
+    await expect(f.enforceOperation('list_elements')).resolves.toEqual({});
     expect(validate).toHaveBeenCalledWith('list_elements', 'READ', expect.any(OperationRegistry));
     expect(f.collect).not.toHaveBeenCalled();
     expect(f.enforce).not.toHaveBeenCalled();

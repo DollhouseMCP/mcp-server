@@ -97,6 +97,8 @@ describe('TemplateManager (BaseElementManager integration)', () => {
     );
 
     await manager.save(template, 'refactor-template.md');
+    expect(await manager.load('refactor-template.md')).toBe(template);
+    manager.clearCache();
     const loaded = await manager.load('refactor-template.md');
 
     expect(loaded.metadata.name).toBe('Refactor Template');
@@ -164,7 +166,7 @@ describe('TemplateManager (BaseElementManager integration)', () => {
     await manager.save(templateC, 'template-c.md');
 
     const mostUsed = await manager.getMostUsed(2);
-    expect(mostUsed.map(t => t.metadata.name)).toEqual(['Template B', 'Template A']);
+    expect(mostUsed.items.map(t => t.metadata.name)).toEqual(['Template B', 'Template A']);
   });
 
   it('findByTag filters templates by sanitized tag', async () => {
@@ -177,6 +179,6 @@ describe('TemplateManager (BaseElementManager integration)', () => {
     await manager.save(templateC, 'template-c.md');
 
     const filtered = await manager.findByTag('refactor');
-    expect(filtered.map(t => t.metadata.name).sort()).toEqual(['Template A', 'Template B']);
+    expect(filtered.items.map(t => t.metadata.name).sort()).toEqual(['Template A', 'Template B']);
   });
 });

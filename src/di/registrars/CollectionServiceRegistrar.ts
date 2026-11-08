@@ -106,6 +106,7 @@ export class CollectionServiceRegistrar {
 
     container.register('ElementInstaller', () => new ElementInstaller(container.resolve('GitHubClient'), {
       portfolioManager: container.resolve('PortfolioManager'),
+      managerLookup: container.resolve('ElementManagerLookup'),
       unifiedIndexManager: container.hasRegistration('DatabaseTenantMemoryRegistry') ? undefined : container.resolve('UnifiedIndexManager'),
       memoryRegistry: container.hasRegistration('DatabaseTenantMemoryRegistry') ? container.resolve('DatabaseTenantMemoryRegistry') : undefined,
       fileOperations: container.resolve('FileOperationsService'),

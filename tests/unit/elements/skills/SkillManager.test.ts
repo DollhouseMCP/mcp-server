@@ -72,6 +72,7 @@ describe('SkillManager', () => {
   });
 
   beforeEach(async () => {
+    skillManager.clearCache();
     // Set up mocks
     jest.clearAllMocks();
 
@@ -158,6 +159,18 @@ This is a test skill.`;
   });
 
   describe('save', () => {
+    it('stores the triggers its reader keeps, so the saved skill reads back as saved', async () => {
+      const skill = new Skill({ name: 'Trigger Store', description: 'Trigger symmetry', triggers: ['refactor', 'improve', ''] },
+        'Do the thing', metadataService);
+
+      await skillManager.save(skill, 'trigger-store.md');
+
+      expect(skill.metadata.triggers).toEqual(['refactor', 'improve']);
+      const written = await fs.readFile(path.join(portfolioManager.getElementDir(ElementType.SKILL), 'trigger-store.md'), 'utf-8');
+      expect(written).not.toMatch(/- ''|- ""/);
+      expect((await skillManager.load('trigger-store.md')).metadata.triggers).toEqual(['refactor', 'improve']);
+    });
+
     it('should save a skill to file', async () => {
       const skill = new Skill({
         name: 'Save Test',
@@ -270,10 +283,8 @@ This is a test skill.`;
       const skillsDir = portfolioManager.getElementDir(ElementType.SKILL);
       await fs.writeFile(path.join(skillsDir, 'invalid.md'), '---\ninvalid: [unclosed\n---\ncontent');
       
-      const skills = await skillManager.list();
-      
-      // Should return empty array and log error
-      expect(skills).toEqual([]);
+      await expect(skillManager.list()).rejects.toThrow('could not be read completely');
+      expect(await skillManager.listReport()).toMatchObject({ items: [], complete: false });
     });
   });
 

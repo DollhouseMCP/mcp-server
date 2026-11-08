@@ -196,7 +196,7 @@ export class EnsembleActivationStrategy extends BaseActivationStrategy implement
    * NOTE: This was missing in the original implementation - adding basic version
    */
   async getActiveElements(): Promise<MCPResponse> {
-    const activeEnsembles = await this.ensembleManager.getActiveEnsembles();
+    return this.renderCollectionReport(await this.ensembleManager.getActiveReferenceReport({ freshness: 'advisory' }), activeEnsembles => {
 
     if (activeEnsembles.length === 0) {
       return {
@@ -218,6 +218,7 @@ export class EnsembleActivationStrategy extends BaseActivationStrategy implement
         text: `Active ensembles:\n${ensembleList}`
       }]
     };
+    });
   }
 
   /**
@@ -225,12 +226,11 @@ export class EnsembleActivationStrategy extends BaseActivationStrategy implement
    * Extracted from ElementCRUDHandler.ts lines 807-846
    */
   async getElementDetails(name: string): Promise<MCPResponse> {
-    // Use flexible finding to support both display name and filename
-    const allEnsembles = await this.ensembleManager.list();
-    const ensemble = await this.findElementFlexibly(name, allEnsembles);
+    const ensemble = await this.ensembleManager.findByName(name);
     if (!ensemble) {
       this.throwNotFoundError(name, 'Ensemble');
     }
+    await this.ensembleManager.projectForDisplay(ensemble);
 
     const elementsList = ensemble.metadata.elements?.map((elem: any) =>
       `- ${elem.element_name} (${elem.element_type}) - ${elem.role}, priority: ${elem.priority}, activation: ${elem.activation}`

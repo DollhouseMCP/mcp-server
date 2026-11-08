@@ -238,8 +238,9 @@ describe('MetadataService', () => {
     });
 
     it('should generate defaults for Memory', () => {
+      // The one memory default the index and normalizeMetadata use (ruling #581 item 8).
       const defaults = service.generateDefaultMetadata(ElementType.MEMORY);
-      expect(defaults.name).toBe('Untitled Memory');
+      expect(defaults.name).toBe('Unnamed Memory');
     });
 
     it('should generate defaults for Ensemble', () => {

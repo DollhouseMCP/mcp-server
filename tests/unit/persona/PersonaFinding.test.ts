@@ -62,12 +62,16 @@ describe('PersonaFinding - Multi-Strategy Search', () => {
       expect(found?.unique_id).toBe('creative-writer-abc123');
     });
 
-    it('should find persona by unique_id', () => {
-      const found = personaManager.findPersona('creative-writer-abc123');
+    it('does not find a persona by its unique_id: a generated id is not a name', () => {
+      expect(personaManager.findPersona('creative-writer-abc123')).toBeUndefined();
+    });
 
-      expect(found).toBeDefined();
-      expect(found?.metadata.name).toBe('Creative Writer');
-      expect(found?.unique_id).toBe('creative-writer-abc123');
+    it('still finds a persona whose unique_id is also its filename stem, through the shared rule', () => {
+      seedPersona({ id: 'stem-persona', type: ElementType.PERSONA, version: '1.0', unique_id: 'stem-persona', filename: 'stem-persona.md',
+        content: 'Test content', metadata: { name: 'Stem Persona', description: 'Stem fixture', unique_id: 'stem-persona',
+          category: 'personal', version: '1.0', author: 'test', created_date: '2025-01-01' } } as Persona);
+      expect(personaManager.findPersona('stem-persona')?.filename).toBe('stem-persona.md');
+      expect(personaManager.findPersona('stem-persona.md')?.filename).toBe('stem-persona.md');
     });
   });
 
@@ -123,12 +127,8 @@ describe('PersonaFinding - Multi-Strategy Search', () => {
       expect(found?.metadata.name).toBe('Creative Writer');
     });
 
-    it('should fallback to unique_id match when filename and name do not match', () => {
-      const found = personaManager.findPersona('test-special-chars-def456');
-
-      expect(found).toBeDefined();
-      expect(found?.unique_id).toBe('test-special-chars-def456');
-      expect(found?.metadata.name).toBe('Test & Test');
+    it('does not fall back to a unique_id match when filename and name do not match', () => {
+      expect(personaManager.findPersona('test-special-chars-def456')).toBeUndefined();
     });
   });
 
@@ -187,16 +187,16 @@ describe('PersonaFinding - Multi-Strategy Search', () => {
         seedPersona(persona);
       }
 
-      const matching = jest.spyOn(personaManager as any, 'matchesIdentifier');
-      const cachedCount = (personaManager as any).getCachedElementsForCurrentNamespace().length;
-      const found = personaManager.findPersona(`persona-${count / 2}`);
+      // An exact storage reference is one cache lookup; any other text is one pass of the shared selector.
+      const passes = jest.spyOn(personaManager as any, 'getCachedElementsForCurrentNamespace');
+      const found = personaManager.findPersona(`persona-${count / 2}.md`);
 
       expect(found).toBeDefined();
       expect(found?.unique_id).toBe(`persona-${count / 2}`);
-      expect(matching.mock.calls.length).toBeLessThanOrEqual(cachedCount);
-      matching.mockClear();
+      expect(passes).not.toHaveBeenCalled();
+      passes.mockClear();
       expect(personaManager.findPersona('absent-persona')).toBeUndefined();
-      expect(matching.mock.calls.length).toBeLessThanOrEqual(cachedCount);
+      expect(passes).toHaveBeenCalledTimes(1);
       expect(fixture.mockFileOperationsService.readFile).not.toHaveBeenCalled();
       expect(fixture.mockFileOperationsService.readElementFile).not.toHaveBeenCalled();
       expect(fixture.mockFileOperationsService.listDirectory).not.toHaveBeenCalled();
@@ -204,27 +204,20 @@ describe('PersonaFinding - Multi-Strategy Search', () => {
   });
 
   it('detects a deliberately regressed repeated scan without timing measurements', () => {
-    const candidates = (personaManager as any).getCachedElementsForCurrentNamespace() as Persona[];
-    const cachedCount = candidates.length;
-    const matching = jest.spyOn(personaManager as any, 'matchesIdentifier');
+    const passes = jest.spyOn(personaManager as any, 'getCachedElementsForCurrentNamespace');
     const assertOneMissScan = (): void => {
-      matching.mockClear();
+      passes.mockClear();
       expect(personaManager.findPersona('absent-persona')).toBeUndefined();
-      expect(matching.mock.calls.length).toBeLessThanOrEqual(cachedCount);
+      expect(passes).toHaveBeenCalledTimes(1);
     };
     assertOneMissScan();
+    // A lookup that scanned the cache twice is caught by the same one-pass assertion.
     const lookup = jest.spyOn(personaManager, 'findPersona');
-    // A correct index/early miss is allowed to perform zero predicate calls.
-    lookup.mockReturnValueOnce(undefined);
-    assertOneMissScan();
-    lookup.mockImplementation(identifier => {
-      for (let pass = 0; pass < 2; pass++) {
-        candidates.find(candidate => (personaManager as any).matchesIdentifier(candidate, identifier));
-      }
+    lookup.mockImplementation(() => {
+      for (let pass = 0; pass < 2; pass++) (personaManager as any).getCachedElementsForCurrentNamespace();
       return undefined;
     });
     expect(assertOneMissScan).toThrow();
-    expect(matching.mock.calls).toHaveLength(2 * cachedCount);
   });
 
   // ============================================================================

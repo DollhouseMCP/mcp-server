@@ -72,8 +72,9 @@ required('required PostgreSQL trusted CRUD and activation caller', () => {
       session.activationStore=store;
       await scope.run(f.foreignUserId,()=>tracker.runAsync(tracker.createSessionContext('test',{
         userId:f.foreignUserId,sessionId:'owned-foreign-session',tenantId:null,transport:'http',createdAt:1}),async()=>{
-        const elements=await handler.getElements('memory') as Memory[];
-        expect(elements.map(memory=>memory.metadata.name)).toEqual(['foreign-fixture']);
+        const report=await handler.getElements('memory');
+        expect(report.complete).toBe(true);
+        expect((report.items as Memory[]).map(memory=>memory.metadata.name)).toEqual(['foreign-fixture']);
         const activation=await handler.activateElement('foreign-fixture','memory');
         expect(activation.content[0].text).toContain("Memory 'foreign-fixture' activated");
         expect(store.getActivations('memory')).toHaveLength(1);
@@ -83,7 +84,7 @@ required('required PostgreSQL trusted CRUD and activation caller', () => {
           expect(response.content[0].text).not.toContain('warning');
           expect(store.getActivations('memory')).toEqual([]);
           expect(session.memories.size).toBe(0);
-          expect(await handler.getElements('memory')).toEqual([]);
+          expect(await handler.getElements('memory')).toEqual({ items: [], failures: [], complete: true });
         }
       }));
       expect(rootReads).not.toHaveBeenCalled();

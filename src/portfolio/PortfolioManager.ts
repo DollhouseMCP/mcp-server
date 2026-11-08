@@ -3,6 +3,7 @@
  */
 
 import { sanitizeStorageError } from '../storage/StorageScanError.js';
+import { ElementUnreadableError, elementReadFailure } from '../elements/base/ElementReadError.js';
 import { visitSequentially } from '../utils/visitSequentially.js';
 import * as path from 'node:path';
 import { homedir } from 'node:os';
@@ -11,7 +12,6 @@ import { ElementType, PortfolioConfig } from './types.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { DefaultElementProvider } from './DefaultElementProvider.js';
-import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
 import { FileOperationsService, isAbsentPathError } from '../services/FileOperationsService.js';
 import type { PathService } from '../paths/PathService.js';
 import type { ContextTracker } from '../security/encryption/ContextTracker.js';
@@ -28,11 +28,6 @@ const ELEMENT_FILE_EXTENSIONS: Record<ElementType, string> = {
 
 // Default extension for backward compatibility
 const DEFAULT_ELEMENT_FILE_EXTENSION = '.md';
-
-interface ListElementsOptions {
-  /** Preserve filesystem failures instead of representing them as an empty portfolio. */
-  throwOnFilesystemError?: boolean;
-}
 
 /**
  * Get the file extension for an element type without requiring a PortfolioManager instance.
@@ -277,12 +272,11 @@ export class PortfolioManager {
     return this.probeDirectory('portfolio directory', () => this.fileOperations.directoryExists(this.baseDir));
   }
 
-  /** Preserve absence and identify the directory role without exposing server paths. */
+  /** The strict probe answers absence itself; a failure is reported by directory role, never by server path. */
   private async probeDirectory(role: string, probe: () => Promise<boolean>): Promise<boolean> {
     try {
       return await probe();
     } catch (error) {
-      if (isAbsentPathError(error)) return false;
       throw sanitizeStorageError(error, undefined, undefined, role);
     }
   }
@@ -342,8 +336,7 @@ export class PortfolioManager {
    * List all elements of a specific type
    */
   public async listElements(
-    type: ElementType,
-    options: ListElementsOptions = {}
+    type: ElementType
   ): Promise<string[]> {
     const elementDir = this.getElementDir(type);
     const fileExtension = ELEMENT_FILE_EXTENSIONS[type] || DEFAULT_ELEMENT_FILE_EXTENSION;
@@ -370,35 +363,8 @@ export class PortfolioManager {
 
       return filteredFiles;
     } catch (error) {
-      const err = error as NodeJS.ErrnoException;
-      
-      if (err.code === 'ENOENT') {
-        if (options.throwOnFilesystemError) {
-          throw error;
-        }
-        // Directory doesn't exist yet - this is expected for new installations
-        logger.debug(`[PortfolioManager] Element directory doesn't exist yet: ${elementDir}`);
-        return [];
-      }
-      
-      if (err.code === 'EACCES' || err.code === 'EPERM') {
-        ErrorHandler.logError('PortfolioManager.listElements', error, { elementDir });
-        if (options.throwOnFilesystemError) {
-          throw error;
-        }
-        // Permission denied - preserve the legacy best-effort listing behavior
-        return [];
-      }
-      
-      if (err.code === 'ENOTDIR') {
-        // Path exists but is not a directory
-        ErrorHandler.logError('PortfolioManager.listElements', error, { elementDir });
-        throw ErrorHandler.createError(`Path is not a directory: ${elementDir}`, ErrorCategory.SYSTEM_ERROR);
-      }
-      
-      // For any other errors, throw with context
-      ErrorHandler.logError('PortfolioManager.listElements', error, { elementDir });
-      throw ErrorHandler.wrapError(error, 'Failed to list elements', ErrorCategory.SYSTEM_ERROR);
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return [];
+      throw elementReadFailure(error, type);
     }
   }
   
@@ -453,8 +419,8 @@ export class PortfolioManager {
   public async elementExists(type: ElementType, filename: string): Promise<boolean> {
     try {
       return await this.fileOperations.exists(this.getElementPath(type, filename));
-    } catch {
-      return false;
+    } catch (cause) {
+      throw new ElementUnreadableError('Portfolio element existence lookup failed', { cause });
     }
   }
   
@@ -471,9 +437,15 @@ export class PortfolioManager {
   public async hasLegacyPersonas(): Promise<boolean> {
     const legacyDir = this.getLegacyPersonasDir();
     return this.probeDirectory('legacy personas directory', async () => {
-      if (!await this.fileOperations.exists(legacyDir)) return false;
-      const files = await this.fileOperations.listDirectory(legacyDir);
-      return files.some(file => file.endsWith('.md'));
+      try {
+        if (!await this.fileOperations.exists(legacyDir)) return false;
+        const files = await this.fileOperations.listDirectory(legacyDir);
+        return files.some(file => file.endsWith('.md'));
+      } catch (error) {
+        // A legacy directory that disappears during the probe is simply absent.
+        if (isAbsentPathError(error)) return false;
+        throw error;
+      }
     });
   }
 

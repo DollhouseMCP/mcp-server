@@ -20,22 +20,22 @@ describe('validateElement helper', () => {
 
     mockContext = {
       skillManager: {
-        find: jest.fn().mockResolvedValue(null),
+        findByName: jest.fn().mockResolvedValue(null),
       },
       templateManager: {
-        find: jest.fn().mockResolvedValue(null),
+        findByName: jest.fn().mockResolvedValue(null),
       },
       agentManager: {
-        find: jest.fn().mockResolvedValue(null),
+        findByName: jest.fn().mockResolvedValue(null),
       },
       memoryManager: {
-        find: jest.fn().mockResolvedValue(null),
+        findByName: jest.fn().mockResolvedValue(null),
       },
       ensembleManager: {
-        find: jest.fn().mockResolvedValue(null),
+        findByName: jest.fn().mockResolvedValue(null),
       },
       personaManager: {
-        find: jest.fn().mockResolvedValue(null),
+        findByName: jest.fn().mockResolvedValue(null),
       },
       validationRegistry: {
         getValidator: jest.fn().mockReturnValue(mockValidator),
@@ -43,6 +43,11 @@ describe('validateElement helper', () => {
       ensureInitialized: jest.fn().mockResolvedValue(undefined),
       getPersonaIndicator: jest.fn().mockReturnValue('>> '),
     } as any;
+    mockContext.getManagerForType = (type: string) => ({
+      [ElementType.PERSONA]: mockContext.personaManager, [ElementType.SKILL]: mockContext.skillManager,
+      [ElementType.TEMPLATE]: mockContext.templateManager, [ElementType.AGENT]: mockContext.agentManager,
+      [ElementType.MEMORY]: mockContext.memoryManager, [ElementType.ENSEMBLE]: mockContext.ensembleManager,
+    } as Record<string, unknown>)[type];
   });
 
   describe('type validation', () => {
@@ -57,7 +62,7 @@ describe('validateElement helper', () => {
     });
 
     it('should accept valid element type: skills', async () => {
-      mockContext.skillManager.find = jest.fn().mockResolvedValue({
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue({
         metadata: { name: 'test-skill' },
         validate: jest.fn().mockReturnValue({ valid: true, errors: [], warnings: [] }),
       });
@@ -67,12 +72,12 @@ describe('validateElement helper', () => {
         type: ElementType.SKILL,
       });
 
-      expect(mockContext.skillManager.find).toHaveBeenCalled();
+      expect(mockContext.skillManager.findByName).toHaveBeenCalled();
       expect(result.content[0].text).toContain('✅ Status: Valid');
     });
 
     it('should accept valid element type: templates', async () => {
-      mockContext.templateManager.find = jest.fn().mockResolvedValue({
+      mockContext.templateManager.findByName = jest.fn().mockResolvedValue({
         metadata: { name: 'test-template' },
         validate: jest.fn().mockReturnValue({ valid: true, errors: [], warnings: [] }),
       });
@@ -82,12 +87,12 @@ describe('validateElement helper', () => {
         type: ElementType.TEMPLATE,
       });
 
-      expect(mockContext.templateManager.find).toHaveBeenCalled();
+      expect(mockContext.templateManager.findByName).toHaveBeenCalled();
       expect(result.content[0].text).toContain('✅ Status: Valid');
     });
 
     it('should accept valid element type: agents', async () => {
-      mockContext.agentManager.find = jest.fn().mockResolvedValue({
+      mockContext.agentManager.findByName = jest.fn().mockResolvedValue({
         metadata: { name: 'test-agent' },
         validate: jest.fn().mockReturnValue({ valid: true, errors: [], warnings: [] }),
       });
@@ -97,12 +102,12 @@ describe('validateElement helper', () => {
         type: ElementType.AGENT,
       });
 
-      expect(mockContext.agentManager.find).toHaveBeenCalled();
+      expect(mockContext.agentManager.findByName).toHaveBeenCalled();
       expect(result.content[0].text).toContain('✅ Status: Valid');
     });
 
     it('should accept valid element type: memories', async () => {
-      mockContext.memoryManager.find = jest.fn().mockResolvedValue({
+      mockContext.memoryManager.findByName = jest.fn().mockResolvedValue({
         metadata: { name: 'test-memory' },
         validate: jest.fn().mockReturnValue({ valid: true, errors: [], warnings: [] }),
       });
@@ -112,13 +117,13 @@ describe('validateElement helper', () => {
         type: ElementType.MEMORY,
       });
 
-      expect(mockContext.memoryManager.find).toHaveBeenCalled();
+      expect(mockContext.memoryManager.findByName).toHaveBeenCalled();
       expect(result.content[0].text).toContain('✅ Status: Valid');
     });
 
     // FIX: Issue #281 - Persona now uses standard validation flow like other element types
     it('should validate persona using standard flow', async () => {
-      mockContext.personaManager.find = jest.fn().mockResolvedValue({
+      mockContext.personaManager.findByName = jest.fn().mockResolvedValue({
         metadata: { name: 'Test Persona' },
         validate: jest.fn().mockReturnValue({ valid: true, errors: [], warnings: [] }),
       });
@@ -128,7 +133,7 @@ describe('validateElement helper', () => {
         type: ElementType.PERSONA,
       });
 
-      expect(mockContext.personaManager.find).toHaveBeenCalled();
+      expect(mockContext.personaManager.findByName).toHaveBeenCalled();
       expect(result.content[0].text).toContain('🔍 Validation Report');
       expect(result.content[0].text).toContain('Test Persona');
       expect(result.content[0].text).toContain('✅ Status: Valid');
@@ -138,7 +143,7 @@ describe('validateElement helper', () => {
   describe('element not found', () => {
     // Issue #275: Now throws error instead of returning error content
     it('should throw ElementNotFoundError when skill not found', async () => {
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(null);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(null);
 
       await expect(validateElement(mockContext, {
         name: 'missing-skill',
@@ -148,7 +153,7 @@ describe('validateElement helper', () => {
 
     // Issue #275: Now throws error instead of returning error content
     it('should throw ElementNotFoundError when template not found', async () => {
-      mockContext.templateManager.find = jest.fn().mockResolvedValue(null);
+      mockContext.templateManager.findByName = jest.fn().mockResolvedValue(null);
 
       await expect(validateElement(mockContext, {
         name: 'missing-template',
@@ -159,7 +164,7 @@ describe('validateElement helper', () => {
 
   describe('validation reports - valid elements', () => {
     it('should generate valid report for element with no issues', async () => {
-      mockContext.skillManager.find = jest.fn().mockResolvedValue({
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue({
         metadata: { name: 'test-skill' },
         validate: jest.fn().mockReturnValue({
           valid: true,
@@ -182,7 +187,7 @@ describe('validateElement helper', () => {
 
   describe('validation reports - invalid elements', () => {
     it('should show errors in validation report', async () => {
-      mockContext.skillManager.find = jest.fn().mockResolvedValue({
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue({
         metadata: { name: 'bad-skill' },
         validate: jest.fn().mockReturnValue({
           valid: false,
@@ -207,7 +212,7 @@ describe('validateElement helper', () => {
     });
 
     it('should show warnings in validation report', async () => {
-      mockContext.skillManager.find = jest.fn().mockResolvedValue({
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue({
         metadata: { name: 'warned-skill' },
         validate: jest.fn().mockReturnValue({
           valid: true,
@@ -231,7 +236,7 @@ describe('validateElement helper', () => {
     });
 
     it('should show suggestions in validation report', async () => {
-      mockContext.skillManager.find = jest.fn().mockResolvedValue({
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue({
         metadata: { name: 'improvable-skill' },
         validate: jest.fn().mockReturnValue({
           valid: true,
@@ -255,7 +260,7 @@ describe('validateElement helper', () => {
     });
 
     it('should show combined errors, warnings, and suggestions', async () => {
-      mockContext.skillManager.find = jest.fn().mockResolvedValue({
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue({
         metadata: { name: 'complex-skill' },
         validate: jest.fn().mockReturnValue({
           valid: false,
@@ -285,7 +290,7 @@ describe('validateElement helper', () => {
 
   describe('strict mode', () => {
     it('should show strict mode indicator when enabled', async () => {
-      mockContext.skillManager.find = jest.fn().mockResolvedValue({
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue({
         metadata: { name: 'test-skill' },
         validate: jest.fn().mockReturnValue({
           valid: true,
@@ -304,7 +309,7 @@ describe('validateElement helper', () => {
     });
 
     it('should not show strict mode indicator when disabled', async () => {
-      mockContext.skillManager.find = jest.fn().mockResolvedValue({
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue({
         metadata: { name: 'test-skill' },
         validate: jest.fn().mockReturnValue({
           valid: true,
@@ -323,7 +328,7 @@ describe('validateElement helper', () => {
     });
 
     it('should default to non-strict mode', async () => {
-      mockContext.skillManager.find = jest.fn().mockResolvedValue({
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue({
         metadata: { name: 'test-skill' },
         validate: jest.fn().mockReturnValue({
           valid: true,
@@ -344,7 +349,7 @@ describe('validateElement helper', () => {
   describe('element finding', () => {
     it('should find element by exact name match', async () => {
       const findCallback = jest.fn();
-      mockContext.skillManager.find = jest.fn().mockImplementation((cb) => {
+      mockContext.skillManager.findByName = jest.fn().mockImplementation((cb) => {
         findCallback.mockImplementation(cb);
         const element = { metadata: { name: 'exact-match' }, validate: jest.fn().mockReturnValue({ valid: true, errors: [], warnings: [] }) };
         return findCallback(element) ? element : null;
@@ -355,13 +360,13 @@ describe('validateElement helper', () => {
         type: ElementType.SKILL,
       });
 
-      expect(mockContext.skillManager.find).toHaveBeenCalled();
+      expect(mockContext.skillManager.findByName).toHaveBeenCalled();
     });
   });
 
   describe('initialization', () => {
     it('should call ensureInitialized', async () => {
-      mockContext.skillManager.find = jest.fn().mockResolvedValue({
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue({
         metadata: { name: 'test' },
         validate: jest.fn().mockReturnValue({ valid: true, errors: [], warnings: [] }),
       });

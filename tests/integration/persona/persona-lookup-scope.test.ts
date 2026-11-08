@@ -23,6 +23,7 @@ import { DEFAULT_INDICATOR_CONFIG } from '../../../src/config/indicator-config.j
 import { FileStorageLayerFactory, defaultMemoryFileFilter } from '../../../src/storage/FileStorageLayerFactory.js';
 import { DatabaseStorageLayerFactory } from '../../../src/storage/DatabaseStorageLayerFactory.js';
 import { DatabaseStorageLayer } from '../../../src/storage/DatabaseStorageLayer.js';
+import { ElementStorageLayer } from '../../../src/storage/ElementStorageLayer.js';
 import { cleanupAllTestData, closeTestDb, ensureTestUser, ensureTestUserB, getTestDb, isDatabaseAvailable } from '../database/test-db-helpers.js';
 
 function deferred() {
@@ -166,7 +167,7 @@ describe.each(['filesystem', 'database'] as const)('Persona lookup scope (%s)', 
     const expected = await seed(userA);
     const storageRead = mode === 'database'
       ? jest.spyOn(DatabaseStorageLayer.prototype, 'readContent')
-      : jest.spyOn(FileOperationsService.prototype, 'readElementFile');
+      : jest.spyOn(ElementStorageLayer.prototype, 'readContent');
     const barrier = pauseFirstLookup();
     const first = asUser(userA, () => manager.findPersonaAsync(personaName));
     await barrier.entered.promise;

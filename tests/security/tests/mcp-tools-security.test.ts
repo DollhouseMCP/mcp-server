@@ -195,7 +195,7 @@ describe('MCP Tools Security Tests', () => {
         // Issue #281: Use getElementDetails instead of getPersonaDetails
         // Should throw error for path traversal attempts (Issue #275 error handling)
         await expect(server.getElementDetails(payload, 'persona'))
-          .rejects.toThrow(/not found/i);
+          .rejects.toThrow('Invalid persona path');
 
         SecurityTestPerformance.checkpoint('get_persona_details path traversal');
       }
@@ -208,7 +208,7 @@ describe('MCP Tools Security Tests', () => {
         // Should return error response for path traversal attempts
         const result = await server.activateElement(payload, 'persona');
         expect(result.content[0].text).toContain('❌');
-        expect(result.content[0].text).toMatch(/persona not found|Persona Not Found/i);
+        expect(result.content[0].text).toContain('Invalid persona path');
       }
     );
   });

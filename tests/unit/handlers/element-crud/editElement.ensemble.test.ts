@@ -29,38 +29,43 @@ describe('editElement - ensemble elements (Issue #658)', () => {
   beforeEach(() => {
     mockContext = {
       skillManager: {
-        find: jest.fn().mockResolvedValue(null),
+        findByName: jest.fn().mockResolvedValue(null),
         save: jest.fn().mockResolvedValue(undefined),
       },
       templateManager: {
-        find: jest.fn().mockResolvedValue(null),
+        findByName: jest.fn().mockResolvedValue(null),
         save: jest.fn().mockResolvedValue(undefined),
       },
       agentManager: {
-        find: jest.fn().mockResolvedValue(null),
+        findByName: jest.fn().mockResolvedValue(null),
         save: jest.fn().mockResolvedValue(undefined),
       },
       memoryManager: {
-        find: jest.fn().mockResolvedValue(null),
+        findByName: jest.fn().mockResolvedValue(null),
         save: jest.fn().mockResolvedValue(undefined),
       },
       ensembleManager: {
-        list: jest.fn().mockResolvedValue([]),
+        findByName: jest.fn().mockResolvedValue(null),
         save: jest.fn().mockResolvedValue(undefined),
       },
       personaManager: {
-        find: jest.fn().mockResolvedValue(null),
+        findByName: jest.fn().mockResolvedValue(null),
         save: jest.fn().mockResolvedValue(undefined),
       },
       ensureInitialized: jest.fn().mockResolvedValue(undefined),
       getPersonaIndicator: jest.fn().mockReturnValue('>> '),
     } as any;
+    mockContext.getManagerForType = (type: string) => ({
+      [ElementType.PERSONA]: mockContext.personaManager, [ElementType.SKILL]: mockContext.skillManager,
+      [ElementType.TEMPLATE]: mockContext.templateManager, [ElementType.AGENT]: mockContext.agentManager,
+      [ElementType.MEMORY]: mockContext.memoryManager, [ElementType.ENSEMBLE]: mockContext.ensembleManager,
+    } as Record<string, unknown>)[type];
   });
 
   describe('dict-keyed elements input', () => {
     it('should convert dict-keyed elements to array format', async () => {
       const ensemble = createMockEnsemble('test-ensemble');
-      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([ensemble]);
+      mockContext.ensembleManager.findByName = jest.fn().mockResolvedValue(ensemble);
 
       const result = await editElement(mockContext, {
         name: 'test-ensemble',
@@ -75,7 +80,7 @@ describe('editElement - ensemble elements (Issue #658)', () => {
       expect(result.content[0].text).toContain('✅');
       const saved = (mockContext.ensembleManager.save as jest.Mock).mock.calls[0][0];
       expect(Array.isArray(saved.metadata.elements)).toBe(true);
-      expect(saved.metadata.elements.length).toBe(1);
+      expect(saved.metadata.elements).toHaveLength(1);
       expect(saved.metadata.elements[0].element_name).toBe('bridge-session');
       expect(saved.metadata.elements[0].element_type).toBe('memory');
       expect(saved.metadata.elements[0].role).toBe('support');
@@ -84,7 +89,7 @@ describe('editElement - ensemble elements (Issue #658)', () => {
 
     it('should convert multi-entry dict to array with all entries', async () => {
       const ensemble = createMockEnsemble('test-ensemble');
-      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([ensemble]);
+      mockContext.ensembleManager.findByName = jest.fn().mockResolvedValue(ensemble);
 
       const result = await editElement(mockContext, {
         name: 'test-ensemble',
@@ -99,7 +104,7 @@ describe('editElement - ensemble elements (Issue #658)', () => {
 
       expect(result.content[0].text).toContain('✅');
       const saved = (mockContext.ensembleManager.save as jest.Mock).mock.calls[0][0];
-      expect(saved.metadata.elements.length).toBe(2);
+      expect(saved.metadata.elements).toHaveLength(2);
       const names = saved.metadata.elements.map((e: any) => e.element_name);
       expect(names).toContain('session-notes');
       expect(names).toContain('code-reviewer');
@@ -107,7 +112,7 @@ describe('editElement - ensemble elements (Issue #658)', () => {
 
     it('should return error for dict entry with non-object value', async () => {
       const ensemble = createMockEnsemble('test-ensemble');
-      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([ensemble]);
+      mockContext.ensembleManager.findByName = jest.fn().mockResolvedValue(ensemble);
 
       const result = await editElement(mockContext, {
         name: 'test-ensemble',
@@ -128,7 +133,7 @@ describe('editElement - ensemble elements (Issue #658)', () => {
   describe('array elements input', () => {
     it('should accept array of element objects', async () => {
       const ensemble = createMockEnsemble('test-ensemble');
-      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([ensemble]);
+      mockContext.ensembleManager.findByName = jest.fn().mockResolvedValue(ensemble);
 
       const result = await editElement(mockContext, {
         name: 'test-ensemble',
@@ -142,13 +147,13 @@ describe('editElement - ensemble elements (Issue #658)', () => {
 
       expect(result.content[0].text).toContain('✅');
       const saved = (mockContext.ensembleManager.save as jest.Mock).mock.calls[0][0];
-      expect(saved.metadata.elements.length).toBe(1);
+      expect(saved.metadata.elements).toHaveLength(1);
       expect(saved.metadata.elements[0].element_name).toBe('my-skill');
     });
 
     it('should accept legacy name/type fields in array', async () => {
       const ensemble = createMockEnsemble('test-ensemble');
-      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([ensemble]);
+      mockContext.ensembleManager.findByName = jest.fn().mockResolvedValue(ensemble);
 
       const result = await editElement(mockContext, {
         name: 'test-ensemble',
@@ -168,7 +173,7 @@ describe('editElement - ensemble elements (Issue #658)', () => {
 
     it('should return error for array element missing element_name', async () => {
       const ensemble = createMockEnsemble('test-ensemble');
-      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([ensemble]);
+      mockContext.ensembleManager.findByName = jest.fn().mockResolvedValue(ensemble);
 
       const result = await editElement(mockContext, {
         name: 'test-ensemble',
@@ -187,7 +192,7 @@ describe('editElement - ensemble elements (Issue #658)', () => {
 
     it('should return error for non-object item in array', async () => {
       const ensemble = createMockEnsemble('test-ensemble');
-      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([ensemble]);
+      mockContext.ensembleManager.findByName = jest.fn().mockResolvedValue(ensemble);
 
       const result = await editElement(mockContext, {
         name: 'test-ensemble',
@@ -209,7 +214,7 @@ describe('editElement - ensemble elements (Issue #658)', () => {
         { element_name: 'existing-memory', element_type: 'memory', role: 'support', priority: 50, activation: 'always' },
       ];
       const ensemble = createMockEnsemble('test-ensemble', existingElements);
-      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([ensemble]);
+      mockContext.ensembleManager.findByName = jest.fn().mockResolvedValue(ensemble);
 
       const result = await editElement(mockContext, {
         name: 'test-ensemble',
@@ -223,7 +228,7 @@ describe('editElement - ensemble elements (Issue #658)', () => {
 
       expect(result.content[0].text).toContain('✅');
       const saved = (mockContext.ensembleManager.save as jest.Mock).mock.calls[0][0];
-      expect(saved.metadata.elements.length).toBe(3);
+      expect(saved.metadata.elements).toHaveLength(3);
       const names = saved.metadata.elements.map((e: any) => e.element_name);
       expect(names).toContain('existing-skill');
       expect(names).toContain('existing-memory');
@@ -236,7 +241,7 @@ describe('editElement - ensemble elements (Issue #658)', () => {
         { element_name: 'skill-b', element_type: 'skill', role: 'support', priority: 30, activation: 'always' },
       ];
       const ensemble = createMockEnsemble('test-ensemble', existingElements);
-      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([ensemble]);
+      mockContext.ensembleManager.findByName = jest.fn().mockResolvedValue(ensemble);
 
       const result = await editElement(mockContext, {
         name: 'test-ensemble',
@@ -250,7 +255,7 @@ describe('editElement - ensemble elements (Issue #658)', () => {
 
       expect(result.content[0].text).toContain('✅');
       const saved = (mockContext.ensembleManager.save as jest.Mock).mock.calls[0][0];
-      expect(saved.metadata.elements.length).toBe(2);
+      expect(saved.metadata.elements).toHaveLength(2);
       const skillA = saved.metadata.elements.find((e: any) => e.element_name === 'skill-a');
       expect(skillA.priority).toBe(90);
       expect(skillA.element_type).toBe('skill'); // preserved from existing
@@ -263,7 +268,7 @@ describe('editElement - ensemble elements (Issue #658)', () => {
         { element_name: 'existing-skill', element_type: 'skill', role: 'primary', priority: 80, activation: 'always' },
       ];
       const ensemble = createMockEnsemble('test-ensemble', existingElements);
-      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([ensemble]);
+      mockContext.ensembleManager.findByName = jest.fn().mockResolvedValue(ensemble);
 
       const result = await editElement(mockContext, {
         name: 'test-ensemble',
@@ -277,7 +282,7 @@ describe('editElement - ensemble elements (Issue #658)', () => {
 
       expect(result.content[0].text).toContain('✅');
       const saved = (mockContext.ensembleManager.save as jest.Mock).mock.calls[0][0];
-      expect(saved.metadata.elements.length).toBe(2);
+      expect(saved.metadata.elements).toHaveLength(2);
       const names = saved.metadata.elements.map((e: any) => e.element_name);
       expect(names).toContain('existing-skill');
       expect(names).toContain('new-memory');
@@ -290,7 +295,7 @@ describe('editElement - ensemble elements (Issue #658)', () => {
         { element_name: 'skill-a', element_type: 'skill', role: 'primary', priority: 50, activation: 'always' },
       ];
       const ensemble = createMockEnsemble('test-ensemble', existingElements);
-      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([ensemble]);
+      mockContext.ensembleManager.findByName = jest.fn().mockResolvedValue(ensemble);
 
       const result = await editElement(mockContext, {
         name: 'test-ensemble',
@@ -307,7 +312,7 @@ describe('editElement - ensemble elements (Issue #658)', () => {
 
       expect(result.content[0].text).toContain('✅');
       const saved = (mockContext.ensembleManager.save as jest.Mock).mock.calls[0][0];
-      expect(saved.metadata.elements.length).toBe(2);
+      expect(saved.metadata.elements).toHaveLength(2);
       for (const elem of saved.metadata.elements) {
         expect(elem).not.toHaveProperty('_remove');
         expect(elem).not.toHaveProperty('name');
@@ -325,7 +330,7 @@ describe('editElement - ensemble elements (Issue #658)', () => {
         { element_name: 'memory-c', element_type: 'memory', role: 'support', priority: 30, activation: 'always' },
       ];
       const ensemble = createMockEnsemble('test-ensemble', existingElements);
-      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([ensemble]);
+      mockContext.ensembleManager.findByName = jest.fn().mockResolvedValue(ensemble);
 
       const result = await editElement(mockContext, {
         name: 'test-ensemble',
@@ -339,7 +344,7 @@ describe('editElement - ensemble elements (Issue #658)', () => {
 
       expect(result.content[0].text).toContain('✅');
       const saved = (mockContext.ensembleManager.save as jest.Mock).mock.calls[0][0];
-      expect(saved.metadata.elements.length).toBe(2);
+      expect(saved.metadata.elements).toHaveLength(2);
       const names = saved.metadata.elements.map((e: any) => e.element_name);
       expect(names).toContain('skill-a');
       expect(names).toContain('memory-c');
@@ -353,7 +358,7 @@ describe('editElement - ensemble elements (Issue #658)', () => {
         { element_name: 'C', element_type: 'memory', role: 'support', priority: 30, activation: 'always' },
       ];
       const ensemble = createMockEnsemble('test-ensemble', existingElements);
-      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([ensemble]);
+      mockContext.ensembleManager.findByName = jest.fn().mockResolvedValue(ensemble);
 
       const result = await editElement(mockContext, {
         name: 'test-ensemble',
@@ -370,7 +375,7 @@ describe('editElement - ensemble elements (Issue #658)', () => {
 
       expect(result.content[0].text).toContain('✅');
       const saved = (mockContext.ensembleManager.save as jest.Mock).mock.calls[0][0];
-      expect(saved.metadata.elements.length).toBe(3);
+      expect(saved.metadata.elements).toHaveLength(3);
       const elemMap = new Map(saved.metadata.elements.map((e: any) => [e.element_name, e]));
       expect(elemMap.get('A').priority).toBe(90);      // updated
       expect(elemMap.has('B')).toBe(false);              // removed
@@ -383,7 +388,7 @@ describe('editElement - ensemble elements (Issue #658)', () => {
         { element_name: 'skill-a', element_type: 'skill', role: 'primary', priority: 80, activation: 'always' },
       ];
       const ensemble = createMockEnsemble('test-ensemble', existingElements);
-      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([ensemble]);
+      mockContext.ensembleManager.findByName = jest.fn().mockResolvedValue(ensemble);
 
       const result = await editElement(mockContext, {
         name: 'test-ensemble',
@@ -399,7 +404,7 @@ describe('editElement - ensemble elements (Issue #658)', () => {
       expect(result.content[0].text).toContain('not found');
       // Existing elements preserved
       const saved = (mockContext.ensembleManager.save as jest.Mock).mock.calls[0][0];
-      expect(saved.metadata.elements.length).toBe(1);
+      expect(saved.metadata.elements).toHaveLength(1);
       expect(saved.metadata.elements[0].element_name).toBe('skill-a');
     });
 
@@ -409,7 +414,7 @@ describe('editElement - ensemble elements (Issue #658)', () => {
         { element_name: 'B', element_type: 'skill', role: 'support', priority: 50, activation: 'always' },
       ];
       const ensemble = createMockEnsemble('test-ensemble', existingElements);
-      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([ensemble]);
+      mockContext.ensembleManager.findByName = jest.fn().mockResolvedValue(ensemble);
 
       const result = await editElement(mockContext, {
         name: 'test-ensemble',
@@ -424,14 +429,14 @@ describe('editElement - ensemble elements (Issue #658)', () => {
 
       expect(result.content[0].text).toContain('✅');
       const saved = (mockContext.ensembleManager.save as jest.Mock).mock.calls[0][0];
-      expect(saved.metadata.elements.length).toBe(0);
+      expect(saved.metadata.elements).toHaveLength(0);
     });
   });
 
   describe('invalid elements format', () => {
     it('should return error for string elements', async () => {
       const ensemble = createMockEnsemble('test-ensemble');
-      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([ensemble]);
+      mockContext.ensembleManager.findByName = jest.fn().mockResolvedValue(ensemble);
 
       const result = await editElement(mockContext, {
         name: 'test-ensemble',
@@ -448,7 +453,7 @@ describe('editElement - ensemble elements (Issue #658)', () => {
 
     it('should return error for number elements', async () => {
       const ensemble = createMockEnsemble('test-ensemble');
-      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([ensemble]);
+      mockContext.ensembleManager.findByName = jest.fn().mockResolvedValue(ensemble);
 
       const result = await editElement(mockContext, {
         name: 'test-ensemble',
@@ -465,7 +470,7 @@ describe('editElement - ensemble elements (Issue #658)', () => {
 
     it('should return error for null elements', async () => {
       const ensemble = createMockEnsemble('test-ensemble');
-      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([ensemble]);
+      mockContext.ensembleManager.findByName = jest.fn().mockResolvedValue(ensemble);
 
       const result = await editElement(mockContext, {
         name: 'test-ensemble',
@@ -484,7 +489,7 @@ describe('editElement - ensemble elements (Issue #658)', () => {
       const ensemble = createMockEnsemble('test-ensemble', [
         { element_name: 'skill-a', element_type: 'skill', role: 'primary', priority: 80, activation: 'always' },
       ]);
-      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([ensemble]);
+      mockContext.ensembleManager.findByName = jest.fn().mockResolvedValue(ensemble);
 
       const result = await editElement(mockContext, {
         name: 'test-ensemble',
@@ -506,7 +511,7 @@ describe('editElement - ensemble elements (Issue #658)', () => {
       const ensemble = createMockEnsemble('test-ensemble', [
         { element_name: 'skill-a', element_type: 'skill', role: 'primary', priority: 80, activation: 'always' },
       ]);
-      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([ensemble]);
+      mockContext.ensembleManager.findByName = jest.fn().mockResolvedValue(ensemble);
 
       const result = await editElement(mockContext, {
         name: 'test-ensemble',
@@ -531,7 +536,7 @@ describe('editElement - ensemble elements (Issue #658)', () => {
         { element_name: 'existing-skill', element_type: 'skill', role: 'primary', priority: 50, activation: 'always' }
       ]);
 
-      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([existing]);
+      mockContext.ensembleManager.findByName = jest.fn().mockResolvedValue(existing);
       mockContext.ensembleManager.save = jest.fn().mockResolvedValue(undefined);
 
       const result = await editElement(mockContext, {
@@ -557,7 +562,7 @@ describe('editElement - ensemble elements (Issue #658)', () => {
     it('should validate elements even when nested in metadata', async () => {
       const existing = createMockEnsemble('MetaTest', []);
 
-      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([existing]);
+      mockContext.ensembleManager.findByName = jest.fn().mockResolvedValue(existing);
 
       const result = await editElement(mockContext, {
         name: 'MetaTest',
@@ -576,7 +581,7 @@ describe('editElement - ensemble elements (Issue #658)', () => {
     it('should merge other metadata fields alongside elements', async () => {
       const existing = createMockEnsemble('MetaTest', []);
 
-      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([existing]);
+      mockContext.ensembleManager.findByName = jest.fn().mockResolvedValue(existing);
       mockContext.ensembleManager.save = jest.fn().mockResolvedValue(undefined);
 
       const result = await editElement(mockContext, {

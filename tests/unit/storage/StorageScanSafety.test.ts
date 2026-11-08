@@ -95,7 +95,7 @@ it.each(['element', 'memory'] as const)('keeps %s enumeration errors path-safe t
     if (dir === target) throw failure;
     return list(dir);
   });
-  const manager = { list: () => f.layer.listSummaries() };
+  const manager = { listReport: () => f.layer.listSummaries() };
   const context = { ensureInitialized: async () => {}, memoryManager: manager, skillManager: manager } as unknown as ElementCrudContext;
   for (let i = 0; i < 2; i++) {
     const result = await listElements(context, kind === 'memory' ? 'memories' : 'skills');

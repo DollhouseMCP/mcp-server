@@ -12,19 +12,17 @@
  * logic to a reusable utility class for better performance and maintainability.
  */
 
-import * as path from 'path';
+import * as path from 'node:path';
 import { logger } from './logger.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
-import { IFileOperationsService, FileOperationsService } from '../services/FileOperationsService.js';
+import { IFileOperationsService, FileOperationsService, isAbsentKindError } from '../services/FileOperationsService.js';
 import { FileLockManager } from '../security/fileLockManager.js';
 
 // Singleton file operations service for static methods
 let fileOperationsService: IFileOperationsService | null = null;
 
 function getFileOperationsService(): IFileOperationsService {
-  if (!fileOperationsService) {
-    fileOperationsService = new FileOperationsService(new FileLockManager());
-  }
+  fileOperationsService ??= new FileOperationsService(new FileLockManager());
   return fileOperationsService;
 }
 
@@ -42,7 +40,7 @@ interface CacheEntry {
 
 export class FileDiscoveryUtil {
   private static readonly CACHE_TTL = 5000; // 5 seconds cache TTL
-  private static cache = new Map<string, CacheEntry>();
+  private static readonly cache = new Map<string, CacheEntry>();
   
   /**
    * Find files in a directory with optimized search
@@ -80,59 +78,51 @@ export class FileDiscoveryUtil {
       }
     }
     
-    try {
-      // Single readdir operation for efficiency
-      const fileOps = getFileOperationsService();
-      const files = await fileOps.listDirectory(directory);
-      
-      // Build search patterns
-      const searchPatterns = this.buildSearchPatterns(safeName, extensions);
-      
-      // Filter files efficiently
-      const matches: string[] = [];
-      for (const file of files) {
-        const fileLower = file.toLowerCase();
-        
-        // Check each pattern
-        for (const pattern of searchPatterns) {
-          if (this.matchesPattern(fileLower, pattern, partialMatch)) {
-            const fullPath = path.join(directory, file);
-            matches.push(fullPath);
-            
-            if (matches.length >= maxResults) {
-              break;
-            }
-          }
-        }
-        
-        if (matches.length >= maxResults) {
-          break;
-        }
-      }
-      
-      // Cache results if enabled
-      if (cacheResults && matches.length > 0) {
-        this.setCached(cacheKey, matches);
-      }
-      
+    const files = await this.listDirectory(directory, searchName);
+    // Single readdir operation for efficiency; patterns filter the listing.
+    const matches = this.matchFiles(directory, files, this.buildSearchPatterns(safeName, extensions), partialMatch, maxResults);
+
+    if (matches.length > 0) {
+      if (cacheResults) this.setCached(cacheKey, matches);
       // Log file discovery for monitoring
-      if (matches.length > 0) {
-        logger.debug('Files discovered', {
-          directory,
-          searchName,
-          count: matches.length
-        });
-      }
-      
-      return matches;
+      logger.debug('Files discovered', {
+        directory,
+        searchName,
+        count: matches.length
+      });
+    }
+
+    return matches;
+  }
+
+  /** One listing; a missing directory holds no matches, any other failure is reported, never read as "not found". */
+  private static async listDirectory(directory: string, searchName: string): Promise<string[]> {
+    try {
+      return await getFileOperationsService().listDirectory(directory);
     } catch (error) {
+      if (isAbsentKindError(error)) return [];
       logger.error('File discovery failed', {
         directory,
         searchName,
         error: error instanceof Error ? error.message : String(error)
       });
-      return [];
+      throw error;
     }
+  }
+
+  /** Each pattern a file matches adds it once, up to the result limit. */
+  private static matchFiles(directory: string, files: readonly string[], patterns: readonly string[],
+    partialMatch: boolean, maxResults: number): string[] {
+    const matches: string[] = [];
+    for (const file of files) {
+      const fileLower = file.toLowerCase();
+      for (const pattern of patterns) {
+        if (matches.length >= maxResults) return matches;
+        if (this.matchesPattern(fileLower, pattern, partialMatch)) matches.push(path.join(directory, file));
+      }
+      if (matches.length >= maxResults) return matches;
+    }
+    return matches;
   }
   
   /**

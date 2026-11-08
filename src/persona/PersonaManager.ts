@@ -3,12 +3,15 @@
  */
 
 import type { ActivationMetricsTracker } from '../metrics/ActivationMetricsTracker.js';
+import type { DeletionReport, ElementDeletionTarget } from '../elements/base/ElementDeletion.js';
 import { randomUUID } from 'node:crypto';
+import { basename } from 'node:path';
 import type { Persona, PersonaMetadata } from '../types/persona.js';
 import type { PersonaElementMetadata } from './PersonaElement.js';
 import { PersonaElement } from './PersonaElement.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { validateFilename, sanitizeInput, validateContentSize } from '../security/InputValidator.js';
+import { ELEMENT_FILE_EXTENSIONS, canonicalElementName, resolveNamedCandidate } from '../storage/ElementNameKeys.js';
 import { SECURITY_LIMITS } from '../security/constants.js';
 import { ContentValidator } from '../security/contentValidator.js';
 // Issue #1948: PathValidator import removed — initialized via DI container, not PersonaManager
@@ -28,6 +31,7 @@ import { logger } from '../utils/logger.js';
 import { isDefaultPersona } from '../constants/defaultPersonas.js';
 import type { PersonaImporter, ImportResult } from './export-import/PersonaImporter.js';
 import { BaseElementManager, type ElementManagerDeps } from '../elements/base/BaseElementManager.js';
+import { requireCompleteCollection } from '../elements/base/CollectionReport.js';
 import { VALIDATION_CONSTANTS } from '../elements/base/ElementValidation.js';
 import { normalizeVersion } from '../elements/BaseElement.js';
 import type { TriggerValidationService } from '../services/validation/TriggerValidationService.js';
@@ -112,7 +116,7 @@ function applyEditValueToPersona(
     return;
   }
   if (field === 'name') {
-    persona.metadata.name = sanitizeInput(sanitizedValue, 100);
+    persona.assignName(canonicalElementName(sanitizedValue));
     return;
   }
   if (field === 'category') {
@@ -320,22 +324,20 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
   /**
    * Reload personas using BaseElementManager caches
    */
-  async reload(): Promise<void> {
+  async reload(): Promise<PersonaElement[]> {
     this.initializePathValidator();
 
     // Clear BaseElementManager caches and reload
     this.clearCache();
-    const personas = await super.list();
-
-    // Check if active personas still exist after reload
-    // Issue #281: Support multiple active personas
-    for (const activeFilename of [...this.getActivationSet()]) { // NOSONAR — spread required: loop body calls .delete() on the Set
-      const stillExists = personas.some(p => this.deriveFilename(p) === activeFilename);
-      if (!stillExists) {
-        this.getActivationSet().delete(activeFilename);
+    const report = await this.listReport();
+    await this.resolveActiveReferences({ resolve: async activeFilename => {
+      const persona = await this.findPersonaAsync(activeFilename);
+      if (!persona && this.getActivationSet().delete(activeFilename)) {
         this.notifyPersonaChange('persona-deactivated', activeFilename, null);
       }
-    }
+      return persona;
+    } });
+    return requireCompleteCollection(report);
   }
 
   private deriveFilename(persona: PersonaElement): string {
@@ -396,7 +398,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
 
     // Sanitize name first (before MetadataService)
     const sanitizedName =
-      sanitizeInput(metadata.name || persona.filename || `persona-${Date.now()}`, 100) || 'Persona';
+      canonicalElementName(metadata.name || persona.filename || `persona-${Date.now()}`) || 'Persona';
     metadata.name = sanitizedName;
 
     // Use MetadataService for common fields + persona-specific defaults
@@ -455,26 +457,23 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
   }
 
   /**
-   * List all personas as an array
-   * Ensures all personas have filenames set
+   * Ensure listed personas have filenames set
    */
-  override async list(options?: { includePublic?: boolean }): Promise<PersonaElement[]> {
-    const personas = await super.list(options);
+  protected override decorateListed(personas: PersonaElement[]): Promise<void> {
     // Ensure filenames are set using deriveFilename logic
     for (const persona of personas) {
       if (!persona.filename) {
         persona.filename = this.deriveFilename(persona);
       }
     }
-    return personas;
+    return Promise.resolve();
   }
 
   /**
    * Reload personas and return MCP-formatted response
    */
   async reloadPersonas() {
-    await this.reload();
-    const personas = await this.list();
+    const personas = await this.reload();
     return {
       content: [{
         type: "text",
@@ -483,11 +482,6 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     };
   }
 
-  /**
-   * Find a persona by identifier (filename, name, or unique_id)
-   * Uses cached elements from BaseElementManager for synchronous access
-   * Multi-strategy search: filename (with/without .md), name (case-insensitive), unique_id
-   */
   /** Cache miss metrics for monitoring persona lookup health (Issue #843) */
   private readonly cacheMissMetrics = {
     cacheHits: 0,
@@ -503,41 +497,34 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     return { ...this.cacheMissMetrics };
   }
 
-  /**
-   * Check if a persona matches an identifier by filename, name, or ID.
-   * Shared matching logic used by both findPersona() and findPersonaAsync().
-   */
-  private matchesIdentifier(persona: PersonaElement, identifier: string): boolean {
-    const trimmed = identifier.trim();
-    const lower = trimmed.toLowerCase();
-    const filenameWithExt = trimmed.endsWith('.md') ? trimmed : `${trimmed}.md`;
-    const filename = this.deriveFilename(persona);
-
-    // Strategy 1: Exact filename match (with or without .md)
-    if (filename === trimmed || filename === filenameWithExt) return true;
-    // Strategy 2: Name match (case-insensitive)
-    if (persona.metadata.name.toLowerCase() === lower) return true;
-    // Strategy 3: Unique ID match
-    if (persona.id === trimmed || persona.metadata.unique_id === trimmed) return true;
-
-    return false;
+  /** The storage reference a cached persona is selected by (the selector's exact tier). */
+  private cachedReferenceOf(persona: PersonaElement): string {
+    return (persona as PersonaElement & { filePath?: string }).filePath ?? this.deriveFilename(persona);
   }
 
+  /**
+   * Find a cached persona synchronously (displays and deactivation of an active reference): the
+   * shared selector over the cached personas, with the storage reference (filename or row id) as
+   * the exact tier. A filename alone never selects, and a tie selects nothing. Cache-only and never
+   * checked for currency; every lookup that reads definitions goes through findPersonaAsync.
+   */
   findPersona(identifier: string): PersonaElement | undefined {
     if (!identifier) {
       return undefined;
     }
 
-    const candidate = this.getCachedElementsForCurrentNamespace()
-      .find(p => this.matchesIdentifier(p, identifier));
+    const text = identifier.trim();
+    // An exact activation key is the selector's exact tier: one cache lookup, taken only when the
+    // text is the stored reference itself (never a path that merely resolves to it).
+    const exact = this.getCachedElementByStorageIdentity(text);
+    const candidate = (exact && this.cachedReferenceOf(exact) === text ? exact : undefined) ?? resolveNamedCandidate(text,
+      this.getCachedElementsForCurrentNamespace().map(persona => ({
+        reference: this.cachedReferenceOf(persona), name: persona.metadata.name, persona,
+      }))).selected?.persona;
 
     if (candidate) {
-      // Issue #843 follow-up: the iteration above scans cache values
-      // without going through LRUCache.get(), so the LRU never sees the
-      // access — hits don't get recorded and frequently-read personas
-      // can be evicted before stale ones under memory pressure. Touch
-      // the entry by ID so the LRU promotes it to MRU and bumps its
-      // internal hit counter.
+      // Issue #843 follow-up: the selection above reads cache values without LRUCache.get(), so the
+      // LRU never sees the access. Touch the entry by ID so the LRU promotes it to MRU.
       this.touchCachedElement(candidate.id);
       this.cacheMissMetrics.cacheHits++;
     } else {
@@ -551,28 +538,14 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
   private readonly pendingLookups = new Map<string, Promise<PersonaElement | undefined>>();
 
   /**
-   * Find a persona with disk fallback when cache misses.
-   *
-   * Issue #843: findPersona() is synchronous and cache-only. After LRU eviction
-   * or direct filesystem edits followed by scan(), personas become invisible even
-   * though the file exists on disk. This async method tries the fast cache path
-   * first, then falls back to BaseElementManager.findByName() which has the full
-   * cache → storage index → direct file load → list scan fallback chain.
-   *
-   * Includes request deduplication: concurrent lookups for the same identifier
-   * share a single disk read to avoid redundant I/O in bridge/swarm scenarios.
+   * Find a persona through the shared read contract (performLookup). Concurrent lookups for the
+   * same identifier share one read.
    */
-  async findPersonaAsync(identifier: string): Promise<PersonaElement | undefined> {
-    // Fast path: check LRU cache (synchronous, O(cache size)).
-    // findPersona() now records hit/miss in cacheMissMetrics and touches
-    // the LRU on hit, so we don't double-count here.
-    const cached = this.findPersona(identifier);
-    if (cached) {
-      return cached;
-    }
-
+  async findPersonaAsync(identifier: string, options: { refreshed?: boolean } = {}): Promise<PersonaElement | undefined> {
+    if (!identifier) return undefined;
     // Resolve the namespace in the caller's context before sharing a lookup.
-    const lookupKey = `${this.getCacheNamespace()}:${identifier.trim().toLowerCase()}`;
+    // Exact text: 'Alpha.md' and 'alpha.md' are different references, so they never share a lookup.
+    const lookupKey = `${this.getCacheNamespace()}:${identifier.trim()}`;
     const pending = this.pendingLookups.get(lookupKey);
     if (pending) {
       this.cacheMissMetrics.deduplicatedLookups++;
@@ -580,7 +553,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
       return pending;
     }
 
-    const lookup = this.performDiskLookup(identifier);
+    const lookup = this.performLookup(identifier.trim(), options);
     this.pendingLookups.set(lookupKey, lookup);
 
     try {
@@ -591,25 +564,23 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
   }
 
   /**
-   * Perform the actual disk lookup for findPersonaAsync.
-   * Separated to support request deduplication.
+   * One persona lookup through the shared classifier and selector: findByStorageIdentity (which
+   * classifies first and serves a cached instance only by the shared currency rule), then
+   * findByName. No cache step runs on raw caller text, and a selector hit is never dropped.
    */
-  private async performDiskLookup(identifier: string): Promise<PersonaElement | undefined> {
+  private async performLookup(identifier: string, options: { refreshed?: boolean } = {}): Promise<PersonaElement | undefined> {
     try {
-      // Activation references are storage identities: filenames or database UUIDs.
-      const fromDisk = (await this.findByStorageIdentity(identifier)) ?? (await this.findByName(identifier));
-      if (fromDisk && this.matchesIdentifier(fromDisk, identifier)) {
-        this.cacheMissMetrics.diskRecoveries++;
-        logger.info(`[PersonaManager] Cache miss recovered from disk: "${identifier}" (total recoveries: ${this.cacheMissMetrics.diskRecoveries}, miss rate: ${this.cacheMissMetrics.cacheMisses}/${this.cacheMissMetrics.cacheHits + this.cacheMissMetrics.cacheMisses})`);
-        return fromDisk;
+      const found = await this.findByStorageIdentity(identifier)
+        ?? await this.findByName(identifier, options);
+      if (!found) {
+        this.cacheMissMetrics.notFound++;
+        logger.debug(`[PersonaManager] findPersonaAsync: "${identifier}" not found`);
       }
-      this.cacheMissMetrics.notFound++;
-      logger.debug(`[PersonaManager] findPersonaAsync: "${identifier}" not found in cache or on disk`);
-      return undefined;
-    } catch {
+      return found;
+    } catch (error) {
       this.cacheMissMetrics.diskFailures++;
-      logger.debug(`[PersonaManager] findPersonaAsync: disk lookup failed for "${identifier}" (parse/validation error)`);
-      return undefined;
+      logger.debug(`[PersonaManager] findPersonaAsync: lookup failed for "${identifier}" (parse/validation error)`);
+      throw error;
     }
   }
 
@@ -676,6 +647,18 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     };
   }
   
+  /** Clear explicit recovery intent without reading a possibly unavailable definition. */
+  override releaseActivationReference(key: string): ReturnType<BaseElementManager<PersonaElement>['releaseActivationReference']> {
+    const rollback = this.pendingDeletes.get(this.getActivationSet())?.get(key);
+    if (rollback) rollback.restore = false;
+    const result = super.releaseActivationReference(key);
+    if (result.released) {
+      this.activationMetricsTracker.forget('persona', key);
+      this.notifyPersonaChange('persona-deactivated', key, null);
+    }
+    return result;
+  }
+
   /**
    * Deactivate a specific persona by name
    * Issue #281: Now requires a name parameter to deactivate specific persona from the set
@@ -771,17 +754,11 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    * synchronous cache that getActivePersonas() intentionally relies on.
    */
   async resolveActivePersonas(): Promise<PersonaElement[]> {
-    const personas: PersonaElement[] = [];
-    // Walk the live iterator so activation changes during lookup retain Set semantics.
-    const step = async (it: Iterator<string>): Promise<void> => {
-      const next = it.next();
-      if (next.done) return;
-      const persona = await this.findPersonaAsync(next.value);
-      if (persona) personas.push(persona);
-      await step(it);
-    };
-    await step(this.getActivationSet().values());
-    return personas;
+    return this.resolveActiveReferences({ resolve: reference => this.findPersonaAsync(reference, { refreshed: true }) });
+  }
+
+  protected override findActiveReference(reference: string): Promise<PersonaElement | undefined> {
+    return this.findPersonaAsync(reference, { refreshed: true });
   }
 
   /**
@@ -1153,12 +1130,9 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     // Validate and sanitize all inputs - throws on validation failure
     const validatedInputs = this.validatePersonaInputs(name, description, effectiveInstructions, triggersString);
 
-    // Check for duplicate - throw instead of returning result object
-    await super.list();
-    const existingPersona = this.findPersona(validatedInputs.filename);
-    if (existingPersona) {
-      throw new Error(`A persona named "${validatedInputs.sanitizedName}" already exists`);
-    }
+    // Check for duplicate - throw instead of returning result object. The name is certified through
+    // the shared selector; the target file is probed too, so a create never overwrites another persona.
+    await this.assertNameAvailable(validatedInputs.sanitizedName, await this.exists(validatedInputs.filename));
 
     // Build metadata overrides from remaining data fields
     const { name: _n, description: _d, content: _c, instructions: _i, triggers: _t, ...metadataOverrides } = data;
@@ -1284,7 +1258,9 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
         isDefault,
         newName: editablePersona.metadata.name || persona.metadata.name,
         version: editablePersona.metadata.version,
-        newId: isDefault ? editablePersona.unique_id : undefined
+        newId: isDefault ? editablePersona.unique_id : undefined,
+        // The stored reference of the writable copy, the key a lookup of it uses.
+        newFilename: isDefault ? editablePersona.filename : undefined
       };
     } catch (error) {
       const sanitized = SecureErrorHandler.sanitizeError(error);
@@ -1299,11 +1275,10 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     const result = await this.editPersona(persona.filename, field, value);
     // Note: editPersona already calls reload(), no need to reload again
 
-    // For copy-on-write, we need to find by the new ID if one was created
-    const identifierToFind = result.isDefault && result.newId ? result.newId : persona.filename;
-
-    // Find the updated persona
-    const updatedPersona = this.findPersona(identifierToFind);
+    // A copy-on-write edit saved a writable copy: look it up by its stored reference (a unique_id is
+    // not a name), through the shared read contract.
+    const identifierToFind = result.isDefault && result.newFilename ? result.newFilename : persona.filename;
+    const updatedPersona = await this.findPersonaAsync(identifierToFind);
     if (!updatedPersona) {
       // SECURITY: Don't include unsanitized user input in error messages
       throw new Error('Failed to retrieve updated persona');
@@ -1527,10 +1502,13 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    *
    * @param filePath - The filename of the persona to delete
    */
-  override async delete(filePath: string, onCommitted?: () => void): Promise<void> {
+  override async deleteResolved(target: ElementDeletionTarget<PersonaElement>, onCommitted?: () => void): Promise<DeletionReport> {
+    const filePath = target.storageIdentity;
     // Issue #281: Auto-deactivate before deletion
     // This allows deleting active personas without requiring explicit deactivation
     const active = this.getActivationSet();
+    // Automatic removal must preserve another pending delete's rollback obligation.
+    // Only explicit recovery/deactivation cancels that intent before commit.
     const wasActive = active.delete(filePath);
     let pending = this.pendingDeletes.get(active);
     if (!pending) {
@@ -1542,8 +1520,9 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     obligation.restore ||= wasActive;
     pending.set(filePath, obligation);
 
+    let report: DeletionReport;
     try {
-      await super.delete(filePath, () => {
+      report = await super.deleteResolved(target, () => {
         // Clear every pre-commit activation before asynchronous post-delete work.
         obligation.restore = false;
         active.delete(filePath);
@@ -1570,6 +1549,14 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
         wasActive
       }
     });
+    return report;
+  }
+
+  protected override canDeleteRepair(storageIdentity: string, _reason: string, storedName?: string): Promise<{ allowed: boolean; reason?: string }> {
+    const filename = storedName === undefined ? basename(storageIdentity) : this.getElementFilename(storedName);
+    return Promise.resolve(isDefaultPersona(filename)
+      ? { allowed: false, reason: 'Cannot delete a default persona. Edit it to create a personal copy instead.' }
+      : { allowed: true });
   }
 
   /**
@@ -1774,7 +1761,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
   }
 
   getFileExtension(): string {
-    return '.md';
+    return ELEMENT_FILE_EXTENSIONS.personas;
   }
 
   private validateImportYaml(data: string): void {

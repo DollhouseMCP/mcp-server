@@ -18,7 +18,6 @@ import { FileStorageLayerBase, type DirScanState } from './FileStorageLayerBase.
 import { DirectoryStateCache, MAX_CACHED_DIRECTORY_STATES } from './DirectoryStateCache.js';
 import * as path from 'node:path';
 import { logger } from '../utils/logger.js';
-import type { UnindexedEntry } from './IStorageLayer.js';
 import type { IStorageBackend } from './IStorageBackend.js';
 import { type ElementIndexEntry, type ManifestDiffResult } from './types.js';
 import { FileStorageBackend } from './FileStorageBackend.js';
@@ -27,6 +26,10 @@ import { MemoryIndexFile } from './MemoryIndexFile.js';
 import { MemoryIndexPersistence } from './MemoryIndexPersistence.js';
 import { FileStateTable } from './FileStateTable.js';
 import { type FileOperationsService, isAbsentPathError } from '../services/FileOperationsService.js';
+import type { FreshCollectionSnapshot, UnindexedEntry } from './IStorageLayer.js';
+import { ELEMENT_FILE_EXTENSIONS, filenameKey } from './ElementNameKeys.js';
+import { ValidationError } from '../security/errors.js';
+
 
 export interface MemoryStorageLayerOptions {
   /** Absolute path to the memories directory */
@@ -36,6 +39,7 @@ export interface MemoryStorageLayerOptions {
   /** Override the storage backend (useful for testing) */
   storageBackend?: IStorageBackend;
   retainDirectoryState?: (dir: string) => boolean;
+  onFailedRecordRecovered?: (reference: string) => void;
   /** Debounce interval for _index.json writes (default: 2000) */
   indexDebounceMs?: number;
   /** Maximum total wait for all final persistence flushes (default: 5000). */
@@ -62,6 +66,7 @@ interface MemoryDirScanState extends DirScanState {
 }
 
 export class MemoryStorageLayer extends FileStorageLayerBase<MemoryDirScanState> {
+  protected readonly fileExtension = ELEMENT_FILE_EXTENSIONS.memories;
   private shutdown: Promise<void> | undefined;
   private readonly warnedDirtyStates = new WeakSet<MemoryDirScanState>();
   private readonly retainDirectoryState?: (dir: string) => boolean;
@@ -79,7 +84,7 @@ export class MemoryStorageLayer extends FileStorageLayerBase<MemoryDirScanState>
       new DirectoryStateCache<MemoryDirScanState>(
         (state, dir) => this.isIdleDirectory(state, dir),
         state => state.persistence.dispose(),
-      ), options.scanCooldownMs);
+      ), options.scanCooldownMs, options.onFailedRecordRecovered);
     this.retainDirectoryState = options.retainDirectoryState;
     this.staticMemoriesDir = options.memoriesDir;
     this.memoriesDirResolver = options.memoriesDirResolver;
@@ -115,8 +120,21 @@ export class MemoryStorageLayer extends FileStorageLayerBase<MemoryDirScanState>
     return options?.preserveDuplicates ? state.table.entries() : state.table.ownerEntries();
   }
 
-  /** Internal scoped discovery using the injected backend/filter, without index publication. */
+  /** The fresh inventory as a typed snapshot: readable entries plus every unreadable file's evidence. */
+  override async readFreshCollection(options: { preserveDuplicates?: boolean } = {}): Promise<FreshCollectionSnapshot> {
+    const { entries, unindexed } = await this.readFreshAtDirectory(this.memoriesDir, options.preserveDuplicates === true);
+    return { entries, unindexed };
+  }
+
+  /** Internal scoped discovery using the injected backend/filter, without index publication; any unreadable file refuses. */
   async readFreshSummariesAtDirectory(dir: string, preserveDuplicates = false): Promise<ElementIndexEntry[]> {
+    const snapshot = await this.readFreshAtDirectory(dir, preserveDuplicates);
+    if (snapshot.refusal !== undefined) throw snapshot.refusal;
+    return snapshot.entries;
+  }
+
+  private async readFreshAtDirectory(dir: string, preserveDuplicates: boolean):
+    Promise<{ entries: ElementIndexEntry[]; unindexed: ReadonlyMap<string, UnindexedEntry>; refusal?: unknown }> {
     this.assertActive();
     let paths: string[];
     try {
@@ -124,22 +142,43 @@ export class MemoryStorageLayer extends FileStorageLayerBase<MemoryDirScanState>
       paths = await this.enumerateYamlFiles(dir, subdirs, true);
     } catch (error) { throw sanitizeStorageError(error, dir); }
     const entries: ElementIndexEntry[] = [];
-    // Keep each read/stat pair ordered and fail fast before starting later locator I/O.
+    const failures = new Map<string, UnindexedEntry>();
+    let refusal: unknown;
+    // Keep each read/stat pair ordered; a failed file is recorded with its evidence, never skipped.
     await visitSequentially(paths.values(), async filePath => {
       const absolutePath = path.join(dir, filePath);
       try {
-        const content = await this.backend.readFile(absolutePath);
+        const content = await this.readEntryContent(dir, filePath);
         const meta = await this.backend.stat(absolutePath);
         entries.push(this.buildEntry(content, filePath, meta));
       } catch (error) {
-        if (!isAbsentPathError(error)) throw sanitizeStorageError(error, dir, absolutePath);
+        if (isAbsentPathError(error)) return;
+        const safe = sanitizeStorageError(error, dir, absolutePath);
+        refusal ??= safe;
+        failures.set(filePath, this.freshFailure(error, safe, filePath));
       }
     });
     this.assertActive();
-    if (preserveDuplicates) return entries;
+    const result = preserveDuplicates ? entries : MemoryStorageLayer.ownersOf(entries);
+    return { entries: result, unindexed: failures, refusal };
+  }
+
+  private static ownersOf(entries: readonly ElementIndexEntry[]): ElementIndexEntry[] {
     const table = new FileStateTable();
     for (const entry of entries) table.applySaved(entry.filePath, entry.mtimeMs, entry);
     return table.ownerEntries();
+  }
+
+  /** A never-parsed fresh-inventory failure: it could hold only its filename key, and it is logged here. */
+  private freshFailure(error: unknown, safe: unknown, filePath: string): UnindexedEntry {
+    const reason = safe instanceof Error ? safe.message : String(safe);
+    const code = (error as NodeJS.ErrnoException)?.code;
+    const details = { reference: filePath, reason, ...(code === undefined ? {} : { code }) };
+    // A reference-policy refusal is a security signal; a parse or storage failure is a warning.
+    if (error instanceof ValidationError) logger.error('MemoryStorageLayer: fresh inventory refused a stored memory reference', details);
+    else logger.warn('MemoryStorageLayer: fresh inventory could not read a memory', details);
+    return { reason, name: error instanceof Error ? error.name : typeof error, candidateNames: [filenameKey(filePath)],
+      unattributed: true, ...(code === undefined ? {} : { code }) };
   }
 
   async getIndexedPaths(): Promise<string[]> {
@@ -148,20 +187,23 @@ export class MemoryStorageLayer extends FileStorageLayerBase<MemoryDirScanState>
     return state.table.ownerEntries().map(entry => entry.filePath);
   }
 
-  /** Scan and capture metadata plus failures from one pinned directory state. */
-  async scanMemorySnapshot(autoLoad = false): Promise<{ entries: ElementIndexEntry[]; unindexed: ReadonlyMap<string, UnindexedEntry> }> {
-    const dir = this.memoriesDir;
-    const state = this.getState(dir);
-    return this.dirStates.scanAndRead(state, () => this.scanState(dir, state, {}), () => ({
-      entries: autoLoad ? this.autoLoadEntriesOf(state) : state.table.ownerEntries(),
-      unindexed: state.table.unindexed(),
-    }));
+  /** A definition read is audited by the layer that performs it. */
+  override async readContent(reference: string): Promise<string> {
+    const content = await super.readContent(reference);
+    this.fileOps.auditElementRead(path.join(this.memoriesDir, reference), 'memories', 'MemoryStorageLayer.readContent');
+    return content;
   }
 
-  private autoLoadEntriesOf(state: MemoryDirScanState): ElementIndexEntry[] {
-    return state.table.ownerEntries()
-      .filter(entry => entry.autoLoad === true)
-      .sort((a, b) => (a.priority ?? 999) - (b.priority ?? 999));
+  protected override collectionEntries(state: MemoryDirScanState): ElementIndexEntry[] {
+    return state.table.ownerEntries();
+  }
+
+  /** Newest-owner rule: a copy of a name in any date folder, parsed or not, may own that name. */
+  protected override failureShadowsSurvivors(): boolean { return true; }
+
+  /** Name lookups offer the same newest-owner entries the collection snapshot lists. */
+  protected override candidateEntries(state: MemoryDirScanState, name: string): ElementIndexEntry[] {
+    return super.candidateEntries(state, name).filter(entry => state.table.isOwner(entry.filePath));
   }
 
   /** Fence scans immediately, then flush all directories under one deadline. */
@@ -215,7 +257,7 @@ export class MemoryStorageLayer extends FileStorageLayerBase<MemoryDirScanState>
   private async collectYamlFilesFromSubdir(dir: string, subdir: string, out: string[], strict = false): Promise<void> {
     const absDir = subdir ? path.join(dir, subdir) : dir;
     try {
-      const files = await this.backend.listFiles(absDir, '.yaml');
+      const files = await this.backend.listFiles(absDir, this.fileExtension);
       for (const file of files) {
         if (this.fileFilter && !this.fileFilter(file)) continue;
         out.push(subdir ? `${subdir}/${file}` : file);

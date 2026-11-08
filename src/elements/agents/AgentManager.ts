@@ -1,3 +1,7 @@
+import { certifyNamedReference } from '../base/ElementNameEvidence.js';
+import { foldedNameKey } from '../../storage/ElementNameKeys.js';
+import { ElementMissingError, identityResolutionFailure } from '../base/ElementReadError.js';
+import type { DeletionReport, ElementDeletionTarget } from '../base/ElementDeletion.js';
 /**
  * AgentManager - Refactored to extend BaseElementManager
  * Manages agent CRUD operations, metadata sanitization, and state persistence.
@@ -55,13 +59,7 @@ import {
   createExecutionContext,
 } from './safetyTierService.js';
 import { BaseElementManager, type ElementManagerDeps } from '../base/BaseElementManager.js';
-import {
-  isWritableStorageLayer,
-  type DatabaseStorageIdentity,
-  type ElementSaveOptions,
-  type IWritableStorageLayer,
-  type StorageScanOptions,
-} from '../../storage/IStorageLayer.js';
+import { isWritableStorageLayer, type DatabaseStorageIdentity, type ElementSaveOptions, type IWritableStorageLayer, type StorageScanOptions } from '../../storage/IStorageLayer.js';
 import {
   AGENT_STATE_MAX_YAML_SIZE,
   AgentStateReductionRequiredError,
@@ -75,15 +73,17 @@ import type { IAgentStateStore } from '../../storage/IAgentStateStore.js';
  * The resolver returns heterogeneous managers (PersonaManager, SkillManager, etc.)
  * — this captures the common surface needed by getElementContent().
  */
+export interface ResolvedElement {
+  metadata: { name: string; [key: string]: unknown };
+  content?: string;
+  instructions?: string;
+  getEntries?: () => unknown[];
+  elements?: Record<string, unknown>;
+  extensions?: Record<string, unknown>;
+}
+
 export interface ResolvedElementManager {
-  list(): Promise<Array<{
-    metadata: { name: string; [key: string]: unknown };
-    content?: string;
-    instructions?: string;
-    getEntries?: () => unknown[];
-    elements?: Record<string, unknown>;
-    extensions?: Record<string, unknown>;
-  }>>;
+  findByName(name: string): Promise<ResolvedElement | undefined>;
 }
 
 export interface AgentMemoryOperationBinding {
@@ -118,7 +118,7 @@ import { TenantMemoryOperationProvider, type BoundMemoryOperation } from '../../
 import { DatabaseTenantMemoryRegistry } from '../../storage/DatabaseTenantMemoryRegistry.js';
 import type { MemoryManager } from '../memories/MemoryManager.js';
 import { toSingularLabel } from '../../utils/elementTypeNormalization.js';
-import { sanitizeInput, validatePath } from '../../security/InputValidator.js';
+import { sanitizeInput } from '../../security/InputValidator.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { ContentValidator } from '../../security/contentValidator.js';
@@ -180,14 +180,13 @@ interface ExecutionGenerationEntry {
   observers: number;
 }
 
-interface FlexibleReadCandidate {
-  agent: Agent;
+/** The one definition a name selects: its storage identity and whether it lives under another filename. */
+interface ResolvedAgentDefinition {
   storagePath: string;
-}
-
-interface FlexibleReadCandidates {
-  candidates: FlexibleReadCandidate[];
-  loadFailures: unknown[];
+  /** File backend only: stored under a filename other than the name's own, so recovery must verify durable state. */
+  flexible: boolean;
+  /** The one definition read of the call, at that storage identity. */
+  definition: Agent;
 }
 
 export interface AgentActivationResult {
@@ -417,22 +416,14 @@ export class AgentManager extends BaseElementManager<Agent> {
       this.assignV2MetadataFields(agent, metadataV2);
 
       // Issue #613: Check metadata name uniqueness (not just filename)
-      const existingAgents = await this.list();
-      const duplicateExists = existingAgents.some(a =>
-        a.metadata.name.toLowerCase() === sanitizedInput.name.toLowerCase()
-      );
-      if (duplicateExists) {
-        return {
-          success: false,
-          message: `Agent '${sanitizedInput.name}' already exists`
-        };
-      }
+      const duplicate = await this.duplicateNameRefusal(sanitizedInput.name);
+      if (duplicate) return { success: false, message: duplicate };
 
       // Save through the standard pipeline with exclusive flag for atomic create-or-fail.
       // In file mode, this uses createFileExclusive (wx flag) to prevent TOCTOU races.
       // In DB mode, the storage layer does a plain INSERT and converts the 23505 unique-
-      // constraint violation into an "already exists" error. The duplicate check above via
-      // list() catches the common case; exclusive handles concurrent-create races.
+      // constraint violation into an "already exists" error. The duplicate-name refusal above
+      // (duplicateNameRefusal) catches the common case; exclusive handles concurrent-create races.
       await this.save(agent, this.getFilename(sanitizedInput.name), { exclusive: true });
 
       SecurityMonitor.logSecurityEvent({
@@ -570,175 +561,83 @@ export class AgentManager extends BaseElementManager<Agent> {
   /**
    * Read an agent by name (without extension).
    *
-   * @param name - Agent name (without extension)
-  * @returns Agent instance or null if not found
-  */
+   * @param name - Agent name (without extension), used as given
+   * @returns Agent instance or null when absence is certified
+   */
   async read(name: string): Promise<Agent | null> {
-    const sanitizedName = sanitizeInput(name, 100);
-    try {
-      const storagePath = await this.resolveDirectAgentStoragePath(sanitizedName);
-      if (!storagePath) return this.readFlexibly(name, false);
-
-      const found = await this.findByStorageIdentity(storagePath);
-      if (!found) return this.readFlexibly(name, false);
-      this.bindAgentStorageIdentity(found, storagePath);
-      if (
-        !isWritableStorageLayer(this.storageLayer) &&
-        !this.matchesRequestedAgentIdentity(found, sanitizedName)
-      ) {
-        return this.readFlexibly(name, false);
-      }
-      await this.ensureStateHydrated(found);
-      return found;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return this.readFlexibly(name, false);
-      }
-      throw error;
-    }
-  }
-
-  /** Resolve an exact name without allowing cached state into strict recovery. */
-  private async readWithStatePolicy(name: string, strictStateErrors: boolean): Promise<Agent | null> {
-    if (!strictStateErrors) return this.read(name);
-
-    const sanitizedName = sanitizeInput(name, 100);
-    try {
-      const storagePath = await this.resolveDirectAgentStoragePath(sanitizedName);
-      if (!storagePath) return this.readFlexibly(name, true);
-
-      const definition = await this.loadElementDefinition(storagePath);
-      if (
-        !isWritableStorageLayer(this.storageLayer) &&
-        !this.matchesRequestedAgentIdentity(definition, sanitizedName)
-      ) {
-        return this.readFlexibly(name, true);
-      }
-      return this.createRecoveryAgent(definition, name, false, storagePath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return this.readFlexibly(name, true);
-      }
-      throw error;
-    }
-  }
-
-  private async resolveDirectAgentStoragePath(name: string): Promise<string | undefined> {
-    if (!isWritableStorageLayer(this.storageLayer)) {
-      return this.getFilename(name);
-    }
-
-    try {
-      return (await this.storageLayer.resolveContentIdentity(
-        this.elementType,
-        this.stripExtension(name),
-      ))?.id;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EAMBIGUOUS') return undefined;
-      throw error;
-    }
-  }
-
-  /** Preserve name-based read semantics when a legacy filename disagrees with its metadata. */
-  private matchesRequestedAgentIdentity(agent: Agent, requestedName: string): boolean {
-    return this.getFilename(agent.metadata.name) === this.getFilename(requestedName)
-      || agent.id === requestedName;
+    // The resolved storage identity is loaded by the same rule as findByStorageIdentity.
+    const resolved = await this.resolveAgentDefinition(name, reference => this.loadByStorageReference(reference));
+    if (!resolved) return null;
+    this.bindAgentStorageIdentity(resolved.definition, resolved.storagePath);
+    this.noteFlexibleMatch(name, resolved);
+    await this.ensureStateHydrated(resolved.definition);
+    return resolved.definition;
   }
 
   /**
-   * Fallback for read() when direct file lookup fails.
-   * Searches loaded agents by metadata name using case-insensitive and slug matching.
-   * Logs a warning when a match is found (indicates filename/name mismatch needing cleanup).
-   *
-   * @example
-   * // File on disk: "legacy-poster-agent.md"
-   * // Metadata name: "legacy-poster"
-   * // Direct lookup for "legacy-poster.md" fails (ENOENT)
-   * // Flexible fallback matches via metadata name:
-   * const agent = await read("legacy-poster"); // resolves via fallback
+   * Resolve a name without allowing cached state into strict recovery. The strict flag changes
+   * only state hydration and recovery, never which definition is served.
    */
-  private async readFlexibly(name: string, strictStateErrors = false): Promise<Agent | null> {
-    try {
-      const { candidates, loadFailures } = await this.listForFlexibleRead(strictStateErrors);
-      const match = this.selectFlexibleReadCandidate(name, candidates);
-      if (match === null) return null;
-
-      if (match) {
-        if (strictStateErrors) {
-          const recoveryAgent = await this.createRecoveryAgent(match.agent, name, true, match.storagePath);
-          logger.warn(
-            `Agent "${name}" resolved via flexible matching to file with metadata name "${match.agent.metadata.name}". ` +
-            `Consider renaming the file to match the expected convention (#607).`
-          );
-          return recoveryAgent;
-        }
-        this.bindAgentStorageIdentity(match.agent, match.storagePath);
-        await this.hydrateAgentState(match.agent, this.stripExtension(match.storagePath));
-        logger.warn(
-          `Agent "${name}" resolved via flexible matching to file with metadata name "${match.agent.metadata.name}". ` +
-          `Consider renaming the file to match the expected convention (#607).`
-        );
-        return match.agent;
-      }
-
-      if (loadFailures.length > 0) throw loadFailures[0];
-      return null;
-    } catch (lookupError) {
-      logger.debug(`Flexible agent lookup failed for "${name}": ${lookupError}`);
-      throw lookupError;
-    }
+  private async readWithStatePolicy(name: string, strictStateErrors: boolean): Promise<Agent | null> {
+    if (!strictStateErrors) return this.read(name);
+    const resolved = await this.resolveAgentDefinition(name, reference => this.loadElementDefinition(reference));
+    if (!resolved) return null;
+    this.noteFlexibleMatch(name, resolved);
+    return this.createRecoveryAgent(resolved.definition, name, resolved.flexible, resolved.storagePath);
   }
 
-  private selectFlexibleReadCandidate(
-    name: string,
-    candidates: FlexibleReadCandidate[],
-  ): FlexibleReadCandidate | null | undefined {
-    const searchLower = name.toLowerCase();
-    const searchSlug = this.normalizeFilename(name);
-    let matches = candidates.filter(
-      ({ agent }) => agent.metadata.name.toLowerCase() === searchLower,
-    );
-    if (matches.length === 0) {
-      matches = candidates.filter(({ agent }) => {
-        const slug = this.normalizeFilename(agent.metadata.name);
-        return slug === searchSlug || slug === searchLower;
-      });
-    }
-
-    const exactStorageMatches = matches.filter(({ storagePath }) =>
-      this.stripExtension(path.basename(storagePath)) === searchSlug
-    );
-    if (exactStorageMatches.length === 1) return exactStorageMatches[0];
-    if (matches.length <= 1) return matches[0];
-
-    const competingPaths = matches.map(({ storagePath }) => storagePath).join(', ');
-    logger.warn(`Ambiguous agent identity for "${name}"; competing storage paths: ${competingPaths}`);
-    return null;
-  }
-
-  private async listForFlexibleRead(strictStateErrors: boolean): Promise<FlexibleReadCandidates> {
-    let storagePaths: string[];
+  /**
+   * One resolution for every agent read, lock and execution, one rule per backend. File: the
+   * shared resolver rule (path-shaped refusal, certification, then the slug and raw filenames
+   * accepted only by the shared selection rule). Database: the in-transaction identity read on
+   * the shared selector, so a competing row another process inserted is seen on every read; its
+   * ambiguity is indeterminate, naming the competing rows. A definition that vanished before it
+   * loaded is absent. `load` is the one definition read of the call: cache-publishing for
+   * ordinary reads, fresh for recovery.
+   */
+  private async resolveAgentDefinition(name: string, load: (reference: string) => Promise<Agent>): Promise<ResolvedAgentDefinition | undefined> {
     if (isWritableStorageLayer(this.storageLayer)) {
-      await this.storageLayer.scan();
-      storagePaths = (await this.storageLayer.listSummaries()).map(summary => summary.filePath);
-    } else {
-      storagePaths = strictStateErrors
-        ? await this.portfolioManager.listElements(ElementType.AGENT, { throwOnFilesystemError: true })
-        : await this.portfolioManager.listElements(ElementType.AGENT);
+      // The shared caller-text classifier runs first, as for every name lookup; the database then
+      // resolves the identity by the shared name rule over its callerNames, in its transaction.
+      await this.classifyCallerText(name);
+      return this.resolveDatabaseAgentDefinition(this.storageLayer, name, load);
     }
+    const resolved = await this.resolveDefinition(name, load);
+    if (!resolved) return undefined;
+    return { storagePath: resolved.reference, flexible: resolved.reference !== this.getFilename(name), definition: resolved.definition };
+  }
 
-    const results = await Promise.allSettled(
-      storagePaths.map(storagePath => this.loadElementDefinition(storagePath))
-    );
-    const candidates: FlexibleReadCandidates = { candidates: [], loadFailures: [] };
-    for (const [index, result] of results.entries()) {
-      if (result.status === 'fulfilled') {
-        candidates.candidates.push({ agent: result.value, storagePath: storagePaths[index] });
-      } else {
-        candidates.loadFailures.push(result.reason);
-      }
+  /**
+   * Database agents resolve their identity inside a transaction on every read, so an edit or
+   * rename by another process is seen on the next read. This backend branch stays until
+   * storage-revision observations give every type the same freshness.
+   */
+  private async resolveDatabaseAgentDefinition(storage: IWritableStorageLayer, name: string,
+    load: (reference: string) => Promise<Agent>): Promise<ResolvedAgentDefinition | undefined> {
+    let identity: DatabaseStorageIdentity | undefined;
+    try {
+      identity = await storage.resolveContentIdentity(ElementType.AGENT, name);
+    } catch (cause) {
+      throw identityResolutionFailure(cause, name);
     }
-    return candidates;
+    if (!identity) return undefined;
+    let definition: Agent;
+    try {
+      definition = await load(identity.id);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      throw error;
+    }
+    return { storagePath: identity.id, flexible: false, definition };
+  }
+
+  /** A definition served from a filename other than the name's own is worth a cleanup hint (#607). */
+  private noteFlexibleMatch(name: string, resolved: ResolvedAgentDefinition): void {
+    if (!resolved.flexible) return;
+    logger.warn(
+      `Agent "${name}" resolved via flexible matching to file with metadata name "${resolved.definition.metadata.name}". ` +
+      `Consider renaming the file to match the expected convention (#607).`
+    );
   }
 
   /**
@@ -749,8 +648,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     updates: Partial<AgentMetadata>,
     content?: string
   ): Promise<boolean> {
-    const sanitizedName = sanitizeInput(name, 100);
-    const agent = await this.read(sanitizedName);
+    const agent = await this.read(name);
     if (!agent) {
       logger.warn(`Agent not found for update: ${name}`);
       return false;
@@ -823,8 +721,8 @@ export class AgentManager extends BaseElementManager<Agent> {
       };
     }
 
-    await this.save(agent, this.getAgentSaveTarget(agent, sanitizedName));
-    logger.info(`Agent updated: ${sanitizedName}`);
+    await this.save(agent, this.getAgentSaveTarget(agent, name));
+    logger.info(`Agent updated: ${name}`);
     return true;
   }
 
@@ -901,39 +799,6 @@ export class AgentManager extends BaseElementManager<Agent> {
   }
 
   /**
-   * Load an agent, then hydrate its runtime state from the .state.yaml sidecar.
-   *
-   * Delegates the read/parse/cache pipeline to super.load() so we inherit the
-   * base class's DB/file branching, invalidElements tracking (Issue #708),
-   * load-error event emission, and suppressed-repeat-error dedup. Agent-specific
-   * work (path normalization, size guard, state hydration) runs around it.
-   */
-  override async load(filePath: string): Promise<Agent> {
-    const sanitizedInput = sanitizeInput(filePath, 255);
-
-    // DB mode: the storage layer indexes by UUID, not filesystem path. Pass the
-    // input through unchanged — appending `.md` or running file-system path
-    // validation would yield `UUID.md` that the DB storage layer can't match.
-    if (isWritableStorageLayer(this.storageLayer)) {
-      return super.load(sanitizedInput);
-    }
-
-    const relativePath = sanitizedInput.endsWith(AGENT_FILE_EXTENSION)
-      ? sanitizedInput
-      : this.getFilename(sanitizeInput(sanitizedInput, 100));
-
-    // Agent-specific path validation (defense-in-depth on top of base normalization).
-    try {
-      validatePath(relativePath, this.elementDir);
-    } catch (error) {
-      logger.error(`Invalid agent path: ${error}`);
-      throw new Error(`Invalid agent path: ${error instanceof Error ? error.message : 'Invalid path'}`);
-    }
-
-    return super.load(relativePath);
-  }
-
-  /**
    * Agent-specific content parser.
    *
    * Uses SerializationService.parseFrontmatter (strict) rather than the base
@@ -1000,18 +865,16 @@ export class AgentManager extends BaseElementManager<Agent> {
     // `.md` would break storage-layer lookups which index by UUID, not path.
     // In file mode, normalize to a `<name>.md` filename for on-disk storage.
     const isDb = isWritableStorageLayer(this.storageLayer);
-    const sanitizedPath = isDb
-      ? sanitizeInput(filePath, 255)
-      : this.normalizeAgentFilePath(filePath);
+    const savePath = isDb ? filePath : this.normalizeAgentFilePath(filePath);
 
-    await super.save(agent, sanitizedPath, options);
+    await super.save(agent, savePath, options);
 
     // State persistence uses the agent's logical name (not path/UUID) so that
     // .state.yaml sidecar files stay stable across file/DB mode.
     if (agent.needsStatePersistence()) {
       const stateName = isDb
         ? agent.metadata.name
-        : this.stripExtension(sanitizedPath);
+        : this.stripExtension(savePath);
       const newVersion = await this.saveAgentState(agent, stateName, agent.getState());
       agent[COMMIT_PERSISTED_VERSION](newVersion);  // Sync agent's internal version (Issue #123 fix)
       agent.markStatePersisted();
@@ -1054,46 +917,69 @@ export class AgentManager extends BaseElementManager<Agent> {
    * the normalized filename used for state file creation/loading.
    */
   override async delete(filePath: string, onCommitted?: () => void): Promise<void> {
-    // DB mode: filePath is a UUID, don't force `.md` extension.
-    const isDb = isWritableStorageLayer(this.storageLayer);
-    const sanitizedPath = isDb
-      ? sanitizeInput(filePath, 255)
-      : this.normalizeAgentFilePath(filePath);
-    if (isDb) {
+    let target: ElementDeletionTarget<Agent>;
+    try {
+      target = await this.resolveDeletionTarget(filePath);
+    } catch (cause) {
+      if (cause instanceof ElementMissingError) return;
+      throw cause;
+    }
+    await this.deleteResolved(target, onCommitted);
+  }
+
+  override async resolveDeletionTarget(identifier: string): Promise<ElementDeletionTarget<Agent>> {
+    try {
+      const target = await super.resolveDeletionTarget(identifier);
+      if (target.kind === 'element') this.bindAgentStorageIdentity(target.element, target.storageIdentity);
+      return target;
+    } catch (cause) {
+      if (!(cause instanceof ElementMissingError) ||
+        !this.storageLayer.isExactStorageReference(identifier, this.getFileExtension())) throw cause;
+      const { relativePath } = await this.normalizeAndValidatePath(identifier);
+      const state = await this.stateStore.load({ name: this.stripExtension(relativePath), agentElementId: relativePath }, { strict: true });
+      if (!state) throw cause;
+      return { kind: 'repair', repair: 'orphaned-state', storageIdentity: relativePath,
+        reason: 'The definition is absent but its filename-derived agent state remains' };
+    }
+  }
+
+  override async deleteResolved(target: ElementDeletionTarget<Agent>, onCommitted?: () => void): Promise<DeletionReport> {
+    const sanitizedPath = target.storageIdentity;
+    if (isWritableStorageLayer(this.storageLayer)) {
       // The shared DB persister refreshes and resolves the authoritative row
       // identity before validation/deletion. agent_states has an ON DELETE
       // CASCADE foreign key, so a second state deletion here would create a
       // dangerous partial-success path if definition deletion affected no row.
-      await super.delete(sanitizedPath, onCommitted);
-      return;
+      return super.deleteResolved(target, onCommitted);
     }
 
-    const existing = await this.load(sanitizedPath).catch(() => null);
     const name = this.stripExtension(sanitizedPath);
-    const stateKey = existing
-      ? await this.getAgentStateKey(existing, name)
+    const stateKey = target.kind === 'element'
+      ? await this.getAgentStateKey(target.element, name)
       : { name, agentElementId: sanitizedPath };
-    await super.delete(sanitizedPath, onCommitted);
-
+    const orphaned = target.kind === 'repair' && target.repair === 'orphaned-state';
+    const report = orphaned ? { storageIdentity: sanitizedPath, notices: [] as string[] }
+      : await super.deleteResolved(target, onCommitted);
     await this.stateStore.delete(stateKey);
-  }
-
-  private normalizeAgentFilePath(filePath: string): string {
-    return filePath.endsWith(AGENT_FILE_EXTENSION)
-      ? sanitizeInput(filePath, 255)
-      : this.getFilename(sanitizeInput(filePath, 100));
-  }
-
-  override async exists(filePath: string): Promise<boolean> {
-    // DB mode: the storage layer looks up by UUID or name via its index, not by
-    // filename. Pass through unchanged.
-    if (isWritableStorageLayer(this.storageLayer)) {
-      return super.exists(sanitizeInput(filePath, 255));
+    if (orphaned) {
+      try {
+        onCommitted?.();
+      } catch (error) {
+        logger.warn('Post-delete commit observer failed', { type: this.elementType, name: sanitizedPath, error });
+      }
+      SecurityMonitor.logSecurityEvent({ type: 'ELEMENT_DELETED', severity: 'MEDIUM',
+        source: 'AgentManager.deleteResolved', details: `Removed orphaned agent state: ${name}` });
     }
-    const sanitizedPath = filePath.endsWith(AGENT_FILE_EXTENSION)
-      ? sanitizeInput(filePath, 255)
-      : this.getFilename(sanitizeInput(filePath, 100));
-    return super.exists(sanitizedPath);
+    if (target.kind === 'repair') {
+      report.notices.push(`Removed agent state under filename-derived key '${name}'. State under a different metadata-derived key was not touched.`);
+      if (orphaned) report.notices.unshift('The definition was absent; removed its orphaned agent state.');
+    }
+    return report;
+  }
+
+  /** A reference is used as given (the base refuses what the sanitiser would change); a name gets its filename. */
+  private normalizeAgentFilePath(filePath: string): string {
+    return filePath.endsWith(AGENT_FILE_EXTENSION) ? filePath : this.getFilename(filePath);
   }
 
   override validatePath(targetPath: string): boolean {
@@ -1111,9 +997,7 @@ export class AgentManager extends BaseElementManager<Agent> {
   }
 
   /** Apply per-session active status using durable storage identity. */
-  override async list(options?: { includePublic?: boolean }): Promise<Agent[]> {
-    const agents = await super.list(options);
-
+  protected override async decorateListed(agents: Agent[]): Promise<void> {
     await visitSequentially(agents[Symbol.iterator](), async (agent) => {
       const identity = this.getActivationIdentity(agent);
       const shouldBeActive =
@@ -1126,8 +1010,6 @@ export class AgentManager extends BaseElementManager<Agent> {
         await agent.activate();
       }
     });
-
-    return agents;
   }
 
   /**
@@ -1221,85 +1103,11 @@ export class AgentManager extends BaseElementManager<Agent> {
     };
   }
 
-  /** Resolve a caller-facing name to the backend-owned identity used for locks. */
+  /** Resolve a caller-facing name to the backend-owned identity used for locks: the same certification every read uses. */
   async resolveExecutionIdentity(name: string): Promise<PersistedActivationIdentity> {
-    const sanitizedName = sanitizeInput(name, 100);
-    if (isWritableStorageLayer(this.storageLayer)) {
-      return this.resolveDatabaseExecutionIdentity(this.storageLayer, name, sanitizedName);
-    }
-    return this.resolveFileExecutionIdentity(name, sanitizedName);
-  }
-
-  private async resolveDatabaseExecutionIdentity(
-    storageLayer: IWritableStorageLayer,
-    name: string,
-    sanitizedName: string,
-  ): Promise<PersistedActivationIdentity> {
-    let identity;
-    try {
-      identity = await storageLayer.resolveContentIdentity(
-        this.elementType,
-        this.stripExtension(sanitizedName),
-      );
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EAMBIGUOUS') {
-        throw ErrorHandler.createError(
-          `Agent '${name}' resolves to more than one persisted definition`,
-          ErrorCategory.USER_ERROR,
-          'ELEMENT_IDENTITY_AMBIGUOUS',
-          error,
-        );
-      }
-      throw error;
-    }
-    if (!identity) throw new ElementNotFoundError('Agent', name);
-    return { kind: 'database', value: identity.id };
-  }
-
-  private async resolveFileExecutionIdentity(
-    name: string,
-    sanitizedName: string,
-  ): Promise<PersistedActivationIdentity> {
-    const directPath = this.getFilename(sanitizedName);
-    const requestedStem = this.stripExtension(path.basename(sanitizedName));
-    const storagePaths = await this.portfolioManager.listElements(ElementType.AGENT);
-    const exactStoragePaths = storagePaths.filter(storagePath =>
-      this.stripExtension(path.basename(storagePath)) === requestedStem
-    );
-    if (exactStoragePaths.length === 1) {
-      const exactPath = exactStoragePaths[0];
-      const definition = await this.loadElementDefinition(exactPath);
-      if (this.matchesRequestedAgentIdentity(definition, sanitizedName)) {
-        return { kind: 'file', value: exactPath };
-      }
-    }
-
-    const canonicalStoragePaths = storagePaths.filter(storagePath =>
-      this.getFilename(this.stripExtension(path.basename(storagePath))) === directPath
-    );
-    if (canonicalStoragePaths.length === 1) {
-      const resolvedPath = canonicalStoragePaths[0];
-      const definition = await this.loadElementDefinition(resolvedPath);
-      if (this.matchesRequestedAgentIdentity(definition, sanitizedName)) {
-        return { kind: 'file', value: resolvedPath };
-      }
-    }
-
-    try {
-      const definition = await this.loadElementDefinition(directPath);
-      if (this.matchesRequestedAgentIdentity(definition, sanitizedName)) {
-        return { kind: 'file', value: directPath };
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
-
-    const { candidates, loadFailures } = await this.listForFlexibleRead(false);
-    const match = this.selectFlexibleReadCandidate(name, candidates);
-    if (match) return { kind: 'file', value: match.storagePath };
-    if (match === null) throw new ElementNotFoundError('Agent', name);
-    if (loadFailures.length > 0) throw loadFailures[0];
-    throw new ElementNotFoundError('Agent', name);
+    const resolved = await this.resolveAgentDefinition(name, reference => this.loadElementDefinition(reference));
+    if (!resolved) throw new ElementNotFoundError('Agent', name);
+    return { kind: isWritableStorageLayer(this.storageLayer) ? 'database' : 'file', value: resolved.storagePath };
   }
 
   private async resolveCurrentExecutionIdentity(
@@ -1461,13 +1269,18 @@ export class AgentManager extends BaseElementManager<Agent> {
     };
   }
 
+  override releaseActivationReference(key: string): ReturnType<BaseElementManager<Agent>['releaseActivationReference']> {
+    const identity: PersistedActivationIdentity | undefined = this.getActivationNameMap().has(key)
+      ? { kind: isWritableStorageLayer(this.storageLayer) ? 'database' : 'file', value: key }
+      : undefined;
+    const result = super.releaseActivationReference(key);
+    if (result.released) this.getActivationNameMap().delete(key);
+    return { ...result, identity };
+  }
+
   private deactivateMissingAgent(identifier: string): AgentActivationResult {
-    // Missing definitions may only clear an exact live key, never a guessed alias.
-    if (this.getActivationSet().delete(identifier)) {
-      const identity: PersistedActivationIdentity | undefined = this.getActivationNameMap().has(identifier)
-        ? { kind: isWritableStorageLayer(this.storageLayer) ? 'database' : 'file', value: identifier }
-        : undefined;
-      this.getActivationNameMap().delete(identifier);
+    const { released, identity } = this.releaseActivationReference(identifier);
+    if (released) {
       return { success: true, message: ElementMessages.deactivated(ElementType.AGENT, identifier), identity };
     }
     return {
@@ -1481,19 +1294,21 @@ export class AgentManager extends BaseElementManager<Agent> {
    * Get all active agents
    */
   async getActiveAgents(options: StorageScanOptions = {}): Promise<Agent[]> {
-    await this.scanAndEvict(options);
-    const agents: Agent[] = [];
-    await visitSequentially(this.getActivationSet()[Symbol.iterator](), async (key) => {
-      const agent = this.getActivationNameMap().has(key)
-        ? await this.findByStorageIdentity(key)
-        : await this.findByName(key);
-      if (!agent) return;
-      if (typeof agent.getStatus === 'function' && agent.getStatus() !== ElementStatus.ACTIVE) {
-        await agent.activate();
-      }
-      agents.push(agent);
+    return this.resolveActiveReferences({
+      scanOptions: options,
+      resolve: key => this.getActivationNameMap().has(key) ? this.findByStorageIdentity(key) : this.findByName(key, { refreshed: true }),
+      afterLookup: async agent => {
+        if (typeof agent.getStatus === 'function' && agent.getStatus() !== ElementStatus.ACTIVE) await agent.activate();
+      },
     });
-    return agents;
+  }
+
+  protected override findActiveReference(reference: string): Promise<Agent | undefined> {
+    return this.getActivationNameMap().has(reference) ? this.findByStorageIdentity(reference) : this.findByName(reference, { refreshed: true });
+  }
+
+  protected override async afterActiveReferenceLookup(agent: Agent): Promise<void> {
+    if (agent.getStatus() !== ElementStatus.ACTIVE) await agent.activate();
   }
 
   /**
@@ -1770,7 +1585,7 @@ export class AgentManager extends BaseElementManager<Agent> {
         warnings: conversionResult.warnings,
       });
     }
-    const saveTarget = this.getAgentSaveTarget(agent, sanitizeInput(name, 100));
+    const saveTarget = this.getAgentSaveTarget(agent, name);
     await this.save(agent, saveTarget, this.getLifecycleSaveOptions(agent, identity));
     logger.info(`Agent '${name}' converted from V1 to V2 and saved to '${saveTarget}'`);
   }
@@ -1927,7 +1742,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       newGoal.status = 'in_progress';
       await this.save(
         agent,
-        this.getAgentSaveTarget(agent, sanitizeInput(name, 100)),
+        this.getAgentSaveTarget(agent, name),
         this.getLifecycleSaveOptions(agent, identity),
       );
     } catch (error) {
@@ -2301,15 +2116,15 @@ export class AgentManager extends BaseElementManager<Agent> {
     selfLoop: string[] | null;
   } {
     const stack: Array<{ current: string; path: string[]; pathSet: Set<string> }> = [];
-    const rootLower = rootName.toLowerCase();
+    const rootLower = foldedNameKey(rootName);
     for (const child of activatedAgents) {
-      if (child.toLowerCase() === rootLower) {
+      if (foldedNameKey(child) === rootLower) {
         return { stack, selfLoop: [rootName, child] };
       }
       stack.push({
         current: child,
         path: [rootName, child],
-        pathSet: new Set<string>([rootLower, child.toLowerCase()]),
+        pathSet: new Set<string>([rootLower, foldedNameKey(child)]),
       });
     }
     return { stack, selfLoop: null };
@@ -2344,7 +2159,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     agentCache: Map<string, string[] | null>,
     stack: Array<{ current: string; path: string[]; pathSet: Set<string> }>
   ): Promise<string[] | null> {
-    const currentLower = entry.current.toLowerCase();
+    const currentLower = foldedNameKey(entry.current);
     if (fullyExplored.has(currentLower)) {
       return null;
     }
@@ -2361,23 +2176,18 @@ export class AgentManager extends BaseElementManager<Agent> {
     name: string,
     agentCache: Map<string, string[] | null>
   ): Promise<string[]> {
-    const cacheKey = name.toLowerCase();
+    const cacheKey = foldedNameKey(name);
     if (agentCache.has(cacheKey)) {
       return agentCache.get(cacheKey) || [];
     }
-    try {
-      const agent = await this.read(name);
-      const agents = agent ? (agent.metadata as AgentMetadataV2).activates?.agents || [] : null;
-      if (!agents) {
-        logger.warn(`Agent '${name}' referenced in activates.agents could not be resolved during cycle detection`);
-      }
-      agentCache.set(cacheKey, agents);
-      return agents || [];
-    } catch {
+    // A certified-absent child has no children; a failed read is not "no children" and propagates.
+    const agent = await this.read(name);
+    const agents = agent ? (agent.metadata as AgentMetadataV2).activates?.agents || [] : null;
+    if (!agents) {
       logger.warn(`Agent '${name}' referenced in activates.agents could not be resolved during cycle detection`);
-      agentCache.set(cacheKey, null);
-      return [];
     }
+    agentCache.set(cacheKey, agents);
+    return agents || [];
   }
 
   private static enqueueActivationChildren(
@@ -2388,7 +2198,7 @@ export class AgentManager extends BaseElementManager<Agent> {
   ): { cyclePath: string[] | null; foundUnexplored: boolean } {
     let foundUnexplored = false;
     for (const child of children) {
-      const childLower = child.toLowerCase();
+      const childLower = foldedNameKey(child);
       if (entry.pathSet.has(childLower)) {
         return { cyclePath: [...entry.path, child], foundUnexplored: true };
       }
@@ -2402,41 +2212,8 @@ export class AgentManager extends BaseElementManager<Agent> {
     return { cyclePath: null, foundUnexplored };
   }
 
-  private findActivationElement(
-    elements: Array<Awaited<ReturnType<ResolvedElementManager['list']>>[number] | Memory>,
-    elementType: string,
-    elementName: string,
-  ): Awaited<ReturnType<ResolvedElementManager['list']>>[number] | Memory {
-      // Issue #2432: activates: references use canonical filename slugs (e.g.
-      // 'security-analyst', 'bug-report') while element metadata carries display
-      // names ('Security Analyst', 'BugReport'). Exact-name matches win across the
-      // full list; otherwise candidates map through the same slug derivation
-      // getElementFilename() uses when saving — normalizeFilename with its
-      // empty-result 'unnamed' fallback — so a reference resolves exactly when it
-      // matches the element's on-disk filename. The fallback applies only to
-      // candidates: a reference that is empty or normalizes to nothing ('', '   ',
-      // '---') can never name a saved file and stays unresolved.
-      const canonicalSlug = (name: string): string => this.normalizeFilename(name) || 'unnamed';
-      const trimmedReference = elementName.trim();
-      const normalizedTarget = trimmedReference ? this.normalizeFilename(trimmedReference) : '';
-      const element =
-        elements.find(e => e.metadata.name === elementName) ??
-        (normalizedTarget
-          ? elements.find(e =>
-              typeof e.metadata.name === 'string' &&
-              canonicalSlug(e.metadata.name) === normalizedTarget
-            )
-          : undefined);
-
-      if (!element) {
-        throw new Error(`${elementType} '${elementName}' not found`);
-      }
-
-      return element;
-  }
-
   private formatActivationElementContent(
-    element: Awaited<ReturnType<ResolvedElementManager['list']>>[number] | Memory,
+    element: ResolvedElement | Memory,
     elementType: string,
     elementName: string,
   ): string {
@@ -2537,11 +2314,12 @@ export class AgentManager extends BaseElementManager<Agent> {
         return `[Manager not found: ${managerName}]`;
       }
 
-      // Get all elements of this type
-      const elements = memoryScope && elementType === 'memories'
-        ? await memoryScope.manager.list({ strictDatabase: true }) : await manager.list();
+      // The reference resolves through the manager's one name rule (exact, folded or slug name;
+      // activates: references use filename slugs, #2432), never a first-match list scan.
+      const element = memoryScope && elementType === 'memories'
+        ? await memoryScope.manager.findByName(elementName) : await manager.findByName(elementName);
       memoryScope?.assertCurrent();
-      const element = this.findActivationElement(elements, elementType, elementName);
+      if (!element) throw new Error(`${elementType} '${elementName}' not found`);
       return this.formatActivationElementContent(element, elementType, elementName);
     } catch (error) {
       if (memoryScope) throw error;
@@ -2898,7 +2676,9 @@ export class AgentManager extends BaseElementManager<Agent> {
     if (attachedIdentity) {
       return attachedIdentity;
     }
-    const resolvedIdentity = await this.storageLayer.findIndexedPath([agent.metadata.name, name]);
+    // The durable identity comes from a certified selection, never from the owner hint.
+    const resolvedIdentity = (await certifyNamedReference(this.nameEvidence, agent.metadata.name)).selected?.reference
+      ?? (name === agent.metadata.name ? undefined : (await certifyNamedReference(this.nameEvidence, name)).selected?.reference);
     if (!resolvedIdentity) {
       throw new Error(`Cannot resolve durable database identity for agent "${name}"`);
     }
@@ -3705,10 +3485,9 @@ export class AgentManager extends BaseElementManager<Agent> {
     });
 
     // 4. Save agent state
-    const sanitizedName = sanitizeInput(params.agentName, 100);
     await this.save(
       agent,
-      this.getAgentSaveTarget(agent, sanitizedName),
+      this.getAgentSaveTarget(agent, params.agentName),
       this.getLifecycleSaveOptions(agent, identity),
     );
 
@@ -3891,12 +3670,11 @@ export class AgentManager extends BaseElementManager<Agent> {
     const completedGoalSnapshot = structuredClone(goal);
 
     // 6. Save agent state
-    const completeSanitizedName = sanitizeInput(params.agentName, 100);
     try {
       await this.persistTerminalGoalState({
         agent,
         agentName: params.agentName,
-        sanitizedName: completeSanitizedName,
+        requestedName: params.agentName,
         goalId: goal.id,
         strictState,
         identity,
@@ -3945,7 +3723,7 @@ export class AgentManager extends BaseElementManager<Agent> {
   private async persistTerminalGoalState(params: {
     agent: Agent;
     agentName: string;
-    sanitizedName: string;
+    requestedName: string;
     goalId: string;
     strictState: boolean;
     stateSnapshot: object;
@@ -3954,11 +3732,11 @@ export class AgentManager extends BaseElementManager<Agent> {
   }): Promise<void> {
     try {
       if (params.strictState) {
-        await this.persistStrictTerminalGoalState(params.agent, params.sanitizedName, params.goalId);
+        await this.persistStrictTerminalGoalState(params.agent, params.requestedName, params.goalId);
       } else {
         await this.save(
           params.agent,
-          this.getAgentSaveTarget(params.agent, params.sanitizedName),
+          this.getAgentSaveTarget(params.agent, params.requestedName),
           this.getLifecycleSaveOptions(params.agent, params.identity),
         );
       }
@@ -3976,10 +3754,10 @@ export class AgentManager extends BaseElementManager<Agent> {
 
   private async persistStrictTerminalGoalState(
     agent: Agent,
-    sanitizedName: string,
+    requestedName: string,
     goalId: string,
   ): Promise<void> {
-    const newVersion = await this.saveAgentStateForRecovery(agent, sanitizedName);
+    const newVersion = await this.saveAgentStateForRecovery(agent, requestedName);
     agent[COMMIT_PERSISTED_VERSION](newVersion);
     agent.markStatePersisted();
     this.synchronizeRecoveryState(agent, newVersion, goalId);
@@ -3988,7 +3766,7 @@ export class AgentManager extends BaseElementManager<Agent> {
   private async archiveTerminalGoalAndShrink(params: {
     agent: Agent;
     agentName: string;
-    sanitizedName: string;
+    requestedName: string;
     goalId: string;
     strictState: boolean;
     stateSnapshot: object;
@@ -4001,7 +3779,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       params.agent[EVICT_TERMINAL_GOAL](params.goalId);
       const newVersion = await this.persistCompactedRecoveryState(
         params.agent,
-        params.sanitizedName,
+        params.requestedName,
         archivedGoalIds,
         archivedGoalSnapshots,
       );
@@ -4038,12 +3816,12 @@ export class AgentManager extends BaseElementManager<Agent> {
 
   private async persistCompactedRecoveryState(
     agent: Agent,
-    sanitizedName: string,
+    requestedName: string,
     archivedGoalIds: string[],
     archivedGoalSnapshots: AgentGoal[],
   ): Promise<number> {
     try {
-      return await this.saveAgentStateForRecovery(agent, sanitizedName);
+      return await this.saveAgentStateForRecovery(agent, requestedName);
     } catch (error) {
       if (!(error instanceof AgentStateReductionRequiredError)) {
         throw error;
@@ -4061,7 +3839,7 @@ export class AgentManager extends BaseElementManager<Agent> {
         stateBeforeEviction.goals,
       );
     }
-    return this.persistCompactedRecoveryState(agent, sanitizedName, archivedGoalIds, archivedGoalSnapshots);
+    return this.persistCompactedRecoveryState(agent, requestedName, archivedGoalIds, archivedGoalSnapshots);
   }
 
   private captureArchivedGoalSnapshot(

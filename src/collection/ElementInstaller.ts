@@ -23,6 +23,7 @@
  */
 
 import * as path from 'node:path';
+import { type ElementManagerLookup, withMemoryManager } from '../elements/ElementManagerLookup.js';
 import { randomUUID } from 'node:crypto';
 import type { GitHubClient } from './GitHubClient.js';
 import type { IElementMetadata } from '../types/elements/IElement.js';
@@ -52,6 +53,7 @@ import type { ISharedPoolInstaller } from '../collection/shared-pool/ISharedPool
 import type { IStorageLayerFactory } from '../storage/IStorageLayerFactory.js';
 import { TenantMemoryOperationProvider, type BoundMemoryOperation } from '../storage/TenantMemoryOperationProvider.js';
 import type { DatabaseTenantMemoryRegistry } from '../storage/DatabaseTenantMemoryRegistry.js';
+import { selectNamedCandidate } from '../elements/base/ElementNameEvidence.js';
 
 /**
  * Result of an element installation operation
@@ -134,6 +136,7 @@ export class ElementInstaller {
     if (this.memoryRegistry) provider.assertRegistry(this.memoryRegistry);
     provider.assertOperation(operation);
     const bound = new ElementInstaller(this.githubClient, { portfolioManager: this.portfolioManager,
+      managerLookup: withMemoryManager(this.managerLookup, () => operation.manager),
       unifiedIndexManager, fileOperations: this.fileOperations, sharedPoolInstaller: this.sharedPoolInstaller,
       storageLayerFactory: this.storageLayerFactory, memoryRegistry: this.memoryRegistry });
     bound.memoryOperation = Object.freeze({ provider, operation });
@@ -160,6 +163,8 @@ export class ElementInstaller {
 
   private readonly githubClient: GitHubClient;
   private readonly portfolioManager: PortfolioManager;
+  /** Local existence is certified by the owning manager, on both backends. */
+  private readonly managerLookup: ElementManagerLookup;
   private readonly baseUrl = 'https://api.github.com/repos/DollhouseMCP/collection/contents';
 
   // Source priority support (Issue #1447)
@@ -194,6 +199,7 @@ export class ElementInstaller {
     githubClient: GitHubClient,
     options: {
       portfolioManager?: PortfolioManager;
+      managerLookup?: ElementManagerLookup;
       unifiedIndexManager?: UnifiedIndexManager;
       fileOperations?: IFileOperationsService;
       sharedPoolInstaller?: ISharedPoolInstaller;
@@ -205,6 +211,9 @@ export class ElementInstaller {
     if (!options.portfolioManager) {
       throw new Error('ElementInstaller requires a PortfolioManager instance');
     }
+    if (!options.managerLookup) {
+      throw new Error('ElementInstaller requires an ElementManagerLookup instance');
+    }
     if (!options.unifiedIndexManager && !options.memoryRegistry) {
       throw new Error('ElementInstaller requires a UnifiedIndexManager instance');
     }
@@ -212,6 +221,7 @@ export class ElementInstaller {
       throw new Error('ElementInstaller requires a FileOperationsService instance');
     }
     this.portfolioManager = options.portfolioManager;
+    this.managerLookup = options.managerLookup;
     this.fixedIndex = options.unifiedIndexManager;
     this.memoryRegistry = options.memoryRegistry;
     this.sourcePriorityConfig = getSourcePriorityConfig();
@@ -611,72 +621,14 @@ export class ElementInstaller {
   }
 
   /**
-   * Check if element exists locally
-   *
-   * ENHANCEMENT (PR #1453): Added optional chaining for robustness
-   *
-   * @param elementName - Name of element to check
-   * @param elementType - Type of element
-   * @returns true if element exists locally
-   * @private
+   * Whether the owning manager certifies that a definition with this name exists locally.
+   * Absence comes only from the manager's certified result; an unreadable or indeterminate
+   * collection propagates so the install never overwrites what it could not see.
    */
   private async checkLocalElement(elementName: string, elementType: ElementType): Promise<boolean> {
-    try {
-      // Use UnifiedIndexManager to search local portfolio
-      const results = await this.unifiedIndexManager.search({
-        query: elementName,
-        includeLocal: true,
-        includeGitHub: false,
-        includeCollection: false,
-        elementType
-      });
-      this.assertMemoryOperation();
-
-      // ENHANCEMENT (PR #1453): Use optional chaining for safer property access
-      // Check if any result matches the element name exactly
-      return results.some(
-        result =>
-          result.source === 'local' &&
-          result.entry.name.toLowerCase() === elementName.toLowerCase()
-      );
-    } catch (error) {
-      this.assertMemoryOperation();
-      if (this.memoryOperation) throw error;
-      // FIX (SonarCloud L511): Log error before fallback to filesystem check
-      // If index check fails, fall back to filesystem check
-      // This is a graceful degradation when the index is unavailable
-      logger.debug('Index check failed, falling back to filesystem check', {
-        elementName,
-        elementType,
-        error: error instanceof Error ? error.message : String(error)
-      });
-
-      try {
-        const elementDir = this.portfolioManager.getElementDir(elementType);
-        let files: string[];
-        try {
-          files = await this.fileOperations.listDirectory(elementDir);
-        } catch {
-          files = [];
-        }
-
-        // Check if any file matches the element name
-        return files.some(file => {
-          const nameWithoutExt = file.replace(/\.(md|yaml|yml)$/, '');
-          return nameWithoutExt.toLowerCase() === elementName.toLowerCase();
-        });
-      } catch (fallbackError) {
-        this.assertMemoryOperation();
-        // FIX (SonarCloud L523): Log fallback error before returning
-        // Both index and filesystem checks failed - assume element doesn't exist
-        logger.debug('Filesystem check also failed, assuming element does not exist', {
-          elementName,
-          elementType,
-          fallbackError: fallbackError instanceof Error ? fallbackError.message : String(fallbackError)
-        });
-        return false;
-      }
-    }
+    const element = await this.managerLookup.managerFor(elementType).findByName(elementName);
+    this.assertMemoryOperation();
+    return element !== undefined;
   }
 
   /**
@@ -720,13 +672,10 @@ export class ElementInstaller {
       });
       this.assertMemoryOperation();
 
-      // ENHANCEMENT (PR #1453): Use optional chaining for safer property access
-      // Find exact match
-      const match = results.find(
-        result =>
-          result.source === 'github' &&
-          result.entry.name.toLowerCase() === elementName.toLowerCase()
-      );
+      // The remote entry is selected by the shared name rule, as portfolio sync selects it.
+      const match = selectNamedCandidate(elementName, results
+        .filter(result => result.source === 'github')
+        .map(result => ({ reference: result.entry.filename ?? result.entry.name, name: result.entry.name, result })))?.result;
 
       if (!match?.entry.githubDownloadUrl) {
         logger.debug('Element not found in GitHub portfolio', {

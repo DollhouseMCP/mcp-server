@@ -1,6 +1,6 @@
 import { logger } from '../../utils/logger.js';
 import { GatekeeperErrorCode } from './GatekeeperTypes.js';
-import type { ElementType, OperationInput } from './types.js';
+import { normalizeMCPAQLElementType, type ElementType, type OperationInput } from './types.js';
 import type { PersistedActivationIdentity } from '../../state/IActivationStateStore.js';
 
 /**
@@ -9,13 +9,16 @@ import type { PersistedActivationIdentity } from '../../state/IActivationStateSt
  * `elementType` (Issue #290). Centralizing the deprecation fallback in
  * one place keeps every call site free of deprecation warnings while
  * preserving backwards compatibility for callers that haven't migrated
- * to the snake_case parameter name.
+ * to the snake_case parameter name. Params-only operations use the same normalized
+ * type for dispatch, policy scope, and exact-reference recovery.
  */
 export function resolveInputElementType(input: OperationInput): ElementType | undefined {
   // Dynamic-key access for the legacy camelCase fallback so neither the
   // TS deprecation lint nor SonarQube flags the intentional backcompat path.
   // Issue #290 — remove when `elementType` is dropped from OperationInput.
-  return input.element_type ?? (input as unknown as Record<string, ElementType | undefined>).elementType;
+  const value = input.element_type ?? (input as unknown as Record<string, ElementType | undefined>).elementType
+    ?? input.params?.element_type;
+  return typeof value === 'string' ? normalizeMCPAQLElementType(value) : undefined;
 }
 
 /**

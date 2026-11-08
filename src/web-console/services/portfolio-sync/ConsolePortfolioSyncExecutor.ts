@@ -1,3 +1,5 @@
+import { visitSequentially } from '../../../utils/visitSequentially.js';
+import { requireCompleteCollection } from '../../../elements/base/CollectionReport.js';
 import * as yaml from 'js-yaml';
 
 import type { SessionContext } from '../../../context/SessionContext.js';
@@ -156,15 +158,15 @@ export class ConsolePortfolioSyncExecutor implements IPortfolioSyncJobExecutor {
     client: GitHubPortfolioContentsClient,
     counters: SyncCounters,
   ): Promise<void> {
-    for (const type of CONSOLE_PORTFOLIO_ELEMENT_TYPES) {
+    await visitSequentially(CONSOLE_PORTFOLIO_ELEMENT_TYPES.values(), async type => {
       const files = await client.listFiles(type);
-      for (const file of files) {
+      await visitSequentially(files.values(), async file => {
         const parsed = await client.readElementFile(file);
-        if (!parsed) continue;
+        if (!parsed) return;
         const existing = await this.options.portfolioStore.findByName(job.userId, type, parsed.canonicalName);
         if (existing) {
           await this.applyRemoteUpdate(job, type, existing, parsed, counters);
-          continue;
+          return;
         }
         await this.options.portfolioStore.create({
           userId: job.userId,
@@ -177,8 +179,8 @@ export class ConsolePortfolioSyncExecutor implements IPortfolioSyncJobExecutor {
           now: this.now(),
         });
         counters.pulled += 1;
-      }
-    }
+      });
+    });
   }
 
   private async applyRemoteUpdate(
@@ -220,16 +222,16 @@ export class ConsolePortfolioSyncExecutor implements IPortfolioSyncJobExecutor {
     client: GitHubPortfolioContentsClient,
     counters: SyncCounters,
   ): Promise<void> {
-    const summaries = await this.options.portfolioStore.listByUser(job.userId);
-    for (const local of summaries) {
+    const summaries = requireCompleteCollection(await this.options.portfolioStore.listByUser(job.userId));
+    await visitSequentially(summaries.values(), async local => {
       const detail = await this.options.portfolioStore.findByName(job.userId, local.type, local.canonicalName);
-      if (!detail) continue;
+      if (!detail) return;
       const path = elementPath(detail.type, detail.canonicalName);
       const remote = await client.getFile(path);
       const serialized = serializePortfolioElement(detail);
       if (remote?.content === serialized) {
         counters.skipped += 1;
-        continue;
+        return;
       }
       if (remote && job.conflictPolicy === 'fail') {
         counters.conflicts += 1;
@@ -237,11 +239,11 @@ export class ConsolePortfolioSyncExecutor implements IPortfolioSyncJobExecutor {
       }
       if (remote && job.conflictPolicy === 'prefer_remote') {
         counters.skipped += 1;
-        continue;
+        return;
       }
       await client.putFile(path, serialized, commitMessage(detail), remote?.sha);
       counters.pushed += 1;
-    }
+    });
   }
 
   private decryptAccessToken(integration: UserIntegrationRecord): string | null {

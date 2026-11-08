@@ -19,15 +19,21 @@ import { elements, elementTags } from '../database/schema/elements.js';
 import type { UserIdResolver } from '../database/UserContext.js';
 import { isSerializationFailure, type DrizzleTx } from '../database/db-utils.js';
 import type { ElementIndexEntry, ManifestDiffResult } from './types.js';
-import { firstIndexedPath } from './IStorageLayer.js';
-import type {
-  DatabaseStorageIdentity,
-  IndexedPathResult,
-  IWritableStorageLayer,
-  ElementWriteMetadata,
-  StorageScanOptions,
-  WriteContentOptions,
+import {
+  firstIndexedPath,
+  type CollectionChangeObservation,
+  type DatabaseStorageIdentity,
+  type IndexedPathResult,
+  type IWritableStorageLayer,
+  type ElementWriteMetadata,
+  type NamedCandidate,
+  type StorageCacheVersion,
+  type StorageScanOptions,
+  type StorageReference,
+  type WriteContentOptions,
+  type FreshCollectionSnapshot,
 } from './IStorageLayer.js';
+import { ELEMENT_FILE_EXTENSIONS, databaseNameCandidates, foldedNameKey, namedCandidateTier, resolveNamedCandidateAmong, slugNameKey } from './ElementNameKeys.js';
 
 /**
  * Canonical key for case/format-insensitive name resolution: lowercase, with
@@ -45,12 +51,28 @@ function canonicalNameKey(value: string): string {
 }
 
 const DATABASE_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+/** A row is addressed by its id: any other reference can name no row (proven absence), never a query error. */
+function assertRowReference(reference: string): void {
+  if (!DATABASE_UUID_PATTERN.test(reference)) {
+    throw Object.assign(new Error(`Element not found: ${reference}`), { code: 'ENOENT' });
+  }
+}
+
 const SERIALIZABLE_DELETE_ATTEMPTS = 3;
 const MAX_INDEX_STATES = 256;
 
 interface DatabaseIndexState {
   nameToIdMap: Map<string, string>;
   idToNameMap: Map<string, string>;
+  /** Indexed names by their selection keys, kept beside nameToIdMap so a lookup reads only its candidates. */
+  namesByFolded: Map<string, Set<string>>;
+  namesBySlug: Map<string, Set<string>>;
+  /** Indexed names by the owner hint's canonical key (getPathByName). */
+  namesByHintKey: Map<string, Set<string>>;
+  /** Insertion order of each indexed name, so candidates keep the index order. */
+  nameOrder: Map<string, number>;
+  nextNameOrder: number;
   lastScanTimestamp: Date | null;
   scanCompleted: boolean;
   activeOperations: number;
@@ -87,7 +109,16 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
 
   // ── IStorageLayer ─────────────────────────────────────────────────
 
-  async scan(_options?: StorageScanOptions): Promise<ManifestDiffResult> {
+  scan(_options?: StorageScanOptions): Promise<ManifestDiffResult> {
+    return this.scanRows(false);
+  }
+
+  /**
+   * One index scan. `full` reads every row even with a warm watermark, so removals are seen. Every
+   * known row a scan returns is reported modified: no updated_at or clock decides that a row is
+   * unchanged (the watermark only narrows the incremental scan's query).
+   */
+  private async scanRows(full: boolean): Promise<ManifestDiffResult> {
     const userId = this.userId;
     const state = this.acquireState(userId);
     const result: ManifestDiffResult = {
@@ -101,13 +132,13 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
     // non-null Date (the boolean alone can't carry that narrowing across the
     // closure, which previously forced a non-null assertion).
     const lastScan = state.lastScanTimestamp;
-    const isFullScan = !lastScan;
+    const isFullScan = full || !lastScan;
 
     // Explicit userId in all queries for defense-in-depth (alongside RLS)
     // and to enable composite index utilization on idx_elements_scan/idx_elements_user_type.
     try {
       const rows = await withUserRead(this.db, userId, async (tx) => {
-        if (lastScan) {
+        if (!isFullScan && lastScan) {
           return tx
             .select({ id: elements.id, name: elements.name, updatedAt: elements.updatedAt })
             .from(elements)
@@ -136,6 +167,9 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
       state.scanCompleted = true;
 
       return result;
+    } catch (cause) {
+      state.lastScanTimestamp = null;
+      throw cause;
     } finally {
       this.releaseState(state);
     }
@@ -148,14 +182,18 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
     isFullScan: boolean,
   ): void {
     const seenIds = new Set<string>();
-
+    // Every row is classified against the live index before any row is applied, so applying one
+    // (a rename that takes another row's old name) never makes a known row look new; the cost is
+    // O(rows), not a copy of the index.
     for (const row of rows) {
-      seenIds.add(row.id);
-      if (state.nameToIdMap.has(row.name)) {
+      if (state.idToNameMap.has(row.id) || state.nameToIdMap.has(row.name)) {
         result.modified.push(row.id);
       } else {
         result.added.push(row.id);
       }
+    }
+    for (const row of rows) {
+      seenIds.add(row.id);
       this.setIndexForState(state, row.name, row.id);
     }
 
@@ -236,38 +274,77 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
     return Array.from(state.nameToIdMap.values());
   }
 
-  findIndexedPath(names: readonly string[]): Promise<string | undefined> {
-    return Promise.resolve(firstIndexedPath(names, name => this.getPathByName(name)));
-  }
-
-  readIndexedPath(names: readonly string[]): Promise<IndexedPathResult> {
+  readIndexedPath(names: readonly string[], options: { candidates?: boolean } = {}): Promise<IndexedPathResult> {
     const state = this.getState();
+    // Every row a name could select is a candidate; a collision is the selector's ambiguity, never
+    // absence. Preferred names are alternatives: the first name with any candidate answers.
+    let candidates: NamedCandidate[] = [];
+    for (const identifier of options.candidates === false ? [] : names) {
+      // Every row any of the text's names could select, ranked together by the caller's selector.
+      const offered = new Map(this.callerNames(identifier).flatMap(name => this.candidatesIn(state, name))
+        .map(candidate => [candidate.reference, candidate]));
+      candidates = [...offered.values()];
+      if (candidates.length) break;
+    }
     return Promise.resolve({
       path: firstIndexedPath(names, name => this.getPathByNameInState(state, name)),
       indexComplete: state.scanCompleted,
-      authoritative: state.scanCompleted,
+      authoritative: state.scanCompleted && state.lastScanTimestamp !== null,
       unindexed: [],
+      failures: new Map(),
+      candidates,
     });
+  }
+
+  /** The rows one identifier could select, read from the precomputed key maps, never the whole index. */
+  private candidatesIn(state: DatabaseIndexState, identifier: string): NamedCandidate[] {
+    const names = new Set<string>([...state.namesByFolded.get(foldedNameKey(identifier)) ?? [],
+      ...state.namesBySlug.get(slugNameKey(identifier)) ?? []]);
+    const exact = state.idToNameMap.get(identifier);
+    if (exact !== undefined) names.add(exact);
+    return [...names]
+      .sort((left, right) => (state.nameOrder.get(left) ?? 0) - (state.nameOrder.get(right) ?? 0))
+      .flatMap(name => {
+        const id = state.nameToIdMap.get(name);
+        return id !== undefined && namedCandidateTier(identifier, { reference: id, name }) !== undefined ? [{ reference: id, name }] : [];
+      });
+  }
+
+  /** Rows are read from the database now; a row is never unreadable at the inventory level. */
+  async readFreshCollection(_options?: { preserveDuplicates?: boolean }): Promise<FreshCollectionSnapshot> {
+    return { entries: await this.listSummaries({ includePublic: false }), unindexed: new Map() };
+  }
+
+  /**
+   * The index's freshness without the summary query. The incremental (updated_at) scan cannot see
+   * a row another process deleted, so a refresh runs the full id scan: one query that reports
+   * removed rows, so their cached instances are evicted and an active reference to one fails closed.
+   * Every known row is reported modified, so every cached instance of the type is evicted before
+   * each policy check.
+   */
+  refreshCollection(_options?: StorageScanOptions): Promise<ManifestDiffResult> {
+    return this.scanRows(true);
+  }
+
+  async readCollection(options?: { includePublic?: boolean }) {
+    const diff = await this.scan();
+    const entries = await this.listSummaries(options);
+    return { entries, unindexed: new Map(), authoritative: true, complete: true, includesPublic: true, diff };
   }
 
   getPathByName(name: string): string | undefined {
     return this.getPathByNameInState(this.getState(), name);
   }
 
+  /** O(1) hint: an exact row, else the one canonical row. PostgreSQL's unique index permits
+   * case/canonical variants (`Agent_Name` and `agent-name`), and a hint cannot choose between
+   * them; readIndexedPath exposes both as candidates and the resolver's selector refuses the name. */
   private getPathByNameInState(state: DatabaseIndexState, name: string): string | undefined {
-    // Preserve exact, case-sensitive row identity first. PostgreSQL's unique
-    // index permits case/canonical variants (for example `Agent_Name` and
-    // `agent-name`), so a folded lookup must never choose one arbitrarily.
     const direct = state.nameToIdMap.get(name);
     if (direct !== undefined) return direct;
-    // The web-console addresses elements by their filename stem (lowercased, with
-    // spaces/underscores hyphenated), which won't match a raw mixed-case index
-    // key like "Meeting-Notes". Fall back to a canonical comparison so resolve
-    // and delete work for any-cased name (only scans on a direct miss).
-    const target = canonicalNameKey(name);
     let match: string | undefined;
-    for (const [key, id] of state.nameToIdMap) {
-      if (canonicalNameKey(key) !== target) continue;
+    for (const key of state.namesByHintKey.get(canonicalNameKey(name)) ?? []) {
+      const id = state.nameToIdMap.get(key);
       if (match !== undefined && match !== id) {
         return undefined;
       }
@@ -403,7 +480,64 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
       this.resolveIdentityInTransaction(tx, userId, elementType, identifier));
   }
 
+  /**
+   * The incremental scan a listing makes (rows written since the last scan), run before a warm miss
+   * is answered, so a row another process created is found. Best effort: it can miss a late commit
+   * or a delete, so it never certifies absence. The rows it applied are returned for the caller to
+   * evict. A cold index is read by the caller's own collection read instead.
+   */
+  async observeCollectionChange(): Promise<CollectionChangeObservation> {
+    const state = this.getState();
+    if (!state.scanCompleted || state.lastScanTimestamp === null) return { changed: false };
+    const diff = await this.scanRows(false);
+    return { changed: diff.added.length > 0 || diff.modified.length > 0, diff };
+  }
+
+  /**
+   * A caller text names a row as written, and a plain filename ('readme.md') also by its
+   * extension-stripped name ('readme'); the shared selector ranks the candidates of both together.
+   */
+  callerNames(text: string): readonly string[] {
+    const extension = ELEMENT_FILE_EXTENSIONS[this.elementType as keyof typeof ELEMENT_FILE_EXTENSIONS] ?? '';
+    return databaseNameCandidates(text, extension);
+  }
+
+  holdsReference(reference: string): boolean | undefined {
+    const state = this.getState();
+    if (state.idToNameMap.has(reference)) return true;
+    return state.scanCompleted && state.lastScanTimestamp !== null ? false : undefined;
+  }
+
+  isExactStorageReference(reference: string, _fileExtension: string): boolean {
+    return DATABASE_UUID_PATTERN.test(reference);
+  }
+
+  readonly cachedInstanceCurrency = 'unverifiable' as const;
+
+  /** Another process may have edited or deleted the row; only a read by id answers. */
+  isCachedReferenceCurrent(_reference: string, _version: StorageCacheVersion | undefined): Promise<boolean> {
+    return Promise.resolve(false);
+  }
+
+  /** A row has no cache version: the database never vouches for a cached row. */
+  readCacheVersion(_reference: string): Promise<StorageCacheVersion | undefined> {
+    return Promise.resolve(undefined);
+  }
+
+  /**
+   * A caller reference on the database is a row id; any other text is a name, which the manager
+   * selects through the shared name rule over its callerNames, exactly as a read
+   * of the same text does. Path syntax never reaches here: the shared caller-text classifier
+   * refuses it first.
+   */
+  resolveReference(reference: string): Promise<StorageReference> {
+    return Promise.resolve(DATABASE_UUID_PATTERN.test(reference)
+      ? { kind: 'identity', storageIdentity: reference, requested: reference }
+      : { kind: 'name', name: reference });
+  }
+
   async readContent(relativePath: string): Promise<string> {
+    assertRowReference(relativePath);
     const row = await withUserRead(this.db, this.userId, async (tx) => {
       // RLS is authoritative for cross-user visibility: the elements_select
       // policy (migration 0005) returns rows where user_id matches the caller
@@ -433,6 +567,7 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
   async readContentForUpdate(relativePath: string): Promise<{
     content: string; identity: DatabaseStorageIdentity; revision: string;
   }> {
+    assertRowReference(relativePath);
     const userId = this.userId;
     const rows = await withUserRead(this.db, userId, tx => tx.select({
       id: elements.id, name: elements.name, content: elements.rawContent,
@@ -446,52 +581,33 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
 
   // ── Protected helpers for subclasses ──────────────────────────────
 
-  /** Resolve exact identities first, then require a unique canonical match. */
+  /**
+   * Resolve a mutation target inside its transaction with the one name rule every read uses: the
+   * shared selector runs over the caller's rows of this type (a row id is its exact reference,
+   * tier 0), and a same-tier collision is ambiguity (EAMBIGUOUS, naming the competing rows),
+   * never an arbitrary row. The rows are fetched whole: no SQL filter is byte-identical to the
+   * folded and slug keys, and the set is one user's rows of one type, which the scan reads anyway.
+   */
   protected async resolveIdentityInTransaction(
     tx: DrizzleTx,
     userId: string,
     elementType: string,
     identifier: string,
   ): Promise<DatabaseStorageIdentity | undefined> {
-    const identifierIsUuid = DATABASE_UUID_PATTERN.test(identifier);
-    const exactPredicate = identifierIsUuid
-      ? or(eq(elements.id, identifier), eq(elements.name, identifier))
-      : eq(elements.name, identifier);
-    const exactRows = await tx
+    const rows = await tx
       .select({ id: elements.id, name: elements.name })
       .from(elements)
-      .where(and(
-        eq(elements.userId, userId),
-        eq(elements.elementType, elementType),
-        exactPredicate,
-      ))
-      .limit(2);
-    if (exactRows.length > 1) {
-      const error = new Error(`Ambiguous element identity: ${identifier}`) as NodeJS.ErrnoException;
+      .where(and(eq(elements.userId, userId), eq(elements.elementType, elementType)));
+    const { selected, competitors } = resolveNamedCandidateAmong(this.callerNames(identifier),
+      rows.map(row => ({ reference: row.id, name: row.name })));
+    if (competitors.length) {
+      const ids = competitors.map(candidate => candidate.reference);
+      const error = new Error(`Ambiguous element identity: ${identifier} (rows ${ids.join(', ')})`) as NodeJS.ErrnoException & { competitors: string[] };
       error.code = 'EAMBIGUOUS';
+      error.competitors = ids;
       throw error;
     }
-    const exact = exactRows.at(0);
-    if (exact) return exact;
-    if (identifierIsUuid) return undefined;
-
-    const canonicalIdentifier = canonicalNameKey(identifier);
-    const canonicalRows = await tx
-      .select({ id: elements.id, name: elements.name })
-      .from(elements)
-      .where(and(
-        eq(elements.userId, userId),
-        eq(elements.elementType, elementType),
-        sql<boolean>`btrim(regexp_replace(regexp_replace(lower(btrim(${elements.name})), '[[:space:]_]+', '-', 'g'), '-+', '-', 'g'), '-') = ${canonicalIdentifier}`,
-      ))
-      .limit(2);
-
-    if (canonicalRows.length > 1) {
-      const error = new Error(`Ambiguous element identity: ${identifier}`) as NodeJS.ErrnoException;
-      error.code = 'EAMBIGUOUS';
-      throw error;
-    }
-    return canonicalRows.at(0);
+    return selected ? { id: selected.reference, name: selected.name } : undefined;
   }
 
   /** Update both forward and reverse index maps. */
@@ -505,8 +621,38 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
     if (oldId && oldId !== id) {
       state.idToNameMap.delete(oldId);
     }
+    // A renamed row no longer holds its previous name, in any name or key map.
+    const previousName = state.idToNameMap.get(id);
+    if (previousName !== undefined && previousName !== name && state.nameToIdMap.get(previousName) === id) {
+      this.unindexName(state, previousName);
+    }
+    if (!state.nameToIdMap.has(name)) this.indexNameKeys(state, name);
     state.nameToIdMap.set(name, id);
     state.idToNameMap.set(id, name);
+  }
+
+  private indexNameKeys(state: DatabaseIndexState, name: string): void {
+    state.nameOrder.set(name, state.nextNameOrder++);
+    for (const [keys, key] of this.nameKeyIndexes(state, name)) {
+      if (key === '') continue;
+      const names = keys.get(key) ?? new Set<string>();
+      names.add(name);
+      keys.set(key, names);
+    }
+  }
+
+  private nameKeyIndexes(state: DatabaseIndexState, name: string): ReadonlyArray<readonly [Map<string, Set<string>>, string]> {
+    return [[state.namesByFolded, foldedNameKey(name)], [state.namesBySlug, slugNameKey(name)], [state.namesByHintKey, canonicalNameKey(name)]];
+  }
+
+  private unindexName(state: DatabaseIndexState, name: string): void {
+    if (!state.nameToIdMap.delete(name)) return;
+    state.nameOrder.delete(name);
+    for (const [keys, key] of this.nameKeyIndexes(state, name)) {
+      const names = keys.get(key);
+      names?.delete(name);
+      if (names?.size === 0) keys.delete(key);
+    }
   }
 
   /** Remove from both forward and reverse index maps. */
@@ -517,14 +663,14 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
   private removeIndexForState(state: DatabaseIndexState, name: string): void {
     const id = state.nameToIdMap.get(name);
     if (id) state.idToNameMap.delete(id);
-    state.nameToIdMap.delete(name);
+    this.unindexName(state, name);
   }
 
   /** Remove from index by ID (reverse lookup). */
   protected removeIndexById(id: string, userId = this.userId): void {
     const state = this.getState(userId);
     const name = state.idToNameMap.get(id);
-    if (name) state.nameToIdMap.delete(name);
+    if (name) this.unindexName(state, name);
     state.idToNameMap.delete(id);
   }
 
@@ -534,6 +680,11 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
       state = {
         nameToIdMap: new Map<string, string>(),
         idToNameMap: new Map<string, string>(),
+        namesByFolded: new Map<string, Set<string>>(),
+        namesBySlug: new Map<string, Set<string>>(),
+        namesByHintKey: new Map<string, Set<string>>(),
+        nameOrder: new Map<string, number>(),
+        nextNameOrder: 0,
         lastScanTimestamp: null,
         scanCompleted: false,
         activeOperations: 0,

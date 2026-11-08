@@ -36,7 +36,10 @@ jest.unstable_mockModule('../../../src/cache/APICache.js', () => ({
 
 // Import types and non-mocked modules
 import { ElementType } from '../../../src/portfolio/types.js';
+import { ElementReadError } from '../../../src/elements/base/ElementReadError.js';
 import type { GitHubPortfolioIndex } from '../../../src/portfolio/GitHubPortfolioIndexer.js';
+import { UnifiedIndexManager } from '../../../src/portfolio/UnifiedIndexManager.js';
+import { PerformanceMonitor } from '../../../src/utils/PerformanceMonitor.js';
 
 // Create a mock TokenManager instance
 const mockTokenManagerInstance = {
@@ -88,6 +91,7 @@ describe('GitHubPortfolioIndexer', () => {
   const originalGraphQLEnv = process.env.DOLLHOUSE_GITHUB_GRAPHQL;
 
   beforeEach(() => {
+    jest.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('---\nname: test-persona\n---\nReadable persona content.'));
     delete process.env.DOLLHOUSE_GITHUB_GRAPHQL;
     // Clear mocks
     mockFetchFromGitHub.mockClear();
@@ -101,6 +105,7 @@ describe('GitHubPortfolioIndexer', () => {
   });
 
   afterEach(() => {
+    jest.restoreAllMocks();
     jest.clearAllMocks();
     if (originalGraphQLEnv === undefined) {
       delete process.env.DOLLHOUSE_GITHUB_GRAPHQL;
@@ -180,7 +185,7 @@ describe('GitHubPortfolioIndexer', () => {
       
       const stats = indexer.getCacheStats();
       expect(stats.hasCachedData).toBe(false);
-      expect(stats.lastFetch).toBe(null);
+      expect(stats.lastFetch).toBeNull();
     });
   });
 
@@ -237,21 +242,14 @@ describe('GitHubPortfolioIndexer', () => {
       const rateLimitError = new Error('GitHub API rate limit exceeded');
       mockFetchFromGitHub.mockRejectedValue(rateLimitError);
 
-      const result = await indexer.getIndex();
-
-      // Should return empty index on rate limit
-      expect(result.totalElements).toBe(0);
-      expect(result.username).toBe('unknown');
+      await expect(indexer.getIndex()).rejects.toBeInstanceOf(ElementReadError);
     });
 
     it('should handle authentication errors', async () => {
       const authError = new Error('GitHub authentication failed');
       mockFetchFromGitHub.mockRejectedValue(authError);
 
-      const result = await indexer.getIndex();
-
-      // Should return empty index on auth failure
-      expect(result.totalElements).toBe(0);
+      await expect(indexer.getIndex()).rejects.toBeInstanceOf(ElementReadError);
     });
 
     it('should handle non-existent portfolio repository', async () => {
@@ -422,7 +420,61 @@ invalid yaml here
   });
 
   describe('Error Handling', () => {
-    it('should return stale cache on fetch failure', async () => {
+    it('propagates the user cache binding refusal without selecting the system cache', async () => {
+      const failure = new Error('User context missing');
+      const bound = new GitHubPortfolioIndexer(mockPortfolioRepoManager as any, () => { throw failure; });
+      await expect(bound.getIndex()).rejects.toBe(failure);
+      expect(mockFetchFromGitHub).not.toHaveBeenCalled();
+    });
+
+    it('reports real producer refresh failure through unified search', async () => {
+      mockFetchFromGitHub.mockRejectedValue(new Error('Network unavailable'));
+      const unified = new UnifiedIndexManager({ portfolioIndexManager: {} as any,
+        githubIndexer: indexer, collectionIndexCache: {} as any, performanceMonitor: new PerformanceMonitor() });
+      try {
+        expect(await unified.searchReport({ query: 'policy', includeLocal: false, includeGitHub: true }))
+          .toMatchObject({ complete: false, items: [], failures: expect.arrayContaining([expect.objectContaining({ reference: 'github' })]) });
+      } finally { unified.dispose(); }
+    });
+
+    it('reports a per-type REST failure without publishing a fresh index', async () => {
+      mockCheckPortfolioExists.mockResolvedValue(true);
+      mockFetchFromGitHub.mockImplementation(async url => {
+        if (url === '/user') return { login: 'testuser' };
+        if (url.endsWith('/commits/HEAD')) return { sha: 'head', commit: { committer: { date: '2026-10-28T00:00:00Z' } } };
+        if (url.endsWith('/contents/skills')) throw new Error('Skill directory unavailable');
+        if (url.includes('/contents/')) return [];
+        return {};
+      });
+      const report = await indexer.getIndexReport(true);
+      expect(report).toMatchObject({ complete: false, failures: [expect.objectContaining({ reference: 'skills' })] });
+      expect(indexer.getCacheStats().lastFetch).toBeNull();
+      expect(indexer.getCacheStats().hasCachedData).toBe(false);
+      await expect(indexer.getIndex(true)).rejects.toBeInstanceOf(ElementReadError);
+    });
+
+    it('reports a per-file content failure without publishing a fresh index', async () => {
+      mockCheckPortfolioExists.mockResolvedValue(true);
+      const file = { type: 'file', name: 'broken.md', path: 'skills/broken.md', sha: 'f1', size: 120,
+        html_url: 'https://github.com/testuser/dollhouse-portfolio/blob/main/skills/broken.md',
+        download_url: 'https://raw.githubusercontent.com/testuser/dollhouse-portfolio/main/skills/broken.md' };
+      mockFetchFromGitHub.mockImplementation(async url => {
+        if (url === '/user') return { login: 'testuser' };
+        if (url.endsWith('/commits/HEAD')) return { sha: 'head', commit: { committer: { date: '2026-10-28T00:00:00Z' } } };
+        if (url.endsWith('/contents/skills')) return [file];
+        if (url.includes('/contents/')) return [];
+        return {};
+      });
+      (globalThis.fetch as jest.Mock).mockImplementation(async () => new Response('unavailable', { status: 503 }));
+      const report = await indexer.getIndexReport(true);
+      expect(report).toMatchObject({ complete: false, failures: [expect.objectContaining({ reference: 'skills/broken.md' })] });
+      expect(report.items[0].elements.get(ElementType.SKILL)).toEqual([]);
+      expect(indexer.getCacheStats().lastFetch).toBeNull();
+      expect(indexer.getCacheStats().hasCachedData).toBe(false);
+      await expect(indexer.getIndex(true)).rejects.toBeInstanceOf(ElementReadError);
+    });
+
+    it('reports stale cache with failed refresh evidence and leaves its timestamp stale', async () => {
       // Setup stale cache
       const staleCache: GitHubPortfolioIndex = {
         username: 'testuser',
@@ -438,24 +490,20 @@ invalid yaml here
       // Mock fetch failure
       mockFetchFromGitHub.mockRejectedValue(new Error('Network error'));
 
-      const result = await indexer.getIndex();
-
-      expect(result).toBe(staleCache);
-      expect(result.totalElements).toBe(5);
+      const result = await indexer.getIndexReport();
+      expect(result).toMatchObject({ complete: false, items: [staleCache], failures: [expect.objectContaining({ reference: 'github' })] });
+      expect(indexer.getCacheStats().isStale).toBe(true);
+      await expect(indexer.getIndex()).rejects.toBeInstanceOf(ElementReadError);
     });
 
-    it('should return empty index as last resort', async () => {
+    it('refuses a failed fetch without cached evidence', async () => {
       // No cache available
       setIndexerCache(indexer, null, null);
       
       // Mock fetch failure
       mockFetchFromGitHub.mockRejectedValue(new Error('Network error'));
 
-      const result = await indexer.getIndex();
-
-      expect(result.totalElements).toBe(0);
-      expect(result.username).toBe('unknown');
-      expect(result.elements.size).toBe(6); // All element types initialized
+      await expect(indexer.getIndex()).rejects.toBeInstanceOf(ElementReadError);
     });
   });
 

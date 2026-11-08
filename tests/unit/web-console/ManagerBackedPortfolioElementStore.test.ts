@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import yaml from 'js-yaml';
-import { afterEach, describe, expect, it } from '@jest/globals';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import { ElementMissingError, ElementUnreadableError } from '../../../src/elements/base/ElementReadError.js';
 import type { MemoryManager } from '../../../src/elements/memories/MemoryManager.js';
 
 import type { ElementValidationResult, IElement } from '../../../src/types/elements/IElement.js';
@@ -13,6 +14,7 @@ import {
   ManagerBackedPortfolioElementStore,
   PortfolioElementAlreadyExistsError,
   PortfolioElementVersionConflictError,
+  PortfolioElementUnreadableError,
   type ConsolePortfolioElementType,
   type ManagerBackedPortfolioManagers,
 } from '../../../src/web-console/index.js';
@@ -49,6 +51,30 @@ describe('ManagerBackedPortfolioElementStore', () => {
       status: 400, code: 'invalid_request', detail: 'tags must contain at most 50 entries',
     });
   });
+  it.each([undefined, 'integration:github'])('preserves unknown definition failures in tag view %s', async tag => {
+    const manager = new FakeManager(SKILLS_TYPE, [{ metadata: { name: 'Healthy', description: 'Readable skill' }, body: 'Healthy instructions.' }]);
+    const items = await manager.list();
+    const error = new ElementUnreadableError('Definition storage unavailable');
+    jest.spyOn(manager, 'listReport').mockResolvedValue({ items, complete: false,
+      failures: [{ reference: 'broken.md', error }] } as any);
+    const store = new ManagerBackedPortfolioElementStore({ managers: managersWith(manager, SKILLS_TYPE),
+      getCurrentUserId: () => USER_ID });
+    const report = await store.listByUser(USER_ID, { type: SKILLS_TYPE, tag });
+    expect(report.items.map(item => item.name)).toEqual(tag ? [] : ['Healthy']);
+    expect(report.complete).toBe(false);
+    expect(report.failures).toContainEqual(expect.objectContaining({ reference: 'broken.md', error }));
+  });
+  it('retains typed absence when a listed skill vanishes before its snapshot read', async () => {
+    const manager = new FakeManager(SKILLS_TYPE, [{ metadata: { name: 'Vanished', description: 'fixture' }, body: 'Instructions' }]);
+    jest.spyOn(manager, 'findForUpdate').mockResolvedValue(undefined);
+    const store = new ManagerBackedPortfolioElementStore({ managers: managersWith(manager, SKILLS_TYPE),
+      getCurrentUserId: () => USER_ID });
+    const report = await store.listByUser(USER_ID, { type: SKILLS_TYPE });
+    expect(report.items).toEqual([]);
+    expect(report.complete).toBe(false);
+    expect(report.failures[0].error).toBeInstanceOf(ElementMissingError);
+  });
+
   it('projects manager elements with content-hash concurrency metadata', async () => {
     const manager = new FakeManager(SKILLS_TYPE, [{
       metadata: {
@@ -74,7 +100,7 @@ describe('ManagerBackedPortfolioElementStore', () => {
     });
   });
 
-  it('lists an element that fails content validation as invalid instead of failing the whole list', async () => {
+  it('reports each content failure once and only for matching tags', async () => {
     const manager = new FakeManager(SKILLS_TYPE, [
       {
         metadata: { name: 'Good Skill', description: 'reviews code', tags: ['ok'], modified: '2026-06-01T12:00:00.000Z' },
@@ -96,11 +122,18 @@ describe('ManagerBackedPortfolioElementStore', () => {
       getCurrentUserId: () => USER_ID,
     });
 
-    const list = await store.listByUser(USER_ID);
+    const report = await store.listByUser(USER_ID);
+    const list = report.items;
+    expect(report.complete).toBe(false);
+    expect(report.failures).toEqual([expect.objectContaining({ reference: 'Threat Modeling' })]);
 
-    expect(list).toHaveLength(2);
+    expect(list).toHaveLength(1);
     expect(list.find(record => record.name === 'Good Skill')?.validationStatus).toBe('valid');
-    expect(list.find(record => record.name === 'Threat Modeling')?.validationStatus).toBe('invalid');
+    expect(list.find(record => record.name === 'Threat Modeling')).toBeUndefined();
+    expect(await store.listByUser(USER_ID, { tag: 'ok' })).toMatchObject({ complete: true, failures: [],
+      items: [expect.objectContaining({ name: 'Good Skill' })] });
+    expect(await store.listByUser(USER_ID, { tag: 'security' })).toMatchObject({ complete: false, items: [],
+      failures: [expect.objectContaining({ reference: 'Threat Modeling' })] });
   });
 
   it('fails closed when the explicit user and ambient manager user differ', async () => {
@@ -140,6 +173,16 @@ describe('ManagerBackedPortfolioElementStore', () => {
       tags: [],
       now: NOW,
     })).resolves.toMatchObject({ canonicalName: 'valid skill' });
+  });
+
+  it('refuses a save it cannot read back instead of returning the pre-save record', async () => {
+    const manager = new FakeManager(SKILLS_TYPE);
+    const store = new ManagerBackedPortfolioElementStore({ managers: managersWith(manager, SKILLS_TYPE), getCurrentUserId: () => USER_ID });
+    // The save reports success, but storage holds nothing the read-back can find (removed concurrently).
+    jest.spyOn(manager, 'save').mockResolvedValue(undefined);
+    await expect(store.create({ userId: USER_ID, type: SKILLS_TYPE, name: 'Vanishing Skill', displayName: 'Vanishing Skill',
+      metadata: { description: 'Saved then gone' }, content: 'content', tags: [], now: NOW }))
+      .rejects.toBeInstanceOf(PortfolioElementUnreadableError);
   });
 
   it('does not translate an unrelated manager save failure into a conflict', async () => {
@@ -202,7 +245,7 @@ describe('ManagerBackedPortfolioElementStore', () => {
       store.create(elementInput('ensembles', 'Real Ensemble', '', { description: 'Ensemble description', elements: [] })),
     ]);
 
-    const records = await store.listByUser(USER_ID);
+    const { items: records } = await store.listByUser(USER_ID);
 
     expect(records).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'personas', name: 'Real Persona', contentHash: expect.stringMatching(/^[a-f0-9]{64}$/u) }),
@@ -327,6 +370,28 @@ describe('ManagerBackedPortfolioElementStore', () => {
   });
 });
 
+describe('ManagerBackedPortfolioElementStore delete', () => {
+  const cleanupDirs: string[] = [];
+  afterEach(() => {
+    for (const dir of cleanupDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('deletes exactly the element whose hash it verified, by its storage reference, never by its name again', async () => {
+    const store = createRealStore(cleanupDirs);
+    const skills = (store as any).options.managers.skills;
+    const created = await store.create(elementInput('skills', 'Verified Skill', 'Skill instructions', { description: 'Verified description' }));
+    const current = await store.findByName(USER_ID, 'skills', created.canonicalName);
+    const byName = jest.spyOn(skills, 'delete');
+    const resolved = jest.spyOn(skills, 'deleteResolved');
+    await store.delete({ userId: USER_ID, type: 'skills', canonicalName: created.canonicalName,
+      expectedVersion: current?.version ?? 1, expectedContentHash: current?.contentHash, now: NOW });
+    expect(byName).not.toHaveBeenCalled();
+    expect(resolved).toHaveBeenCalledWith(expect.objectContaining({ kind: 'element', storageIdentity: 'verified-skill.md',
+      element: expect.objectContaining({ metadata: expect.objectContaining({ name: 'Verified Skill' }) }) }));
+    await expect(store.findByName(USER_ID, 'skills', created.canonicalName)).resolves.toBeNull();
+  });
+});
+
 function createRealStore(cleanupDirs: string[]): ManagerBackedPortfolioElementStore {
   return createRealStoreWithMemoryManager(cleanupDirs).store;
 }
@@ -402,6 +467,10 @@ class FakeManager {
     return [...this.elements.values()];
   }
 
+  async listReport() {
+    return { items: await this.list(), failures: [], complete: true };
+  }
+
   async findByName(name: string): Promise<FakeElement | undefined> {
     await Promise.resolve();
     return this.elements.get(canonical(name));
@@ -433,6 +502,15 @@ class FakeManager {
   async delete(path: string): Promise<void> {
     await Promise.resolve();
     this.elements.delete(canonical(path.replace(/\.[^.]+$/u, '')));
+  }
+
+  storageReferenceOf(element: FakeElement): string {
+    return `${canonical(element.metadata.name)}.md`;
+  }
+
+  async deleteResolved(target: { storageIdentity: string }) {
+    await this.delete(target.storageIdentity);
+    return { storageIdentity: target.storageIdentity, notices: [] };
   }
 
   getFileExtension(): string {

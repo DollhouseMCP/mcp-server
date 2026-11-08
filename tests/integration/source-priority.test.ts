@@ -137,13 +137,16 @@ describe('Source Priority Integration Tests', () => {
       // Index is automatically built on search
 
       // Action: Search with includeAll
-      const results = await unifiedIndex.search({
+      const report = await unifiedIndex.searchReport({
         query: 'test',
         includeLocal: true,
         includeGitHub: true,
         includeCollection: true,
         includeAll: true
       });
+      const results = report.items;
+      expect(report.complete).toBe(false);
+      expect(report.failures.map(failure => failure.reference)).toEqual(expect.arrayContaining(['github', 'collection']));
 
       // Assert: Search checked all enabled sources
       // At minimum, local results should be present
@@ -209,7 +212,7 @@ describe('Source Priority Integration Tests', () => {
 
       // Assert: No results, but no error
       expect(results).toEqual([]);
-      expect(results.length).toBe(0);
+      expect(results).toHaveLength(0);
     });
 
     it('should handle search with multiple element types', async () => {
@@ -300,13 +303,16 @@ describe('Source Priority Integration Tests', () => {
       // Index is automatically built on search
 
       // Action: Search with stopOnFirst: false
-      const results = await unifiedIndex.search({
+      const report = await unifiedIndex.searchReport({
         query: 'test',
         includeLocal: true,
         includeGitHub: true,
         includeCollection: false,
         includeAll: true
       });
+      const results = report.items;
+      expect(report.complete).toBe(false);
+      expect(report.failures.map(failure => failure.reference)).toContain('github');
 
       // Assert: Multiple sources searched
       expect(results.length).toBeGreaterThan(0);
@@ -411,7 +417,7 @@ describe('Source Priority Integration Tests', () => {
 
       // Assert: No results (no sources to search)
       expect(results).toEqual([]);
-      expect(results.length).toBe(0);
+      expect(results).toHaveLength(0);
     });
 
     it('should handle gracefully when no elements exist in any source', async () => {
@@ -425,7 +431,7 @@ describe('Source Priority Integration Tests', () => {
 
       // Assert: Empty results, no error
       expect(results).toEqual([]);
-      expect(results.length).toBe(0);
+      expect(results).toHaveLength(0);
     });
   });
 });

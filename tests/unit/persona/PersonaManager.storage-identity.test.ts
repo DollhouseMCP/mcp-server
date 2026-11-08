@@ -1,4 +1,3 @@
-import { publishCachedElement } from '../../helpers/cache-publication.js';
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { createIntegrationContainer } from '../../helpers/integration-container.js';
 import { PersonaManager } from '../../../src/persona/PersonaManager.js';
@@ -34,7 +33,7 @@ describe('PersonaManager lookup order with mocked lookups', () => {
     const byIdentity = jest.spyOn(manager, 'findByStorageIdentity').mockResolvedValue(undefined);
     const byName = jest.spyOn(manager, 'findByName').mockResolvedValue(persona);
     expect(await manager.findPersonaAsync('guard')).toBe(persona);
-    expect(byName).toHaveBeenCalledWith('guard');
+    expect(byName).toHaveBeenCalledWith('guard', {});
     expect(byIdentity).toHaveBeenCalledWith('guard');
     expect(byIdentity.mock.invocationCallOrder[0]).toBeLessThan(byName.mock.invocationCallOrder[0]);
   });
@@ -44,7 +43,7 @@ describe('PersonaManager lookup order with mocked lookups', () => {
     const byName = jest.spyOn(manager, 'findByName').mockResolvedValue(undefined);
     await expect(manager.findPersonaAsync(identity)).resolves.toBeUndefined();
     expect(byIdentity).toHaveBeenCalledWith(identity);
-    expect(byName).toHaveBeenCalledWith(identity);
+    expect(byName).toHaveBeenCalledWith(identity, {});
   });
 
   it('keeps active-persona lookup sequential and returns activation order', async () => {
@@ -66,19 +65,17 @@ describe('PersonaManager lookup order with mocked lookups', () => {
     const result = manager.resolveActivePersonas();
     await started;
     try {
-      expect(lookup.mock.calls).toEqual([['first.md']]);
+      expect(lookup.mock.calls.map(([reference]) => [reference])).toEqual([['first.md']]);
     } finally { release(); }
     expect(await result).toEqual([first, second]);
-    expect(lookup.mock.calls).toEqual([['first.md'], ['second.md']]);
+    expect(lookup.mock.calls.map(([reference]) => [reference])).toEqual([['first.md'], ['second.md']]);
   });
 
   async function blockFirstActiveLookup() {
-    const personas = ['first', 'second', 'third'].map(name => {
-      const persona = new PersonaElement({ name }, `${name} instructions.`, `${name}.md`,
-        env.container.resolve('MetadataService'));
-      publishCachedElement(manager, persona, persona.filename);
-      return persona;
-    });
+    // Saved through the manager, so each persona has a definition the read contract can serve.
+    const personas = ['first', 'second', 'third'].map(name => new PersonaElement({ name }, `${name} instructions.`, `${name}.md`,
+      env.container.resolve('MetadataService')));
+    for (const persona of personas) await manager.save(persona, persona.filename);
     await manager.activatePersona('first');
     await manager.activatePersona('second');
     let entered!: () => void;
@@ -100,7 +97,7 @@ describe('PersonaManager lookup order with mocked lookups', () => {
       expect(manager.deactivatePersona('second').success).toBe(true);
     } finally { release(); }
     expect(await result).toEqual([personas[0]]);
-    expect(lookup.mock.calls).toEqual([['first.md']]);
+    expect(lookup.mock.calls.map(([reference]) => [reference])).toEqual([['first.md']]);
   });
 
   it('includes a live-set member activated while the first lookup is blocked', async () => {
@@ -109,7 +106,7 @@ describe('PersonaManager lookup order with mocked lookups', () => {
       expect((await manager.activatePersona('third')).success).toBe(true);
     } finally { release(); }
     expect(await result).toEqual(personas);
-    expect(lookup.mock.calls).toEqual([['first.md'], ['third'], ['second.md'], ['third.md']]);
+    expect(lookup.mock.calls.map(([reference]) => [reference])).toEqual([['first.md'], ['third'], ['second.md'], ['third.md']]);
   });
 });
 
@@ -121,7 +118,7 @@ describe('Invalid file storage identities', () => {
         const manager = env.container.resolve<PersonaManager>('PersonaManager');
         await expect(manager.findByStorageIdentity(identifier)).rejects.toThrow();
         const byName = jest.spyOn(manager, 'findByName').mockResolvedValue(undefined);
-        await expect(manager.findPersonaAsync(identifier)).resolves.toBeUndefined();
+        await expect(manager.findPersonaAsync(identifier)).rejects.toThrow(/persona path/i);
         expect(byName).not.toHaveBeenCalled();
         expect(manager.getCacheMissMetrics().diskFailures).toBe(1);
       } finally { jest.restoreAllMocks(); await env.dispose(); }

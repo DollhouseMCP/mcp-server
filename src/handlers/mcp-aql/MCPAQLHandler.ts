@@ -1,3 +1,7 @@
+import { clientReadFailureReason } from '../../elements/base/ElementReadError.js';
+import type { PolicyElement } from '../../services/policy/ActivePolicyCollector.js';
+import { requireCompletePolicyReport, type PolicyReport } from '../../services/policy/PolicyReport.js';
+import { PolicyUnavailableError } from '../../services/policy/PolicyUnavailableError.js';
 import { integrationOperationError } from './IntegrationOperationResult.js';
 import { integrationInvocationContext, type IntegrationInvocationContext } from '../../security/IntegrationEntryPoint.js';
 import { isIntegrationPolicyOperation } from './IntegrationManagementOperations.js';
@@ -46,6 +50,7 @@ import type { MemoryUpgradeLifecycle } from '../../lifecycle/MemoryUpgradeLifecy
 import { MemorySaveHandler, type SaveContextScope } from './MemorySaveHandler.js';
 import { buildOperationSummary } from './OperationSummary.js';
 import { applyFieldSelection } from './FieldSelection.js';
+import { visitSequentially } from '../../utils/visitSequentially.js';
 import { initializeNormalizers } from './normalizers/index.js';
 import {
   type OperationInput,
@@ -432,21 +437,6 @@ export interface HandlerRegistry {
 }
 
 /**
- * MCPAQLHandler - Unified entry point for all MCP-AQL operations
- *
- * This handler implements the thin resolver pattern:
- * 1. Validates that operations are called via correct CRUD endpoints
- * 2. Routes operations to their handler references
- * 3. Dispatches to actual handler methods
- * 4. Returns standardized OperationResult
- *
- * DESIGN RATIONALE:
- * - Single Responsibility: Only orchestrates, delegates actual work
- * - Dependency Inversion: Depends on HandlerRegistry interface
- * - Interface Segregation: HandlerRegistry exposes only what's needed
- * - Open/Closed: New operations added to router, not this class
- */
-/**
  * Minimal interface for correlation ID retrieval.
  * Keeps coupling loose — only requires what MCPAQLHandler actually needs.
  * Issue #301: Request correlation support.
@@ -464,6 +454,21 @@ interface MemoryCallerView {
 
 export type TenantHandlerRegistry = Omit<HandlerRegistry, 'memoryManager'>;
 
+/**
+ * MCPAQLHandler - Unified entry point for all MCP-AQL operations
+ *
+ * This handler implements the thin resolver pattern:
+ * 1. Validates that operations are called via correct CRUD endpoints
+ * 2. Routes operations to their handler references
+ * 3. Dispatches to actual handler methods
+ * 4. Returns standardized OperationResult
+ *
+ * DESIGN RATIONALE:
+ * - Single Responsibility: Only orchestrates, delegates actual work
+ * - Dependency Inversion: Depends on HandlerRegistry interface
+ * - Interface Segregation: HandlerRegistry exposes only what's needed
+ * - Open/Closed: New operations added to router, not this class
+ */
 export class MCPAQLHandler {
   private readonly handlers: TenantHandlerRegistry;
   readonly operations: OperationRegistry;
@@ -794,43 +799,18 @@ export class MCPAQLHandler {
   private async getActiveElements(sessionId?: string, handlers: HandlerRegistry = this.fixedHandlers): Promise<ActiveElement[]> {
     try {
       const rawElements = sessionId
-        ? await handlers.elementCRUD.getPolicyElementsForReport(
+        ? requireCompletePolicyReport(await handlers.elementCRUD.getPolicyElementsForReport(
           sessionId,
           { allowCoalescing: false },
-        )
+        ))
         : await handlers.elementCRUD.getActiveElementsForPolicy({ allowCoalescing: false });
-      const activeElements: ActiveElement[] = rawElements.map((el) => ({
-        type: el.type,
-        name: el.name,
-        metadata: {
-          name: el.name,
-          description: el.metadata.description as string | undefined,
-          gatekeeper: el.metadata.gatekeeper as ActiveElement['metadata']['gatekeeper'] ?? undefined,
-          ...this.copyGatekeeperDiagnostics(el.metadata),
-        },
-      }));
-
-      // Issue #449: Include executing agents with gatekeeper policies
-      if (!sessionId) {
-        for (const [, agentEntry] of this.executingAgents) {
-          activeElements.push({
-            type: 'agent',
-            name: agentEntry.name,
-            executionIdentity: agentEntry.identity,
-            metadata: {
-              name: agentEntry.name,
-              gatekeeper: agentEntry.metadata.gatekeeper as ActiveElement['metadata']['gatekeeper'],
-            },
-          });
-        }
-      }
-
-      return activeElements;
+      return this.toActivePolicyElements(rawElements, sessionId);
     } catch (error) {
       logger.warn('Failed to gather active elements for Gatekeeper policy evaluation', { error, sessionId });
-      throw new Error(
+      if (error instanceof PolicyUnavailableError) throw error;
+      throw new PolicyUnavailableError(
         `Failed to gather active elements for Gatekeeper policy evaluation: ${
-          error instanceof Error ? error.message : String(error)
+          clientReadFailureReason(error)
         }`,
         { cause: error instanceof Error ? error : undefined },
       );
@@ -848,10 +828,10 @@ export class MCPAQLHandler {
     return result;
   }
 
-  private async getPolicyReportElements(sessionId?: string, handlers: HandlerRegistry = this.fixedHandlers): Promise<ActiveElement[]> {
+  private async getPolicyReportElements(sessionId?: string, handlers: HandlerRegistry = this.fixedHandlers): Promise<PolicyReport<ActiveElement>> {
     try {
       const rawElements = await handlers.elementCRUD.getPolicyElementsForReport(sessionId);
-      return rawElements.map((el) => ({
+      const items = rawElements.items.map((el) => ({
         type: el.type,
         name: el.name,
         metadata: {
@@ -864,9 +844,10 @@ export class MCPAQLHandler {
             : {}),
         },
       }));
+      return { ...rawElements, items };
     } catch (error) {
       logger.warn('Failed to gather policy elements for dashboard reporting', { error, sessionId });
-      return sessionId ? [] : this.getActiveElements(undefined, handlers);
+      return { items: [], complete: false, failures: [{ type: 'collection', reason: clientReadFailureReason(error) }] };
     }
   }
 
@@ -1033,9 +1014,9 @@ export class MCPAQLHandler {
       if (identityError) return this.failure(identityError, startTime);
 
       const view = this.memoryProvider ? await this.captureMemoryView() : undefined;
-      const gatekeeperFailure = await this.enforceOperationGatekeeper(parsedInput, endpoint, startTime, view?.handlers);
+      const gatekeeperResult = await this.enforceOperationGatekeeper(parsedInput, endpoint, startTime, view?.handlers);
       view?.operation.assertCurrent();
-      if (gatekeeperFailure) return gatekeeperFailure;
+      if (gatekeeperResult.failure) return gatekeeperResult.failure;
 
       // Step 3: Route operation to handler reference
       const route = this.operations.getRoute(operation);
@@ -1048,7 +1029,11 @@ export class MCPAQLHandler {
       const mergedParams = route.implicitParams
         ? { ...route.implicitParams, ...params }
         : params ?? {};
-      const rawData = await this.dispatch(route.handler, {
+      const rawData = gatekeeperResult.recovery
+        ? await (view?.handlers ?? this.fixedHandlers).elementCRUD.clearActivationReference(
+          gatekeeperResult.recovery.type, gatekeeperResult.recovery.key, gatekeeperResult.recovery.reason,
+        )
+        : await this.dispatch(route.handler, {
         operation,
         elementType,
         params: mergedParams,
@@ -1100,28 +1085,87 @@ export class MCPAQLHandler {
     endpoint: CRUDEndpoint,
     startTime: number,
     handlers: HandlerRegistry = this.fixedHandlers,
-  ): Promise<OperationFailure | null> {
+  ): Promise<{ failure?: OperationFailure; recovery?: { type: string; key: string; reason: string } }> {
     const { operation, params } = input;
     const elementType = resolveInputElementType(input);
     if (!env.DOLLHOUSE_GATEKEEPER_ENABLED) {
       this.gatekeeper.validateRoute(operation, endpoint, this.operations);
-      return null;
+      return {};
     }
 
     // Recovery infrastructure must remain reachable when policy collection fails.
     const skipElementPolicies = isGatekeeperInfraOperation(operation);
-    const activeElements = skipElementPolicies ? [] : await this.getActiveElements(undefined, handlers);
+    const policies = skipElementPolicies ? { elements: [] } : await this.getOperationPolicyElements(input, handlers);
     const decision = this.gatekeeper.enforce({
       operation,
       endpoint,
       elementType,
-      activeElements,
+      activeElements: policies.elements,
       skipElementPolicies,
     }, this.operations);
 
     this.recordGatekeeperDecision(decision);
     this.handleDeniedGatekeeperDecision(decision, operation, endpoint, elementType, params, handlers);
-    return this.blockGatekeeperPolicyEdit(decision, operation, elementType, params, startTime);
+    return {
+      failure: this.blockGatekeeperPolicyEdit(decision, operation, elementType, params, startTime) ?? undefined,
+      recovery: policies.recovery,
+    };
+  }
+
+
+  private toActivePolicyElements(rawElements: PolicyElement[], sessionId?: string): ActiveElement[] {
+    const activeElements: ActiveElement[] = rawElements.map((el) => ({
+      type: el.type,
+      name: el.name,
+      metadata: {
+        name: el.name,
+        description: el.metadata.description as string | undefined,
+        gatekeeper: el.metadata.gatekeeper as ActiveElement['metadata']['gatekeeper'] ?? undefined,
+        ...this.copyGatekeeperDiagnostics(el.metadata),
+      },
+    }));
+
+    // Issue #449: Include executing agents with gatekeeper policies
+    if (!sessionId) {
+      for (const [, agentEntry] of this.executingAgents) {
+        activeElements.push({
+          type: 'agent',
+          name: agentEntry.name,
+          executionIdentity: agentEntry.identity,
+          metadata: {
+            name: agentEntry.name,
+            gatekeeper: agentEntry.metadata.gatekeeper as ActiveElement['metadata']['gatekeeper'],
+          },
+        });
+      }
+    }
+
+    return activeElements;
+  }
+
+  private async getOperationPolicyElements(input: OperationInput, handlers: HandlerRegistry): Promise<{
+    elements: ActiveElement[]; recovery?: { type: string; key: string; reason: string };
+  }> {
+    try {
+      return { elements: await this.getActiveElements(undefined, handlers) };
+    } catch (cause) {
+      if (!(cause instanceof PolicyUnavailableError) || input.operation !== 'deactivate_element') throw cause;
+      const report = await handlers.elementCRUD.getActiveElementsForPolicyReport();
+      const targetType = resolveInputElementType(input);
+      const targetName = input.params?.element_name;
+      const isTarget = (failure: { type: string; reference?: string }) => targetType !== undefined &&
+        typeof targetName === 'string' && failure.reference === targetName && normalizeMCPAQLElementType(failure.type) === targetType;
+      const failedTarget = report.failures.find(isTarget);
+      // Exempt from the snapshot requirement for the target record only: any other failure still refuses.
+      if (!report.complete && (!failedTarget || report.failures.some(failure => !isTarget(failure)))) {
+        requireCompletePolicyReport(report);
+      }
+      return {
+        elements: this.toActivePolicyElements(report.items),
+        recovery: failedTarget && targetType !== undefined && typeof targetName === 'string'
+          ? { type: targetType, key: targetName, reason: failedTarget.reason } : undefined,
+      };
+    }
   }
 
   private recordGatekeeperDecision(decision: GatekeeperDecision): void {
@@ -1407,28 +1451,29 @@ export class MCPAQLHandler {
     view?.operation.assertCurrent();
     const handlers = view?.handlers ?? this.fixedHandlers;
     const [module, method] = handlerRef.split('.');
-    if (view && module === 'Agent') {
+    if (!view) return this.dispatchInView(handlerRef,input,context,view,handlers);
+    if (module === 'Agent') {
       throw new Error('Tenant-bound agent memory composition is required');
     }
-    if (view && module === 'EnhancedIndex') {
+    if (module === 'EnhancedIndex') {
       const handler = handlers.enhancedIndexHandler;
       if (!(handler instanceof EnhancedIndexHandler)) throw new Error('Tenant-bound portfolio/index memory composition is required');
       return handler.withCapturedMemoryOperation(this.memoryProvider!,view.operation,bound =>
         this.dispatchInView(handlerRef,input,context,view,{...handlers,enhancedIndexHandler:bound}));
     }
-    if (view && module === 'Collection') {
+    if (module === 'Collection') {
       const handler = handlers.collectionHandler;
       if (!(handler instanceof CollectionHandler)) throw new Error('Tenant-bound collection composition required');
       return handler.withCapturedMemoryOperation(this.memoryProvider!,view.operation,bound =>
         this.dispatchInView(handlerRef,input,context,view,{...handlers,collectionHandler:bound}));
     }
-    if (view && module === 'Portfolio') {
-      if (method === 'elementManager') {
+    if (module === 'Portfolio' && method === 'elementManager') {
         const handler = handlers.syncHandler;
         if (!(handler instanceof SyncHandler)) throw new Error('Tenant-bound sync composition required');
         return handler.withCapturedMemoryOperation(this.memoryProvider!,view.operation,bound =>
           this.dispatchInView(handlerRef,input,context,view,{...handlers,syncHandler:bound}));
-      }
+    }
+    if (module === 'Portfolio') {
       const handler = handlers.portfolioHandler;
       if (!(handler instanceof PortfolioHandler)) throw new Error('Tenant-bound portfolio composition required');
       return handler.withCapturedMemoryOperation(this.memoryProvider!,view.operation,bound =>
@@ -1499,13 +1544,13 @@ export class MCPAQLHandler {
 
   async dispose(): Promise<void> {
     if (this.memoryProvider) {
-      for (const saves of this.tenantSaveHandlers.values()) await saves.dispose();
+      await visitSequentially(this.tenantSaveHandlers.values(), saves => saves.dispose());
     } else await this.requireOrdinary(this.memorySaveHandler).dispose();
   }
 
   async flushPendingSaves(): Promise<void> {
     if (this.memoryProvider) {
-      for (const saves of this.tenantSaveHandlers.values()) await saves.flushPendingSaves();
+      await visitSequentially(this.tenantSaveHandlers.values(), saves => saves.flushPendingSaves());
     } else await this.requireOrdinary(this.memorySaveHandler).flushPendingSaves();
   }
 
@@ -2187,20 +2232,6 @@ export class MCPAQLHandler {
   }
 
   /**
-   * Dispatch Browser operations (Issue #774: open portfolio browser)
-   */
-  /**
-   * Dispatch Browser operations.
-   *
-   * Starts the portfolio web server (if not running) and opens the
-   * system browser. Returns the URL and any warnings if the browser
-   * could not be opened automatically.
-   *
-   * @param method - The browser method to dispatch ('open')
-   * @returns MCP response with URL and optional warning
-   * @see Issue #774
-   */
-  /**
    * Extract URL query parameters from operation params.
    * Serializes all params except 'tab' as string key-value pairs.
    * @see Issue #1765 - URL parameter support for portfolio browser
@@ -2221,6 +2252,17 @@ export class MCPAQLHandler {
     return JSON.stringify(value);
   }
 
+  /**
+   * Dispatch Browser operations.
+   *
+   * Starts the portfolio web server (if not running) and opens the
+   * system browser. Returns the URL and any warnings if the browser
+   * could not be opened automatically.
+   *
+   * @param method - The browser method to dispatch ('open')
+   * @returns MCP response with URL and optional warning
+   * @see Issue #774
+   */
   private async dispatchBrowser(method: string, params?: Record<string, unknown>): Promise<unknown> {
     if (method !== 'open') {
       throw new Error(`Unknown Browser method: ${method}`);

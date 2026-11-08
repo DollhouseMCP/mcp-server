@@ -23,9 +23,9 @@ describe('UnifiedEndpoint', () => {
       elementCRUD: {
         createElement: jest.fn().mockResolvedValue({ name: 'test-element' }),
         listElements: jest.fn().mockResolvedValue([]),
-        getElements: jest.fn().mockResolvedValue([
+        getElements: jest.fn().mockResolvedValue({ complete: true, failures: [], items: [
           { metadata: { name: 'test-persona', description: 'A test persona' }, content: 'Test content' },
-        ]),
+        ] }),
         getElementDetails: jest.fn().mockResolvedValue({ name: 'test', type: 'persona' }),
         editElement: jest.fn().mockResolvedValue({ updated: true }),
         validateElement: jest.fn().mockResolvedValue({ valid: true }),

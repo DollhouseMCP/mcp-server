@@ -3,6 +3,7 @@
  * Tests the full element CRUD path against real Docker PostgreSQL.
  */
 
+import { resolveNamedCandidate } from '../../../src/storage/ElementNameKeys.js';
 import { DatabaseStorageLayer } from '../../../src/storage/DatabaseStorageLayer.js';
 import type { DrizzleTx } from '../../../src/database/db-utils.js';
 import type { DatabaseStorageIdentity } from '../../../src/storage/IStorageLayer.js';
@@ -397,7 +398,7 @@ describe('DatabaseStorageLayer', () => {
       .resolves.toEqual({ id: namedId, name: uuidName });
   });
 
-  it('rejects an identifier that is both one row ID and another row exact name', async () => {
+  it('selects the id row for an identifier that is both one row ID and another row exact name, on reads and mutations alike', async () => {
     if (!dbAvailable) return;
     const userId = await ensureTestUser();
     const layer = new DatabaseStorageLayer(getTestDb(), fixedUserId(userId), 'skills');
@@ -409,9 +410,13 @@ describe('DatabaseStorageLayer', () => {
       'skills', idRow, buildSkillContent(idRow), metadata,
     );
 
-    await expect(layer.deleteContentByIdentity('skills', idRow))
-      .rejects.toMatchObject({ code: 'EAMBIGUOUS' });
-    await expect(layer.readContent(idRow)).resolves.toContain('name: uuid-owner');
+    // The read offers both rows and the shared selector picks the exact reference (tier 0).
+    const indexed = await layer.readIndexedPath([idRow]);
+    expect(indexed.candidates.map(candidate => candidate.reference).sort()).toEqual([idRow, namedRow].sort());
+    expect(resolveNamedCandidate(idRow, indexed.candidates).selected).toEqual({ reference: idRow, name: 'uuid-owner' });
+    await expect(layer.resolveContentIdentity('skills', idRow)).resolves.toEqual({ id: idRow, name: 'uuid-owner' });
+    await expect(layer.deleteContentByIdentity('skills', idRow)).resolves.toEqual({ id: idRow, name: 'uuid-owner' });
+    await expect(layer.readContent(idRow)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(layer.readContent(namedRow)).resolves.toContain(`name: ${idRow}`);
   });
 

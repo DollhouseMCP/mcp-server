@@ -145,7 +145,13 @@ describe('Element YAML security (BaseElementManager integration)', () => {
     const target = path.join(elementsDir, 'code-injection.md');
     await fs.copyFile(source, target);
 
-    await expect(manager.load('code-injection.md')).rejects.toThrow(/security|yaml|malicious/i);
+    // As on beta, the refusal carries the security reason (on its cause); the message is client-safe.
+    await expect(manager.load('code-injection.md')).rejects.toMatchObject({
+      kind: 'unreadable',
+      message: expect.stringContaining('Definition content could not be read or validated'),
+      failures: [expect.objectContaining({ reference: 'code-injection.md' })],
+      cause: { message: expect.stringMatching(/security|yaml|malicious/i) },
+    });
   });
 
   it('rejects symlinked files that escape the element directory', async () => {

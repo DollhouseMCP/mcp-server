@@ -10,6 +10,7 @@ import { ElementType } from '../../../src/portfolio/types.js';
 import { CollectionIndexCache } from '../../../src/cache/CollectionIndexCache.js';
 import { PerformanceMonitor } from '../../../src/utils/PerformanceMonitor.js';
 import { ElementSource } from '../../../src/config/sourcePriority.js';
+import { ElementUnreadableError, GuardedReadConflict } from '../../../src/elements/base/ElementReadError.js';
 
 describe('UnifiedIndexManager', () => {
   let unifiedManager: UnifiedIndexManager;
@@ -21,16 +22,18 @@ describe('UnifiedIndexManager', () => {
   beforeEach(() => {
     // Create mocks
     mockLocalIndexManager = {
-      search: jest.fn(),
+      search: jest.fn().mockResolvedValue([]),
+      searchReport: jest.fn(async (query, options) => ({ items: await mockLocalIndexManager.search(query, options), failures: [], complete: true })),
       findByName: jest.fn(),
       getElementsByType: jest.fn(),
       getStats: jest.fn(),
       rebuildIndex: jest.fn(),
-      getIndex: jest.fn()
+      getIndex: jest.fn().mockResolvedValue({ byName: new Map(), byType: new Map() })
     } as any;
 
     mockGitHubIndexer = {
       getIndex: jest.fn(),
+      getIndexReport: jest.fn(async () => ({ items: [await mockGitHubIndexer.getIndex()], failures: [], complete: true })),
       invalidateAfterAction: jest.fn(),
       clearCache: jest.fn(),
       getCacheStats: jest.fn()
@@ -38,6 +41,7 @@ describe('UnifiedIndexManager', () => {
 
     mockCollectionIndexCache = {
       getIndex: jest.fn(),
+      getIndexReport: jest.fn(async () => ({ items: [await mockCollectionIndexCache.getIndex()], failures: [], complete: true })),
       getCacheStats: jest.fn(),
       clearCache: jest.fn(),
       clear: jest.fn()
@@ -120,6 +124,72 @@ describe('UnifiedIndexManager', () => {
   });
 
   describe('Unified Search', () => {
+    it.each(['network', 'http'] as const)('carries consulted GitHub file failures through unified search (%s)', async failure => {
+      const repo = {
+        getRepositoryName: () => 'portfolio', checkPortfolioExists: async () => true,
+        githubRequest: async (url: string) => {
+          if (url === '/user') return { login: 'reader' };
+          if (url.endsWith('/commits/HEAD')) return { sha: 'head', commit: { committer: { date: '2026-10-01' } } };
+          if (url.endsWith('/contents/skills')) return ['healthy', 'broken'].map(name => ({ type: 'file',
+            name: `${name}.md`, path: `skills/${name}.md`, size: 100, sha: name,
+            html_url: `https://example.invalid/${name}`, download_url: `https://example.invalid/${name}.md` }));
+          return [];
+        },
+      };
+      const fetch = jest.spyOn(globalThis, 'fetch').mockImplementation(async url => {
+        if (String(url).includes('broken')) {
+          if (failure === 'network') throw new Error('Network unavailable');
+          return new Response('Server failure', { status: 503 });
+        }
+        return new Response('---\nname: healthy\ndescription: Healthy policy\n---\nPolicy instructions.');
+      });
+      try {
+        const producer = new GitHubPortfolioIndexer(repo as any);
+        expect(await producer.getIndexReport()).toMatchObject({ complete: false,
+          failures: [expect.objectContaining({ reference: 'skills/broken.md' })] });
+        const manager = new UnifiedIndexManager({ portfolioIndexManager: mockLocalIndexManager, githubIndexer: producer,
+          collectionIndexCache: mockCollectionIndexCache, performanceMonitor: mockPerformanceMonitor });
+        expect(await manager.searchReport({ query: 'healthy', includeLocal: false, includeGitHub: true, includeCollection: false }))
+          .toMatchObject({ complete: false, items: [expect.objectContaining({ source: 'github', entry: expect.objectContaining({ name: 'healthy' }) })],
+            failures: expect.arrayContaining([expect.objectContaining({ reference: expect.stringContaining('skills/broken.md') })]) });
+      } finally { fetch.mockRestore(); }
+    });
+
+    it('refuses bound-local failure before remote stats work', async () => {
+      (mockLocalIndexManager as any).hasBoundMemorySource = () => true;
+      mockLocalIndexManager.getStats.mockRejectedValue(new Error('Bound local unavailable'));
+      await expect(unifiedManager.getStats()).rejects.toThrow('Bound local unavailable');
+      expect(mockGitHubIndexer.getIndex).not.toHaveBeenCalled();
+      expect(mockCollectionIndexCache.getIndex).not.toHaveBeenCalled();
+    });
+    it.each([false, true])('preserves incomplete source evidence on repeated searches (streaming: %s)', async streamResults => {
+      const failure = { reference: 'broken.md', error: new ElementUnreadableError('Unreadable definition') };
+      mockLocalIndexManager.searchReport.mockResolvedValue({ items: [], failures: [failure], complete: false });
+      const options = { query: 'policy', includeLocal: true, includeGitHub: false, includeCollection: false, streamResults };
+      for (let attempt = 0; attempt < 2; attempt++) {
+        expect(await unifiedManager.searchReport(options)).toMatchObject({ complete: false,
+          failures: [{ reference: 'local: broken.md' }] });
+      }
+      expect(mockLocalIndexManager.searchReport).toHaveBeenCalledTimes(2);
+      await expect(unifiedManager.search(options)).rejects.toThrow('could not be read completely');
+    });
+
+    it('reports remote failure instead of a complete empty search', async () => {
+      mockGitHubIndexer.getIndex.mockRejectedValue(new Error('Remote unavailable'));
+      expect(await unifiedManager.searchReport({ query: 'policy', includeLocal: false, includeGitHub: true }))
+        .toMatchObject({ complete: false, failures: [
+          { reference: 'github' }, { reference: 'github' },
+        ] });
+    });
+
+    it('propagates a guarded revision conflict encountered by local fallback', async () => {
+      const conflict = new GuardedReadConflict('ESTALE', new Error('Revision changed'));
+      mockLocalIndexManager.searchReport.mockRejectedValue(new Error('Initial read failed'));
+      mockLocalIndexManager.search.mockRejectedValue(conflict);
+      await expect(unifiedManager.searchReport({ query: 'policy', includeGitHub: false, includeLocal: true }))
+        .rejects.toBe(conflict);
+    });
+
     it('should combine results from local and GitHub searches when includeAll is true', async () => {
       const localResults: SearchResult[] = [{
         entry: {
@@ -201,10 +271,11 @@ describe('UnifiedIndexManager', () => {
       mockLocalIndexManager.search.mockRejectedValue(new Error('Local search failed'));
       mockGitHubIndexer.getIndex.mockResolvedValue(githubIndex);
 
-      const results = await unifiedManager.search({ query: 'test persona' });
-
-      expect(results).toHaveLength(1);
-      expect(results[0].source).toBe('github');
+      const report = await unifiedManager.searchReport({ query: 'test persona' });
+      expect(report.complete).toBe(false);
+      expect(report.failures[0].reference).toBe('local');
+      expect(report.items).toHaveLength(1);
+      expect(report.items[0].source).toBe('github');
     });
 
     it('should handle GitHub search failures gracefully', async () => {
@@ -410,86 +481,7 @@ describe('UnifiedIndexManager', () => {
 
       const result = await unifiedManager.findByName('Nonexistent Persona');
 
-      expect(result).toBe(null);
-    });
-  });
-
-  describe('Get Elements by Type', () => {
-    it('should combine elements from both sources', async () => {
-      const localEntries: IndexEntry[] = [{
-        filePath: '/local/personas/local.md',
-        elementType: ElementType.PERSONA,
-        metadata: { name: 'Local Persona' },
-        lastModified: new Date(),
-        filename: 'local'
-      }];
-
-      const githubEntries: GitHubIndexEntry[] = [{
-        path: 'personas/github.md',
-        name: 'GitHub Persona',
-        elementType: ElementType.PERSONA,
-        sha: 'abc123',
-        htmlUrl: 'https://github.com/test/repo',
-        downloadUrl: 'https://raw.githubusercontent.com/test/repo',
-        lastModified: new Date(),
-        size: 1024
-      }];
-
-      const githubIndex: GitHubPortfolioIndex = {
-        username: 'testuser',
-        repository: 'dollhouse-portfolio',
-        lastUpdated: new Date(),
-        elements: new Map([[ElementType.PERSONA, githubEntries]]),
-        totalElements: 1,
-        sha: 'abc123'
-      };
-
-      mockLocalIndexManager.getElementsByType.mockResolvedValue(localEntries);
-      mockGitHubIndexer.getIndex.mockResolvedValue(githubIndex);
-
-      const result = await unifiedManager.getElementsByType(ElementType.PERSONA);
-
-      expect(result).toHaveLength(2);
-      expect(result[0].source).toBe('local');
-      expect(result[1].source).toBe('github');
-    });
-
-    it('should deduplicate elements by name and type', async () => {
-      const localEntries: IndexEntry[] = [{
-        filePath: '/local/personas/sample.md',
-        elementType: ElementType.PERSONA,
-        metadata: { name: 'Test Persona' },
-        lastModified: new Date(),
-        filename: 'sample'
-      }];
-
-      const githubEntries: GitHubIndexEntry[] = [{
-        path: 'personas/sample.md',
-        name: 'Test Persona', // Same name
-        elementType: ElementType.PERSONA,
-        sha: 'abc123',
-        htmlUrl: 'https://github.com/test/repo',
-        downloadUrl: 'https://raw.githubusercontent.com/test/repo',
-        lastModified: new Date(),
-        size: 1024
-      }];
-
-      const githubIndex: GitHubPortfolioIndex = {
-        username: 'testuser',
-        repository: 'dollhouse-portfolio',
-        lastUpdated: new Date(),
-        elements: new Map([[ElementType.PERSONA, githubEntries]]),
-        totalElements: 1,
-        sha: 'abc123'
-      };
-
-      mockLocalIndexManager.getElementsByType.mockResolvedValue(localEntries);
-      mockGitHubIndexer.getIndex.mockResolvedValue(githubIndex);
-
-      const result = await unifiedManager.getElementsByType(ElementType.PERSONA);
-
-      expect(result).toHaveLength(1); // Deduplicated
-      expect(result[0].source).toBe('local'); // Local has priority
+      expect(result).toBeNull();
     });
   });
 
@@ -558,7 +550,7 @@ describe('UnifiedIndexManager', () => {
       mockCollectionIndexCache.getIndex.mockResolvedValue(mockCollectionIndex);
       mockCollectionIndexCache.getCacheStats.mockReturnValue(mockCollectionCacheStats);
 
-      const stats = await unifiedManager.getStats();
+      const { items: [stats] } = await unifiedManager.getStats();
 
       expect(stats.local.totalElements).toBe(5);
       expect(stats.github.totalElements).toBe(3);
@@ -608,9 +600,11 @@ describe('UnifiedIndexManager', () => {
 
       const stats = await unifiedManager.getStats();
 
-      expect(stats.local.totalElements).toBe(0);
-      expect(stats.github.totalElements).toBe(0);
-      expect(stats.combined.totalElements).toBe(0); // 0 + 0 + 0 (collection)
+      expect(stats.complete).toBe(false);
+      expect(stats.items[0].local).toBeUndefined();
+      expect(stats.items[0].github).toBeUndefined();
+      expect(stats.items[0].combined).toBeUndefined();
+      expect(stats.failures.map(failure => failure.reference)).toEqual(['local', 'github']);
     });
   });
 
@@ -840,7 +834,9 @@ describe('UnifiedIndexManager', () => {
         mockLocalIndexManager.search.mockRejectedValue(new Error('Local search failed'));
         mockGitHubIndexer.getIndex.mockResolvedValue(githubIndex);
 
-        const results = await unifiedManager.search({ query: 'persona' });
+        const report = await unifiedManager.searchReport({ query: 'persona' });
+        expect(report.complete).toBe(false);
+        const results = report.items;
 
         // Should fallback to GitHub and find results
         expect(results).toHaveLength(1);

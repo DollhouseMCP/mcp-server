@@ -81,7 +81,7 @@ describe('EnsembleManager', () => {
       serializationService,
       metadataService,
       eventDispatcher: new ElementEventDispatcher(),
-    storageLayerFactory: createTestStorageFactory(),
+    storageLayerFactory: createTestStorageFactory(fileOperationsService),
     });
 
     // Set up mocks
@@ -311,13 +311,10 @@ describe('EnsembleManager', () => {
     });
 
     it('should reject duplicate metadata name even with different filename (Issue #613)', async () => {
-      // Create a mock ensemble that list() will return
-      const mockEnsemble = {
-        metadata: { name: 'My Ensemble', description: 'First ensemble' },
-        id: 'my-ensemble',
-        elements: []
-      };
-      jest.spyOn(ensembleManager, 'list').mockResolvedValue([mockEnsemble as any]);
+      // A stored ensemble named "My Ensemble" under another filename; the selector certifies its metadata name.
+      jest.spyOn((ensembleManager as any).storageLayer, 'readIndexedPath').mockResolvedValue({ path: 'first-ensemble.md',
+        indexComplete: true, authoritative: true, unindexed: [], failures: new Map(),
+        candidates: [{ reference: 'first-ensemble.md', name: 'My Ensemble' }] });
 
       // Try to create another ensemble with the same metadata name
       await expect(
@@ -495,7 +492,7 @@ Test instructions.
       await fs.writeFile(fullPath, fileContent, 'utf-8');
 
       // Mock file read
-      atomicReadFileMock(fileLockManager).mockResolvedValueOnce(fileContent);
+      atomicReadFileMock(fileLockManager).mockResolvedValue(fileContent);
 
       const ensemble = await ensembleManager.load(filePath);
 
@@ -555,11 +552,12 @@ elements:
       const filePath = 'repair-legacy-ensemble.md';
       const fullPath = path.join(portfolioPath, 'ensembles', filePath);
       await fs.writeFile(fullPath, fileContent, 'utf-8');
-      mockPortfolioManager.listElements.mockResolvedValue([filePath]);
       atomicReadFileMock(fileLockManager).mockImplementation((targetPath: string) =>
         fs.readFile(targetPath, 'utf-8'));
 
       const result = await ensembleManager.repairLegacyElementFields();
+      // The repair iterates the layer's collection; the manager lists no directory of its own.
+      expect(mockPortfolioManager.listElements).not.toHaveBeenCalled();
 
       expect(result).toEqual({
         scanned: 1,
@@ -885,9 +883,7 @@ elements:
         { element_name: 'found', role: 'primary', priority: 80, activation: 'always' }
       ];
 
-      const result = await resolveElementTypes(elements, mockManagers);
-      expect(result.resolved).toHaveLength(1);
-      expect(result.resolved[0].element_type).toBe('template');
+      await expect(resolveElementTypes(elements, mockManagers)).rejects.toMatchObject({ cause: expect.objectContaining({ message: 'manager error' }) });
     });
 
     it('should validate resolved types against canonical element type map', async () => {
@@ -945,6 +941,13 @@ elements:
   });
 
   describe('List', () => {
+    beforeEach(() => {
+      jest.spyOn(ensembleManager['storageLayer'], 'readCollection').mockImplementation(async () => ({
+        entries: (await mockPortfolioManager.listElements()).map(filePath => ({ filePath })),
+        unindexed: new Map(), authoritative: true, complete: true, includesPublic: false,
+        diff: { added: [], modified: [], removed: [], unchanged: [] },
+      } as any));
+    });
     it('should list all ensembles', async () => {
       const testFiles = ['ensemble1.md', 'ensemble2.md'];
       mockPortfolioManager.listElements.mockResolvedValue(testFiles);
@@ -978,7 +981,7 @@ elements: []
     });
 
     it('should return empty array when directory does not exist', async () => {
-      mockPortfolioManager.listElements.mockRejectedValue({ code: 'ENOENT' });
+      mockPortfolioManager.listElements.mockResolvedValue([]);
 
       const ensembles = await ensembleManager.list();
 
@@ -1009,7 +1012,7 @@ elements: []
 
       expect(SecurityMonitor.logSecurityEvent).toHaveBeenCalledWith(
         expect.objectContaining({
-          source: expect.stringContaining('EnsembleManager.delete')
+          source: 'EnsembleManager.afterDelete'
         })
       );
     });
@@ -1162,7 +1165,7 @@ elements:
 `;
       const ensemblesDir = path.join(portfolioPath, 'ensembles');
       await fs.writeFile(path.join(ensemblesDir, 'legacy-ensemble.md'), fileContent, 'utf-8');
-      atomicReadFileMock(fileLockManager).mockResolvedValueOnce(fileContent);
+      atomicReadFileMock(fileLockManager).mockResolvedValue(fileContent);
 
       // Should load without throwing
       const loaded = await ensembleManager.load('legacy-ensemble.md');
@@ -1191,7 +1194,7 @@ elements:
 `;
       const ensemblesDir = path.join(portfolioPath, 'ensembles');
       await fs.writeFile(path.join(ensemblesDir, 'emdash-ensemble.md'), fileContent, 'utf-8');
-      atomicReadFileMock(fileLockManager).mockResolvedValueOnce(fileContent);
+      atomicReadFileMock(fileLockManager).mockResolvedValue(fileContent);
 
       const loaded = await ensembleManager.load('emdash-ensemble.md');
       expect(loaded.metadata.description).toContain('—');

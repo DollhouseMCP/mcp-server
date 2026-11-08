@@ -53,20 +53,26 @@ describe('PortfolioManager', () => {
       await expect(manager[method]()).resolves.toBe(true);
       exists.mockResolvedValue(false);
       await expect(manager[method]()).resolves.toBe(false);
-      exists.mockRejectedValue(Object.assign(new Error('gone'), { code: 'ENOENT' }));
-      await expect(manager[method]()).resolves.toBe(false);
+      if (method === 'hasLegacyPersonas') {
+        exists.mockRejectedValue(Object.assign(new Error('gone'), { code: 'ENOENT' }));
+        await expect(manager[method]()).resolves.toBe(false);
+      } else {
+        // The strict directory probe answers absence itself; a file where the directory should be is a typed failure, never absence.
+        exists.mockRejectedValue(Object.assign(new Error('not a directory'), { code: 'ENOTDIR' }));
+        await expect(manager[method]()).rejects.toMatchObject({ message: expect.not.stringContaining(testDir), code: 'ENOTDIR' });
+      }
       const denied = Object.assign(new Error('denied'), { code: 'EACCES' });
       exists.mockRejectedValue(denied);
       await expect(manager[method]()).rejects.toMatchObject({ message: expect.not.stringContaining(testDir), code: 'EACCES', cause: denied });
     });
 
-    it('does not consider a regular file to be an initialized element directory', async () => {
+    it('refuses a regular file at an element directory path as a typed failure, never as an uninitialized directory', async () => {
       const manager = new PortfolioManager(fileOperations, { baseDir: testDir });
       for (const type of Object.values(ElementType)) await fs.mkdir(path.join(testDir, type), { recursive: true });
       await fs.mkdir(path.join(testDir, ElementType.AGENT, '.state'), { recursive: true });
       await fs.rmdir(path.join(testDir, ElementType.PERSONA));
       await fs.writeFile(path.join(testDir, ElementType.PERSONA), 'not a directory');
-      await expect(manager['isFullyInitialized']()).resolves.toBe(false);
+      await expect(manager['isFullyInitialized']()).rejects.toMatchObject({ message: expect.not.stringContaining(testDir), code: 'ENOTDIR' });
     });
 
     it('propagates access failure in an element subdirectory during readiness checks', async () => {
@@ -321,8 +327,8 @@ describe('PortfolioManager', () => {
         expect(templates).toEqual([]);
       });
 
-      it.each(['EACCES', 'EPERM'])(
-        'should propagate %s when filesystem errors are requested',
+      it.each(['EACCES', 'EPERM', 'ENOTDIR'])(
+        'should propagate %s as a typed filesystem failure',
         async (code) => {
           const accessError = Object.assign(new Error(`${code}: portfolio unavailable`), {
             code
@@ -332,16 +338,14 @@ describe('PortfolioManager', () => {
             .mockRejectedValueOnce(accessError);
 
           await expect(
-            portfolioManager.listElements(ElementType.AGENT, {
-              throwOnFilesystemError: true
-            })
-          ).rejects.toBe(accessError);
+            portfolioManager.listElements(ElementType.AGENT)
+          ).rejects.toMatchObject({ name: 'ElementUnreadableError', code, cause: accessError });
 
           listDirectorySpy.mockRestore();
         }
       );
 
-      it('should preserve best-effort permission handling by default', async () => {
+      it('does not represent permission failure as an empty portfolio', async () => {
         const accessError = Object.assign(new Error('EACCES: portfolio unavailable'), {
           code: 'EACCES'
         });
@@ -351,21 +355,19 @@ describe('PortfolioManager', () => {
 
         await expect(
           portfolioManager.listElements(ElementType.AGENT)
-        ).resolves.toEqual([]);
+        ).rejects.toMatchObject({ code: 'EACCES' });
 
         listDirectorySpy.mockRestore();
       });
 
-      it('should propagate a missing directory when filesystem errors are requested', async () => {
+      it('treats a proven missing directory as an empty portfolio', async () => {
         await fs.rm(portfolioManager.getElementDir(ElementType.AGENT), {
           recursive: true
         });
 
         await expect(
-          portfolioManager.listElements(ElementType.AGENT, {
-            throwOnFilesystemError: true
-          })
-        ).rejects.toMatchObject({ code: 'ENOENT' });
+          portfolioManager.listElements(ElementType.AGENT)
+        ).resolves.toEqual([]);
       });
     });
     

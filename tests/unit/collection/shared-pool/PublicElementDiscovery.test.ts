@@ -7,6 +7,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { PublicElementDiscovery } from '../../../../src/collection/shared-pool/PublicElementDiscovery.js';
+import { createRealManagerSuite, createTestFileOperationsService } from '../../../helpers/di-mocks.js';
 
 describe('PublicElementDiscovery', () => {
   let tmpDir: string;
@@ -14,7 +15,7 @@ describe('PublicElementDiscovery', () => {
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'public-discovery-test-'));
-    discovery = new PublicElementDiscovery(tmpDir);
+    discovery = new PublicElementDiscovery(tmpDir, createTestFileOperationsService());
   });
 
   afterEach(async () => {
@@ -40,6 +41,22 @@ describe('PublicElementDiscovery', () => {
     expect(result).toHaveLength(2);
     expect(result.some(p => p.endsWith('code-reviewer.md'))).toBe(true);
     expect(result.some(p => p.endsWith('tech-writer.md'))).toBe(true);
+  });
+
+  it('reports a real public-directory scan failure through the manager listing', async () => {
+    await fs.writeFile(path.join(tmpDir, 'skills'), 'Not a directory');
+    const suite = createRealManagerSuite(path.join(tmpDir, 'own'));
+    (suite.skillManager['_listOps'] as any).publicElementDiscovery = discovery;
+    try {
+      const report = await suite.skillManager.listReport({ includePublic: true });
+      expect(report.complete).toBe(false);
+      expect(report.failures).toHaveLength(1);
+      expect(report.failures[0].error).toMatchObject({ code: 'ENOTDIR' });
+      expect(report.failures[0].error.message).not.toContain(tmpDir);
+    } finally {
+      await Promise.all([suite.skillManager, suite.templateManager, suite.memoryManager, suite.ensembleManager,
+        suite.agentManager, suite.personaManager].map(manager => manager.dispose()));
+    }
   });
 
   it('returns absolute paths', async () => {
@@ -69,7 +86,7 @@ describe('PublicElementDiscovery', () => {
 
   it('returns empty array when shared pool directory does not exist', async () => {
     const noSuchDir = new PublicElementDiscovery(
-      path.join(os.tmpdir(), 'nonexistent-shared-pool-test'),
+      path.join(os.tmpdir(), 'nonexistent-shared-pool-test'), createTestFileOperationsService(),
     );
     const result = await noSuchDir.discoverPublicElements('personas', new Set());
     expect(result).toEqual([]);

@@ -587,6 +587,21 @@ describe('default element directory probes', () => {
     expect(JSON.stringify(warn.mock.calls)).not.toContain('private contents');
   });
 
+  it('accepts a candidate whose personas path is a stray file when its skills directory exists', async () => {
+    DefaultElementProvider['cachedDataDir'] = null;
+    const files = createMockFileOperationsService();
+    files.stat.mockResolvedValue({ isDirectory: () => true });
+    files.directoryExists.mockImplementation(async (directory: string) => {
+      // The strict probe: a regular file at the kind's path is ENOTDIR, typed.
+      if (directory === path.join(deniedDir, 'personas')) throw Object.assign(new Error('Not a directory'), { code: 'ENOTDIR' });
+      return true;
+    });
+    const provider = new DefaultElementProvider({ fileOperations: files, customDataPaths: [deniedDir, healthyDir], useDefaultPaths: false });
+    const warn = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+    await expect(provider['findDataDirectory']()).resolves.toBe(deniedDir);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it('warns once in summary when all candidates are absent', async () => {
     DefaultElementProvider['cachedDataDir'] = null;
     const files = createMockFileOperationsService();

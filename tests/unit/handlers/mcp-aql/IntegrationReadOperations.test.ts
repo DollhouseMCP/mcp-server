@@ -225,7 +225,7 @@ describe.each(['crude', 'single'] as const)('strict integration management routi
       const result = state === 'unauthenticated' ? await call() : await runAsUser(fixture.contextTracker, call);
       expect(responseText(result.data)).toMatchObject({ ok: false });
       expect(await fixture.specStore.findByDescriptorId(DESCRIPTOR_ID)).toEqual(before);
-      expect(await portfolioStore.listByUser(USER_ID)).toEqual([]);
+      expect((await portfolioStore.listByUser(USER_ID)).items).toEqual([]);
     }
   });
 

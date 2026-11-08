@@ -147,7 +147,7 @@ describe('Memory manager upgrade obligations', () => {
     const internals = manager as unknown as { storageLayer: { writeContent?: () => Promise<void> } };
     const original = internals.storageLayer;
     const write = jest.fn(async () => { throw new Error('Database publication guard must not write'); });
-    internals.storageLayer = { writeContent: write };
+    internals.storageLayer = { cachedInstanceCurrency: 'unverifiable', writeContent: write } as typeof internals.storageLayer;
     try {
       const before = memory.captureAppendState();
       for (const locator of [`.${path.sep}${sourceLocator}`, sourceLocator.toUpperCase(), undefined]) {
@@ -445,3 +445,24 @@ it('rejects an expired lease before starting a guarded memory update', async () 
       .rejects.toThrow('active lease');
   });
 });
+
+it('drains a memory stored under a raw name its canonical form rewrites (the index keeps the stored name)', () => owned(async manager => {
+    const directory = path.join(manager['memoriesDir'] as string, '2026-10-30');
+    await mkdir(directory, { recursive: true });
+    await writeFile(path.join(directory, 'q-and-a.yaml'), 'metadata:\n  name: "Q&A"\n  description: Raw stored name\nentries: []\n');
+    await manager.runFreshMemoryMutation('Q&A', async fresh => {
+      expect(fresh.metadata.name).toBe('QA');
+    });
+}));
+
+it('selects the fresh mutation target with the shared name rule, so a folded or slug name resolves', () => owned(async (manager, _lifecycle, memory) => {
+    await memory.addEntry('Original');
+    await manager.save(memory);
+    for (const identifier of ['upgrade owned memory', 'UPGRADE OWNED MEMORY', 'upgrade-owned-memory']) {
+      await manager.runFreshMemoryMutation(identifier, async fresh => {
+        expect(fresh.metadata.name).toBe('Upgrade owned memory');
+        expect([...fresh.getEntries().values()].map(entry => entry.content)).toContain('Original');
+      });
+    }
+    await expect(manager.runFreshMemoryMutation('unrelated memory', async () => {})).rejects.toThrow("Memory 'unrelated memory' not found");
+}));

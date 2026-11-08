@@ -30,6 +30,7 @@ import { ServerSetup } from '../../../src/server/ServerSetup.js';
 import { ContextTracker } from '../../../src/security/encryption/ContextTracker.js';
 import type { SessionContext } from '../../../src/context/SessionContext.js';
 import { createStdioSession } from '../../../src/context/StdioSession.js';
+import { ElementUnreadableError } from '../../../src/elements/base/ElementReadError.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -75,6 +76,26 @@ describe('ServerSetup', () => {
   beforeEach(() => {
     contextTracker = new ContextTracker();
     serverSetup = new ServerSetup(contextTracker);
+  });
+
+  it.each(['report', 'throw'])('discloses unavailable digest policy context (%s)', async mode => {
+    const server = createMockServer();
+    const registry = createMockToolRegistry();
+    const failure = new ElementUnreadableError('Definition storage unavailable');
+    const getActiveElementsForPolicyReport = async () => {
+      if (mode === 'throw') throw failure;
+      return { items: [{ type: 'skill', name: 'healthy', metadata: { description: 'Healthy policy' } }],
+        complete: false, failures: [{ type: 'skill', reference: 'broken.md', reason: failure.message }] };
+    };
+    serverSetup.setupServer(server as any, registry as any, { getActiveElementsForPolicyReport } as any);
+    const response = { content: [{ type: 'text', text: 'Operation completed' }] };
+    await serverSetup['appendPrescriptiveDigest'](response, 'list_elements');
+    expect(response.content[0].text).toContain('Operation completed');
+    expect(response.content[0].text).toContain('Definition storage unavailable');
+    if (mode === 'report') {
+      expect(response.content[0].text).toContain('broken.md');
+      expect(response.content[0].text).toContain('healthy');
+    }
   });
 
   describe('tool list change notifications', () => {

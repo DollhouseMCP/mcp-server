@@ -23,8 +23,16 @@ import type { IStorageLayer } from './IStorageLayer.js';
 
 export interface FileStorageOptions {
   elementDir: string;
+  /**
+   * The caller's own directory authority. A manager passes its current element directory here so
+   * the layer it owns follows the same directory on every read, write and scan; without it the
+   * factory's process-wide resolver (or the static elementDir) applies.
+   */
+  elementDirResolver?: () => string;
   /** Keep a directory manifest while cached objects or loads depend on it. */
   retainDirectoryState?: (dir: string) => boolean;
+  /** A failed record was repaired or deleted by a targeted storage recheck. */
+  onFailedRecordRecovered?: (reference: string) => void;
   fileExtension: string;
   scanCooldownMs: number;
 }

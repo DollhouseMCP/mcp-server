@@ -58,7 +58,16 @@ jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
 }));
 
 // Now import the service after mocks are set up
-const { FileOperationsService } = await import('../../../src/services/FileOperationsService.js');
+const { FileOperationsService, isAbsentPathError, isAbsentKindError } = await import('../../../src/services/FileOperationsService.js');
+
+describe('absence predicates', () => {
+  it.each([['ENOENT', true, true], ['ENOTDIR', false, true], ['EACCES', false, false], [undefined, false, false]])(
+    'classifies %s: proven absent %s, kind probe may answer no %s', (code, absent, kind) => {
+      const error = Object.assign(new Error('probe'), code === undefined ? {} : { code });
+      expect(isAbsentPathError(error)).toBe(absent);
+      expect(isAbsentKindError(error)).toBe(kind);
+    });
+});
 const { FileLockManager } = await import('../../../src/security/fileLockManager.js');
 const { ElementType } = await import('../../../src/portfolio/types.js');
 
@@ -376,15 +385,19 @@ describe('FileOperationsService', () => {
     const error = Object.assign(new Error(code), { code });
     const stat = jest.spyOn(service, 'stat').mockRejectedValue(error);
     try {
-      if (code === 'ENOENT' || code === 'ENOTDIR') await expect(service.directoryExists('/test')).resolves.toBe(false);
-      else await expect(service.directoryExists('/test')).rejects.toMatchObject({ cause: error });
+      // Only a missing path is absence; ENOTDIR and every other failure reject, client-safe, with the cause retained.
+      if (code === 'ENOENT') await expect(service.directoryExists('/test')).resolves.toBe(false);
+      else await expect(service.directoryExists('/test')).rejects.toMatchObject({ code, cause: error });
     } finally { stat.mockRestore(); }
   });
 
-  it.each([true, false])('returns the directory kind (%s) from stat', async isDirectory => {
-    const stat = jest.spyOn(service, 'stat').mockResolvedValue({ isDirectory: () => isDirectory } as import('node:fs').Stats);
-    try { await expect(service.directoryExists('/test')).resolves.toBe(isDirectory); }
-    finally { stat.mockRestore(); }
+  it('answers true for a directory and refuses a file at the path as ENOTDIR, like the storage backend', async () => {
+    const stat = jest.spyOn(service, 'stat').mockResolvedValue({ isDirectory: () => true } as import('node:fs').Stats);
+    try {
+      await expect(service.directoryExists('/test')).resolves.toBe(true);
+      stat.mockResolvedValue({ isDirectory: () => false } as import('node:fs').Stats);
+      await expect(service.directoryExists('/test')).rejects.toMatchObject({ code: 'ENOTDIR' });
+    } finally { stat.mockRestore(); }
   });
 
 });

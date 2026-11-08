@@ -96,7 +96,7 @@ export class SkillActivationStrategy extends BaseActivationStrategy implements E
    */
   async getActiveElements(): Promise<MCPResponse> {
     // Use the manager's method to get active skills directly
-    const activeSkills = await this.skillManager.getActiveSkills();
+    return this.renderCollectionReport(await this.skillManager.getActiveReferenceReport({ freshness: 'advisory' }), activeSkills => {
 
     if (activeSkills.length === 0) {
       return {
@@ -114,6 +114,7 @@ export class SkillActivationStrategy extends BaseActivationStrategy implements E
         text: `Active skills: ${skillList}`
       }]
     };
+    });
   }
 
   /**
@@ -124,9 +125,7 @@ export class SkillActivationStrategy extends BaseActivationStrategy implements E
    * @see Issue #275 - Handlers return success=true for missing elements
    */
   async getElementDetails(name: string): Promise<MCPResponse> {
-    // Use flexible finding to support both display name and filename
-    const allSkills = await this.skillManager.list();
-    const skill = await this.findElementFlexibly(name, allSkills);
+    const skill = await this.skillManager.findByName(name);
     if (!skill) {
       this.throwNotFoundError(name, 'Skill');
     }

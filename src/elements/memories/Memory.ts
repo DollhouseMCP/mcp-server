@@ -34,6 +34,7 @@ import DOMPurify from 'dompurify';
 import { JSDOM } from 'jsdom';
 import { LRUCache } from '../../cache/LRUCache.js';
 import { ContentValidator } from '../../security/contentValidator.js';
+import { markContentRejection } from '../../security/contentRejection.js';
 
 /**
  * Maximum length for individual trigger words used in Enhanced Index
@@ -706,7 +707,7 @@ export class Memory extends BaseElement implements IElement {
       throw new Error('Memory markdown body exceeds the 2MB legacy read limit');
     }
     const sanitizedContent = sanitizeMemoryContent(content, MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE);
-    if (!sanitizedContent) throw new Error('Memory markdown body cannot be empty after sanitization');
+    if (!sanitizedContent) throw markContentRejection(new Error('Memory markdown body cannot be empty after sanitization'));
     const entry: MemoryEntry = {
       id: generateMemoryId(),
       timestamp: new Date(),
@@ -1350,7 +1351,7 @@ export class Memory extends BaseElement implements IElement {
     // were already bounded by the 2MB file reader; retain them on subsequent
     // YAML reloads instead of silently truncating at the ordinary entry limit.
     if (entry.source === 'file' && entry.content.length > MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE) {
-      throw new Error('Loaded memory file entry exceeds the 2MB legacy read limit');
+      throw markContentRejection(new Error('Loaded memory file entry exceeds the 2MB legacy read limit'));
     }
     const loadedLimit = entry.source === 'file'
       ? MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE
@@ -1380,7 +1381,7 @@ export class Memory extends BaseElement implements IElement {
 
       // Validate basic structure
       if (!parsed.id || !parsed.type || parsed.type !== ElementType.MEMORY) {
-        throw new Error('Invalid memory data format');
+        throw markContentRejection(new Error('Invalid memory data format'));
       }
 
       // Update properties
@@ -1436,7 +1437,8 @@ export class Memory extends BaseElement implements IElement {
         source: 'Memory.deserialize',
         details: `Failed to deserialize memory: ${error}`
       });
-      throw new Error(`Failed to deserialize memory: ${error}`);
+      // The cause keeps a content rejection's provenance; this catch marks nothing itself.
+      throw new Error(`Failed to deserialize memory: ${error}`, { cause: error });
     }
   }
   

@@ -8,7 +8,7 @@
  * 3. PERFORMANCE (PR #496 recommendation): Using FileDiscoveryUtil for optimized file search
  */
 
-import { createHash } from 'crypto';
+import { createHash } from 'node:crypto';
 import { GitHubAuthManager } from '../../auth/GitHubAuthManager.js';
 import { PortfolioRepoManager } from '../../portfolio/PortfolioRepoManager.js';
 import { TokenManager } from '../../security/tokenManager.js';
@@ -31,16 +31,16 @@ import {
   getValidatedTimeout,
   calculateRetryDelay
 } from '../../config/portfolio-constants.js';
-import { PortfolioElement, SubmitToPortfolioParams, SubmitToPortfolioResult } from './types.js';
+import { SubmitToPortfolioParams, SubmitToPortfolioResult } from './types.js';
 
 // Re-export types for backward compatibility
-export type { PortfolioElement, SubmitToPortfolioParams, SubmitToPortfolioResult };
+export type { PortfolioElement, SubmitToPortfolioParams, SubmitToPortfolioResult } from './types.js';
 import { IRateLimiter } from '../../utils/GitHubRateLimiter.js';
 import { EarlyTerminationSearch } from '../../utils/EarlyTerminationSearch.js';
 import { CollectionErrorCode, formatCollectionError } from '../../config/error-codes.js';
-import * as path from 'path';
+import * as path from 'node:path';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
-import { IFileOperationsService } from '../../services/FileOperationsService.js';
+import { IFileOperationsService, isAbsentKindError } from '../../services/FileOperationsService.js';
 import { PACKAGE_VERSION } from '../../generated/version.js';
 import { TenantMemoryOperationProvider, type BoundMemoryOperation } from '../../storage/TenantMemoryOperationProvider.js';
 import type { DatabaseTenantMemoryRegistry } from '../../storage/DatabaseTenantMemoryRegistry.js';
@@ -51,6 +51,69 @@ import type { DatabaseTenantMemoryRegistry } from '../../storage/DatabaseTenantM
 export interface ElementDetectionMatch {
   type: ElementType;
   path: string;
+}
+
+/** Metadata fields rendered into a collection issue when present. */
+interface ExtendedMeta extends PortfolioElementMetadata {
+  category?: string;
+  triggers?: string[];
+  age_rating?: string;
+  ai_generated?: boolean;
+  generation_method?: string;
+  license?: string;
+  tags?: string[];
+}
+
+interface CollectionIssueParams {
+  elementName: string;
+  elementType: ElementType;
+  portfolioUrl: string;
+  username: string;
+  metadata: PortfolioElementMetadata;
+  token: string;
+  localPath?: string;  // Path to the local element file
+}
+
+/** Patterns that could indicate path traversal or injection in a submitted file path. */
+const SUSPICIOUS_PATH_PATTERNS: readonly RegExp[] = [
+  /\.\./,                    // Path traversal
+  /\/\.\./,                  // Unix path traversal
+  /\\\.\./,                  // Windows path traversal
+  // eslint-disable-next-line no-control-regex -- Intentionally detecting null bytes for security
+  /\u0000/,                    // NOSONAR - Null bytes detection for security
+  // eslint-disable-next-line no-control-regex -- Intentionally detecting control chars for security
+  /[\u0001-\u001f\u007f-\u009f]/,    // NOSONAR - Control characters detection for security
+  /[<>:"|?*]/,               // Invalid filename characters on Windows
+  /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i, // Reserved Windows names
+  /^\./,                     // Hidden files (starting with dot)
+  /\s$/,                     // Trailing whitespace
+  /^\s*$/,                   // Only whitespace
+  /%[0-9a-fA-F]{2}/,         // URL encoding (potential bypass attempt)
+  /\\x[0-9a-fA-F]{2}/,       // Hex encoding
+  /\$\{.*\}/,                // Template literal injection
+  /`.*`/,                    // Backtick injection
+  /[\\/]{2,}/                // Multiple consecutive slashes
+];
+const ALLOWED_PORTFOLIO_EXTENSIONS = ['.md', '.markdown', '.txt', '.yml', '.yaml', '.json'];
+const SAFE_FILENAME_PATTERN = /^[a-zA-Z0-9\-_.\s()[\]{}]+$/;
+
+const COLLECTION_ISSUE_STATUS_DETAIL: Record<number, string> = {
+  404: 'Collection repository not found or no access',
+  403: 'Permission denied to create issue in collection repo',
+  401: 'Authentication failed for collection submission',
+};
+
+function collectionIssueDetails(meta: ExtendedMeta): string[] {
+  const details: string[] = [];
+  if (meta.category) details.push(`**Category**: ${meta.category}`);
+  if (meta.version) details.push(`**Version**: ${meta.version}`);
+  if (Array.isArray(meta.triggers) && meta.triggers.length > 0) details.push(`**Triggers**: ${meta.triggers.join(', ')}`);
+  if (meta.age_rating) details.push(`**Age Rating**: ${meta.age_rating}`);
+  if (meta.ai_generated !== undefined) details.push(`**AI Generated**: ${meta.ai_generated ? 'Yes' : 'No'}`);
+  if (meta.generation_method) details.push(`**Generation Method**: ${meta.generation_method}`);
+  if (meta.license) details.push(`**License**: ${meta.license}`);
+  if (Array.isArray(meta.tags) && meta.tags.length > 0) details.push(`**Tags**: ${meta.tags.join(', ')}`);
+  return details;
 }
 
 export interface ElementDetectionResult {
@@ -104,9 +167,9 @@ export class SubmitToPortfolioTool {
     }
   }
 
-  private authManager: GitHubAuthManager;
-  private portfolioRepoManager: PortfolioRepoManager;
-  private portfolioManager: PortfolioManager;
+  private readonly authManager: GitHubAuthManager;
+  private readonly portfolioRepoManager: PortfolioRepoManager;
+  private readonly portfolioManager: PortfolioManager;
   private readonly fixedIndex?: PortfolioIndexManager;
   private readonly memoryRegistry?: DatabaseTenantMemoryRegistry;
   private get portfolioIndexManager(): PortfolioIndexManager {
@@ -114,16 +177,16 @@ export class SubmitToPortfolioTool {
     if (!this.fixedIndex) throw new Error('Authentic selected portfolio index required');
     return this.fixedIndex;
   }
-  private rateLimiter: IRateLimiter;
-  private fileOperations: IFileOperationsService;
-  private tokenManager: TokenManager;
+  private readonly rateLimiter: IRateLimiter;
+  private readonly fileOperations: IFileOperationsService;
+  private readonly tokenManager: TokenManager;
   private isAutoSubmitEnabled: () => boolean;
 
   constructor(private readonly apiCache: APICache, dependencies: SubmitToPortfolioToolDependencies) {
     // TYPE SAFETY FIX #1: Proper typing for apiCache parameter
     // Previously: constructor(apiCache: any)
     // Now: constructor(apiCache: APICache) with proper import
-    if (!dependencies || !dependencies.authManager) {
+    if (!dependencies?.authManager) {
       throw new Error('SubmitToPortfolioTool requires a GitHubAuthManager instance');
     }
     if (!dependencies.portfolioManager) {
@@ -158,11 +221,11 @@ export class SubmitToPortfolioTool {
    * @param params The input parameters from the user
    * @returns Validation result with normalized name or error response
    */
-  private async validateAndNormalizeParams(params: SubmitToPortfolioParams): Promise<{
+  private validateAndNormalizeParams(params: SubmitToPortfolioParams): {
     success: boolean;
     safeName?: string;
     error?: SubmitToPortfolioResult;
-  }> {
+  } {
     // Normalize user input to prevent Unicode attacks (DMCP-SEC-004)
     const normalizedName = UnicodeValidator.normalize(params.name);
     if (!normalizedName.isValid) {
@@ -228,8 +291,8 @@ export class SubmitToPortfolioTool {
    * @returns Content discovery result with element type and path or error response
    */
   private async discoverContentWithTypeDetection(
-    safeName: string, 
-    explicitType?: ElementType, 
+    safeName: string,
+    explicitType?: ElementType,
     originalName?: string
   ): Promise<{
     success: boolean;
@@ -237,114 +300,85 @@ export class SubmitToPortfolioTool {
     localPath?: string;
     error?: SubmitToPortfolioResult;
   }> {
-    let elementType = explicitType;
-    let localPath: string | null = null;
-    
-    if (elementType) {
+    const displayName = originalName || safeName;
+    if (explicitType) {
       // Type explicitly provided - search in that specific directory only
-      localPath = await this.findLocalContent(safeName, elementType);
-      if (!localPath) {
-        // UX IMPROVEMENT: Provide helpful suggestions for finding content
-        const elementDir = this.portfolioManager.getElementDir(elementType);
-        
-        return {
-          success: false,
-          error: {
-            success: false,
-            message: `Could not find ${elementType} named "${originalName || safeName}" in local portfolio.\n\n` +
-                    `**Searched in**: ${elementDir}\n\n` +
-                    `**Troubleshooting Tips**:\n` +
-                    `• Check if the file exists using your file explorer\n` +
-                    `• Try using the exact filename (without extension)\n` +
-                    `• Use \`list_portfolio\` to see all available ${elementType}\n` +
-                    `• If unsure of the type, omit --type and let the system detect it\n\n` +
-                    `**Common name formats that work**:\n` +
-                    `• "my-element" (kebab-case)\n` +
-                    `• "My Element" (with spaces)\n` +
-                    `• "MyElement" (PascalCase)\n` +
-                    `• Partial matches are supported`,
-            error: 'CONTENT_NOT_FOUND'
-          }
-        };
-      }
-    } else {
-      // CRITICAL FIX: No type provided - implement smart detection across ALL element types
-      // This prevents the previous hardcoded default to PERSONA and enables proper type detection
-      const detectionResult = await this.detectElementType(safeName);
-      this.assertMemoryOperation();
-      
-      if (!detectionResult.found) {
-        // UX IMPROVEMENT: Enhanced guidance with specific suggestions
-        const availableTypes = Object.values(ElementType).join(', ');
-        
-        // Get suggestions for similar names
-        const suggestions = await this.generateNameSuggestions(safeName);
-        this.assertMemoryOperation();
-        
-        let message = `Content "${originalName || safeName}" not found in portfolio.\n\n`;
-        message += `🔍 **Searched in all element types**: ${availableTypes}\n\n`;
-        
-        if (suggestions.length > 0) {
-          message += `💡 **Did you mean one of these?**\n`;
-          for (const suggestion of suggestions.slice(0, SEARCH_CONFIG.MAX_SUGGESTIONS)) {
-            message += `  • "${suggestion.name}" (${suggestion.type})\n`;
-          }
-          message += `\n`;
-        }
-        
-        message += `🛠️ **Troubleshooting Steps**:\n`;
-        message += `1. 📝 Use \`list_portfolio\` to see all available content\n`;
-        message += `2. 🔍 Check exact spelling and try variations:\n`;
-        message += `   • "${(originalName || safeName).toLowerCase()}" (lowercase)\n`;
-        message += `   • "${(originalName || safeName).replaceAll(/[^a-z0-9]/gi, '-').toLowerCase()}" (normalized)\n`;
-        if ((originalName || safeName).includes('.')) {
-          message += `   • "${(originalName || safeName).replaceAll('.', '')}" (no dots)\n`;
-        }
-        message += `3. 🎯 Specify element type: \`submit_collection_content "${originalName || safeName}" --type=personas\`\n`;
-        message += `4. 📁 Check if file exists in portfolio directories\n\n`;
-        message += `📝 **Tip**: The system searches filenames AND metadata names with fuzzy matching.`;
-        
-        return {
-          success: false,
-          error: {
-            success: false,
-            message,
-            error: 'CONTENT_NOT_FOUND'
-          }
-        };
-      }
-      
-      if (detectionResult.matches.length > 1) {
-        // Multiple matches found - ask user to specify type
-        const matchDetails = detectionResult.matches.map(m => `- ${m.type}: ${m.path}`).join('\n');
-        return {
-          success: false,
-          error: {
-            success: false,
-            message: `Content "${originalName || safeName}" found in multiple element types:\n\n${matchDetails}\n\n` +
-                    `Please specify the element type using the --type parameter to avoid ambiguity.`,
-            error: 'MULTIPLE_MATCHES_FOUND'
-          }
-        };
-      }
-      
-      // Single match found - use it
-      const match = detectionResult.matches[0];
-      elementType = match.type;
-      localPath = match.path;
-      
-      logger.info(`Smart detection: Found "${safeName}" as ${elementType}`, { 
-        name: safeName,
-        detectedType: elementType,
-        path: localPath
-      });
+      const localPath = await this.findLocalContent(safeName, explicitType);
+      if (localPath) return { success: true, elementType: explicitType, localPath };
+      return { success: false, error: this.typedNotFound(explicitType, displayName) };
     }
+    // CRITICAL FIX: No type provided - implement smart detection across ALL element types
+    // This prevents the previous hardcoded default to PERSONA and enables proper type detection
+    const detectionResult = await this.detectElementType(safeName);
+    this.assertMemoryOperation();
+    if (!detectionResult.found) {
+      // UX IMPROVEMENT: Enhanced guidance with specific suggestions
+      const suggestions = await this.generateNameSuggestions(safeName);
+      this.assertMemoryOperation();
+      return { success: false, error: this.untypedNotFound(displayName, suggestions) };
+    }
+    if (detectionResult.matches.length > 1) {
+      // Multiple matches found - ask user to specify type
+      const matchDetails = detectionResult.matches.map(m => `- ${m.type}: ${m.path}`).join('\n');
+      return {
+        success: false,
+        error: {
+          success: false,
+          message: `Content "${displayName}" found in multiple element types:\n\n${matchDetails}\n\n` +
+                  `Please specify the element type using the --type parameter to avoid ambiguity.`,
+          error: 'MULTIPLE_MATCHES_FOUND'
+        }
+      };
+    }
+    const match = detectionResult.matches[0];
+    logger.info(`Smart detection: Found "${safeName}" as ${match.type}`, { name: safeName, detectedType: match.type, path: match.path });
+    return { success: true, elementType: match.type, localPath: match.path };
+  }
 
+  /** UX IMPROVEMENT: Provide helpful suggestions for finding content of one type. */
+  private typedNotFound(elementType: ElementType, displayName: string): SubmitToPortfolioResult {
+    const elementDir = this.portfolioManager.getElementDir(elementType);
     return {
-      success: true,
-      elementType,
-      localPath
+      success: false,
+      message: `Could not find ${elementType} named "${displayName}" in local portfolio.\n\n` +
+              `**Searched in**: ${elementDir}\n\n` +
+              `**Troubleshooting Tips**:\n` +
+              `• Check if the file exists using your file explorer\n` +
+              `• Try using the exact filename (without extension)\n` +
+              `• Use \`list_portfolio\` to see all available ${elementType}\n` +
+              `• If unsure of the type, omit --type and let the system detect it\n\n` +
+              `**Common name formats that work**:\n` +
+              `• "my-element" (kebab-case)\n` +
+              `• "My Element" (with spaces)\n` +
+              `• "MyElement" (PascalCase)\n` +
+              `• Partial matches are supported`,
+      error: 'CONTENT_NOT_FOUND'
     };
+  }
+
+  private untypedNotFound(displayName: string, suggestions: Array<{ name: string; type: string }>): SubmitToPortfolioResult {
+    const availableTypes = Object.values(ElementType).join(', ');
+    let message = `Content "${displayName}" not found in portfolio.\n\n`;
+    message += `🔍 **Searched in all element types**: ${availableTypes}\n\n`;
+    if (suggestions.length > 0) {
+      message += `💡 **Did you mean one of these?**\n`;
+      for (const suggestion of suggestions.slice(0, SEARCH_CONFIG.MAX_SUGGESTIONS)) {
+        message += `  • "${suggestion.name}" (${suggestion.type})\n`;
+      }
+      message += `\n`;
+    }
+    message += `🛠️ **Troubleshooting Steps**:\n`;
+    message += `1. 📝 Use \`list_portfolio\` to see all available content\n`;
+    message += `2. 🔍 Check exact spelling and try variations:\n`;
+    message += `   • "${displayName.toLowerCase()}" (lowercase)\n`;
+    message += `   • "${displayName.replaceAll(/[^a-z0-9]/gi, '-').toLowerCase()}" (normalized)\n`;
+    if (displayName.includes('.')) {
+      message += `   • "${displayName.replaceAll('.', '')}" (no dots)\n`;
+    }
+    message += `3. 🎯 Specify element type: \`submit_collection_content "${displayName}" --type=personas\`\n`;
+    message += `4. 📁 Check if file exists in portfolio directories\n\n`;
+    message += `📝 **Tip**: The system searches filenames AND metadata names with fuzzy matching.`;
+    return { success: false, message, error: 'CONTENT_NOT_FOUND' };
   }
 
   /**
@@ -358,7 +392,7 @@ export class SubmitToPortfolioTool {
     error?: SubmitToPortfolioResult;
   }> {
     // SECURITY ENHANCEMENT (Task #7): Validate file path before processing
-    const pathValidation = await this.validatePortfolioPath(localPath);
+    const pathValidation = this.validatePortfolioPath(localPath);
     this.assertMemoryOperation();
     if (!pathValidation.isValid) {
       return {
@@ -426,77 +460,50 @@ export class SubmitToPortfolioTool {
    * @returns Metadata object for the element
    */
   private async prepareElementMetadata(
-    safeName: string, 
-    elementType: ElementType, 
+    safeName: string,
+    elementType: ElementType,
     authStatus: any,
     filePath?: string
   ): Promise<PortfolioElementMetadata> {
     // Try to extract metadata from the file if path is provided
-    let fileMetadata: Record<string, any> | null = null;
-    
-    if (filePath) {
-      fileMetadata = await this.extractElementMetadata(filePath);
-    }
-    
-    // TYPE SAFETY: Define extended metadata interface for better type safety
-    interface ExtendedMetadata extends PortfolioElementMetadata {
-      triggers?: string[];
-      category?: string;
-      age_rating?: string;
-      ai_generated?: boolean;
-      generation_method?: string;
-      license?: string;
-      tags?: string[];
-    }
-    
+    const fileMetadata: Record<string, any> | null = filePath ? await this.extractElementMetadata(filePath) : null;
+
     // Build metadata with real values from file, falling back to defaults
-    const metadata: ExtendedMetadata = {
+    const metadata: ExtendedMeta = {
       name: safeName,
-      description: fileMetadata?.description || 
-                   fileMetadata?.summary || 
+      description: fileMetadata?.description ||
+                   fileMetadata?.summary ||
                    `${elementType} submitted from local portfolio`,
       author: authStatus.username || fileMetadata?.author || 'unknown',
-      created: fileMetadata?.created || 
-               fileMetadata?.created_date || 
+      created: fileMetadata?.created ||
+               fileMetadata?.created_date ||
                new Date().toISOString(),
-      updated: fileMetadata?.updated || 
-               fileMetadata?.modified || 
+      updated: fileMetadata?.updated ||
+               fileMetadata?.modified ||
                new Date().toISOString(),
       version: fileMetadata?.version || '1.0.0'
     };
-    
-    // Add additional metadata fields if present (with type safety)
+
+    // Preserve other metadata fields that might be useful (with type safety)
+    // The field order is part of the serialized form the portfolio duplicate check hashes.
     if (fileMetadata) {
-      // Preserve other metadata fields that might be useful
-      if (fileMetadata.triggers && Array.isArray(fileMetadata.triggers)) {
-        metadata.triggers = fileMetadata.triggers;
-      }
-      if (fileMetadata.category && typeof fileMetadata.category === 'string') {
-        metadata.category = fileMetadata.category;
-      }
-      if (fileMetadata.age_rating && typeof fileMetadata.age_rating === 'string') {
-        metadata.age_rating = fileMetadata.age_rating;
-      }
-      if (fileMetadata.ai_generated !== undefined) {
-        metadata.ai_generated = Boolean(fileMetadata.ai_generated);
-      }
-      if (fileMetadata.generation_method && typeof fileMetadata.generation_method === 'string') {
-        metadata.generation_method = fileMetadata.generation_method;
-      }
-      if (fileMetadata.license && typeof fileMetadata.license === 'string') {
-        metadata.license = fileMetadata.license;
-      }
-      if (fileMetadata.tags && Array.isArray(fileMetadata.tags)) {
-        metadata.tags = fileMetadata.tags;
-      }
+      const stringField = (field: 'category' | 'age_rating' | 'generation_method' | 'license') => {
+        if (fileMetadata[field] && typeof fileMetadata[field] === 'string') metadata[field] = fileMetadata[field];
+      };
+      if (Array.isArray(fileMetadata.triggers)) metadata.triggers = fileMetadata.triggers;
+      stringField('category');
+      stringField('age_rating');
+      if (fileMetadata.ai_generated !== undefined) metadata.ai_generated = Boolean(fileMetadata.ai_generated);
+      stringField('generation_method');
+      stringField('license');
+      if (Array.isArray(fileMetadata.tags)) metadata.tags = fileMetadata.tags;
     }
-    
+
     logger.info('Prepared element metadata', {
       elementName: safeName,
       hasFileMetadata: !!fileMetadata,
       description: metadata.description.substring(0, 100) // Log first 100 chars
     });
-    
     return metadata;
   }
 
@@ -551,59 +558,25 @@ export class SubmitToPortfolioTool {
     try {
       const content = await this.fileOperations.readFile(filePath, { source: 'SubmitToPortfolioTool.extractElementMetadata' });
       this.assertMemoryOperation();
-      
       // SECURITY FIX: Use SecureYamlParser to prevent YAML deserialization attacks
       // Previously would have used: yaml.load(yamlContent) which is vulnerable
-      // Now: Uses SecureYamlParser.parse() which validates and sanitizes
       try {
         const parsed = SecureYamlParser.parse(content, {
           maxYamlSize: 64 * 1024,  // 64KB limit for YAML
           validateContent: false,    // Don't validate content field (just metadata)
           validateFields: false      // Don't enforce persona-specific rules
         });
-        
         // Ensure we got an object back
         if (parsed.data && typeof parsed.data === 'object' && !Array.isArray(parsed.data)) {
-          logger.debug('Extracted metadata from element file', {
-            path: filePath,
-            metadataKeys: Object.keys(parsed.data)
-          });
+          logger.debug('Extracted metadata from element file', { path: filePath, metadataKeys: Object.keys(parsed.data) });
           return parsed.data;
         }
-        
         logger.debug('Parsed data is not a valid metadata object', { path: filePath });
         return null;
-        
       } catch {
         // SecureYamlParser throws on invalid YAML, try alternate frontmatter pattern
-        // Handle files that might have frontmatter without full document structure
-        const frontmatterMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-        
-        if (frontmatterMatch && frontmatterMatch[1]) {
-          try {
-            // Reconstruct full document for SecureYamlParser
-            const fullContent = `---\n${frontmatterMatch[1]}\n---\n`;
-            const parsed = SecureYamlParser.parse(fullContent, {
-              maxYamlSize: 64 * 1024,
-              validateContent: false,
-              validateFields: false
-            });
-            
-            if (parsed.data && typeof parsed.data === 'object') {
-              return parsed.data;
-            }
-          } catch (innerError) {
-            logger.debug('Failed to parse frontmatter with SecureYamlParser', {
-              path: filePath,
-              error: innerError instanceof Error ? innerError.message : String(innerError)
-            });
-          }
-        }
-        
-        logger.debug('No valid frontmatter found in element file', { path: filePath });
-        return null;
+        return this.parseFrontmatterFallback(content, filePath);
       }
-      
     } catch (error) {
       this.assertMemoryOperation();
       logger.warn('Failed to extract metadata from element file', {
@@ -612,6 +585,29 @@ export class SubmitToPortfolioTool {
       });
       return null;
     }
+  }
+
+  /** Handle files that have frontmatter without the full document structure. */
+  private parseFrontmatterFallback(content: string, filePath: string): Record<string, any> | null {
+    const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---/.exec(content)?.[1];
+    if (frontmatter) {
+      try {
+        // Reconstruct full document for SecureYamlParser
+        const parsed = SecureYamlParser.parse(`---\n${frontmatter}\n---\n`, {
+          maxYamlSize: 64 * 1024,
+          validateContent: false,
+          validateFields: false
+        });
+        if (parsed.data && typeof parsed.data === 'object') return parsed.data;
+      } catch (innerError) {
+        logger.debug('Failed to parse frontmatter with SecureYamlParser', {
+          path: filePath,
+          error: innerError instanceof Error ? innerError.message : String(innerError)
+        });
+      }
+    }
+    logger.debug('No valid frontmatter found in element file', { path: filePath });
+    return null;
   }
 
   /**
@@ -762,192 +758,62 @@ export class SubmitToPortfolioTool {
    * @param filePath The file path to validate
    * @returns Validation result with secure path or error response
    */
-  private async validatePortfolioPath(filePath: string): Promise<{
+  private validatePortfolioPath(filePath: string): {
     isValid: boolean;
     safePath?: string;
     error?: SubmitToPortfolioResult;
-  }> {
+  } {
+    const refuse = (event: Omit<Parameters<typeof SecurityMonitor.logSecurityEvent>[0], 'source'>, message: string, code: string) => {
+      SecurityMonitor.logSecurityEvent({ source: 'SubmitToPortfolioTool.validatePortfolioPath', ...event });
+      return { isValid: false, error: { success: false, message, error: code } };
+    };
     try {
       // Basic null/undefined check
       if (!filePath || typeof filePath !== 'string') {
-        SecurityMonitor.logSecurityEvent({
-          type: 'PATH_TRAVERSAL_ATTEMPT',
-          severity: 'MEDIUM',
-          source: 'SubmitToPortfolioTool.validatePortfolioPath',
-          details: 'Invalid path provided - null, undefined, or non-string'
-        });
-        
-        return {
-          isValid: false,
-          error: {
-            success: false,
-            message: 'Invalid file path provided',
-            error: 'INVALID_PATH'
-          }
-        };
+        return refuse({ type: 'PATH_TRAVERSAL_ATTEMPT', severity: 'MEDIUM', details: 'Invalid path provided - null, undefined, or non-string' },
+          'Invalid file path provided', 'INVALID_PATH');
       }
-
       // Check for suspicious patterns that could indicate path traversal or injection
-      const suspiciousPatterns = [
-        /\.\./,                    // Path traversal
-        /\/\.\./,                  // Unix path traversal
-        /\\\.\./,                  // Windows path traversal
-        // eslint-disable-next-line no-control-regex -- Intentionally detecting null bytes for security
-        /\u0000/,                    // NOSONAR - Null bytes detection for security
-        // eslint-disable-next-line no-control-regex -- Intentionally detecting control chars for security
-        /[\u0001-\u001f\u007f-\u009f]/,    // NOSONAR - Control characters detection for security
-        /[<>:"|?*]/,               // Invalid filename characters on Windows
-        /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i, // Reserved Windows names
-        /^\./,                     // Hidden files (starting with dot)
-        /\s+$/,                    // Trailing whitespace
-        /^[\s]*$/,                 // Only whitespace
-        /%[0-9a-fA-F]{2}/,         // URL encoding (potential bypass attempt)
-        /\\x[0-9a-fA-F]{2}/,       // Hex encoding
-        /\$\{.*\}/,                // Template literal injection
-        /`.*`/,                    // Backtick injection
-        /[\\\/]{2,}/               // Multiple consecutive slashes
-      ];
-
-      for (const pattern of suspiciousPatterns) {
-        if (pattern.test(filePath)) {
-          SecurityMonitor.logSecurityEvent({
-            type: 'PATH_TRAVERSAL_ATTEMPT',
-            severity: 'HIGH',
-            source: 'SubmitToPortfolioTool.validatePortfolioPath',
-            details: `Suspicious pattern detected in file path: ${pattern.source}`,
-            metadata: {
-              pathLength: filePath.length,
-              pattern: pattern.source
-            }
-          });
-          
-          return {
-            isValid: false,
-            error: {
-              success: false,
-              message: 'File path contains invalid or suspicious characters',
-              error: 'SUSPICIOUS_PATH_PATTERN'
-            }
-          };
-        }
+      const suspicious = SUSPICIOUS_PATH_PATTERNS.find(pattern => pattern.test(filePath));
+      if (suspicious) {
+        return refuse({ type: 'PATH_TRAVERSAL_ATTEMPT', severity: 'HIGH',
+          details: `Suspicious pattern detected in file path: ${suspicious.source}`,
+          metadata: { pathLength: filePath.length, pattern: suspicious.source } },
+          'File path contains invalid or suspicious characters', 'SUSPICIOUS_PATH_PATTERN');
       }
-
       // Check path length (prevent buffer overflow attempts)
       const MAX_PATH_LENGTH = process.platform === 'win32' ? 260 : 4096;
       if (filePath.length > MAX_PATH_LENGTH) {
-        SecurityMonitor.logSecurityEvent({
-          type: 'PATH_TRAVERSAL_ATTEMPT',
-          severity: 'MEDIUM',
-          source: 'SubmitToPortfolioTool.validatePortfolioPath',
-          details: `File path exceeds maximum length: ${filePath.length} > ${MAX_PATH_LENGTH}`
-        });
-        
-        return {
-          isValid: false,
-          error: {
-            success: false,
-            message: 'File path is too long',
-            error: 'PATH_TOO_LONG'
-          }
-        };
+        return refuse({ type: 'PATH_TRAVERSAL_ATTEMPT', severity: 'MEDIUM',
+          details: `File path exceeds maximum length: ${filePath.length} > ${MAX_PATH_LENGTH}` },
+          'File path is too long', 'PATH_TOO_LONG');
       }
-
       // Normalize path to resolve any relative components safely
       let normalizedPath: string;
       try {
-        // Remove null bytes and normalize
-        // eslint-disable-next-line no-control-regex -- Intentionally removing null bytes for security
-        const cleanPath = filePath.replaceAll(/\u0000/g, ''); // NOSONAR - Removing null bytes for security
-        normalizedPath = path.normalize(cleanPath);
-        
-        // Check if path is within the portfolio directory
-      const portfolioBase = this.portfolioManager.getBaseDir();
-        
-        // For absolute paths, verify they're within the portfolio directory
-        if (path.isAbsolute(normalizedPath)) {
-          const resolvedPath = path.resolve(normalizedPath);
-          const resolvedBase = path.resolve(portfolioBase);
-          
-          // Path must be within the portfolio directory
-          if (!resolvedPath.startsWith(resolvedBase)) {
-            throw new Error('Path is outside portfolio directory');
-          }
-        } else if (normalizedPath.includes('..')) {
-          // Relative paths with .. are not allowed
-          throw new Error('Path contains directory traversal');
-        }
+        normalizedPath = this.normalizeWithinPortfolio(filePath);
       } catch (error) {
-      this.assertMemoryOperation();
-        SecurityMonitor.logSecurityEvent({
-          type: 'PATH_TRAVERSAL_ATTEMPT',
-          severity: 'HIGH',
-          source: 'SubmitToPortfolioTool.validatePortfolioPath',
-          details: `Path normalization failed: ${error instanceof Error ? error.message : 'unknown error'}`
-        });
-        
-        return {
-          isValid: false,
-          error: {
-            success: false,
-            message: 'File path could not be safely processed',
-            error: 'PATH_NORMALIZATION_FAILED'
-          }
-        };
+        this.assertMemoryOperation();
+        return refuse({ type: 'PATH_TRAVERSAL_ATTEMPT', severity: 'HIGH',
+          details: `Path normalization failed: ${error instanceof Error ? error.message : 'unknown error'}` },
+          'File path could not be safely processed', 'PATH_NORMALIZATION_FAILED');
       }
-
       // Validate file extension (only allow safe extensions for portfolio content)
-      const allowedExtensions = ['.md', '.markdown', '.txt', '.yml', '.yaml', '.json'];
       const fileExtension = path.extname(normalizedPath).toLowerCase();
-      
-      if (fileExtension && !allowedExtensions.includes(fileExtension)) {
-        SecurityMonitor.logSecurityEvent({
-          type: 'CONTENT_INJECTION_ATTEMPT',
-          severity: 'MEDIUM',
-          source: 'SubmitToPortfolioTool.validatePortfolioPath',
-          details: `Disallowed file extension: ${fileExtension}`,
-          metadata: {
-            allowedExtensions: allowedExtensions.join(', ')
-          }
-        });
-        
-        return {
-          isValid: false,
-          error: {
-            success: false,
-            message: `File extension '${fileExtension}' is not allowed. Allowed extensions: ${allowedExtensions.join(', ')}`,
-            error: 'INVALID_FILE_EXTENSION'
-          }
-        };
+      if (fileExtension && !ALLOWED_PORTFOLIO_EXTENSIONS.includes(fileExtension)) {
+        return refuse({ type: 'CONTENT_INJECTION_ATTEMPT', severity: 'MEDIUM', details: `Disallowed file extension: ${fileExtension}`,
+          metadata: { allowedExtensions: ALLOWED_PORTFOLIO_EXTENSIONS.join(', ') } },
+          `File extension '${fileExtension}' is not allowed. Allowed extensions: ${ALLOWED_PORTFOLIO_EXTENSIONS.join(', ')}`, 'INVALID_FILE_EXTENSION');
       }
-
       // Validate filename characters (only allow safe characters)
       const basename = path.basename(normalizedPath);
-      const safeFilenamePattern = /^[a-zA-Z0-9\-_.\s()[\]{}]+$/;
-      
-      if (basename && !safeFilenamePattern.test(basename)) {
-        SecurityMonitor.logSecurityEvent({
-          type: 'CONTENT_INJECTION_ATTEMPT',
-          severity: 'MEDIUM',
-          source: 'SubmitToPortfolioTool.validatePortfolioPath',
-          details: 'Filename contains potentially dangerous characters',
-          metadata: {
-            filename: basename,
-            allowedPattern: safeFilenamePattern.source
-          }
-        });
-        
-        return {
-          isValid: false,
-          error: {
-            success: false,
-            message: 'Filename contains invalid characters. Only letters, numbers, spaces, hyphens, underscores, dots, and common brackets are allowed.',
-            error: 'INVALID_FILENAME_CHARACTERS'
-          }
-        };
+      if (basename && !SAFE_FILENAME_PATTERN.test(basename)) {
+        return refuse({ type: 'CONTENT_INJECTION_ATTEMPT', severity: 'MEDIUM', details: 'Filename contains potentially dangerous characters',
+          metadata: { filename: basename, allowedPattern: SAFE_FILENAME_PATTERN.source } },
+          'Filename contains invalid characters. Only letters, numbers, spaces, hyphens, underscores, dots, and common brackets are allowed.',
+          'INVALID_FILENAME_CHARACTERS');
       }
-
-      // Log successful validation with correct event type for path validation
-      // Fixed: Was using TOKEN_VALIDATION_SUCCESS which is semantically incorrect for path validation
+      // Log successful validation with the event type for path validation
       SecurityMonitor.logSecurityEvent({
         type: 'PATH_VALIDATION_SUCCESS',
         severity: 'LOW',
@@ -959,30 +825,30 @@ export class SubmitToPortfolioTool {
           fileExtension: fileExtension || 'none'
         }
       });
-
-      return {
-        isValid: true,
-        safePath: normalizedPath
-      };
-
+      return { isValid: true, safePath: normalizedPath };
     } catch (error) {
       this.assertMemoryOperation();
-      SecurityMonitor.logSecurityEvent({
-        type: 'PATH_TRAVERSAL_ATTEMPT',
-        severity: 'HIGH',
-        source: 'SubmitToPortfolioTool.validatePortfolioPath',
-        details: `Path validation error: ${error instanceof Error ? error.message : 'unknown error'}`
-      });
-      
-      return {
-        isValid: false,
-        error: {
-          success: false,
-          message: 'Unable to validate file path. Please check the file path and try again.',
-          error: 'PATH_VALIDATION_ERROR'
-        }
-      };
+      return refuse({ type: 'PATH_TRAVERSAL_ATTEMPT', severity: 'HIGH',
+        details: `Path validation error: ${error instanceof Error ? error.message : 'unknown error'}` },
+        'Unable to validate file path. Please check the file path and try again.', 'PATH_VALIDATION_ERROR');
     }
+  }
+
+  /** Normalize a path and refuse one that leaves the portfolio directory. */
+  private normalizeWithinPortfolio(filePath: string): string {
+    if (filePath.includes('\0')) throw new Error('Null bytes are not allowed in a path');
+    const normalizedPath = path.normalize(filePath);
+    const portfolioBase = path.resolve(this.portfolioManager.getBaseDir());
+    if (path.isAbsolute(normalizedPath)) {
+      // Native path.relative applies Windows case folding and checks directory boundaries.
+      const relative = path.relative(portfolioBase, path.resolve(normalizedPath));
+      if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+        throw new Error('Path is outside portfolio directory');
+      }
+    } else if (normalizedPath.includes('..')) {
+      throw new Error('Path contains directory traversal');
+    }
+    return normalizedPath;
   }
 
   /**
@@ -1341,53 +1207,8 @@ export class SubmitToPortfolioTool {
     authStatus: any,
     localPath?: string  // Local file path for collection submission
   ): Promise<SubmitToPortfolioResult> {
-    // DUPLICATE DETECTION: Check if content already exists in portfolio
-    const repoFullName = `${authStatus.username}/${this.portfolioRepoManager.getRepositoryName()}`;
-    // Issue #815: Use correct file extension per element type
-    const filePath = `${elementType}/${safeName}${getElementFileExtension(elementType)}`;
-    
-    // Prepare the full content that would be saved
-    // Issue #852: Memories are pure YAML — don't wrap in markdown frontmatter
-    const isYamlType = getElementFileExtension(elementType) === '.yaml';
-    const fullContent = isYamlType
-      ? content  // YAML elements: use raw content (matches serialize() output)
-      : `---\n${JSON.stringify(metadata, null, 2)}\n---\n\n${content}`;
-    
-    const isDuplicate = await this.checkExistingContent(
-      repoFullName, 
-      filePath, 
-      fullContent,
-      authStatus.token
-    );
-    this.assertMemoryOperation();
-    
-    let fileUrl: string | null = null;
-    
-    if (isDuplicate) {
-      // Content already exists, construct the URL without uploading
-      fileUrl = `https://github.com/${repoFullName}/blob/main/${filePath}`;
-      logger.info('Skipped duplicate upload to portfolio', {
-        elementName: safeName,
-        path: filePath
-      });
-    } else {
-      // Create element structure to save
-      const element: PortfolioElement = {
-        type: elementType,
-        metadata,
-        content
-      };
-      
-      // TYPE SAFETY FIX #2: Use adapter pattern instead of complex type casting
-      // Previously: element as unknown as Parameters<typeof this.portfolioRepoManager.saveElement>[0]
-      // Now: Clean adapter pattern that implements IElement interface properly
-      const adapter = new PortfolioElementAdapter(element);
-      
-      // UX IMPROVEMENT: Add retry logic for transient failures
-      fileUrl = await this.saveElementWithRetry(adapter, safeName, elementType);
-    }
-    
-    if (!fileUrl) {
+    const published = await this.publishToPortfolio(safeName, elementType, metadata, content, authStatus);
+    if (!published) {
       return {
         success: false,
         message: 'Failed to save element to GitHub portfolio after multiple attempts.\n\n' +
@@ -1399,24 +1220,16 @@ export class SubmitToPortfolioTool {
         error: 'SAVE_FAILED'
       };
     }
-
+    const { fileUrl, wasDuplicate } = published;
     // Log submission result (DMCP-SEC-006)
-    // Check if this was a duplicate skip or actual upload
-    const wasDuplicate = fileUrl && fileUrl.includes('blob/main/') && !fileUrl.includes('/commit/');
-    
-    if (wasDuplicate) {
-      logger.info(`Skipped duplicate upload for ${safeName} - already in portfolio`, {
-        elementType,
-        username: authStatus.username,
-        fileUrl
-      });
-    } else {
-      logger.info(`Successfully submitted ${safeName} to GitHub portfolio`, {
-        elementType,
-        username: authStatus.username,
-        fileUrl
-      });
-    }
+    logger.info(wasDuplicate ? `Skipped duplicate upload for ${safeName} - already in portfolio` : `Successfully submitted ${safeName} to GitHub portfolio`, {
+      elementType,
+      username: authStatus.username,
+      fileUrl
+    });
+    const portfolioMessage = wasDuplicate ?
+      `✅ ${safeName} already exists in your GitHub portfolio (no changes needed)` :
+      `✅ Successfully uploaded ${safeName} to your GitHub portfolio!`;
 
     // SECURITY ENHANCEMENT (Task #14): Smart token management for collection submission
     const collectionTokenManagement = await this.manageTokenForLongOperation('collection_submission');
@@ -1424,10 +1237,6 @@ export class SubmitToPortfolioTool {
     if (!collectionTokenManagement.canProceed) {
       // Token management failed for collection submission, but main submission succeeded
       const errorMessage = collectionTokenManagement.error?.message || 'Token management failed';
-      const portfolioMessage = wasDuplicate ? 
-        `✅ ${safeName} already exists in your GitHub portfolio (no changes needed)` :
-        `✅ Successfully uploaded ${safeName} to your GitHub portfolio!`;
-      
       return {
         success: true,
         message: `${portfolioMessage}\n📁 Portfolio URL: ${fileUrl}\n\n⚠️ Collection submission skipped: ${errorMessage}`,
@@ -1436,12 +1245,10 @@ export class SubmitToPortfolioTool {
     }
 
     const token = collectionTokenManagement.token!;
-
     // Provide refresh guidance if recommended for collection submission
     if (collectionTokenManagement.refreshRecommended) {
-      const tokenType = this.tokenManager.getTokenType(token);
       logger.info('Collection submission proceeding with aging token', {
-        tokenType,
+        tokenType: this.tokenManager.getTokenType(token),
         recommendation: 'If collection submission fails, try re-authenticating with setup_github_auth'
       });
     }
@@ -1459,34 +1266,60 @@ export class SubmitToPortfolioTool {
     });
     this.assertMemoryOperation();
 
-    // Build the response message based on what happened
-    const portfolioMessage = wasDuplicate ? 
-      `✅ ${safeName} already exists in your GitHub portfolio (no changes needed)` :
-      `✅ Successfully uploaded ${safeName} to your GitHub portfolio!`;
-    
-    let message = `${portfolioMessage}\n`;
-    message += `📁 Portfolio URL: ${fileUrl}\n\n`;
-    
-    if (collectionSubmissionResult.submitted) {
-      if (collectionSubmissionResult.isDuplicate) {
-        message += `📋 Collection issue already exists (no new submission needed)\n`;
-        message += `🔗 Issue: ${collectionSubmissionResult.issueUrl}`;
-      } else {
-        message += `🎉 Also submitted to DollhouseMCP collection for community review!\n`;
-        message += `📋 Issue: ${collectionSubmissionResult.issueUrl}`;
-      }
-    } else if (collectionSubmissionResult.declined) {
-      message += `💡 You can submit to the collection later using the same command.`;
-    } else if (collectionSubmissionResult.error) {
-      message += `⚠️ Collection submission failed: ${collectionSubmissionResult.error}\n`;
-      message += `💡 You can manually submit at: https://github.com/DollhouseMCP/collection/issues/new`;
-    }
-
     return {
       success: true,
-      message,
+      message: `${portfolioMessage}\n📁 Portfolio URL: ${fileUrl}\n\n${this.describeCollectionOutcome(collectionSubmissionResult)}`,
       url: fileUrl
     };
+  }
+
+  /** Upload the definition unless the portfolio already holds identical content. */
+  private async publishToPortfolio(
+    safeName: string,
+    elementType: ElementType,
+    metadata: PortfolioElementMetadata,
+    content: string,
+    authStatus: any
+  ): Promise<{ fileUrl: string; wasDuplicate: boolean } | null> {
+    // DUPLICATE DETECTION: Check if content already exists in portfolio
+    const repoFullName = `${authStatus.username}/${this.portfolioRepoManager.getRepositoryName()}`;
+    // Issue #815: Use correct file extension per element type
+    const filePath = `${elementType}/${safeName}${getElementFileExtension(elementType)}`;
+    // Issue #852: Memories are pure YAML — don't wrap in markdown frontmatter
+    const isYamlType = getElementFileExtension(elementType) === '.yaml';
+    const fullContent = isYamlType
+      ? content  // YAML elements: use raw content (matches serialize() output)
+      : `---\n${JSON.stringify(metadata, null, 2)}\n---\n\n${content}`;
+    const isDuplicate = await this.checkExistingContent(repoFullName, filePath, fullContent, authStatus.token);
+    this.assertMemoryOperation();
+
+    let fileUrl: string | null;
+    if (isDuplicate) {
+      // Content already exists, construct the URL without uploading
+      fileUrl = `https://github.com/${repoFullName}/blob/main/${filePath}`;
+      logger.info('Skipped duplicate upload to portfolio', { elementName: safeName, path: filePath });
+    } else {
+      // TYPE SAFETY FIX #2: Use adapter pattern instead of complex type casting
+      const adapter = new PortfolioElementAdapter({ type: elementType, metadata, content });
+      // UX IMPROVEMENT: Add retry logic for transient failures
+      fileUrl = await this.saveElementWithRetry(adapter, safeName, elementType);
+    }
+    if (!fileUrl) return null;
+    // A duplicate skip is recognisable by its blob URL; an upload reports a commit URL.
+    return { fileUrl, wasDuplicate: fileUrl.includes('blob/main/') && !fileUrl.includes('/commit/') };
+  }
+
+  private describeCollectionOutcome(result: { submitted: boolean; declined: boolean; error?: string; issueUrl?: string; isDuplicate?: boolean }): string {
+    if (result.submitted) {
+      return result.isDuplicate
+        ? `📋 Collection issue already exists (no new submission needed)\n🔗 Issue: ${result.issueUrl}`
+        : `🎉 Also submitted to DollhouseMCP collection for community review!\n📋 Issue: ${result.issueUrl}`;
+    }
+    if (result.declined) return `💡 You can submit to the collection later using the same command.`;
+    if (result.error) {
+      return `⚠️ Collection submission failed: ${result.error}\n💡 You can manually submit at: https://github.com/DollhouseMCP/collection/issues/new`;
+    }
+    return '';
   }
 
   async execute(params: SubmitToPortfolioParams): Promise<SubmitToPortfolioResult> {
@@ -1495,111 +1328,64 @@ export class SubmitToPortfolioTool {
     if (params.type !== undefined) this.assertSubmissionType(params.type);
     const startTime = Date.now();
     const timings: Record<string, number> = {};
-    
+    const step = async <R>(index: number, key: string, title: string, work: () => Promise<R>,
+      summary: (result: R) => Record<string, unknown> = () => ({})): Promise<R> => {
+      logger.info(`Step ${index}/8: ${title}...`);
+      const started = Date.now();
+      const result = await work();
+      this.assertMemoryOperation();
+      timings[key] = Date.now() - started;
+      logger.info(`✅ Step ${index} complete (${timings[key]}ms)`, summary(result));
+      return result;
+    };
+
     logger.info('🚀 SUBMISSION WORKFLOW STARTING', {
       params: JSON.stringify(params),
       timestamp: new Date().toISOString()
     });
-    
+
     try {
       // Step 1: Validate and normalize input parameters
-      logger.info('📋 Step 1/8: Validating parameters...');
-      const step1Start = Date.now();
-      const validationResult = await this.validateAndNormalizeParams(params);
-      this.assertMemoryOperation();
-      timings['validation'] = Date.now() - step1Start;
-      logger.info(`✅ Step 1 complete (${timings['validation']}ms)`);
-      if (!validationResult.success) {
-        return validationResult.error!;
-      }
-      const safeName = validationResult.safeName!;
+      const validation = await step(1, 'validation', '📋 Validating parameters', () => Promise.resolve(this.validateAndNormalizeParams(params)));
+      if (!validation.success) return validation.error!;
+      const safeName = validation.safeName!;
 
       // Step 2: Find content locally with smart type detection
-      logger.info('🔍 Step 2/8: Finding content locally...');
-      const step2Start = Date.now();
-      const contentResult = await this.discoverContentWithTypeDetection(safeName!, params.type, params.name);
-      this.assertMemoryOperation();
-      timings['contentDiscovery'] = Date.now() - step2Start;
-      logger.info(`✅ Step 2 complete (${timings['contentDiscovery']}ms)`, {
-        found: contentResult.success,
-        elementType: contentResult.elementType,
-        path: contentResult.localPath
-      });
-      if (!contentResult.success) {
-        return contentResult.error!;
-      }
-      this.assertMemoryOperation();
-      const elementType = contentResult.elementType!;
+      const discovery = await step(2, 'contentDiscovery', '🔍 Finding content locally',
+        () => this.discoverContentWithTypeDetection(safeName, params.type, params.name),
+        result => ({ found: result.success, elementType: result.elementType, path: result.localPath }));
+      if (!discovery.success) return discovery.error!;
+      const elementType = discovery.elementType!;
       this.assertSubmissionType(elementType);
-      const localPath = contentResult.localPath!;
+      const localPath = discovery.localPath!;
 
-      // Step 3: Validate file and content security (including size check)
-      // This happens BEFORE authentication so users get immediate feedback about file issues
-      logger.info('🔒 Step 3/8: Validating security and file size...');
-      const step3Start = Date.now();
-      const securityResult = await this.validateFileAndContent(localPath);
-      this.assertMemoryOperation();
-      timings['security'] = Date.now() - step3Start;
-      logger.info(`✅ Step 3 complete (${timings['security']}ms)`);
-      if (!securityResult.success) {
-        return securityResult.error!;
-      }
-      const content = securityResult.content!;
+      // Step 3: Validate file and content security (including size check), BEFORE authentication
+      // so users get immediate feedback about file issues
+      const security = await step(3, 'security', '🔒 Validating security and file size', () => this.validateFileAndContent(localPath));
+      if (!security.success) return security.error!;
+      const content = security.content!;
 
-      // Step 4: Check authentication status
-      // This happens AFTER file validation so users don't need to auth just to learn their file is too large
-      logger.info('🔐 Step 4/8: Checking authentication...');
-      const step4Start = Date.now();
-      const authResult = await this.checkAuthentication();
-      this.assertMemoryOperation();
-      timings['authentication'] = Date.now() - step4Start;
-      logger.info(`✅ Step 4 complete (${timings['authentication']}ms)`, {
-        username: authResult.authStatus?.username,
-        hasToken: !!authResult.authStatus?.hasToken
-      });
-      if (!authResult.success) {
-        return authResult.error!;
-      }
-      const authStatus = authResult.authStatus!;
+      // Step 4: Check authentication status, AFTER file validation so users don't need to auth
+      // just to learn their file is too large
+      const auth = await step(4, 'authentication', '🔐 Checking authentication', () => this.checkAuthentication(),
+        result => ({ username: result.authStatus?.username, hasToken: !!result.authStatus?.hasToken }));
+      if (!auth.success) return auth.error!;
+      const authStatus = auth.authStatus!;
 
       // Step 5: Prepare metadata for element
-      logger.info('📝 Step 5/8: Preparing metadata...');
-      const step5Start = Date.now();
-      const metadata = await this.prepareElementMetadata(safeName!, elementType, authStatus, localPath);
-      this.assertMemoryOperation();
-      timings['metadata'] = Date.now() - step5Start;
-      logger.info(`✅ Step 5 complete (${timings['metadata']}ms)`, {
-        author: metadata.author,
-        elementName: safeName
-      });
+      const metadata = await step(5, 'metadata', '📝 Preparing metadata',
+        () => this.prepareElementMetadata(safeName, elementType, authStatus, localPath),
+        result => ({ author: result.author, elementName: safeName }));
 
       // Step 6: Set up GitHub repository access
-      logger.info('🔧 Step 6/8: Setting up GitHub repository...');
-      const step6Start = Date.now();
-      const repoResult = await this.setupGitHubRepository(authStatus);
-      this.assertMemoryOperation();
-      timings['repoSetup'] = Date.now() - step6Start;
-      logger.info(`✅ Step 6 complete (${timings['repoSetup']}ms)`, {
-        success: repoResult.success
-      });
-      if (!repoResult.success) {
-        return repoResult.error!;
-      }
+      const repo = await step(6, 'repoSetup', '🔧 Setting up GitHub repository', () => this.setupGitHubRepository(authStatus),
+        result => ({ success: result.success }));
+      if (!repo.success) return repo.error!;
 
       // Step 7: Submit element to portfolio and handle collection submission
-      logger.info('📤 Step 7/8: Submitting to portfolio...');
-      const step7Start = Date.now();
-      const result = await this.submitElementAndHandleResponse(
-        safeName!, 
-        elementType, 
-        metadata, 
-        content, 
-        authStatus,
-        localPath  // Pass file path for collection submission
-      );
-      this.assertMemoryOperation();
-      timings['submission'] = Date.now() - step7Start;
-      
+      const result = await step(7, 'submission', '📤 Submitting to portfolio',
+        () => this.submitElementAndHandleResponse(safeName, elementType, metadata, content, authStatus, localPath));
+
       // Step 8: Final reporting
       timings['total'] = Date.now() - startTime;
       logger.info('✨ SUBMISSION WORKFLOW COMPLETE', {
@@ -1607,49 +1393,36 @@ export class SubmitToPortfolioTool {
         timings,
         totalTime: `${timings['total']}ms`
       });
-      
       return result;
-
     } catch (error) {
       this.assertMemoryOperation();
       if (this.memoryOperation) throw error;
-      // SECURITY ENHANCEMENT (Task #14): Enhanced error handling with token refresh guidance
-      ErrorHandler.logError('submitToPortfolio', error, {
-        elementName: params.name,
-        elementType: params.type
-      });
-
-      // Check if error is token-related and provide refresh guidance
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      const isTokenError = errorMessage.toLowerCase().includes('token') || 
-                          errorMessage.toLowerCase().includes('auth') ||
-                          errorMessage.toLowerCase().includes('401') ||
-                          errorMessage.toLowerCase().includes('403');
-
-      let formattedError = ErrorHandler.formatForResponse(error);
-
-      if (isTokenError) {
-        try {
-          // Get current token to determine type for guidance
-          const currentToken = await this.tokenManager.getGitHubTokenAsync();
-          this.assertMemoryOperation();
-          if (currentToken) {
-            const tokenType = this.tokenManager.getTokenType(currentToken);
-            const refreshGuidance = this.formatTokenRefreshGuidance('portfolio submission', tokenType);
-            
-            // Append refresh guidance to error message
-            if (formattedError.message) {
-              formattedError.message += refreshGuidance;
-            }
-          }
-        } catch {
-          // If we can't get token info, provide generic guidance
-          formattedError.message += '\n\n🔄 **Authentication Issue**: Try running `setup_github_auth` to refresh your authentication.';
-        }
-      }
-
-      return formattedError;
+      return this.formatExecuteFailure(error, params);
     }
+  }
+
+  /** SECURITY ENHANCEMENT (Task #14): error response with token refresh guidance when the failure looks token-related. */
+  private async formatExecuteFailure(error: unknown, params: SubmitToPortfolioParams): Promise<SubmitToPortfolioResult> {
+    ErrorHandler.logError('submitToPortfolio', error, {
+      elementName: params.name,
+      elementType: params.type
+    });
+    const errorMessage = (error instanceof Error ? error.message : String(error)).toLowerCase();
+    const isTokenError = ['token', 'auth', '401', '403'].some(marker => errorMessage.includes(marker));
+    const formattedError = ErrorHandler.formatForResponse(error);
+    if (!isTokenError) return formattedError;
+    try {
+      // Get current token to determine type for guidance
+      const currentToken = await this.tokenManager.getGitHubTokenAsync();
+      this.assertMemoryOperation();
+      if (currentToken && formattedError.message) {
+        formattedError.message += this.formatTokenRefreshGuidance('portfolio submission', this.tokenManager.getTokenType(currentToken));
+      }
+    } catch {
+      // If we can't get token info, provide generic guidance
+      formattedError.message += '\n\n🔄 **Authentication Issue**: Try running `setup_github_auth` to refresh your authentication.';
+    }
+    return formattedError;
   }
 
   /**
@@ -1733,24 +1506,11 @@ export class SubmitToPortfolioTool {
    * Creates an issue in the DollhouseMCP/collection repository
    * ENHANCEMENT (Issue #549): GitHub API integration for collection submission
    */
-  private async createCollectionIssue(params: {
-    elementName: string;
-    elementType: ElementType;
-    portfolioUrl: string;
-    username: string;
-    metadata: PortfolioElementMetadata;
-    token: string;
-    localPath?: string;  // Path to the local element file
-  }): Promise<string | null> {
+  private async createCollectionIssue(params: CollectionIssueParams): Promise<string | null> {
     try {
       // DUPLICATE DETECTION: Check if issue already exists
-      const existingIssueUrl = await this.checkExistingIssue(
-        params.elementName,
-        params.username,
-        params.token
-      );
+      const existingIssueUrl = await this.checkExistingIssue(params.elementName, params.username, params.token);
       this.assertMemoryOperation();
-      
       if (existingIssueUrl) {
         logger.info('Collection issue already exists, skipping creation', {
           elementName: params.elementName,
@@ -1759,127 +1519,109 @@ export class SubmitToPortfolioTool {
         return existingIssueUrl;
       }
 
-      // Format the issue title
-      const title = `[${params.elementType}] Add ${params.elementName} by @${params.username}`;
-
-      // Format the issue body with all relevant information
-      // Build additional metadata fields for display
-      // TYPE SAFETY: Define interface for extended metadata
-      interface ExtendedMeta extends PortfolioElementMetadata {
-        category?: string;
-        triggers?: string[];
-        age_rating?: string;
-        ai_generated?: boolean;
-        generation_method?: string;
-        license?: string;
-        tags?: string[];
-      }
-      
-      const additionalFields: string[] = [];
       const meta = params.metadata as ExtendedMeta;
-      
-      if (meta.category) additionalFields.push(`**Category**: ${meta.category}`);
-      if (meta.version) additionalFields.push(`**Version**: ${meta.version}`);
-      if (meta.triggers && Array.isArray(meta.triggers) && meta.triggers.length > 0) {
-        additionalFields.push(`**Triggers**: ${meta.triggers.join(', ')}`);
-      }
-      if (meta.age_rating) additionalFields.push(`**Age Rating**: ${meta.age_rating}`);
-      if (meta.ai_generated !== undefined) {
-        additionalFields.push(`**AI Generated**: ${meta.ai_generated ? 'Yes' : 'No'}`);
-      }
-      if (meta.generation_method) additionalFields.push(`**Generation Method**: ${meta.generation_method}`);
-      if (meta.license) additionalFields.push(`**License**: ${meta.license}`);
-      if (meta.tags && Array.isArray(meta.tags) && meta.tags.length > 0) {
-        additionalFields.push(`**Tags**: ${meta.tags.join(', ')}`);
-      }
-      
-      // Read the full element file content if path is provided
-      let elementContent = '';
-      if (params.localPath) {
-        try {
-          // SECURITY: Validate file size before reading to prevent memory exhaustion
-          const stats = await this.fileOperations.stat(params.localPath);
-          this.assertMemoryOperation();
-          if (stats.size > FILE_SIZE_LIMITS.MAX_FILE_SIZE) {
-            // DO NOT truncate user content - reject if too large
-            logger.error('Element file exceeds size limit for collection submission', {
-              elementName: params.elementName,
-              fileSize: stats.size,
-              maxSize: FILE_SIZE_LIMITS.MAX_FILE_SIZE
-            });
+      const elementContent = await this.readElementForIssue(params, meta);
+      if (elementContent === null) return null;
 
-            SecurityMonitor.logSecurityEvent({
-              type: 'CONTENT_INJECTION_ATTEMPT',
-              severity: 'MEDIUM',
-              source: 'SubmitToPortfolioTool.createCollectionIssue',
-              details: `File size ${stats.size} exceeds limit for collection submission`,
-              metadata: {
-                elementName: params.elementName,
-                fileSize: stats.size,
-                limit: FILE_SIZE_LIMITS.MAX_FILE_SIZE
-              }
-            });
+      const title = `[${params.elementType}] Add ${params.elementName} by @${params.username}`;
+      const body = this.formatCollectionIssueBody(params, collectionIssueDetails(meta), elementContent);
+      // Determine labels based on element type
+      const labels = [
+        'element-submission',  // CRITICAL: Triggers automation workflow
+        'collection-repo',     // Indicates this is for the collection
+        'contribution',        // All submissions get this
+        'pending-review',      // Needs review
+        params.elementType.toLowerCase() // Element type label (e.g., 'personas')
+      ];
 
-            // Return error message instead of truncating
-            return null;
-          }
-
-          // Read the full markdown file with frontmatter and content
-          elementContent = await this.fileOperations.readFile(params.localPath, { source: 'SubmitToPortfolioTool.createCollectionIssue' });
-          
-          // SECURITY: Validate content for security issues
-          // Note: We already validated this content in validateFileAndContent()
-          // but we re-validate here since this is being posted to a public issue
-          const validationResult = ContentValidator.validateAndSanitize(elementContent);
-          
-          if (!validationResult.isValid && validationResult.severity === 'critical') {
-            logger.error('Element content failed security validation for collection submission', {
-              elementName: params.elementName,
-              issues: validationResult.detectedPatterns
-            });
-            
-            SecurityMonitor.logSecurityEvent({
-              type: 'CONTENT_INJECTION_ATTEMPT',
-              severity: 'HIGH',
-              source: 'SubmitToPortfolioTool.createCollectionIssue',
-              details: `Critical security issues detected in collection submission`,
-              metadata: {
-                elementName: params.elementName,
-                detectedPatterns: validationResult.detectedPatterns
-              }
-            });
-            
-            // DO NOT submit content with security issues
-            return null;
-          }
-          
-          // Use the sanitized content (but NOT truncated)
-          elementContent = validationResult.sanitizedContent || elementContent;
-          
-          logger.debug('Read and validated element file content for collection submission', {
-            elementName: params.elementName,
-            contentLength: elementContent.length,
-            securityIssues: validationResult.detectedPatterns?.length || 0,
-            buildVersion: `v${PACKAGE_VERSION}`,
-          });
-        } catch (error) {
+      // PERFORMANCE OPTIMIZATION (Task #6): Use GitHub rate limiter for API calls
+      this.assertSubmissionType(params.elementType);
+      const issueUrl = await this.rateLimiter.queueRequest(
+        'create-collection-issue',
+        () => this.postCollectionIssue(params.token, { title, body, labels }),
+        'high' // High priority for collection submission
+      );
       this.assertMemoryOperation();
-          logger.warn('Failed to read element file content, falling back to metadata only', {
-            elementName: params.elementName,
-            error: error instanceof Error ? error.message : String(error)
-          });
-          // Fall back to just the metadata if we can't read the file
-          elementContent = this.formatMetadataAsYaml(params.metadata, meta);
-        }
+      return issueUrl;
+    } catch (error: any) {
+      this.assertMemoryOperation();
+      // Handle timeout specifically
+      if (error.name === 'AbortError') {
+        logger.error(`GitHub API request timeout after ${getValidatedTimeout()}ms`);
       } else {
-        // No file path provided, use metadata as fallback
-        logger.warn('No file path provided for collection submission, using metadata only', {
-          elementName: params.elementName
+        logger.error('Failed to create collection issue', {
+          error: error.message || error
         });
-        elementContent = this.formatMetadataAsYaml(params.metadata, meta);
       }
-      
-      const body = `## New ${params.elementType} Submission
+      return null;
+    }
+  }
+
+  /**
+   * The full element file for the issue body, re-validated because it is posted publicly.
+   * Returns null when the file must not be posted (too large, critical security issues); falls
+   * back to the metadata when the file cannot be read or no path was given.
+   */
+  private async readElementForIssue(params: CollectionIssueParams, meta: ExtendedMeta): Promise<string | null> {
+    if (!params.localPath) {
+      logger.warn('No file path provided for collection submission, using metadata only', { elementName: params.elementName });
+      return this.formatMetadataAsYaml(params.metadata, meta);
+    }
+    try {
+      // SECURITY: Validate file size before reading to prevent memory exhaustion
+      const stats = await this.fileOperations.stat(params.localPath);
+      this.assertMemoryOperation();
+      if (stats.size > FILE_SIZE_LIMITS.MAX_FILE_SIZE) {
+        // DO NOT truncate user content - reject if too large
+        logger.error('Element file exceeds size limit for collection submission', {
+          elementName: params.elementName, fileSize: stats.size, maxSize: FILE_SIZE_LIMITS.MAX_FILE_SIZE
+        });
+        SecurityMonitor.logSecurityEvent({
+          type: 'CONTENT_INJECTION_ATTEMPT',
+          severity: 'MEDIUM',
+          source: 'SubmitToPortfolioTool.createCollectionIssue',
+          details: `File size ${stats.size} exceeds limit for collection submission`,
+          metadata: { elementName: params.elementName, fileSize: stats.size, limit: FILE_SIZE_LIMITS.MAX_FILE_SIZE }
+        });
+        return null;
+      }
+      const elementContent = await this.fileOperations.readFile(params.localPath, { source: 'SubmitToPortfolioTool.createCollectionIssue' });
+      // SECURITY: already validated in validateFileAndContent(); re-validated because this is public
+      const validationResult = ContentValidator.validateAndSanitize(elementContent);
+      if (!validationResult.isValid && validationResult.severity === 'critical') {
+        logger.error('Element content failed security validation for collection submission', {
+          elementName: params.elementName, issues: validationResult.detectedPatterns
+        });
+        SecurityMonitor.logSecurityEvent({
+          type: 'CONTENT_INJECTION_ATTEMPT',
+          severity: 'HIGH',
+          source: 'SubmitToPortfolioTool.createCollectionIssue',
+          details: `Critical security issues detected in collection submission`,
+          metadata: { elementName: params.elementName, detectedPatterns: validationResult.detectedPatterns }
+        });
+        return null;
+      }
+      // Use the sanitized content (but NOT truncated)
+      const content = validationResult.sanitizedContent || elementContent;
+      logger.debug('Read and validated element file content for collection submission', {
+        elementName: params.elementName,
+        contentLength: content.length,
+        securityIssues: validationResult.detectedPatterns?.length || 0,
+        buildVersion: `v${PACKAGE_VERSION}`,
+      });
+      return content;
+    } catch (error) {
+      this.assertMemoryOperation();
+      logger.warn('Failed to read element file content, falling back to metadata only', {
+        elementName: params.elementName,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return this.formatMetadataAsYaml(params.metadata, meta);
+    }
+  }
+
+  private formatCollectionIssueBody(params: CollectionIssueParams, details: string[], elementContent: string): string {
+    return `## New ${params.elementType} Submission
 
 **Name**: ${params.elementName}
 **Author**: @${params.username}
@@ -1889,7 +1631,7 @@ export class SubmitToPortfolioTool {
 ${params.metadata.description || 'No description provided'}
 
 ### Element Details
-${additionalFields.length > 0 ? additionalFields.join('\n') : '*No additional metadata available*'}
+${details.length > 0 ? details.join('\n') : '*No additional metadata available*'}
 
 ### Portfolio Link
 ${params.portfolioUrl}
@@ -1908,119 +1650,68 @@ ${elementContent}
 
 ---
 *This submission was created automatically via the DollhouseMCP submit_collection_content tool (v${PACKAGE_VERSION}).*`;
+  }
 
-      // Determine labels based on element type
-      const labels = [
-        'element-submission',  // CRITICAL: Triggers automation workflow
-        'collection-repo',     // Indicates this is for the collection
-        'contribution',        // All submissions get this
-        'pending-review',      // Needs review
-        params.elementType.toLowerCase() // Element type label (e.g., 'personas')
-      ];
-
-      // PERFORMANCE OPTIMIZATION (Task #6): Use GitHub rate limiter for API calls
-      // This prevents hitting GitHub rate limits and provides better error handling
-      this.assertSubmissionType(params.elementType);
-      const issueUrl = await this.rateLimiter.queueRequest(
-        'create-collection-issue',
-        async () => {
-          this.assertMemoryOperation();
-          const url = 'https://api.github.com/repos/DollhouseMCP/collection/issues';
-          
-          // Create AbortController for timeout
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), getValidatedTimeout());
-          
-          try {
-            const response = await fetch(url, {
-              method: 'POST',
-              headers: {
-                'Accept': 'application/vnd.github.v3+json',
-                'Authorization': `Bearer ${params.token}`,
-                'Content-Type': 'application/json',
-                'User-Agent': 'DollhouseMCP/1.0'
-              },
-              body: JSON.stringify({
-                title,
-                body,
-                labels
-              }),
-              signal: controller.signal
-            });
-            this.assertMemoryOperation();
-            
-            clearTimeout(timeoutId);
-
-            // PERFORMANCE OPTIMIZATION (Task #15): Enhanced rate limit logging
-            // Log rate limit headers for diagnostics
-            const rateLimitRemaining = response.headers.get('X-RateLimit-Remaining');
-            const rateLimitReset = response.headers.get('X-RateLimit-Reset');
-            const rateLimitLimit = response.headers.get('X-RateLimit-Limit');
-            
-            logger.debug('GitHub API rate limit status', {
-              operation: 'create-collection-issue',
-              remaining: rateLimitRemaining,
-              limit: rateLimitLimit,
-              resetTime: rateLimitReset ? new Date(Number.parseInt(rateLimitReset) * 1000) : undefined,
-              responseStatus: response.status
-            });
-            
-            // Log warning if approaching rate limit
-            if (rateLimitRemaining && Number.parseInt(rateLimitRemaining) < 100) {
-              logger.warn('Approaching GitHub API rate limit', {
-                operation: 'create-collection-issue',
-                remaining: rateLimitRemaining,
-                resetTime: rateLimitReset ? new Date(Number.parseInt(rateLimitReset) * 1000) : undefined,
-                recommendation: 'Consider reducing API usage frequency or authenticating for higher limits'
-              });
-            }
-
-            if (!response.ok) {
-              const errorText = await response.text();
-              this.assertMemoryOperation();
-              logger.error('GitHub API error creating issue', { 
-                status: response.status, 
-                statusText: response.statusText,
-                error: errorText,
-                rateLimitRemaining,
-                rateLimitReset
-              });
-              
-              if (response.status === 404) {
-                logger.error('Collection repository not found or no access');
-              } else if (response.status === 403) {
-                logger.error('Permission denied to create issue in collection repo');
-              } else if (response.status === 401) {
-                logger.error('Authentication failed for collection submission');
-              }
-              throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
-            }
-
-            const data = await response.json();
-            this.assertMemoryOperation();
-            return data.html_url;
-          } finally {
-            clearTimeout(timeoutId);
-          }
+  /** One POST to the collection repository under the request timeout; returns the issue URL. */
+  private async postCollectionIssue(token: string, issue: { title: string; body: string; labels: string[] }): Promise<string> {
+    this.assertMemoryOperation();
+    const url = 'https://api.github.com/repos/DollhouseMCP/collection/issues';
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), getValidatedTimeout());
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/vnd.github.v3+json',
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'User-Agent': 'DollhouseMCP/1.0'
         },
-        'high' // High priority for collection submission
-      );
+        body: JSON.stringify(issue),
+        signal: controller.signal
+      });
       this.assertMemoryOperation();
-      
-      return issueUrl;
-
-    } catch (error: any) {
-      this.assertMemoryOperation();
-      // Handle timeout specifically
-      if (error.name === 'AbortError') {
-        logger.error(`GitHub API request timeout after ${getValidatedTimeout()}ms`);
-      } else {
-        logger.error('Failed to create collection issue', { 
-          error: error.message || error
+      clearTimeout(timeoutId);
+      const rateLimit = this.logRateLimitStatus(response);
+      if (!response.ok) {
+        const errorText = await response.text();
+        this.assertMemoryOperation();
+        logger.error('GitHub API error creating issue', {
+          status: response.status, statusText: response.statusText, error: errorText, ...rateLimit
         });
+        const detail = COLLECTION_ISSUE_STATUS_DETAIL[response.status];
+        if (detail) logger.error(detail);
+        throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
       }
-      return null;
+      const data = await response.json();
+      this.assertMemoryOperation();
+      return data.html_url;
+    } finally {
+      clearTimeout(timeoutId);
     }
+  }
+
+  /** PERFORMANCE OPTIMIZATION (Task #15): rate limit headers for diagnostics. */
+  private logRateLimitStatus(response: Response): { rateLimitRemaining: string | null; rateLimitReset: string | null } {
+    const rateLimitRemaining = response.headers.get('X-RateLimit-Remaining');
+    const rateLimitReset = response.headers.get('X-RateLimit-Reset');
+    const resetTime = rateLimitReset ? new Date(Number.parseInt(rateLimitReset) * 1000) : undefined;
+    logger.debug('GitHub API rate limit status', {
+      operation: 'create-collection-issue',
+      remaining: rateLimitRemaining,
+      limit: response.headers.get('X-RateLimit-Limit'),
+      resetTime,
+      responseStatus: response.status
+    });
+    if (rateLimitRemaining && Number.parseInt(rateLimitRemaining) < 100) {
+      logger.warn('Approaching GitHub API rate limit', {
+        operation: 'create-collection-issue',
+        remaining: rateLimitRemaining,
+        resetTime,
+        recommendation: 'Consider reducing API usage frequency or authenticating for higher limits'
+      });
+    }
+    return { rateLimitRemaining, rateLimitReset };
   }
 
   private async findLocalContent(name: string, type: ElementType): Promise<string | null> {
@@ -2036,159 +1727,128 @@ ${elementContent}
     }
     this.assertSubmissionType(type);
     try {
-      // METADATA INDEX FIX: Use portfolio index for fast metadata-based lookups
-      // This solves the critical issue where "Safe Roundtrip Tester" couldn't be found
-      // because findLocalContent only searched filenames, not metadata names
-      const indexManager = this.portfolioIndexManager;
-      
-      // UX IMPROVEMENT: Enhanced search with fuzzy matching
-      // The existing submission consumer requires a real local file. A DB UUID
-      // is a locator, never a path. LEGACY retains its original filesystem path.
-      const indexEntry = this.memoryOperation && type === ElementType.MEMORY ? null : await indexManager.findByName(name, {
-        elementType: type,
-        fuzzyMatch: true
-      });
-      this.assertMemoryOperation();
-      if (indexEntry) {
-        logger.debug('Found content via metadata index', { 
-          searchName: name, 
-          metadataName: indexEntry.metadata.name,
-          filename: indexEntry.filename,
-          filePath: indexEntry.filePath,
-          type 
-        });
-        return indexEntry.filePath;
-      }
-      
-      // FALLBACK: Use original file discovery if index lookup fails
-      // This maintains backward compatibility and handles edge cases
-      logger.debug('Index lookup failed, falling back to file discovery', { name, type });
-      
-      const portfolioDir = this.portfolioManager.getElementDir(type);
-      
-      // UX IMPROVEMENT: Try multiple search strategies for better user experience
-      let file = await FileDiscoveryUtil.findFile(portfolioDir, name, {
-        extensions: ['.md', '.json', '.yaml', '.yml'],
-        partialMatch: true,
-        cacheResults: true
-      });
-      this.assertMemoryOperation();
-      
-      // Issue #815: Memory files are stored in dated subdirectories (YYYY-MM-DD/).
-      // FileDiscoveryUtil only searches flat directories, so traverse subdirs for memories.
-      if (!file && type === ElementType.MEMORY) {
-        try {
-          // Use readdir with withFileTypes to identify dated subdirectories
-          const { readdir: readdirFs } = await import('node:fs/promises');
-          this.assertMemoryOperation();
-          const entries = await readdirFs(portfolioDir, { withFileTypes: true });
-          this.assertMemoryOperation();
-          const subdirs = entries.filter(e => e.isDirectory() && /^\d{4}-\d{2}-\d{2}$/.test(e.name));
-          const normalizedSearch = name.toLowerCase().replaceAll(/[^a-z0-9]/g, '-').replaceAll(/-+/g, '-').replaceAll(/(^-)|(-$)/g, '');
-
-          for (const subdir of subdirs) {
-            const subdirPath = path.join(portfolioDir, subdir.name);
-            // Use FileOperationsService for file listing (respects sandboxing)
-            const subdirFiles = await this.fileOperations.listDirectory(subdirPath);
-            this.assertMemoryOperation();
-            for (const f of subdirFiles) {
-              // Skip backup files (same filtering as PortfolioManager.listElements)
-              if (f.includes('.backup-') || f.includes('.backup.')) continue;
-              const fileExt = path.extname(f);
-              if (!['.yaml', '.yml', '.md'].includes(fileExt)) continue;
-              const base = f.slice(0, -fileExt.length).toLowerCase();
-              if (base === normalizedSearch || base === name.toLowerCase()) {
-                file = path.join(subdirPath, f);
-                logger.debug('Found memory in dated subdirectory', { name, subdir: subdir.name, file });
-                break;
-              }
-            }
-            if (file) break;
-          }
-        } catch (err) {
-          this.assertMemoryOperation();
-          logger.debug('Memory subdirectory traversal failed', {
-            name, type, error: err instanceof Error ? err.message : String(err)
-          });
-        }
-      }
-
-      // If not found, try normalizing the name (e.g., "J.A.R.V.I.S." -> "j-a-r-v-i-s")
-      if (!file) {
-        const normalizedName = name.toLowerCase()
-          .replaceAll(/[^a-z0-9]/gi, '-')  // Replace non-alphanumeric with dashes
-          .replaceAll(/-+/g, '-')         // Replace multiple dashes with single dash
-          .replaceAll(/(^-)|(-$)/g, '');      // Remove leading/trailing dashes
-          
-        if (normalizedName !== name.toLowerCase()) {
-          logger.debug('Trying normalized name search', { 
-            original: name, 
-            normalized: normalizedName,
-            type 
-          });
-          
-          file = await FileDiscoveryUtil.findFile(portfolioDir, normalizedName, {
-            extensions: ['.md', '.json', '.yaml', '.yml'],
-            partialMatch: true,
-            cacheResults: true
-          });
-        }
-      }
-      
-      // If still not found, try searching by display name patterns
-      if (!file) {
-        // Try common variations like removing dots, spaces, etc.
-        const variations = [
-          name.replaceAll('.', ''),        // Remove dots: "J.A.R.V.I.S." -> "JARVIS"
-          name.replaceAll(/\s+/g, '-'),      // Replace spaces with dashes
-          name.replaceAll(/[\s\.]/g, ''),    // Remove spaces and dots
-          name.replaceAll(/[\s\.]/g, '-'),   // Replace spaces and dots with dashes
-        ].filter(v => v !== name && v.length > 0);
-        
-        for (const variation of variations) {
-          file = await FileDiscoveryUtil.findFile(portfolioDir, variation, {
-            extensions: ['.md', '.json', '.yaml', '.yml'],
-            partialMatch: true,
-            cacheResults: true
-          });
-          
-          if (file) {
-            logger.debug('Found content using name variation', {
-              original: name,
-              variation,
-              file,
-              type
-            });
-            break;
-          }
-        }
-      }
-      
-      if (file) {
-        logger.debug('Found local content file via fallback', { name, type, file });
-        return file;
-      }
-      
-      logger.debug('No content found', { name, type });
-      return null;
-      
+      return await this.locateLocalFile(name, type);
     } catch (error) {
       this.assertMemoryOperation();
-      if (this.memoryOperation) throw error;
-      logger.error('Error finding local content', {
-        name,
-        type,
-        error: error instanceof Error ? error.message : String(error)
-      });
+      // Only a missing type directory means "not in this type"; any other failure is a read
+      // failure and propagates, never "not found".
+      if (this.memoryOperation || !isAbsentKindError(error)) throw error;
+      logger.debug('No local content directory for type', { name, type, code: (error as NodeJS.ErrnoException).code });
       return null;
     }
+  }
+
+  /** The index (metadata names) first, then the filename discovery fallbacks. */
+  private async locateLocalFile(name: string, type: ElementType): Promise<string | null> {
+    // METADATA INDEX FIX: metadata names are found through the portfolio index. The submission
+    // requires a real local file: a DB UUID is a locator, never a path.
+    const indexEntry = this.memoryOperation && type === ElementType.MEMORY ? null
+      : await this.portfolioIndexManager.findByName(name, { elementType: type, fuzzyMatch: true });
+    this.assertMemoryOperation();
+    if (indexEntry) {
+      logger.debug('Found content via metadata index', {
+        searchName: name, metadataName: indexEntry.metadata.name, filename: indexEntry.filename,
+        filePath: indexEntry.filePath, type
+      });
+      return indexEntry.filePath;
+    }
+    logger.debug('Index lookup failed, falling back to file discovery', { name, type });
+    const portfolioDir = this.portfolioManager.getElementDir(type);
+    let file = await this.findPortfolioFile(portfolioDir, name);
+    this.assertMemoryOperation();
+    // Issue #815: memory files live in dated subdirectories (YYYY-MM-DD/).
+    if (!file && type === ElementType.MEMORY) file = await this.findDatedMemoryFile(portfolioDir, name);
+    // Normalized name (e.g. "J.A.R.V.I.S." -> "j-a-r-v-i-s"), then common display-name variations.
+    const normalizedName = SubmitToPortfolioTool.normalizedFileName(name);
+    if (!file && normalizedName !== name.toLowerCase()) {
+      logger.debug('Trying normalized name search', { original: name, normalized: normalizedName, type });
+      file = await this.findPortfolioFile(portfolioDir, normalizedName);
+    }
+    file ??= await this.findByNameVariations(portfolioDir, name, type);
+    if (file) {
+      logger.debug('Found local content file via fallback', { name, type, file });
+      return file;
+    }
+    logger.debug('No content found', { name, type });
+    return null;
+  }
+
+  private static normalizedFileName(name: string): string {
+    return name.toLowerCase()
+      .replaceAll(/[^a-z0-9]/g, '-')
+      .replaceAll(/-+/g, '-')
+      .replaceAll(/(^-)|(-$)/g, '');
+  }
+
+  private async findPortfolioFile(portfolioDir: string, name: string): Promise<string | null> {
+    return FileDiscoveryUtil.findFile(portfolioDir, name, {
+      extensions: ['.md', '.json', '.yaml', '.yml'], partialMatch: true, cacheResults: true
+    });
+  }
+
+  /** Try "J.A.R.V.I.S." style variations one after another until one matches. */
+  private async findByNameVariations(portfolioDir: string, name: string, type: ElementType): Promise<string | null> {
+    const variations = [
+      name.replaceAll('.', ''),          // Remove dots
+      name.replaceAll(/\s+/g, '-'),      // Replace spaces with dashes
+      name.replaceAll(/[\s.]/g, ''),     // Remove spaces and dots
+      name.replaceAll(/[\s.]/g, '-'),    // Replace spaces and dots with dashes
+    ].filter(variation => variation !== name && variation.length > 0);
+    const tryFrom = async (index: number): Promise<string | null> => {
+      if (index >= variations.length) return null;
+      const file = await this.findPortfolioFile(portfolioDir, variations[index]);
+      if (!file) return tryFrom(index + 1);
+      logger.debug('Found content using name variation', { original: name, variation: variations[index], file, type });
+      return file;
+    };
+    return tryFrom(0);
+  }
+
+  /** Memories live in dated subdirectories; a missing directory is absence, any other failure propagates. */
+  private async findDatedMemoryFile(portfolioDir: string, name: string): Promise<string | null> {
+    const { readdir: readdirFs } = await import('node:fs/promises');
+    this.assertMemoryOperation();
+    let entries: Array<{ name: string; isDirectory(): boolean }>;
+    try {
+      entries = await readdirFs(portfolioDir, { withFileTypes: true });
+    } catch (error) {
+      this.assertMemoryOperation();
+      if (!isAbsentKindError(error)) throw error;
+      logger.debug('Memory directory not present', { name, code: (error as NodeJS.ErrnoException).code });
+      return null;
+    }
+    this.assertMemoryOperation();
+    const subdirs = entries.filter(entry => entry.isDirectory() && /^\d{4}-\d{2}-\d{2}$/.test(entry.name));
+    const normalizedSearch = SubmitToPortfolioTool.normalizedFileName(name);
+    const searchFrom = async (index: number): Promise<string | null> => {
+      if (index >= subdirs.length) return null;
+      const subdirPath = path.join(portfolioDir, subdirs[index].name);
+      // FileOperationsService listing respects sandboxing.
+      const subdirFiles = await this.fileOperations.listDirectory(subdirPath);
+      this.assertMemoryOperation();
+      const match = subdirFiles.find(file => SubmitToPortfolioTool.isMemoryFileFor(file, normalizedSearch, name));
+      if (!match) return searchFrom(index + 1);
+      const file = path.join(subdirPath, match);
+      logger.debug('Found memory in dated subdirectory', { name, subdir: subdirs[index].name, file });
+      return file;
+    };
+    return searchFrom(0);
+  }
+
+  private static isMemoryFileFor(file: string, normalizedSearch: string, name: string): boolean {
+    // Skip backup files (same filtering as PortfolioManager.listElements).
+    if (file.includes('.backup-') || file.includes('.backup.')) return false;
+    const extension = path.extname(file);
+    if (!['.yaml', '.yml', '.md'].includes(extension)) return false;
+    const base = file.slice(0, -extension.length).toLowerCase();
+    return base === normalizedSearch || base === name.toLowerCase();
   }
 
   /**
    * Smart element type detection - searches across ALL element types for content
    * PERFORMANCE OPTIMIZATION (Task #9): Uses early termination for exact matches
    * This replaces the previous hardcoded default to PERSONA and enables proper type detection
-   * 
+   *
    * @param name The content name to search for
    * @returns Detection result with found matches across all element types
    */
@@ -2199,131 +1859,56 @@ ${elementContent}
       const discovered = await Promise.all(Object.values(ElementType).map(async type => {
         const filePath = await this.findLocalContent(name, type);
         this.assertMemoryOperation();
-        return filePath ? {type,path:filePath} : null;
+        return filePath ? { type, path: filePath } : null;
       }));
       this.assertMemoryOperation();
       const matches = discovered.filter((match): match is ElementDetectionMatch => match !== null);
-      return {found:matches.length > 0,matches};
+      return { found: matches.length > 0, matches };
     }
-    try {
-      // PERFORMANCE OPTIMIZATION (Task #9): Use early termination search utility
-      // Create search functions for each element type
-      const elementTypes = Object.values(ElementType);
-      const searchFunctions = elementTypes.map((type) => async () => {
-        try {
-          const filePath = await this.findLocalContent(name, type);
-          this.assertMemoryOperation();
-          if (filePath) {
-            return { type: type as ElementType, path: filePath };
-          }
-          return null;
-        } catch (error: any) {
-          this.assertMemoryOperation();
-          if (this.memoryOperation) throw error;
-          // Log unexpected errors but don't fail the search
-          if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') {
-            logger.debug(`Error searching ${type} directory for content detection`, { 
-              name,
-              type,
-              error: error?.message || String(error),
-              code: error?.code 
-            });
-          }
-          // Return null instead of throwing to let other searches continue
-          return null;
-        }
-      });
-
-      // PERFORMANCE OPTIMIZATION (Task #9): Define exact match criteria
-      const isExactMatch = (match: ElementDetectionMatch): boolean => {
-        const filename = path.basename(match.path, path.extname(match.path));
-        return filename.toLowerCase() === name.toLowerCase();
-      };
-
-      // Execute searches with early termination optimization
-      const searchResults = await EarlyTerminationSearch.executeWithEarlyTermination(
-        searchFunctions,
-        isExactMatch,
-        {
-          operationName: 'element-type-detection',
-          timeoutAfterExactMatch: 1000, // Wait 1 second for other searches after exact match
-          maxParallelSearches: 8 // Limit concurrent searches to avoid overwhelming the system
-        }
-      );
-      this.assertMemoryOperation();
-
-      // PERFORMANCE OPTIMIZATION (Task #8): Enhanced batch operation reporting
-      const batchResults = {
+    // PERFORMANCE OPTIMIZATION (Task #9): early termination over one search per element type.
+    // The optimizer reduces failures to strings, so each search keeps its real cause here and a
+    // failed type read propagates instead of reading as "not found".
+    const elementTypes = Object.values(ElementType);
+    const failures: unknown[] = [];
+    const searchFunctions = elementTypes.map(type => async () => {
+      try {
+        const filePath = await this.findLocalContent(name, type);
+        return filePath ? { type, path: filePath } : null;
+      } catch (error) {
+        failures.push(error);
+        throw error;
+      }
+    });
+    const isExactMatch = (match: ElementDetectionMatch): boolean =>
+      path.basename(match.path, path.extname(match.path)).toLowerCase() === name.toLowerCase();
+    const searchResults = await EarlyTerminationSearch.executeWithEarlyTermination(searchFunctions, isExactMatch, {
+      operationName: 'element-type-detection',
+      timeoutAfterExactMatch: 1000, // Wait 1 second for other searches after exact match
+      maxParallelSearches: 8 // Limit concurrent searches to avoid overwhelming the system
+    });
+    this.assertMemoryOperation();
+    if (failures.length > 0) throw failures[0];
+    logger.debug('Element type detection completed with early termination optimization', {
+      name,
+      totalSearches: searchResults.totalSearches,
+      completedSearches: searchResults.completedSearches,
+      matches: searchResults.matches.length,
+      exactMatchFound: !!searchResults.exactMatch,
+      exactMatchType: searchResults.exactMatch?.type,
+      earlyTerminationTriggered: searchResults.earlyTerminationTriggered,
+      performanceGain: searchResults.performanceGain,
+      matchedTypes: searchResults.matches.map(match => match.type)
+    });
+    if (searchResults.earlyTerminationTriggered) {
+      logger.info('Early termination optimization applied successfully', {
         name,
-        totalSearches: searchResults.totalSearches,
-        completedSearches: searchResults.completedSearches,
-        matches: searchResults.matches.length,
-        failures: searchResults.failures.length,
-        exactMatchFound: !!searchResults.exactMatch,
         exactMatchType: searchResults.exactMatch?.type,
-        earlyTerminationTriggered: searchResults.earlyTerminationTriggered,
         performanceGain: searchResults.performanceGain,
-        matchedTypes: searchResults.matches.map(m => m.type),
-        failedTypes: searchResults.failures.map(f => elementTypes[f.index]).filter(Boolean)
-      };
-
-      logger.debug('Element type detection completed with early termination optimization', batchResults);
-
-      // PERFORMANCE OPTIMIZATION (Task #8): Clear reporting of partial failures
-      if (searchResults.failures.length > 0) {
-        logger.warn('Some element type searches failed during batch operation', {
-          name,
-          failures: searchResults.failures.map(f => ({
-            type: elementTypes[f.index] || 'unknown',
-            error: f.error.substring(0, 100) // Truncate long error messages
-          })),
-          successRate: `${searchResults.completedSearches}/${searchResults.totalSearches}`,
-          impactOnResults: searchResults.matches.length > 0 
-            ? 'No impact - matches found in successful searches' 
-            : 'Potential impact - no matches found'
-        });
-
-        // If we have failures and no matches, provide actionable guidance
-        if (searchResults.matches.length === 0 && searchResults.failures.length > 0) {
-          logger.warn('Batch operation had failures and no matches found', {
-            name,
-            recommendation: 'Consider checking file permissions or portfolio structure',
-            failureCount: searchResults.failures.length,
-            totalSearches: searchResults.totalSearches
-          });
-        }
-      }
-
-      // Log performance gains from early termination
-      if (searchResults.earlyTerminationTriggered) {
-        logger.info('Early termination optimization applied successfully', {
-          name,
-          exactMatchType: searchResults.exactMatch?.type,
-          performanceGain: searchResults.performanceGain,
-          searchesCompleted: searchResults.completedSearches,
-          searchesTotal: searchResults.totalSearches
-        });
-      }
-
-      return {
-        found: searchResults.matches.length > 0,
-        matches: searchResults.matches
-      };
-
-    } catch (error) {
-      this.assertMemoryOperation();
-      if (this.memoryOperation) throw error;
-      logger.error('Error in element type detection', {
-        name,
-        error: error instanceof Error ? error.message : String(error)
+        searchesCompleted: searchResults.completedSearches,
+        searchesTotal: searchResults.totalSearches
       });
-      
-      // Return empty result on detection failure
-      return {
-        found: false,
-        matches: []
-      };
     }
+    return { found: searchResults.matches.length > 0, matches: searchResults.matches };
   }
 
   /**
@@ -2332,134 +1917,43 @@ ${elementContent}
    * Helps users find content when exact matches fail
    */
   private async generateNameSuggestions(searchName: string): Promise<Array<{name: string, type: string}>> {
-    try {
-      const suggestions: Array<{name: string, type: string}> = [];
-      const searchLower = searchName.toLowerCase();
-      const elementTypes = Object.values(ElementType);
-      
-      // Track batch operation results for better diagnostics
-      const batchResults = {
-        searchName,
-        totalTypes: elementTypes.length,
-        successfulScans: 0,
-        failedScans: 0,
-        failureDetails: [] as Array<{ type: ElementType; error: string }>,
-        totalSuggestions: 0,
-        suggestionsByType: {} as Record<string, number>
-      };
-      
-      // Process all element types for suggestions
-      for (const elementType of elementTypes) {
-        if (elementType === ElementType.MEMORY && this.memoryOperation?.operation.manager.isGuardedHeadUpdateEnabled()) continue;
-        try {
-          const elementDir = this.portfolioManager.getElementDir(elementType);
-          
-          // Get files in this directory
-          const files = await FileDiscoveryUtil.findFile(elementDir, '*', {
-            extensions: ['.md', '.json', '.yaml', '.yml'],
-            partialMatch: false,
-            cacheResults: true
-          });
-          this.assertMemoryOperation();
-          
-          let typeSuggestions = 0;
-          
-          if (Array.isArray(files)) {
-            for (const filePath of files) {
-              const basename = path.basename(filePath, path.extname(filePath));
-              
-              // Calculate similarity using simple metrics
-              if (this.calculateSimilarity(searchLower, basename.toLowerCase()) > SEARCH_CONFIG.MIN_SIMILARITY_SCORE) {
-                suggestions.push({
-                  name: basename,
-                  type: elementType
-                });
-                typeSuggestions++;
-              }
-            }
-          } else if (files) {
-            const basename = path.basename(files, path.extname(files));
-            if (this.calculateSimilarity(searchLower, basename.toLowerCase()) > SEARCH_CONFIG.MIN_SIMILARITY_SCORE) {
-              suggestions.push({
-                name: basename,
-                type: elementType
-              });
-              typeSuggestions++;
-            }
-          }
-          
-          batchResults.successfulScans++;
-          batchResults.suggestionsByType[elementType] = typeSuggestions;
-          
-        } catch (error) {
-      this.assertMemoryOperation();
-          // PERFORMANCE OPTIMIZATION (Task #8): Track and report partial failures
-          batchResults.failedScans++;
-          batchResults.failureDetails.push({
-            type: elementType,
-            error: error instanceof Error ? error.message : String(error)
-          });
-          
-          // Log individual failures for diagnostics
-          logger.debug('Failed to scan element type for suggestions', {
-            elementType,
-            searchName,
-            error: error instanceof Error ? error.message : String(error)
-          });
-        }
-      }
-      
-      batchResults.totalSuggestions = suggestions.length;
-      
-      // PERFORMANCE OPTIMIZATION (Task #8): Comprehensive batch operation reporting
-      logger.debug('Name suggestion batch operation completed', {
-        ...batchResults,
-        successRate: `${batchResults.successfulScans}/${batchResults.totalTypes}`,
-        // Don't log full failure details at debug level to avoid spam
-        hasFailures: batchResults.failedScans > 0
-      });
-      
-      // Report failures clearly if they occurred
-      if (batchResults.failedScans > 0) {
-        logger.warn('Some element type scans failed during name suggestion generation', {
-          searchName,
-          failedTypes: batchResults.failureDetails.map(f => f.type),
-          successfulTypes: batchResults.successfulScans,
-          impactOnResults: batchResults.totalSuggestions > 0 
-            ? 'Partial impact - suggestions found from successful scans' 
-            : 'Potential impact - no suggestions generated',
-          recommendation: batchResults.totalSuggestions === 0 && batchResults.failedScans > 0
-            ? 'Check portfolio directory structure and file permissions'
-            : 'Suggestion generation partially successful despite some failures'
-        });
-      }
-      
-      // Sort by similarity (higher is better) and return top suggestions
-      const sortedSuggestions = suggestions.sort((a, b) => {
-        const simA = this.calculateSimilarity(searchLower, a.name.toLowerCase());
-        const simB = this.calculateSimilarity(searchLower, b.name.toLowerCase());
-        return simB - simA;
-      });
-      
-      logger.debug('Name suggestions generated successfully', {
-        searchName,
-        totalSuggestions: sortedSuggestions.length,
-        topSuggestions: sortedSuggestions.slice(0, 3).map(s => s.name)
-      });
-      
-      return sortedSuggestions;
-      
-    } catch (error) {
-      this.assertMemoryOperation();
-      logger.warn('Failed to generate name suggestions - batch operation failed completely', { 
-        searchName, 
-        error: error instanceof Error ? error.message : String(error),
-        recommendation: 'Check portfolio structure and permissions'
-      });
-      return [];
-    }
+    const searchLower = searchName.toLowerCase();
+    const elementTypes = Object.values(ElementType)
+      .filter(type => !(type === ElementType.MEMORY && this.memoryOperation?.operation.manager.isGuardedHeadUpdateEnabled()));
+    // A failed type scan propagates (suggestions from survivors would hide it).
+    const scans = await Promise.all(elementTypes.map(type => this.suggestionsForType(type, searchLower)));
+    const suggestions = scans.flatMap(scan => scan.suggestions);
+    // Sort by similarity (higher is better) and return top suggestions
+    suggestions.sort((a, b) =>
+      this.calculateSimilarity(searchLower, b.name.toLowerCase()) - this.calculateSimilarity(searchLower, a.name.toLowerCase()));
+    logger.debug('Name suggestions generated successfully', {
+      searchName,
+      totalTypes: elementTypes.length,
+      totalSuggestions: suggestions.length,
+      topSuggestions: suggestions.slice(0, 3).map(s => s.name)
+    });
+    return suggestions;
   }
-  
+
+  /** Similar names in one type directory; a missing directory has none, any other failure propagates. */
+  private async suggestionsForType(type: ElementType, searchLower: string):
+    Promise<{ type: ElementType; suggestions: Array<{ name: string; type: string }> }> {
+    const files = await FileDiscoveryUtil.findFile(this.portfolioManager.getElementDir(type), '*', {
+      extensions: ['.md', '.json', '.yaml', '.yml'],
+      partialMatch: false,
+      cacheResults: true
+    });
+    this.assertMemoryOperation();
+    let candidates: string[] = [];
+    if (Array.isArray(files)) candidates = files;
+    else if (files) candidates = [files];
+    const suggestions = candidates
+      .map(filePath => path.basename(filePath, path.extname(filePath)))
+      .filter(basename => this.calculateSimilarity(searchLower, basename.toLowerCase()) > SEARCH_CONFIG.MIN_SIMILARITY_SCORE)
+      .map(name => ({ name, type }));
+    return { type, suggestions };
+  }
+
   /**
    * Simple similarity calculation using Levenshtein-like approach
    * Returns value between 0 and 1, where 1 is identical
@@ -2479,10 +1973,8 @@ ${elementContent}
     
     // Count common characters
     let common = 0;
-    for (let i = 0; i < shorter.length; i++) {
-      if (longer.includes(shorter[i])) {
-        common++;
-      }
+    for (const character of shorter) {
+      if (longer.includes(character)) common++;
     }
     
     return common / longer.length;
@@ -2493,82 +1985,54 @@ ${elementContent}
    * Handles common GitHub API issues like rate limits and temporary network problems
    */
   private async saveElementWithRetry(
-    adapter: PortfolioElementAdapter, 
-    elementName: string, 
+    adapter: PortfolioElementAdapter,
+    elementName: string,
     elementType: ElementType,
     maxRetries: number = RETRY_CONFIG.MAX_ATTEMPTS
   ): Promise<string | null> {
-    let lastError: any = null;
-    
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const exhausted = (lastError: unknown): null => {
+      logger.error(`All ${maxRetries} save attempts failed`, {
+        elementName,
+        elementType,
+        lastError: (lastError as Error | undefined)?.message
+      });
+      return null;
+    };
+    const attempt = async (number: number, lastError: unknown): Promise<string | null> => {
+      if (number > maxRetries) return exhausted(lastError);
       try {
-        logger.debug(`Attempting to save element (attempt ${attempt}/${maxRetries})`, {
-          elementName,
-          elementType,
-          attempt
-        });
-        
+        logger.debug(`Attempting to save element (attempt ${number}/${maxRetries})`, { elementName, elementType, attempt: number });
         this.assertSubmissionType(elementType);
         const fileUrl = await this.portfolioRepoManager.saveElement(adapter, true);
         this.assertMemoryOperation();
-        
         if (fileUrl) {
-          if (attempt > 1) {
-            logger.info(`Element saved successfully after ${attempt} attempts`, {
-              elementName,
-              elementType,
-              fileUrl
-            });
-          }
+          if (number > 1) logger.info(`Element saved successfully after ${number} attempts`, { elementName, elementType, fileUrl });
           return fileUrl;
         }
-        
-        // If saveElement returns null, treat as a failure but don't retry immediately
-        lastError = new Error(`saveElement returned null on attempt ${attempt}`);
-        
+        // If saveElement returns null, treat as a failure but don't wait before the next attempt
+        return attempt(number + 1, new Error(`saveElement returned null on attempt ${number}`));
       } catch (error: any) {
-      this.assertMemoryOperation();
-        lastError = error;
+        this.assertMemoryOperation();
         const isRetryable = this.isRetryableError(error);
-        
-        logger.warn(`Save attempt ${attempt} failed`, {
-          elementName,
-          elementType,
-          attempt,
-          error: error.message,
-          isRetryable,
-          willRetry: isRetryable && attempt < maxRetries
+        logger.warn(`Save attempt ${number} failed`, {
+          elementName, elementType, attempt: number, error: error.message, isRetryable, willRetry: isRetryable && number < maxRetries
         });
-        
-        // If this is not a retryable error, fail immediately
         if (!isRetryable) {
-          logger.error('Non-retryable error encountered, aborting retries', {
-            elementName,
-            error: error.message
-          });
-          break;
+          logger.error('Non-retryable error encountered, aborting retries', { elementName, error: error.message });
+          return exhausted(error);
         }
-        
-        // If we have more attempts, wait before retrying
-        if (attempt < maxRetries) {
-          const delay = calculateRetryDelay(attempt);
-          logger.debug(`Waiting ${delay}ms before retry`, { attempt, delay });
+        if (number < maxRetries) {
+          const delay = calculateRetryDelay(number);
+          logger.debug(`Waiting ${delay}ms before retry`, { attempt: number, delay });
           await new Promise(resolve => setTimeout(resolve, delay));
           this.assertMemoryOperation();
         }
+        return attempt(number + 1, error);
       }
-    }
-    
-    // All attempts failed
-    logger.error(`All ${maxRetries} save attempts failed`, {
-      elementName,
-      elementType,
-      lastError: lastError?.message
-    });
-    
-    return null;
+    };
+    return attempt(1, null);
   }
-  
+
   /**
    * Determine if an error is worth retrying
    * Retryable: network issues, rate limits, temporary GitHub API problems

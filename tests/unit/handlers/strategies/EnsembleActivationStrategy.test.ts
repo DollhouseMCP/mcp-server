@@ -23,9 +23,12 @@ describe('EnsembleActivationStrategy', () => {
   beforeEach(() => {
     mockEnsembleManager = {
       list: jest.fn(),
+      projectForDisplay: jest.fn(() => Promise.resolve()),
+      findByName: jest.fn(async () => (await mockEnsembleManager.list())?.[0]),
       activateEnsemble: jest.fn(),
       deactivateEnsemble: jest.fn(),
       getActiveEnsembles: jest.fn(),
+      getActiveReferenceReport: jest.fn(async () => ({ items: await mockEnsembleManager.getActiveEnsembles(), failures: [], complete: true })),
     } as unknown as jest.Mocked<EnsembleManager>;
 
     mockPortfolioManager = {} as jest.Mocked<PortfolioManager>;
@@ -56,6 +59,15 @@ describe('EnsembleActivationStrategy', () => {
   });
 
   describe('activate', () => {
+    it('reports unreadable active references without claiming there are no activations', async () => {
+      mockEnsembleManager.getActiveReferenceReport.mockResolvedValue({ items: [], complete: false,
+        failures: [{ reference: 'broken', error: new Error('Definition unreadable') }] } as any);
+      const response = await strategy.getActiveElements();
+      const text = response.content.map(item => item.text).join('\n');
+      expect(text).toContain('broken');
+      expect(text).toContain('Definition unreadable');
+      expect(text).not.toMatch(/No active|No personas/);
+    });
     it('includes manager notices in the activation response', async () => {
       const ensemble = {
         metadata: { name: 'notice-ensemble', activationStrategy: 'sequential' },

@@ -26,6 +26,8 @@ import { sanitizeMetadata } from './element-crud/helpers.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { formatNotFoundError } from './element-crud/responseFormatter.js';
 import { ElementType } from '../portfolio/PortfolioManager.js';
+import { collectionReportNotice } from '../elements/base/CollectionReport.js';
+import { clientReadFailureReason } from '../elements/base/ElementReadError.js';
 
 /**
  * Handles all persona-related MCP tool operations
@@ -48,7 +50,8 @@ export class PersonaHandler {
    * Extracted from index.ts:515-557
    */
   async listPersonas() {
-    const personaList = (await this.personaManager.list()).map(persona => ({
+    const report = await this.personaManager.listReport();
+    const personaList = report.items.map(persona => ({
       filename: persona.filename,
       unique_id: persona.unique_id,
       name: persona.metadata.name,
@@ -63,7 +66,7 @@ export class PersonaHandler {
       active: this.activePersona.get() === persona.filename,
     }));
 
-    if (personaList.length === 0) {
+    if (personaList.length === 0 && report.complete) {
       return {
         content: [
           {
@@ -85,7 +88,7 @@ export class PersonaHandler {
               `   📁 ${p.category} | 🎭 ${p.author} | 🔖 ${p.price} | ${p.ai_generated ? '🤖 AI' : '👤 Human'}\n` +
               `   Age: ${p.age_rating} | Version: ${p.version}\n` +
               `   Triggers: ${p.triggers.join(', ') || 'None'}\n`
-            ).join('\n'),
+            ).join('\n') + '\n' + collectionReportNotice(report),
         },
       ],
     };
@@ -186,7 +189,7 @@ export class PersonaHandler {
     const indicator = this.indicatorService.getPersonaIndicator();
     this.activePersona.set(null);
 
-    return {
+    return await Promise.resolve({
       content: [
         {
           type: "text",
@@ -195,7 +198,7 @@ export class PersonaHandler {
             : "No persona was active.",
         },
       ],
-    };
+    });
   }
 
   /**
@@ -313,7 +316,7 @@ export class PersonaHandler {
               `🎭 **${newPersona.metadata.name}** by ${newPersona.metadata.author}\n` +
               `🆔 Unique ID: ${newPersona.unique_id}\n` +
               `📄 Saved as: ${newPersona.filename}\n` +
-              `📊 Total personas: ${(await this.personaManager.list()).length}\n\n` +
+              `📊 ${await this.postImportListingNotice()}\n\n` +
               `🎯 **Ready to use:** \`activate_persona "${newPersona.metadata.name}"\`\n` +
               `📤 **Share it:** \`submit_collection_content "${newPersona.metadata.name}"\`\n` +
               `✏️ **Edit it:** \`edit_persona "${newPersona.metadata.name}" "field" "new value"\``,
@@ -378,15 +381,15 @@ export class PersonaHandler {
    */
   async exportAllPersonas(includeDefaults = true) {
     try {
-      const personasArray = await this.personaManager.list();
-      const bundle = this.personaExporter.exportBundle(personasArray, includeDefaults);
+      const report = await this.personaManager.listReport();
+      const bundle = this.personaExporter.exportBundle(report.items, includeDefaults);
       const base64 = this.personaExporter.toBase64(bundle);
       const result = this.personaExporter.formatBundleResult(bundle, base64);
 
       return {
         content: [{
           type: "text",
-          text: `${this.indicatorService.getPersonaIndicator()}${result}`
+          text: `${this.indicatorService.getPersonaIndicator()}${result}\n${collectionReportNotice(report)}`
         }]
       };
     } catch (error) {
@@ -426,13 +429,12 @@ export class PersonaHandler {
 
       const importedPersona = importResult.persona!;
 
-      // After successful import, reload personas to update the cache
-      await this.reloadPersonas();
+      const listing = await this.postImportListingNotice();
 
       return {
         content: [{
           type: "text",
-          text: `${this.indicatorService.getPersonaIndicator()}✅ Persona "${importedPersona.metadata.name}" imported successfully.\nTotal personas: ${(await this.personaManager.list()).length}`
+          text: `${this.indicatorService.getPersonaIndicator()}✅ Persona "${importedPersona.metadata.name}" imported successfully.\n${listing}`
         }]
       };
     } catch (error) {
@@ -442,6 +444,16 @@ export class PersonaHandler {
           text: `${this.indicatorService.getPersonaIndicator()}❌ Import failed: ${SecureErrorHandler.sanitizeError(error).message}`
         }]
       };
+    }
+  }
+
+  private async postImportListingNotice(): Promise<string> {
+    try {
+      await this.personaManager.reload();
+      const report = await this.personaManager.listReport();
+      return report.complete ? `Total personas: ${report.items.length}` : collectionReportNotice(report);
+    } catch (cause) {
+      return `Listing incomplete: ${clientReadFailureReason(cause)}`;
     }
   }
 

@@ -3,6 +3,7 @@ import { ElementType } from '../../../src/portfolio/PortfolioManager.js';
 import { describe, it, expect, beforeEach, jest, afterEach } from '@jest/globals';
 import { FileDiscoveryUtil } from '../../../src/utils/FileDiscoveryUtil.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
+import { FileOperationsService } from '../../../src/services/FileOperationsService.js';
 
 const submitExecuteMock = jest.fn();
 const unifiedIndexInstanceMock = {
@@ -233,6 +234,52 @@ describe('CollectionHandler', () => {
     it('should return a message indicating it is not implemented', async () => {
         const result = await handler.submitContent('test-content');
         expect(submitExecuteMock).not.toHaveBeenCalled();
+        expect(result.content[0].text).toContain('not found in portfolio');
+    });
+
+    it('reports a type directory it could not read as a failed submission, never as not found', async () => {
+        // ENOENT/ENOTDIR mean "not in this type"; a permission error is a read failure. Only the
+        // type search (cached results) fails, so the suggestion scan cannot mask it.
+        findFileSpy.mockImplementation(async (_dir: string, _name: string, options?: { cacheResults?: boolean }) => {
+          if (options?.cacheResults === false) return null;
+          throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+        });
+        const result = await handler.submitContent('test-content');
+        expect(submitExecuteMock).not.toHaveBeenCalled();
+        expect(result.content[0].text).not.toContain('not found in portfolio');
+        expect(result.content[0].text).toContain('permission denied');
+    });
+
+    it('reports a failed suggestion scan as a failed submission, never as suggestions from the surviving types', async () => {
+        // The type search finds nothing; the suggestion scan (no result caching) cannot read a directory.
+        findFileSpy.mockImplementation(async (_dir: string, _name: string, options?: { cacheResults?: boolean }) => {
+          if (options?.cacheResults === false) throw Object.assign(new Error('suggestion scan denied'), { code: 'EACCES' });
+          return null;
+        });
+        const result = await handler.submitContent('test-content');
+        expect(submitExecuteMock).not.toHaveBeenCalled();
+        expect(result.content[0].text).toContain('suggestion scan denied');
+        expect(result.content[0].text).not.toContain('Did you mean');
+    });
+
+    it('reports a type directory the discovery utility could not list as a failed submission, without the local path', async () => {
+        // The real discovery utility runs; only the directory listing beneath it is refused.
+        findFileSpy.mockRestore();
+        findFileSpy = jest.spyOn(FileOperationsService.prototype, 'listDirectory').mockRejectedValue(Object.assign(
+          new Error("EACCES: permission denied, scandir '/home/portfolio-owner/.dollhouse/portfolio/skills'"), { code: 'EACCES' }));
+        const result = await handler.submitContent('test-content');
+        expect(submitExecuteMock).not.toHaveBeenCalled();
+        expect(result.content[0].text).not.toContain('not found in portfolio');
+        expect(result.content[0].text).toContain('permission denied');
+        expect(result.content[0].text).not.toContain('/home/portfolio-owner');
+    });
+
+    it('still reports not found when every type directory is merely missing', async () => {
+        // The real discovery utility answers a missing directory with no match.
+        findFileSpy.mockRestore();
+        findFileSpy = jest.spyOn(FileOperationsService.prototype, 'listDirectory')
+          .mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' }));
+        const result = await handler.submitContent('test-content');
         expect(result.content[0].text).toContain('not found in portfolio');
     });
   });

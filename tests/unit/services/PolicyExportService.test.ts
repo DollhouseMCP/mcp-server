@@ -18,13 +18,17 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { logger } from '../../../src/utils/logger.js';
+
+// Mode-bit denial requires POSIX permissions and an unprivileged process.
+const posixIt = process.platform === 'win32' || !process.getuid || process.getuid() === 0 ? it.skip : it;
 
 let testDir: string;
 let policyDir: string;
 
 function createMockDeps(overrides: Partial<PolicyExportDeps> = {}): PolicyExportDeps {
   return {
-    getActiveElementsForPolicy: async () => [],
+    getActiveElementsForPolicy: async () => ({ items: [], failures: [], complete: true }),
     getServerVersion: () => '2.0.0-test',
     ...overrides,
   };
@@ -50,10 +54,53 @@ describe('PolicyExportService', () => {
   });
 
   afterEach(async () => {
+    jest.restoreAllMocks();
     await fs.rm(testDir, { recursive: true, force: true });
   });
 
   describe('exportPolicies', () => {
+    posixIt('reports an inaccessible bridge directory when the unavailable marker cannot be published', async () => {
+      const parent = path.join(testDir, 'blocked');
+      const target = path.join(parent, 'policies');
+      await fs.mkdir(target, { recursive: true });
+      const error = jest.spyOn(logger, 'error').mockImplementation(() => {});
+      const capture = jest.fn(async () => ({ items: [], complete: true, failures: [] }));
+      await fs.chmod(parent, 0);
+      try {
+        await expect(createServiceWithDir(target, { getActiveElementsForPolicy: capture }).exportPolicies()).resolves.toBeUndefined();
+        expect(capture).not.toHaveBeenCalled();
+        expect(error).toHaveBeenCalledWith('[PolicyExportService] Failed to publish unavailable policies', expect.any(Object));
+      } finally { await fs.chmod(parent, 0o700); }
+    });
+    it('omits driver query text from an unavailable export after collection throws', async () => {
+      const cause = Object.assign(new Error('Failed query SELECT private_data; params: private-token'), { name: 'DrizzleQueryError' });
+      await createServiceWithDir(policyDir, { getActiveElementsForPolicy: async () => { throw cause; } }).exportPolicies();
+      const policy = await readPolicyFile();
+      expect(policy).toMatchObject({ status: 'unavailable', complete: false });
+      expect(policy).not.toHaveProperty('element_policies');
+      expect(JSON.stringify(policy)).not.toMatch(/private_data|private-token|Failed query/);
+    });
+    it('replaces a complete export with an unavailable marker without partial policies', async () => {
+      await createServiceWithDir(policyDir).exportPolicies();
+      expect(await readPolicyFile()).toMatchObject({ schema_version: '1.0', status: 'complete', complete: true });
+      const failures = [{ type: 'skill', reference: 'broken', reason: 'Definition unreadable' }];
+      const service = createServiceWithDir(policyDir, {
+        getActiveElementsForPolicy: async () => ({ complete: false, failures,
+          items: [{ type: 'skill', name: 'healthy', metadata: {} }] }),
+      });
+      await service.exportPolicies();
+      const policy = await readPolicyFile();
+      expect(policy).toMatchObject({ schema_version: '2.0', status: 'unavailable', complete: false, failures });
+      expect(policy).not.toHaveProperty('element_policies');
+    });
+    it('logs failed unavailable publication without throwing into the caller', async () => {
+      await fs.mkdir(path.join(policyDir, 'dollhousemcp-crude-policies.json'));
+      const error = jest.spyOn(logger, 'error').mockImplementation(() => {});
+      await expect(createServiceWithDir(policyDir, { getActiveElementsForPolicy: async () => ({
+        items: [], complete: false, failures: [{ type: 'skills', reason: 'Definition unavailable' }],
+      }) }).exportPolicies()).resolves.toBeUndefined();
+      expect(error).toHaveBeenCalledWith('[PolicyExportService] Failed to publish unavailable policies', expect.any(Object));
+    });
     it('should skip silently when bridge directory does not exist', async () => {
       const service = new PolicyExportService(createMockDeps(), path.join(testDir, 'missing'));
       // If bridge dir doesn't exist, this should not throw
@@ -76,7 +123,7 @@ describe('PolicyExportService', () => {
           markFirstCaptureStarted();
           await firstCaptureBlocked;
         }
-        return [];
+        return { items: [], failures: [], complete: true };
       });
       const service = createServiceWithDir(policyDir, { getActiveElementsForPolicy });
 
@@ -109,7 +156,7 @@ describe('PolicyExportService', () => {
             markOlderCaptureStarted();
             await olderCaptureBlocked;
           }
-          return [{ type: 'persona', name: session, metadata: {} }];
+          return { items: [{ type: 'persona', name: session, metadata: {} }], failures: [], complete: true };
         },
       });
 
@@ -199,7 +246,7 @@ describe('PolicyExportService', () => {
 
     it('should extract allow/deny patterns from active elements', async () => {
       const service = createServiceWithDir(policyDir, {
-        getActiveElementsForPolicy: async () => [{
+        getActiveElementsForPolicy: async () => ({ failures: [], complete: true, items: [{
           type: 'skill',
           name: 'code-review',
           metadata: {
@@ -211,7 +258,7 @@ describe('PolicyExportService', () => {
               },
             },
           },
-        }],
+        }]}),
       });
       await service.exportPolicies();
 
@@ -231,10 +278,10 @@ describe('PolicyExportService', () => {
 
     it('should set ensemble_name when ensemble is active', async () => {
       const service = createServiceWithDir(policyDir, {
-        getActiveElementsForPolicy: async () => [
+        getActiveElementsForPolicy: async () => ({ failures: [], complete: true, items: [
           { type: 'ensemble', name: 'dev-workflow', metadata: {} },
           { type: 'persona', name: 'coder', metadata: {} },
-        ],
+        ]}),
       });
       await service.exportPolicies();
 
@@ -245,7 +292,7 @@ describe('PolicyExportService', () => {
 
     it('should deduplicate combined patterns', async () => {
       const service = createServiceWithDir(policyDir, {
-        getActiveElementsForPolicy: async () => [
+        getActiveElementsForPolicy: async () => ({ failures: [], complete: true, items: [
           {
             type: 'skill', name: 'skill-a',
             metadata: { gatekeeper: { externalRestrictions: { description: 'a', allowPatterns: ['git *'], denyPatterns: ['rm -rf *'] } } },
@@ -254,7 +301,7 @@ describe('PolicyExportService', () => {
             type: 'skill', name: 'skill-b',
             metadata: { gatekeeper: { externalRestrictions: { description: 'b', allowPatterns: ['git *', 'npm test*'], denyPatterns: ['rm -rf *'] } } },
           },
-        ],
+        ]}),
       });
       await service.exportPolicies();
 
@@ -266,9 +313,9 @@ describe('PolicyExportService', () => {
 
     it('should handle elements without gatekeeper metadata', async () => {
       const service = createServiceWithDir(policyDir, {
-        getActiveElementsForPolicy: async () => [
+        getActiveElementsForPolicy: async () => ({ failures: [], complete: true, items: [
           { type: 'persona', name: 'default', metadata: {} },
-        ],
+        ]}),
       });
       await service.exportPolicies();
 
@@ -281,7 +328,7 @@ describe('PolicyExportService', () => {
 
     it('should filter out non-string values in patterns', async () => {
       const service = createServiceWithDir(policyDir, {
-        getActiveElementsForPolicy: async () => [{
+        getActiveElementsForPolicy: async () => ({ failures: [], complete: true, items: [{
           type: 'skill', name: 'malformed',
           metadata: {
             gatekeeper: {
@@ -292,7 +339,7 @@ describe('PolicyExportService', () => {
               },
             },
           },
-        }],
+        }]}),
       });
       await service.exportPolicies();
 

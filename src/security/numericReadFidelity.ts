@@ -1,4 +1,5 @@
 import * as yaml from 'js-yaml';
+import { markContentRejection } from './contentRejection.js';
 import { SecurityError } from '../errors/SecurityError.js';
 
 // Qualification bounds work on an individual numeric scalar. Native JSON
@@ -7,7 +8,7 @@ const MAX_NUMERIC_SCALAR_UNITS = 1024;
 type Decimal = { negative: boolean; digits: string; scale: bigint };
 
 function refuse(): never {
-  throw new SecurityError('Numeric scalar cannot be faithfully read', 'YAML_NUMERIC_PRECISION', 'medium');
+  throw markContentRejection(new SecurityError('Numeric scalar cannot be faithfully read', 'YAML_NUMERIC_PRECISION', 'medium'));
 }
 
 function decimal(token: string): Decimal {

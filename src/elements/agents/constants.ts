@@ -1,3 +1,4 @@
+import { ELEMENT_FILE_EXTENSIONS } from '../../storage/ElementNameKeys.js';
 /**
  * Shared constants for Agent elements
  */
@@ -44,7 +45,7 @@ export const AGENT_LIMITS = {
 } as const;
 
 // File extensions
-export const AGENT_FILE_EXTENSION = '.md';
+export const AGENT_FILE_EXTENSION = ELEMENT_FILE_EXTENSIONS.agents;
 export const STATE_FILE_EXTENSION = '.state.yaml';
 export const STATE_DIRECTORY = '.state';
 

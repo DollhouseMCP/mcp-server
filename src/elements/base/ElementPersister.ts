@@ -7,10 +7,12 @@
  * beforeSave, afterSave, afterDelete, canDelete, onSaveError,
  * createBackupBeforeSave, createBackupBeforeDelete) receive them via
  * the ElementPersisterHost interface so late binding is preserved.
- * Extracted from BaseElementManager; no behaviour changed.
+ * Every write is checked against the reader's own field rules, so a saved definition reads back.
  */
 
 import { createHash, randomUUID } from 'node:crypto';
+import { ElementMissingError, ElementReadError, ElementUnreadableError, identityResolutionFailure } from './ElementReadError.js';
+import { certifyNamedReference, type NameEvidenceSource } from './ElementNameEvidence.js';
 import * as path from 'node:path';
 import type { IElement } from '../../types/elements/IElement.js';
 import type { ElementType } from '../../portfolio/types.js';
@@ -19,22 +21,25 @@ import type { FileLockManager } from '../../security/fileLockManager.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
 import { ContentValidator } from '../../security/contentValidator.js';
-import { SecurityError } from '../../security/errors.js';
+import { SecurityError, ValidationError } from '../../security/errors.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import type { FileOperationsService } from '../../services/FileOperationsService.js';
 import { ElementTransactionScope } from './ElementTransactionScope.js';
 import {
+  type DatabaseStorageIdentity,
   type ElementSaveOptions,
   type IStorageLayer,
+  type IWritableStorageLayer,
+  type StorageCacheVersion,
   isWritableStorageLayer,
 } from '../../storage/IStorageLayer.js';
 import { getGatekeeperAuthoringErrors } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 import type { ElementCache, CachePublicationLease } from './ElementCache.js';
 import type { ElementEventCoordinator } from './ElementEventCoordinator.js';
 import type { ElementLoader, ElementTypeToContext } from './ElementLoader.js';
+import type { ElementDeletionTarget } from './ElementDeletion.js';
 
-const DATABASE_STORAGE_IDENTITY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 /**
  * Host interface: the persister calls back into BaseElementManager for
@@ -42,6 +47,8 @@ const DATABASE_STORAGE_IDENTITY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f
  */
 export interface ElementPersisterHost<T extends IElement> {
   readonly elementType: ElementType;
+  /** The index scan with its diff evicted (the manager's one collection read). */
+  scanEvicting(): Promise<void>;
   serializeElement(element: T): Promise<string>;
   /**
    * Validate serialized content before writing.
@@ -51,8 +58,10 @@ export interface ElementPersisterHost<T extends IElement> {
   validateSerializedContent(content: string): void;
   beforeSave?(element: T, filePath: string): Promise<void>;
   afterSave?(element: T, filePath: string): Promise<void>;
-  afterDelete?(filePath: string): Promise<void>;
+  /** Storage identity plus the readable database target name; file labels remain unchanged. */
+  afterDelete?(filePath: string, displayName?: string): Promise<void>;
   canDelete?(element: T): Promise<{ allowed: boolean; reason?: string }>;
+  canDeleteRepair(storageIdentity: string, reason: string, storedName?: string): Promise<{ allowed: boolean; reason?: string }>;
   onSaveError?(element: T, filePath: string, error: unknown): void;
   createBackupBeforeSave(absolutePath: string): Promise<void>;
   createBackupBeforeDelete(absolutePath: string, onCommitted?: () => void): Promise<boolean>;
@@ -73,6 +82,8 @@ export interface ElementPersisterDependencies<T extends IElement> {
   readonly fileLockManager: FileLockManager;
   readonly fileOperations: FileOperationsService;
   readonly storageLayer: IStorageLayer;
+  /** The manager's evicting name-evidence source (a collection read never drops its diff). */
+  readonly nameEvidence: NameEvidenceSource;
   readonly elementTypeToContext: ElementTypeToContext;
 }
 
@@ -84,6 +95,7 @@ export class ElementPersister<T extends IElement> {
   private readonly fileLockManager: FileLockManager;
   private readonly fileOperations: FileOperationsService;
   private readonly storageLayer: IStorageLayer;
+  private readonly nameEvidence: NameEvidenceSource;
   private readonly elementTypeToContext: ElementTypeToContext;
 
   constructor(deps: ElementPersisterDependencies<T>) {
@@ -94,6 +106,7 @@ export class ElementPersister<T extends IElement> {
     this.fileLockManager = deps.fileLockManager;
     this.fileOperations = deps.fileOperations;
     this.storageLayer = deps.storageLayer;
+    this.nameEvidence = deps.nameEvidence;
     this.elementTypeToContext = deps.elementTypeToContext;
   }
 
@@ -114,7 +127,7 @@ export class ElementPersister<T extends IElement> {
       } };
     }
     await this.host.scanAndEvict();
-    const target = (await this.storageLayer.findIndexedPath([name])) ?? this.host.getElementFilename(name);
+    const target = (await certifyNamedReference(this.nameEvidence, name)).path ?? this.host.getElementFilename(name);
     const { absolutePath } = await this.host.normalizeAndValidatePath(target);
     return this.fileLockManager.withLock(`element:${absolutePath}`, async () => {
       try {
@@ -173,12 +186,14 @@ export class ElementPersister<T extends IElement> {
 
       const isDbMode = isWritableStorageLayer(this.storageLayer);
       let savedRelativePath = relativePath;
+      // The written file's version, as the write itself observed it; none means the instance is unversioned.
+      let writtenVersion: StorageCacheVersion | undefined;
 
       transaction.addCommit(async () => {
         if (!isDbMode) {
           await this.storageLayer.notifySaved(savedRelativePath, absolutePath);
         }
-        this.cache.cacheElement(element, savedRelativePath, lease);
+        this.cache.cacheElement(element, savedRelativePath, lease, writtenVersion);
         this.events.eventDispatcher.emitAsync(
           'element:save:success',
           this.events.createEventPayload({ correlationId, filePath: savedRelativePath, element }),
@@ -230,8 +245,11 @@ export class ElementPersister<T extends IElement> {
           savedRelativePath = elementId;
         } else if (options?.exclusive) {
           await this.fileOperations.createDirectory(path.dirname(absolutePath));
+          // The created file's version, observed on the exclusive handle itself before it closes.
+          let createdVersion: StorageCacheVersion | undefined;
           const created = await this.fileOperations.createFileExclusive(absolutePath, content, {
             source: `${this.host.constructor.name}.save`,
+            onWritten: version => { createdVersion = version; },
           });
           if (!created) {
             const error = new Error(
@@ -240,6 +258,7 @@ export class ElementPersister<T extends IElement> {
             error.code = 'EEXIST';
             throw error;
           }
+          writtenVersion = createdVersion;
         } else {
           if (!options?.updateOnly) {
             await this.fileOperations.createDirectory(path.dirname(absolutePath));
@@ -251,7 +270,10 @@ export class ElementPersister<T extends IElement> {
           // Preserve the existing atomic temp-file + rename publication.
           if (options?.updateOnly) await this.fileOperations.stat(absolutePath);
           await this.verifyFileSnapshot(absolutePath, options?.expectedFileSnapshot);
-          await this.fileOperations.writeFile(absolutePath, content, { encoding: 'utf-8' });
+          // The write's own observation (its temporary file, before the rename); a write that reports
+          // none caches the instance unversioned, so the next load reads the file again.
+          const written = await this.fileOperations.writeFile(absolutePath, content, { encoding: 'utf-8' });
+          writtenVersion = written ?? undefined;
         }
 
         if (this.host.afterSave) {
@@ -277,7 +299,8 @@ export class ElementPersister<T extends IElement> {
    * Delete an element from file or database.
    * Identical to the former BaseElementManager.delete() body.
    */
-  async delete(filePath: string, onCommitted?: () => void): Promise<void> {
+  async deleteResolved(target: ElementDeletionTarget<T>, onCommitted?: () => void): Promise<void> {
+    const filePath = target.storageIdentity;
     const { relativePath, absolutePath } = await this.host.normalizeAndValidatePath(filePath);
 
     await this.fileLockManager.withLock(`element:${absolutePath}`, async () => {
@@ -329,10 +352,12 @@ export class ElementPersister<T extends IElement> {
 
       await transaction.run(async () => {
         if (isDbMode) {
-          deletedStorageIdentity = await this.deleteFromDatabase(relativePath, notifyCommitted);
+          deletedStorageIdentity = await this.deleteFromDatabase(relativePath, target, notifyCommitted);
         } else {
-          if (this.host.canDelete) {
-            const elementForValidation = await this.loader.loadElementSnapshot(absolutePath, relativePath);
+          if (target.kind === 'repair') {
+            await this.assertRepairDeleteAllowed(target);
+          } else if (this.host.canDelete) {
+            const elementForValidation = await this.loader.loadElementSnapshot(relativePath);
             await this.assertDeleteAllowed(elementForValidation);
           }
           const movedToBackup = await this.host.createBackupBeforeDelete(absolutePath, notifyCommitted);
@@ -345,7 +370,8 @@ export class ElementPersister<T extends IElement> {
         }
 
         if (this.host.afterDelete) {
-          await this.host.afterDelete(relativePath);
+          const displayName = isDbMode && target.kind === 'element' ? target.element.metadata.name : undefined;
+          await this.host.afterDelete(relativePath, displayName);
         }
       });
 
@@ -353,23 +379,22 @@ export class ElementPersister<T extends IElement> {
     });
   }
 
-  private async deleteFromDatabase(relativePath: string, onCommitted?: () => void): Promise<string> {
+  private async deleteFromDatabase(relativePath: string, target: ElementDeletionTarget<T>, onCommitted?: () => void): Promise<string> {
     if (!isWritableStorageLayer(this.storageLayer)) {
       throw new Error('Database deletion requires a writable storage layer');
     }
     const storage = this.storageLayer;
-    const dbIdentifier = DATABASE_STORAGE_IDENTITY_PATTERN.test(relativePath)
-      ? relativePath
-      : this.host.extractNameFromPath(relativePath);
-    const resolvedIdentity = await storage.resolveContentIdentity(
-      this.host.elementType,
-      dbIdentifier,
-    );
-    if (!resolvedIdentity) throw this.createNotFoundError(relativePath);
+    const requested = target.kind === 'element' ? target.requestedReference ?? relativePath : relativePath;
+    // The caller's text was classified at the entry (path syntax never reaches here). Inside the
+    // delete it is resolved again, so a competing row inserted during authorization refuses.
+    const { identifier: dbIdentifier, identity: resolvedIdentity } = await this.resolveDatabaseIdentity(storage, requested);
+    if (resolvedIdentity?.id !== target.storageIdentity) throw this.createNotFoundError(requested);
     const dbId = resolvedIdentity.id;
 
-    if (this.host.canDelete) {
-      const elementForValidation = await this.loader.loadElementSnapshotFromDb(dbId);
+    if (target.kind === 'repair') {
+      await this.assertRepairDeleteAllowed(target, resolvedIdentity.name);
+    } else if (this.host.canDelete) {
+      const elementForValidation = await this.loader.loadElementSnapshot(dbId);
       await this.assertDeleteAllowed(elementForValidation);
     }
 
@@ -390,10 +415,13 @@ export class ElementPersister<T extends IElement> {
     }
   }
 
+  private async assertRepairDeleteAllowed(target: Extract<ElementDeletionTarget<T>, { kind: 'repair' }>, storedName?: string): Promise<void> {
+    const decision = await this.host.canDeleteRepair(target.storageIdentity, target.reason, storedName);
+    if (!decision.allowed) throw new Error(decision.reason ?? 'Repair deletion is not permitted');
+  }
+
   private createNotFoundError(relativePath: string): NodeJS.ErrnoException {
-    const error = new Error(`Element not found: ${relativePath}`) as NodeJS.ErrnoException;
-    error.code = 'ENOENT';
-    return error;
+    return new ElementMissingError(relativePath, undefined);
   }
 
   /**
@@ -402,14 +430,28 @@ export class ElementPersister<T extends IElement> {
   async exists(filePath: string): Promise<boolean> {
     try {
       if (isWritableStorageLayer(this.storageLayer)) {
-        const name = this.host.extractNameFromPath(filePath);
-        return (await this.storageLayer.findIndexedPath([name, filePath])) !== undefined;
+        await this.host.scanEvicting();
+        // The storage layer's callerNames rank the text as written and its stripped name together.
+        return (await certifyNamedReference(this.nameEvidence, filePath)).selected !== undefined;
       }
       const { absolutePath } = await this.host.normalizeAndValidatePath(filePath);
       return await this.fileOperations.exists(absolutePath);
-    } catch {
-      return false;
+    } catch (cause) {
+      // A caller's own reference syntax is refused unwrapped at every entry point; storage failures are classified.
+      if (cause instanceof ElementReadError || cause instanceof ValidationError) throw cause;
+      throw new ElementUnreadableError('Element existence lookup failed', { cause });
     }
+  }
+
+  /**
+   * The row caller text the classifier already admitted names. The storage layer resolves it by
+   * the shared name rule over its callerNames, inside its transaction, as a read of the text does.
+   */
+  private async resolveDatabaseIdentity(storage: IWritableStorageLayer, requested: string):
+    Promise<{ identifier: string; identity: DatabaseStorageIdentity | undefined }> {
+    const identity = await storage.resolveContentIdentity(this.host.elementType, requested)
+      .catch(cause => { throw identityResolutionFailure(cause, requested); });
+    return { identifier: requested, identity };
   }
 
   /**
@@ -482,6 +524,8 @@ export class ElementPersister<T extends IElement> {
       }
 
       validateGatekeeperMetadata(frontmatterData, 'frontmatter');
+      // Write → read symmetry: every non-memory reader applies the parser's field validators.
+      SecureYamlParser.assertFieldValues(frontmatterData);
 
       const bodyValidation = ContentValidator.validateAndSanitize(bodyContent, { contentContext });
       if (!bodyValidation.isValid && bodyValidation.severity === 'critical') {

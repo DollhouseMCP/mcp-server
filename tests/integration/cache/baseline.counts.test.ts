@@ -2,6 +2,7 @@ import { describe, it, expect, afterAll } from '@jest/globals';
 import { listCounts, refreshCounts } from '../../helpers/counting/LegacyCounts.js';
 import { cacheFixture, TYPES, type Backend } from '../../helpers/counting/CacheFixture.js';
 import { cleanupTestElements, closeTestDb, ensureTestUser, TEST_DB_URL } from '../database/test-db-helpers.js';
+import { PolicyUnavailableError } from '../../../src/services/policy/PolicyUnavailableError.js';
 
 // Measurements exclude seeding, activation, mutation and cleanup. File scan cooldown
 // is zero to exercise manifest validation deterministically, without a timing gate.
@@ -59,9 +60,10 @@ for (const mode of ['file', 'db'] as const) {
             for (const manager of Object.values(fixture.managers)) manager.clearCache();
           }
           fixture.counter.reset();
-          const values = await fixture.refresh();
-          const remaining = count - Number(scenario === 'delete');
-          expect(values).toHaveLength(remaining);
+          const refresh = fixture.refresh();
+          // Missing active definitions refuse enforcement instead of silently reducing the policy count.
+          if (scenario === 'delete') await expect(refresh).rejects.toBeInstanceOf(PolicyUnavailableError);
+          else expect(await refresh).toHaveLength(count);
           expect(fixture.counter.snapshot()).toEqual(refreshCounts(mode, type, count, scenario, temperature));
         } finally { await fixture.dispose(); }
       });

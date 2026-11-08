@@ -1,3 +1,4 @@
+import { storageReferenceFromPath } from '../../storage/StorageReference.js';
 /**
  * BaseElementManager - Abstract base class for all element managers
  *
@@ -24,11 +25,13 @@
 
 import { ACTIVE_LIMIT_ENV_VARS, getActiveElementLimitConfig, type ActiveLimitElementType } from '../../config/active-element-limits.js';
 import { ValidationError } from '../../security/errors.js';
+import { normalizeElementFilename } from '../../utils/filesystem.js';
+import { ELEMENT_TYPE_TO_CONTEXT } from '../../security/elementContentContext.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { visitSequentially } from '../../utils/visitSequentially.js';
 import type { ActivationMetricsTracker } from '../../metrics/ActivationMetricsTracker.js';
 import { PendingActivationDeletions, resolvedActivationLocator, type ResolvedActivationTarget, type PendingActivationDeletion } from '../../state/PendingActivationDeletions.js';
-import type { PersistedActivation } from '../../state/IActivationStateStore.js';
+import type { PersistedActivation, PersistedActivationIdentity } from '../../state/IActivationStateStore.js';
 import { ActivationSet } from '../../state/ActivationSet.js';
 import type { IElementManager } from '../../types/elements/IElementManager.js';
 import type { IElement, ElementValidationResult } from '../../types/elements/IElement.js';
@@ -36,7 +39,7 @@ import { ElementType } from '../../portfolio/types.js';
 import type { PortfolioManager } from '../../portfolio/PortfolioManager.js';
 import { logger } from '../../utils/logger.js';
 import type { FileLockManager } from '../../security/fileLockManager.js';
-import { sanitizeInput } from '../../security/InputValidator.js';
+import { assertUnsanitizedReference } from '../../security/InputValidator.js';
 import type { LRUCache } from '../../cache/LRUCache.js';
 import * as path from 'node:path';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
@@ -49,8 +52,11 @@ import { type ElementValidator } from '../../services/validation/ElementValidato
 import {
   type IStorageLayer,
   type ElementSaveOptions,
+  type StorageCacheVersion,
+  type StorageCollectionSnapshot,
   type StorageScanOptions,
   isWritableStorageLayer,
+  type StorageReference,
 } from '../../storage/IStorageLayer.js';
 import type { IStorageLayerFactory } from '../../storage/IStorageLayerFactory.js';
 import type { ElementIndexEntry } from '../../storage/types.js';
@@ -70,7 +76,12 @@ import { ElementEventCoordinator } from './ElementEventCoordinator.js';
 import { ElementLoader } from './ElementLoader.js';
 import { ElementPersister } from './ElementPersister.js';
 import { ElementListOperations } from './ElementListOperations.js';
-import { ElementResolver } from './ElementResolver.js';
+import { ElementResolver, type CallerTextKind, type ResolvedDefinition } from './ElementResolver.js';
+import { requireCompleteCollection, type CollectionReport } from './CollectionReport.js';
+import { acceptsDirectDefinition, callerNamesOf, nameTakenBy, type NameEvidenceSource } from './ElementNameEvidence.js';
+import { resolveActiveReferenceReport } from './ActiveReferenceResolver.js';
+import { ElementMissingError, ElementReadError, ElementUnreadableError, callerReadFailure, elementReadFailure, isRejectedDefinition } from './ElementReadError.js';
+import type { DeletionReport, ElementDeletionTarget } from './ElementDeletion.js';
 
 export const MAX_RETAINED_NOTICE_LINES = 5;
 
@@ -103,10 +114,9 @@ export interface BaseElementManagerOptions {
   /** Issue #1946: Registry for per-session activation state */
   activationRegistry?: import('../../state/SessionActivationState.js').SessionActivationRegistry;
   /**
-   * Phase 4: Per-call resolver returning the current user's UUID. Used
-   * by listFromDatabase() for cache hygiene (evicting foreign rows from
-   * the per-user cache when includePublic is active). Resolves from
-   * ContextTracker's session context. Undefined in file-only mode.
+   * Per-call resolver returning the current user's UUID: the element cache namespace outside a
+   * session, and the owner filter when a public listing evicts foreign rows from the per-user
+   * cache. Resolves from ContextTracker's session context. Undefined in file-only mode.
    */
   getCurrentUserId?: import('../../database/UserContext.js').UserIdResolver;
   /**
@@ -119,6 +129,17 @@ export interface BaseElementManagerOptions {
   storageLayerFactory: IStorageLayerFactory;
   /** Step 4.6: File-mode shared-pool discovery for include_public. */
   publicElementDiscovery?: import('../../collection/shared-pool/PublicElementDiscovery.js').PublicElementDiscovery;
+}
+
+/** How fresh an active-reference read must be: enforcement (invalidate and scan) or advisory. */
+export type ActiveReferenceFreshness = 'enforcement' | 'advisory';
+
+export interface ActiveReferenceReportOptions<T> {
+  assertCurrent?: () => void;
+  scanOptions?: StorageScanOptions;
+  freshness?: ActiveReferenceFreshness;
+  resolve?: (reference: string) => Promise<T | undefined>;
+  afterLookup?: (element: T, reference: string) => Promise<void>;
 }
 
 /**
@@ -160,20 +181,15 @@ export interface ElementManagerDeps {
 export interface InvalidElementRecord {
   /** Relative file path within the element directory. */
   filePath: string;
-  /** Human-readable reason the element was rejected. */
+  /** Original diagnostic reason; may contain private definition or storage details. */
   reason: string;
+  /** Client-safe reason captured from the typed read failure at load time. */
+  clientSafeReason: string;
   /** ISO timestamp of last failed load attempt. */
   failedAt: string;
+  /** True only when this definition’s own content was read and rejected. */
+  contentRejected: boolean;
 }
-
-/** Map plural ElementType enum values to singular ContentValidator context. */
-const ELEMENT_TYPE_TO_CONTEXT: Partial<Record<ElementType, 'persona' | 'skill' | 'template' | 'agent' | 'memory'>> = {
-  [ElementType.PERSONA]: 'persona',
-  [ElementType.SKILL]: 'skill',
-  [ElementType.TEMPLATE]: 'template',
-  [ElementType.AGENT]: 'agent',
-  [ElementType.MEMORY]: 'memory',
-};
 
 /**
  * Abstract base class implementing common element management operations.
@@ -264,7 +280,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    * (e.g. `MEMORY_DELETED`) or clearing sidecar caches — not for anything that
    * assumes the underlying delete can be undone.
    */
-  protected afterDelete?(filePath: string): Promise<void>;
+  protected afterDelete?(filePath: string, displayName?: string): Promise<void>;
   protected findByIdentifier?(identifier: string): Promise<T | undefined>;
   protected canDelete?(element: T): Promise<{ allowed: boolean; reason?: string }>;
   /**
@@ -346,7 +362,8 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     const eventCoordinatorHost = {
       get elementDir() { return self.elementDir; },
       get elementType() { return self.elementType; },
-      load: (fp: string) => this.load(fp),
+      // The watcher reloads a reference the layer reported, never caller text.
+      load: (reference: string) => this.loadStoredReference(reference),
       getElementLabel: () => this.getElementLabel(),
     };
 
@@ -384,21 +401,21 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
       loaderHost,
       this._cache,
       this._events,
-      this.fileOperations,
       this.storageLayer,
-      ELEMENT_TYPE_TO_CONTEXT,
     );
 
     const persisterHost = {
       get elementType() { return self.elementType; },
+      scanEvicting: () => this._listOps.scanEvicting(),
       serializeElement: (el: T) => this.serializeElement(el),
       validateSerializedContent: (c: string) => this.validateSerializedContent(c),
       beforeSave: (el: T, fp: string) => this.beforeSave ? this.beforeSave(el, fp) : Promise.resolve(),
       afterSave: (el: T, fp: string) => this.afterSave ? this.afterSave(el, fp) : Promise.resolve(),
-      afterDelete: (fp: string) => this.afterDelete ? this.afterDelete(fp) : Promise.resolve(),
+      afterDelete: (fp: string, displayName?: string) => this.afterDelete ? this.afterDelete(fp, displayName) : Promise.resolve(),
       // Always dispatch dynamically so tests or subclasses can assign canDelete
       // after construction (e.g. via (manager as any).canDelete = jest.fn(...)).
       canDelete: (el: T) => this.canDelete ? this.canDelete(el) : Promise.resolve({ allowed: true }),
+      canDeleteRepair: (identity: string, reason: string, storedName?: string) => this.canDeleteRepair(identity, reason, storedName),
       onSaveError: (el: T, fp: string, err: unknown) => this.onSaveError?.(el, fp, err),
       createBackupBeforeSave: (ap: string) => this.createBackupBeforeSave(ap),
       createBackupBeforeDelete: (ap: string, onCommitted?: () => void) => this.createBackupBeforeDelete(ap, onCommitted),
@@ -420,6 +437,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
       fileLockManager: this.fileLockManager,
       fileOperations: this.fileOperations,
       storageLayer: this.storageLayer,
+      nameEvidence: this.nameEvidence,
       elementTypeToContext: ELEMENT_TYPE_TO_CONTEXT,
     });
 
@@ -430,7 +448,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
       migrateMetadataDefaults: (d: Record<string, unknown>, fp: string) => this.migrateMetadataDefaults(d, fp),
       parseMetadata: (d: any) => this.parseMetadata(d),
       createElement: (m: T['metadata'], c: string) => this.createElement(m, c),
-      load: (fp: string) => this.load(fp),
+      load: (reference: string) => this.loadStoredReference(reference),
       resolveAbsolutePath: (fp: string) => this.resolveAbsolutePath(fp),
       getElementLabelCapitalized: () => this.getElementLabelCapitalized(),
       get constructor() { return self.constructor as { name: string }; },
@@ -440,20 +458,20 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     this._listOps = new ElementListOperations<T>(
       listHost,
       this._cache,
-      this.portfolioManager,
-      this.fileOperations,
       this.storageLayer,
       this.publicElementDiscovery,
       this.getCurrentUserId,
     );
 
     const resolverHost = {
-      load: (fp: string) => this.load(fp),
+      loadReference: (reference: string) => this.loadStoredReference(reference),
+      fallbackCandidates: (filename: string) => this.fallbackCandidates(filename),
       list: (opts?: { includePublic?: boolean }) => this.list(opts),
-      normalizeFilename: (n: string) => this.normalizeFilename(n),
       getElementFilename: (n: string) => this.getElementFilename(n),
       getFileExtension: () => this.getFileExtension(),
-      resolveAbsolutePath: (fp: string) => this.resolveAbsolutePath(fp),
+      validateReference: (reference: string) => this.validateCallerReference(reference),
+      classifyCallerText: (text: string) => this.classifyCallerText(text),
+      refreshStaleIndex: () => this.scanAndEvict(),
     };
 
     // ── Build ElementResolver ─────────────────────────────────────────────
@@ -461,6 +479,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
       resolverHost,
       this._cache,
       this.storageLayer,
+      this.nameEvidence,
     );
   }
 
@@ -471,9 +490,14 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   protected createStorageLayer(): IStorageLayer {
     return this.storageLayerFactory.createForElement(this.elementType, {
       elementDir: this.elementDir,
+      elementDirResolver: () => this.elementDir,
       fileExtension: this.getFileExtension(),
       scanCooldownMs: getValidatedScanCooldown(),
       retainDirectoryState: dir => this._cache?.hasDirectoryEntries(dir) ?? false,
+      onFailedRecordRecovered: reference => {
+        this._cache.uncacheByPath(reference);
+        this._loader.clearInvalidRecord(reference);
+      },
     });
   }
 
@@ -481,8 +505,32 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   // LOAD / SAVE / DELETE / EXISTS / VALIDATE
   // ============================================
 
+  /**
+   * Caller entry: load by storage reference or by name, as the caller-text classifier decides.
+   */
   async load(filePath: string): Promise<T> {
-    return this._loader.load(filePath);
+    if (await this.classifyCallerText(filePath) === 'reference') return this.loadStoredReference(filePath);
+    const element = await this.findByName(filePath);
+    if (element) return element;
+    throw new ElementMissingError(filePath, undefined);
+  }
+
+  /**
+   * Read one storage reference through the loader, never back through the caller-text entry: a
+   * reference that classification or certification already selected is never classified again.
+   * Subclasses that observe every definition read (an audit event) override this.
+   */
+  protected loadStoredReference(reference: string): Promise<T> {
+    this.normalizeReference(reference);
+    return this._loader.load(reference);
+  }
+
+  /**
+   * Where a type may store a filename the index does not hold, for the resolver's filename
+   * fallback only. Most types keep definitions in one flat directory; memories add sub-folders.
+   */
+  protected fallbackCandidates(filename: string): Promise<string[]> {
+    return Promise.resolve([filename]);
   }
 
   /**
@@ -509,7 +557,9 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     if (!target) return undefined;
     try {
       const element = await this._loader.loadDefinitionFromContent(target.content, target.path);
-      return element ? { element, ...target } : undefined;
+      // A target read outside the index is accepted by the same rule as a direct load by name.
+      return element && acceptsDirectDefinition(name, target.path, element.metadata.name, n => this.getElementFilename(n),
+        callerNamesOf(this.storageLayer, name)) ? { element, ...target } : undefined;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
       throw error;
@@ -517,10 +567,103 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   }
 
   async delete(filePath: string, onCommitted?: () => void): Promise<void> {
-    return this._persister.delete(filePath, onCommitted);
+    await this.deleteResolved(await this.resolveDeletionTarget(filePath), onCommitted);
   }
 
+  /**
+   * Caller entry: the caller-text classifier refuses path syntax first; an exact storage reference
+   * then fails on its own syntax here, bare; a name resolves through the index like every name
+   * lookup, and its own caller refusal passes unwrapped. Every storage failure is classified.
+   */
+  async resolveDeletionTarget(identifier: string): Promise<ElementDeletionTarget<T>> {
+    await this.classifyCallerText(identifier);
+    const reference = await this.classifiedRead(identifier, () => this.storageLayer.resolveReference(identifier));
+    if (reference.kind === 'identity') this.normalizeReference(reference.storageIdentity);
+    return this.classifiedRead(identifier, () => this.resolveDeletionReference(identifier, reference));
+  }
+
+  private async classifiedRead<R>(identifier: string, read: () => Promise<R>): Promise<R> {
+    try {
+      return await read();
+    } catch (cause) {
+      throw callerReadFailure(cause, identifier);
+    }
+  }
+
+  private async resolveDeletionReference(identifier: string, reference: StorageReference): Promise<ElementDeletionTarget<T>> {
+    if (reference.kind === 'identity') {
+      const { relativePath } = await this.normalizeAndValidatePath(reference.storageIdentity);
+      try {
+        const element = await this.loadElementDefinition(relativePath);
+        return { kind: 'element', storageIdentity: relativePath, element, requestedReference: reference.requested };
+      } catch (cause) {
+        if (this.storageLayer.isExactStorageReference(identifier, this.getFileExtension()) &&
+          isRejectedDefinition(cause)) {
+          return { kind: 'repair', storageIdentity: relativePath, reason: cause.message, repair: 'rejected-definition' };
+        }
+        throw cause;
+      }
+    }
+    const element = await this.findByName(reference.name);
+    if (!element) throw new ElementMissingError(identifier, undefined);
+    return { kind: 'element', storageIdentity: this.storageReferenceOf(element), element, requestedReference: identifier };
+  }
+
+  async deleteResolved(target: ElementDeletionTarget<T>, onCommitted?: () => void): Promise<DeletionReport> {
+    // A target carries the caller's text it was resolved from; that text meets the shared classifier here too.
+    if (target.kind === 'element' && target.requestedReference !== undefined) await this.classifyCallerText(target.requestedReference);
+    await this._persister.deleteResolved(target, onCommitted);
+    return { storageIdentity: target.storageIdentity, notices: target.kind === 'repair'
+      ? [`Definition could not be read: ${target.reason}. Removed by storage reference '${target.storageIdentity}'.`] : [] };
+  }
+
+  protected canDeleteRepair(_storageIdentity: string, _reason: string, _storedName?: string): Promise<{ allowed: boolean; reason?: string }> {
+    return Promise.resolve(this.canDelete
+      ? { allowed: false, reason: 'This element requires definition-based deletion validation.' }
+      : { allowed: true });
+  }
+
+  /**
+   * The one create availability check, on both backends (ElementNameEvidence.nameTakenBy): the
+   * stored name of the definition the requested name selects by any tier ('my skill' beside
+   * 'My-Skill'), undefined when free, and indeterminate (refused, typed) when a failed definition
+   * could hold it or several definitions tie. An unrelated unreadable sibling never blocks a create.
+   * The evidence is fresh: the collection is refreshed through the storage contract first (one id
+   * query on the database, the membership check on files), so a name another process stored since
+   * the index was built is still refused.
+   */
+  protected nameTakenBy(name: string): Promise<string | undefined> {
+    return this.classifiedRead(name, async () => {
+      await this._listOps.refreshCollection();
+      return nameTakenBy(this.nameEvidence, name);
+    });
+  }
+
+  /**
+   * The one create refusal for a name another definition holds, for every type: thrown, with the
+   * stored name when it differs from the requested text. A type whose create also writes a target
+   * file another definition could hold passes whether that target is taken.
+   */
+  protected async assertNameAvailable(name: string, targetTaken = false): Promise<void> {
+    const refusal = await this.duplicateNameRefusal(name, targetTaken);
+    if (refusal) throw new Error(refusal);
+  }
+
+  /** The duplicate-name refusal message, or undefined when the name is free (assertNameAvailable's rule). */
+  protected async duplicateNameRefusal(name: string, targetTaken = false): Promise<string | undefined> {
+    const existing = await this.nameTakenBy(name);
+    if (existing === undefined && !targetTaken) return undefined;
+    const label = this.getElementLabel();
+    const article = /^[aeiou]/iu.test(label) ? 'An' : 'A';
+    const stored = existing === undefined || existing === name ? '' : ` (stored as "${existing}")`;
+    return `${article} ${label} named "${name}" already exists${stored}`;
+  }
+
+  /** Caller entry: a storage reference is probed; a name is certified like every name lookup. */
   async exists(filePath: string): Promise<boolean> {
+    if (await this.classifyCallerText(filePath) !== 'reference' && !isWritableStorageLayer(this.storageLayer)) {
+      return (await this.findByName(filePath)) !== undefined;
+    }
     return this._persister.exists(filePath);
   }
 
@@ -536,13 +679,68 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   // LIST / FIND
   // ============================================
 
-  async list(options?: { includePublic?: boolean; strictDatabase?: boolean }): Promise<T[]> {
-    return this._listOps.list(options);
+  async list(options?: { includePublic?: boolean }): Promise<T[]> {
+    return requireCompleteCollection(await this.listReport(options));
   }
+
+  listReport(options?: { includePublic?: boolean }): Promise<CollectionReport<T>> {
+    return this.readCollectionReport(options);
+  }
+
+  /** Project the same per-type presentation as collection reads onto one resolved definition. */
+  async projectForDisplay(element: T): Promise<void> {
+    await this.decorateListed([element]);
+  }
+
+  /** Per-type presentation shared by complete lists and partial report survivors. */
+  protected decorateListed(_items: T[]): Promise<void> {
+    return Promise.resolve();
+  }
+
+  protected async readCollectionReport(options?: { includePublic?: boolean }, select?: (entry: ElementIndexEntry) => boolean): Promise<CollectionReport<T>> {
+    const report = await this._listOps.listReport(options, select);
+    await this.decorateListed(report.items);
+    return report;
+  }
+
+  protected async resolveActiveReferences(options: ActiveReferenceReportOptions<T> = {}): Promise<T[]> {
+    return requireCompleteCollection(await this.getActiveReferenceReport(options));
+  }
+
+  /**
+   * The active references as current definitions. Enforcement (the default) invalidates and scans,
+   * evicting every changed definition on files and every known row on the database, so a cached
+   * instance is never served past an edit. An advisory read (a display or the coalesced digest)
+   * uses the cheaper collection refresh.
+   */
+  async getActiveReferenceReport(options: ActiveReferenceReportOptions<T> = {}): Promise<CollectionReport<T>> {
+    const type = this.activationSetKey;
+    if (!type) throw new ElementUnreadableError('Element type does not support activation');
+    return resolveActiveReferenceReport({
+      ...options,
+      references: this.resolveActivationSet(type),
+      scan: () => this.refreshForFreshness(options.freshness, options.scanOptions),
+      resolve: options.resolve ?? (reference => this.findActiveReference(reference)),
+      afterLookup: options.afterLookup ?? (element => this.afterActiveReferenceLookup(element)),
+    });
+  }
+
+  /**
+   * The one refresh a policy or active-reference read takes: enforcement (the default) invalidates
+   * and scans, evicting every changed definition; an advisory read takes the cheaper collection
+   * refresh, which evicts only what it reports changed.
+   */
+  refreshForFreshness(freshness: ActiveReferenceFreshness = 'enforcement', scanOptions?: StorageScanOptions): Promise<void> {
+    return freshness === 'advisory' ? this._listOps.refreshCollection(scanOptions) : this.scanAndEvict(scanOptions);
+  }
+
+  protected findActiveReference(reference: string): Promise<T | undefined> { return this.findByName(reference, { refreshed: true }); }
+  protected afterActiveReferenceLookup(_element: T): Promise<void> { return Promise.resolve(); }
 
   async listSummaries(options?: { includePublic?: boolean }): Promise<ElementIndexEntry[]> {
     return this._listOps.listSummaries(options);
   }
+
 
   async find(predicate: (element: T) => boolean): Promise<T | undefined> {
     return this._resolver.find(predicate);
@@ -552,8 +750,23 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     return this._resolver.findMany(predicate);
   }
 
-  async findByName(identifier: string): Promise<T | undefined> {
-    return this._resolver.findByName(identifier);
+  /**
+   * `refreshed` is for a caller that refreshed this collection in the same call (an active-reference
+   * read after its scan, a policy member lookup after its refresh): a miss is answered from that
+   * refresh, never from an older observation.
+   */
+  async findByName(identifier: string, options: { refreshed?: boolean } = {}): Promise<T | undefined> {
+    return this._resolver.findByName(identifier, options);
+  }
+
+  /** The shared name resolution with its storage reference, for a type that needs its own load (fresh or cached). */
+  protected resolveDefinition(identifier: string, load?: (reference: string) => Promise<T>): Promise<ResolvedDefinition<T> | undefined> {
+    return this._resolver.resolveDefinition(identifier, load);
+  }
+
+  /** Load an exact storage reference by the loader's one cached-instance rule (ElementLoader.loadByReference). */
+  protected loadByStorageReference(reference: string): Promise<T> {
+    return this._loader.loadByReference(reference, ref => this.loadStoredReference(ref));
   }
 
   /**
@@ -565,25 +778,16 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   async findByStorageIdentity(identity: string): Promise<T | undefined> {
     if (typeof identity !== 'string' || identity.trim() === '') return undefined;
     const normalizedIdentity = identity.trim();
-    if (
-      isWritableStorageLayer(this.storageLayer) &&
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(normalizedIdentity)
-    ) {
-      return undefined;
-    }
-    if (
-      !isWritableStorageLayer(this.storageLayer) &&
-      !normalizedIdentity.toLowerCase().endsWith(this.getFileExtension().toLowerCase())
-    ) {
-      return undefined;
-    }
-    const cached = this._cache.getCachedByPath(normalizedIdentity);
-    if (cached) return cached;
+    // The one caller-text classifier decides: only a storage reference is looked up here. A name
+    // (path syntax a stored name certifies included) is the caller's name lookup to make; unheld
+    // path syntax is refused by the type's path policy.
+    if (await this.classifyCallerText(normalizedIdentity) !== 'reference') return undefined;
+    // The loader's one rule for a lookup by storage reference (IStorageLayer.cachedInstanceCurrency).
     try {
-      return await this.load(normalizedIdentity);
+      return await this.loadByStorageReference(normalizedIdentity);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-      throw error;
+      throw elementReadFailure(error, normalizedIdentity);
     }
   }
 
@@ -596,11 +800,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   }
 
   getInvalidElement(name: string): InvalidElementRecord | undefined {
-    return this._loader.getInvalidElement(
-      name,
-      () => this.getFileExtension(),
-      (n) => this.normalizeFilename(n),
-    );
+    return this._loader.getInvalidElement(name);
   }
 
   // ============================================
@@ -659,21 +859,27 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     this._cache.assertPublicationLease(lease);
   }
 
-  protected cacheElement(element: T, filePath: string, lease: CachePublicationLease): void {
-    this._cache.cacheElement(element, filePath, lease);
+  /**
+   * The manager's name-evidence source: the index, and the one evicting collection read, so a
+   * snapshot read for certification never leaves a changed instance cached.
+   */
+  protected readonly nameEvidence: NameEvidenceSource = {
+    readIndexedPath: (names, options) => this.storageLayer.readIndexedPath(names, options),
+    callerNames: text => callerNamesOf(this.storageLayer, text),
+    readCollection: options => this._listOps.readCollectionEvicting(options),
+  };
+
+  /** The manager's one collection read: what the snapshot saw change is evicted. */
+  protected readCollectionEvicting(options?: { includePublic?: boolean }): Promise<StorageCollectionSnapshot> {
+    return this._listOps.readCollectionEvicting(options);
+  }
+
+  protected cacheElement(element: T, filePath: string, lease: CachePublicationLease, version?: StorageCacheVersion): void {
+    this._cache.cacheElement(element, filePath, lease, version);
   }
 
   protected uncacheByPath(filePath: string): void {
     this._cache.uncacheByPath(filePath);
-  }
-
-  /**
-   * Protected cache lookup by absolute path.
-   * Allows subclasses with custom load() overrides (e.g. MemoryManager)
-   * to check the LRU cache before re-reading from disk.
-   */
-  protected getCachedByAbsolutePath(absolutePath: string): T | undefined {
-    return this._cache.getCachedByAbsolutePath(absolutePath);
   }
 
   protected getCachedElementsForCurrentNamespace(): T[] {
@@ -689,6 +895,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   protected getCachedElementByStorageIdentity(identity: string): T | undefined {
     return this._cache.getCachedByPath(identity);
   }
+
 
   /**
    * Record an access on a cached element by ID. Exposes ElementCache.touchById
@@ -755,19 +962,9 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     return this._listOps.scanAndEvict(options);
   }
 
-  /** Refresh the storage index without loading the full element catalog. */
-  public async refreshIndex(options?: StorageScanOptions): Promise<void> {
-    return this._listOps.scanAndEvict(options);
-  }
-
   // ============================================
   // LOAD ERROR SUPPRESSION
   // ============================================
-
-  /** Record an element storage could not read as a load failure, with the loader's suppression rules. */
-  protected recordUnreadableElement(relativePath: string, error: Error): void {
-    this._loader.recordUnreadableElement(relativePath, error);
-  }
 
   /**
    * Returns true if the most recent load() failure for this path was suppressed
@@ -929,6 +1126,12 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     return type === ElementType.TEMPLATE ? undefined : type;
   }
 
+  /** Release only an exact live key; recovery must never read its definition. */
+  releaseActivationReference(key: string): { released: boolean; identity?: PersistedActivationIdentity; message?: string } {
+    const setKey = this.activationSetKey;
+    return { released: setKey !== undefined && this.resolveActivationSet(setKey).delete(key) };
+  }
+
   beginActivationDeletion(locator: string): PendingActivationDeletion | undefined {
     const setKey = this.activationSetKey;
     if (!setKey) return undefined;
@@ -984,36 +1187,125 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   }
 
   /**
-   * Normalize, sanitize, and security-validate a file path.
-   * Returns both the normalized relative path and its absolute counterpart.
+   * Normalize and sanitize a reference and validate its syntax without touching storage: the
+   * part of the policy a caller can get wrong (empty, absolute, traversal, containment, filename).
+   * Public entry points run it on caller input so the validator's own error surfaces directly.
    */
-  protected async normalizeAndValidatePath(filePath: string): Promise<{ relativePath: string; absolutePath: string }> {
+  protected normalizeReference(filePath: string): { relativePath: string; absolutePath: string } {
     // In database mode, the "path" is a UUID — skip filesystem normalization
     // and validation. The UUID is used directly as the key for readContent().
     if (isWritableStorageLayer(this.storageLayer)) {
       return { relativePath: filePath, absolutePath: filePath };
     }
 
-    const sanitizedPath = sanitizeInput(filePath, 255);
-
-    if (!sanitizedPath || sanitizedPath.trim().length === 0 || sanitizedPath === '.' || sanitizedPath === path.sep) {
-      throw new Error(`Invalid ${this.getElementLabel()} path: empty path is not allowed`);
+    if (!filePath || filePath.trim().length === 0 || filePath === '.' || filePath === path.sep) {
+      throw new ValidationError(`Invalid ${this.getElementLabel()} path: empty path is not allowed`);
     }
 
-    if (path.isAbsolute(sanitizedPath)) {
-      throw new Error(`Absolute ${this.getElementLabel()} paths are not allowed`);
+    if (path.isAbsolute(filePath)) {
+      throw new ValidationError(`Absolute ${this.getElementLabel()} paths are not allowed`);
     }
-
-    const normalizedRelative = path.normalize(sanitizedPath);
-    const absolutePath = path.join(this.elementDir, normalizedRelative);
 
     try {
-      await PathValidator.validateElementPathOnly(absolutePath, this.elementDir);
-      return { relativePath: normalizedRelative, absolutePath };
+      assertUnsanitizedReference(filePath);
     } catch (error) {
-      const reason = error instanceof Error ? error.message : 'Invalid path';
-      throw new Error(`Invalid ${this.getElementLabel()} path: ${reason}`);
+      throw this.pathRejection(error);
     }
+    const normalizedRelative = path.normalize(filePath);
+    const absolutePath = path.join(this.elementDir, normalizedRelative);
+    try {
+      PathValidator.validateElementReference(absolutePath, this.elementDir);
+    } catch (error) {
+      throw this.pathRejection(error);
+    }
+    return { relativePath: storageReferenceFromPath(normalizedRelative), absolutePath };
+  }
+
+  /**
+   * The full storage policy: reference syntax plus the stored target (a symlink must stay inside
+   * the element directory). The loader, the persister and the file scan apply the same policy.
+   */
+  protected async normalizeAndValidatePath(filePath: string): Promise<{ relativePath: string; absolutePath: string }> {
+    const paths = this.normalizeReference(filePath);
+    if (isWritableStorageLayer(this.storageLayer)) return paths;
+    try {
+      await PathValidator.validateElementPathOnly(paths.absolutePath, this.elementDir);
+    } catch (error) {
+      throw callerReadFailure(this.pathRejection(error), filePath);
+    }
+    return paths;
+  }
+
+  /**
+   * The caller-syntax check for a reference that is about to be used as a path: the type's own
+   * path policy, refused before any read. Subclasses with their own policy override it.
+   */
+  protected validateCallerReference(reference: string): Promise<void> {
+    this.normalizeReference(reference);
+    return Promise.resolve();
+  }
+
+  /**
+   * The one caller-text classifier, on both backends and at every caller entry (findByName, load,
+   * exists, delete). Text in the storage layer's own canonical reference form (a typed relative
+   * filename on the file backend, a row id on the database) is a reference; one with a separator
+   * still meets the type's path policy. Other path-shaped text (a separator, or path syntax: a '..'
+   * segment, an absolute path, a drive letter, percent-encoding, NUL) is a name-only lookup that
+   * selects by exact or case-folded name, never by slug, and is never turned into a filename. Path
+   * syntax that no stored name holds meets the type's own path policy (its own message) and is
+   * otherwise refused. Everything else is a name.
+   */
+  protected async classifyCallerText(text: string): Promise<CallerTextKind> {
+    const extension = this.getFileExtension();
+    const shaped = PathValidator.isPathShaped(text);
+    if (this.storageLayer.isExactStorageReference(text, extension)) {
+      if (shaped) await this.applyPathPolicy(text, extension);
+      return 'reference';
+    }
+    if (PathValidator.isPathSyntax(text, extension)) {
+      const held = await this.storedNameHolds(text).catch(error => {
+        // Discovery may have found this exact reference while reporting its rejected content.
+        if (error instanceof ElementReadError && error.kind !== 'absent'
+          && this.storageLayer.isExactStorageReference(text, extension)) return false;
+        throw error;
+      });
+      // The evidence read indexed the layer, so it is asked again: text it holds ('save-50%25.md') is
+      // a reference on the first call, whether or not anything had filled the index before. It leaves
+      // by the warm branch's own exit, path policy included.
+      if (this.storageLayer.isExactStorageReference(text, extension)) {
+        if (shaped) await this.applyPathPolicy(text, extension);
+        return 'reference';
+      }
+      if (!held) {
+        await this.applyPathPolicy(text, extension);
+        throw new ValidationError(`Invalid ${this.getElementLabel()} reference: elements are addressed by name or storage reference, not by path`);
+      }
+    }
+    return shaped ? 'name-only' : 'name';
+  }
+
+  /**
+   * Whether a stored name certifies this exact or case-folded text. Only a certified absence is
+   * "no"; an indeterminate or unreadable index propagates, so a stored name is never refused as a
+   * path merely because the evidence was incomplete.
+   */
+  private async storedNameHolds(text: string): Promise<boolean> {
+    return await nameTakenBy(this.nameEvidence, text) !== undefined;
+  }
+
+  /** Path-shaped text meets the type's own path policy first, so its refusal carries the type's message. */
+  private async applyPathPolicy(text: string, extension: string): Promise<void> {
+    try {
+      await this.validateCallerReference(text.endsWith(extension) ? text : `${text}${extension}`);
+    } catch (error) {
+      if (error instanceof ValidationError) throw error;
+    }
+  }
+
+  protected pathRejection(error: unknown): unknown {
+    // Storage state is not a caller syntax refusal. Preserve its original code and cause.
+    if (typeof (error as NodeJS.ErrnoException | null)?.code === 'string') return error;
+    return new ValidationError(`Invalid ${this.getElementLabel()} path: ${error instanceof Error ? error.message : 'Invalid path'}`);
   }
 
   /**
@@ -1049,24 +1341,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    * normalizeFilename("--leading-and-trailing--") // "leading-and-trailing"
    */
   protected normalizeFilename(name: string): string {
-    if (!name || name.trim().length === 0) {
-      return 'unnamed';
-    }
-
-    // The `/-+/g` collapse above reduces any run of dashes to a single
-    // dash, so the trims below only ever need to remove ONE leading or
-    // trailing dash — no `+` quantifier needed. The quantifier-free
-    // form also sidesteps sonarjs S5852, which flagged `/-+$/g` as
-    // super-linear even though it's O(n) when anchored to a disjoint
-    // position.
-    return name
-      .replaceAll(/([a-z])([A-Z])/g, '$1-$2')
-      .replaceAll(/[\s_]+/g, '-')
-      .toLowerCase()
-      .replaceAll(/[^a-z0-9-]/g, '-')
-      .replaceAll(/-+/g, '-')
-      .replaceAll(/^-/g, '')
-      .replaceAll(/-$/g, '');
+    return normalizeElementFilename(name);
   }
 
   /**
@@ -1219,4 +1494,16 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    * Subclasses implement format-specific export logic.
    */
   abstract exportElement(element: T, format?: 'json' | 'yaml' | 'markdown'): Promise<string>;
+
+  /**
+   * The storage reference the cache attached when this element was resolved: a relative path on
+   * the file backend (date folders included), a row id on the database. The one identity
+   * extraction for deletion; an element without one cannot be addressed.
+   */
+  storageReferenceOf(element: T): string {
+    // The cache attaches the full relative reference; a basename would mis-address a date-folder memory.
+    const reference = (element as T & { filePath?: string }).filePath;
+    if (!reference) throw new ElementUnreadableError('Resolved element has no storage identity');
+    return reference;
+  }
 }

@@ -650,7 +650,7 @@ Observer accounting content.
 `);
       const memory = requireDefined((await memoryManager.getAutoLoadMemories())[0]);
       const seed = jest.spyOn(memoryManager, 'installSeedMemories').mockResolvedValue(undefined);
-      const listed = jest.spyOn(memoryManager, 'getAutoLoadMemories').mockResolvedValue([memory]);
+      const listed = jest.spyOn(memoryManager, 'getAutoLoadMemoryReport').mockResolvedValue({ items: [memory], failures: [], complete: true });
       const originalInfo = logger.info.bind(logger);
       const cause = new Error('Controlled activated observer failure');
       let threw = false;

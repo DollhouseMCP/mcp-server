@@ -5,6 +5,7 @@
  */
 
 import type { ActivationMetricsTracker } from '../../metrics/ActivationMetricsTracker.js';
+import { ELEMENT_FILE_EXTENSIONS } from '../../storage/ElementNameKeys.js';
 import { visitSequentially } from '../../utils/visitSequentially.js';
 import { BaseElementManager } from '../base/BaseElementManager.js';
 import type { ElementManagerDeps } from '../base/BaseElementManager.js';
@@ -107,14 +108,7 @@ export class SkillManager extends BaseElementManager<Skill> {
     const filename = this.getElementFilename(sanitizedName);
 
     // FIX: Issue #20 - Check for duplicate before creating
-    const existingSkills = await this.list();
-    const duplicate = existingSkills.some(s =>
-      s.metadata.name.toLowerCase() === sanitizedName.toLowerCase()
-    );
-
-    if (duplicate) {
-      throw new Error(`A skill named "${sanitizedName}" already exists`);
-    }
+    await this.assertNameAvailable(sanitizedName);
 
     const { content, instructions, ...metadata } = data;
     // Dual-field: instructions = behavioral directives, content = reference material
@@ -230,7 +224,7 @@ export class SkillManager extends BaseElementManager<Skill> {
   }
 
   getFileExtension(): string {
-    return '.md';
+    return ELEMENT_FILE_EXTENSIONS.skills;
   }
 
   /**
@@ -239,14 +233,7 @@ export class SkillManager extends BaseElementManager<Skill> {
   protected parseMetadata(data: any): Promise<SkillMetadata> {
     const metadata = { ...(data as SkillMetadata) };
 
-    if (Array.isArray(data?.triggers)) {
-      const validationResult = this.triggerValidationService.validateTriggers(
-        data.triggers,
-        ElementType.SKILL,
-        metadata.name || 'unknown'
-      );
-      metadata.triggers = validationResult.validTriggers;
-    }
+    if (Array.isArray(data?.triggers)) metadata.triggers = this.storedTriggers(data.triggers, metadata.name);
 
     // Issue #676: Sanitize gatekeeper policy on load to prevent prompt-injection attacks
     // Malformed policies are stripped and logged as security events (never reach enforcement)
@@ -255,6 +242,22 @@ export class SkillManager extends BaseElementManager<Skill> {
     }
 
     return Promise.resolve(metadata);
+  }
+
+  /**
+   * A skill is stored with the triggers its reader keeps, so the saved instance the cache publishes
+   * is the definition every later read of it returns.
+   */
+  protected override beforeSave(element: Skill): Promise<void> {
+    if (Array.isArray(element.metadata.triggers)) {
+      element.metadata.triggers = this.storedTriggers(element.metadata.triggers, element.metadata.name);
+    }
+    return Promise.resolve();
+  }
+
+  /** The one trigger rule for skills, applied when a definition is read and when it is written. */
+  private storedTriggers(triggers: string[], name: string | undefined): string[] {
+    return this.triggerValidationService.validateTriggers(triggers, ElementType.SKILL, name || 'unknown').validTriggers;
   }
 
   /**
@@ -328,11 +331,9 @@ export class SkillManager extends BaseElementManager<Skill> {
   }
 
   /**
-   * Override list() to apply active status to skills
+   * Apply listed active status to skills
    */
-  override async list(options?: { includePublic?: boolean }): Promise<Skill[]> {
-    const skills = await super.list(options);
-
+  protected override async decorateListed(skills: Skill[]): Promise<void> {
     // Apply active status to skills that are in the active set (by name)
     await visitSequentially(skills[Symbol.iterator](), async (skill) => {
       if (this.getActivationSet().has(skill.metadata.name)) {
@@ -340,8 +341,6 @@ export class SkillManager extends BaseElementManager<Skill> {
         await skill.activate();
       }
     });
-
-    return skills;
   }
 
   /**
@@ -401,7 +400,7 @@ export class SkillManager extends BaseElementManager<Skill> {
     const { element: skill, lookupFailed } = await this.findForDeactivation(identifier);
 
     if (!skill) {
-      if (this.getActivationSet().delete(identifier)) {
+      if (this.releaseActivationReference(identifier).released) {
         this.activationMetricsTracker.forget('skill', identifier);
         return { success: true, message: ElementMessages.deactivated(ElementType.SKILL, identifier) };
       }
@@ -435,12 +434,7 @@ export class SkillManager extends BaseElementManager<Skill> {
    * Get all active skills
    */
   async getActiveSkills(): Promise<Skill[]> {
-    const results: Skill[] = [];
-    await visitSequentially(this.getActivationSet()[Symbol.iterator](), async (name) => {
-      const skill = await this.findByName(name);
-      if (skill) results.push(skill);
-    });
-    return results;
+    return this.resolveActiveReferences();
   }
 
   /** Report pressure and await retained-reference notices only at the cleanup threshold. */
@@ -451,7 +445,7 @@ export class SkillManager extends BaseElementManager<Skill> {
   /** A failed or empty lookup is uncertainty, never authority to deactivate a reference. */
   private collectRetainedReferenceNotices(): Promise<string[]> {
     return this.retainedReferenceNotices('skill', async key => !!await this.findByName(key), this.activationMetricsTracker,
-      'While it fails to load, no active skill policies are applied.');
+      'While it fails to load, policy evaluation is unavailable.');
   }
 
   /**

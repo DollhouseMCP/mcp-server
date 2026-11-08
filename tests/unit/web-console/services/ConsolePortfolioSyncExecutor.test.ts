@@ -4,6 +4,7 @@ import path from 'node:path';
 import { createRealManagerSuite } from '../../../helpers/di-mocks.js';
 import { ManagerBackedPortfolioElementStore } from '../../../../src/web-console/stores/ManagerBackedPortfolioElementStore.js';
 import { CONSOLE_PORTFOLIO_ELEMENT_TYPES } from '../../../../src/web-console/stores/IPortfolioElementStore.js';
+import { ElementUnreadableError } from '../../../../src/elements/base/ElementReadError.js';
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
 import {
@@ -33,6 +34,18 @@ afterEach(async () => {
 });
 
 describe('ConsolePortfolioSyncExecutor', () => {
+  it('refuses to push an incomplete local collection before any remote write', async () => {
+    const portfolioStore = new InMemoryPortfolioElementStore();
+    jest.spyOn(portfolioStore, 'listByUser').mockResolvedValue({ items: [], complete: false,
+      failures: [{ reference: 'broken.md', error: new ElementUnreadableError('Definition storage unavailable') }] });
+    const fetchMock = jest.fn<typeof fetch>();
+    const executor = new ConsolePortfolioSyncExecutor({ portfolioStore, secretEncryption,
+      integrationStore: new InMemoryUserIntegrationStore([integrationRecord()]), fetch: fetchMock, now: () => NOW });
+    await expect(executor.execute(syncJob({ direction: 'push', conflictPolicy: 'prefer_local' })))
+      .rejects.toThrow('Definition storage unavailable');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it.each(CONSOLE_PORTFOLIO_ELEMENT_TYPES)('pushes and pulls %s using ordinary manager details', async type => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'portfolio-sync-'));
     const suite = createRealManagerSuite(directory);
@@ -232,7 +245,7 @@ describe('ConsolePortfolioSyncExecutor', () => {
 
     await expect(executor.execute(syncJob({ direction: 'pull', conflictPolicy: 'prefer_remote' })))
       .rejects.toThrow('Malicious YAML content detected');
-    await expect(portfolioStore.listByUser(USER_ID)).resolves.toHaveLength(0);
+    expect((await portfolioStore.listByUser(USER_ID)).items).toHaveLength(0);
   });
 
   it('fails closed without a usable connected integration credential', async () => {

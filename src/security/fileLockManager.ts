@@ -20,6 +20,13 @@ import { getValidatedLockTimeout } from '../config/performance-constants.js';
  * actually completes. Subsequent callers queue behind the real operation,
  * preventing zombie races. See #1874.
  */
+
+/** A written file's (mtime, size), as observed by the write itself. */
+export interface WrittenFileVersion {
+  mtimeMs: number;
+  sizeBytes: number;
+}
+
 export class FileLockManager {
   // Map of resource identifiers to their lock promises
   private readonly locks = new Map<string, Promise<any>>();
@@ -142,13 +149,15 @@ export class FileLockManager {
 
   /**
    * Perform atomic file write operation
-   * Writes to temporary file then renames to ensure atomicity
+   * Writes to temporary file then renames to ensure atomicity. Returns the written file's
+   * (mtime, size), observed on the private temporary file before the rename (which keeps both), so
+   * no other writer can stand between the write and that observation.
    */
   async atomicWriteFile(
     filePath: string,
     content: string,
     options?: { encoding?: BufferEncoding }
-  ): Promise<void> {
+  ): Promise<WrittenFileVersion> {
     const tempPath = await this.getTempFilePath(filePath);
     const dir = path.dirname(tempPath);
 
@@ -158,9 +167,11 @@ export class FileLockManager {
 
       // Write to temporary file
       await fs.writeFile(tempPath, content, options);
+      const written = await fs.stat(tempPath);
 
       // Atomic rename (on same filesystem)
       await fs.rename(tempPath, filePath);
+      return { mtimeMs: written.mtimeMs, sizeBytes: written.size };
 
     } catch (error) {
       // Clean up temp file on error

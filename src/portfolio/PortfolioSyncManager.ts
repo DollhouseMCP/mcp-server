@@ -10,8 +10,9 @@
  * - Bulk operations with configuration checks
  */
 
-import * as path from 'path';
-import { createHash } from 'crypto';
+import * as path from 'node:path';
+import { createHash } from 'node:crypto';
+import { visitSequentially } from '../utils/visitSequentially.js';
 import { logger } from '../utils/logger.js';
 import { ConfigManager, DollhouseConfig } from '../config/ConfigManager.js';
 import { PortfolioManager } from './PortfolioManager.js';
@@ -23,7 +24,8 @@ import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { ElementType } from './types.js';
 import { PortfolioElementAdapter } from '../tools/portfolio/PortfolioElementAdapter.js';
-import { IFileOperationsService } from '../services/FileOperationsService.js';
+import { IFileOperationsService, isAbsentPathError } from '../services/FileOperationsService.js';
+import { elementReadFailure } from '../elements/base/ElementReadError.js';
 import { TenantMemoryOperationProvider, type BoundMemoryOperation } from '../storage/TenantMemoryOperationProvider.js';
 import type { DatabaseTenantMemoryRegistry } from '../storage/DatabaseTenantMemoryRegistry.js';
 
@@ -144,12 +146,12 @@ export class PortfolioSyncManager {
     }
   }
 
-  private configManager: ConfigManager;
-  private portfolioManager: PortfolioManager;
-  private repoManager: PortfolioRepoManager;
-  private indexer: GitHubPortfolioIndexer;
-  private fileOperations: IFileOperationsService;
-  private tokenManager: TokenManager;
+  private readonly configManager: ConfigManager;
+  private readonly portfolioManager: PortfolioManager;
+  private readonly repoManager: PortfolioRepoManager;
+  private readonly indexer: GitHubPortfolioIndexer;
+  private readonly fileOperations: IFileOperationsService;
+  private readonly tokenManager: TokenManager;
   private readonly storageLayerFactory?: import('../storage/IStorageLayerFactory.js').IStorageLayerFactory;
 
   constructor(dependencies: PortfolioSyncManagerDependencies) {
@@ -473,8 +475,9 @@ export class PortfolioSyncManager {
     entries: GitHubIndexEntry[]
   ): SyncResult {
     const suggestions = this.getSuggestions(elementName, entries);
+    const suggestionLines = suggestions.map(s => `  • ${s.name}`).join('\n');
     const suggestionText = suggestions.length > 0
-      ? `\n\nDid you mean one of these?\n${suggestions.map(s => `  • ${s.name}`).join('\n')}`
+      ? `\n\nDid you mean one of these?\n${suggestionLines}`
       : '';
     return {
       success: false,
@@ -485,9 +488,10 @@ export class PortfolioSyncManager {
   private async readLocalElementContent(localPath: string, source: string): Promise<string | null> {
     try {
       return await this.fileOperations.readFile(localPath, { source });
-    } catch {
+    } catch (cause) {
       this.assertMemoryOperation();
-      return null;
+      if (isAbsentPathError(cause)) return null;
+      throw elementReadFailure(cause, path.basename(localPath));
     }
   }
 
@@ -539,7 +543,7 @@ export class PortfolioSyncManager {
       return null;
     }
 
-    const diff = await this.generateDiff(localContent, remoteContent);
+    const diff = this.generateDiff(localContent, remoteContent);
     this.assertMemoryOperation();
     const conflictInfo = await this.buildConflictInfo(elementName, elementType, localPath, localContent, entry);
     this.assertMemoryOperation();
@@ -664,8 +668,9 @@ export class PortfolioSyncManager {
   ): Promise<string | SyncResult> {
     try {
       return await this.fileOperations.readFile(localPath, { source: 'PortfolioSyncManager.uploadElement' });
-    } catch {
+    } catch (cause) {
       this.assertMemoryOperation();
+      if (!isAbsentPathError(cause)) throw elementReadFailure(cause, path.basename(localPath));
       return {
         success: false,
         message: `Element '${elementName}' (${elementType}) not found locally`
@@ -779,7 +784,7 @@ export class PortfolioSyncManager {
       const entry = entries.find(e => e.name === elementName);
       const remote = entry ? await this.loadRemoteVersion(entry, token) : { version: null, content: null };
       this.assertMemoryOperation();
-      const result = await this.buildVersionComparisonResult(
+      const result = this.buildVersionComparisonResult(
         elementName,
         elementType,
         local,
@@ -840,9 +845,10 @@ export class PortfolioSyncManager {
           source: 'local'
         }
       };
-    } catch {
+    } catch (cause) {
       this.assertMemoryOperation();
-      return { version: null, content: null };
+      if (isAbsentPathError(cause)) return { version: null, content: null };
+      throw elementReadFailure(cause, path.basename(localPath));
     }
   }
 
@@ -876,13 +882,13 @@ export class PortfolioSyncManager {
     };
   }
 
-  private async buildVersionComparisonResult(
+  private buildVersionComparisonResult(
     elementName: string,
     elementType: ElementType,
     local: { version: VersionInfo | null; content: string | null },
     remote: { version: VersionInfo | null; content: string | null },
     showDiff?: boolean
-  ): Promise<any> {
+  ): any {
     const result: any = {
       element: elementName,
       type: elementType,
@@ -892,7 +898,7 @@ export class PortfolioSyncManager {
 
     result.status = this.getVersionComparisonStatus(local.version, remote.version);
     if (showDiff && local.content && remote.content && result.status === 'different') {
-      result.diff = await this.generateDiff(local.content, remote.content);
+      result.diff = this.generateDiff(local.content, remote.content);
     }
     return result;
   }
@@ -949,10 +955,10 @@ export class PortfolioSyncManager {
 
     for (const element of elementsToDownload) this.assertMutationType(element.type, 'download');
     const results = PortfolioSyncManager.createBulkDownloadResults();
-    for (const element of elementsToDownload) {
+    await visitSequentially(elementsToDownload.values(), async element => {
       await this.downloadBulkElement(element, results);
       this.assertMemoryOperation();
-    }
+    });
 
     return {
       success: results.failed.length === 0,
@@ -962,9 +968,10 @@ export class PortfolioSyncManager {
   }
 
   private buildBulkDownloadPreview(elementsToDownload: SyncElementInfo[]): SyncResult {
+    const lines = elementsToDownload.map(e => `- ${e.name} (${e.type})`).join('\n');
     return {
       success: false,
-      message: `Bulk download preview:\n\n${elementsToDownload.length} elements will be downloaded:\n${elementsToDownload.map(e => `- ${e.name} (${e.type})`).join('\n')}\n\nTo proceed, use --confirm flag`,
+      message: `Bulk download preview:\n\n${elementsToDownload.length} elements will be downloaded:\n${lines}\n\nTo proceed, use --confirm flag`,
       data: { requiresConfirmation: true },
       elements: elementsToDownload
     };
@@ -1009,7 +1016,8 @@ export class PortfolioSyncManager {
     message += `- Skipped (up to date): ${results.skipped.length} elements\n`;
     message += `- Failed: ${results.failed.length} elements`;
     if (results.failed.length > 0) {
-      message += `\n\nFailed downloads:\n${results.failed.map(f => `- ${f.name}: ${f.error}`).join('\n')}`;
+      const lines = results.failed.map(f => `- ${f.name}: ${f.error}`).join('\n');
+      message += `\n\nFailed downloads:\n${lines}`;
     }
     return message;
   }
@@ -1044,10 +1052,10 @@ export class PortfolioSyncManager {
 
     for (const element of localElements) this.assertMutationType(element.type, 'upload');
     const results = PortfolioSyncManager.createBulkUploadResults();
-    for (const element of localElements) {
+    await visitSequentially(localElements.values(), async element => {
       await this.uploadBulkElement(element, results);
       this.assertMemoryOperation();
-    }
+    });
 
     return {
       success: results.failed.length === 0,
@@ -1068,10 +1076,10 @@ export class PortfolioSyncManager {
       ElementType.ENSEMBLE
     ];
     const localElements: Array<{ name: string; type: ElementType; path: string }> = [];
-    for (const type of types) {
+    await visitSequentially(types.values(), async type => {
       await this.collectLocalElementsOfType(type, localElements);
       this.assertMemoryOperation();
-    }
+    });
     return localElements;
   }
 
@@ -1081,7 +1089,7 @@ export class PortfolioSyncManager {
   ): Promise<void> {
     this.assertMemoryOperation();
     if (this.memoryOperation && type === ElementType.MEMORY && this.memoryOperation.operation.manager.isGuardedHeadUpdateEnabled()) {
-      const memories = await this.memoryOperation.operation.manager.list({ strictDatabase: true });
+      const memories = await this.memoryOperation.operation.manager.list();
       this.assertMemoryOperation();
       for (const memory of memories) localElements.push({ name: memory.metadata.name, type,
         // Discovery only: guarded uploads are refused before any filepath consumer.
@@ -1097,8 +1105,9 @@ export class PortfolioSyncManager {
           localElements.push({ name: file.replace('.md', ''), type, path: path.join(dir, file) });
         }
       }
-    } catch {
+    } catch (cause) {
       this.assertMemoryOperation();
+      if (!isAbsentPathError(cause)) throw elementReadFailure(cause, type);
       logger.debug(`Directory for ${type} does not exist yet`);
     }
   }
@@ -1112,9 +1121,10 @@ export class PortfolioSyncManager {
       status: 'local-only' as const,
       action: 'upload' as const
     }));
+    const lines = localElements.map(e => `- ${e.name} (${e.type})`).join('\n');
     return {
       success: false,
-      message: `Bulk upload preview:\n\n${localElements.length} elements will be uploaded:\n${localElements.map(e => `- ${e.name} (${e.type})`).join('\n')}\n\nTo proceed, use --confirm flag`,
+      message: `Bulk upload preview:\n\n${localElements.length} elements will be uploaded:\n${lines}\n\nTo proceed, use --confirm flag`,
       data: { requiresConfirmation: true },
       elements: previewElements
     };
@@ -1159,7 +1169,8 @@ export class PortfolioSyncManager {
     message += `- Skipped (local-only): ${results.skipped.length} elements\n`;
     message += `- Failed: ${results.failed.length} elements`;
     if (results.failed.length > 0) {
-      message += `\n\nFailed uploads:\n${results.failed.map(f => `- ${f.name}: ${f.error}`).join('\n')}`;
+      const lines = results.failed.map(f => `- ${f.name}: ${f.error}`).join('\n');
+      message += `\n\nFailed uploads:\n${lines}`;
     }
     return message;
   }
@@ -1167,7 +1178,7 @@ export class PortfolioSyncManager {
   /**
    * Generate diff between two content versions
    */
-  private async generateDiff(local: string, remote: string): Promise<string> {
+  private generateDiff(local: string, remote: string): string {
     // Simple line-based diff for now
     const localLines = local.split('\n');
     const remoteLines = remote.split('\n');
@@ -1209,14 +1220,14 @@ export class PortfolioSyncManager {
     remoteEntry: GitHubIndexEntry
   ): Promise<ConflictInfo> {
     const localMeta = this.extractMetadata(localContent);
-    let localModified = new Date();
+    let localModified: Date;
     try {
       const stats = await this.fileOperations.stat(localPath);
       this.assertMemoryOperation();
       localModified = stats.mtime;
-    } catch {
+    } catch (cause) {
       this.assertMemoryOperation();
-      // Ignore - use current date fallback
+      throw elementReadFailure(cause, path.basename(localPath));
     }
 
     const remoteModified = remoteEntry.lastModified ? new Date(remoteEntry.lastModified) : new Date();
@@ -1241,9 +1252,9 @@ export class PortfolioSyncManager {
       return {
         version: parsed.data?.version
       };
-    } catch {
+    } catch (cause) {
       this.assertMemoryOperation();
-      return {};
+      throw elementReadFailure(cause);
     }
   }
   
@@ -1286,8 +1297,8 @@ export class PortfolioSyncManager {
     }
     
     // Sort by score and return top 5
+    scored.sort((a, b) => b.score - a.score);
     return scored
-      .sort((a, b) => b.score - a.score)
       .slice(0, 5)
       .map(s => ({ name: s.entry.name }));
   }
@@ -1316,7 +1327,7 @@ export class PortfolioSyncManager {
   private static calculateWordOverlapScore(wordsA: string[], wordsB: string[]): number {
     let matches = 0;
     for (const wordA of wordsA) {
-      if (wordA && wordsB.some(wordB => wordB === wordA)) {
+      if (wordA && wordsB.includes(wordA)) {
         matches++;
       }
     }

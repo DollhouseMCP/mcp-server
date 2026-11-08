@@ -9,16 +9,30 @@ describe('MemoryActivationStrategy', () => {
   beforeEach(() => {
     mockMemoryManager = {
       list: jest.fn(),
+      projectForDisplay: jest.fn(() => Promise.resolve()),
+      findByName: jest.fn(async () => (await mockMemoryManager.list())?.[0]),
       get: jest.fn(),
       activateMemory: jest.fn(),
       deactivateMemory: jest.fn(),
       getActiveMemories: jest.fn(),
+      getActiveReferenceReport: jest.fn(async () => ({ items: await mockMemoryManager.getActiveMemories(), failures: [], complete: true })),
     } as unknown as jest.Mocked<MemoryManager>;
 
     strategy = new MemoryActivationStrategy(mockMemoryManager);
   });
 
   describe('activate', () => {
+    it.each([false, true])('reports unreadable active references with survivor: %s', async survivor => {
+      mockMemoryManager.getActiveReferenceReport.mockResolvedValue({ items: survivor
+        ? [{ metadata: { name: 'healthy-memory' } }] : [], complete: false,
+        failures: [{ reference: 'broken', error: new Error('Definition unreadable') }] } as any);
+      const response = await strategy.getActiveElements();
+      const text = response.content.map(item => item.text).join('\n');
+      expect(text).toContain('broken');
+      expect(text).toContain('Definition unreadable');
+      expect(text).not.toMatch(/No active|No personas/);
+      expect(text.includes('healthy-memory')).toBe(survivor);
+    });
     it('should activate memory successfully with retention and tags', async () => {
       const mockMemory = {
         metadata: {

@@ -30,6 +30,7 @@ describe('EnhancedIndexManager - Trigger Metrics Integration', () => {
   let manager: InstanceType<typeof EnhancedIndexManager>;
   let testDir: string;
   let portfolioPath: string;
+  const originalHome = process.env.HOME;
 
   beforeEach(async () => {
     // Create test directory
@@ -194,6 +195,8 @@ Test element content.
 
     // Clean up test directory
     await fs.rm(testDir, { recursive: true, force: true });
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
   });
 
   describe('trackTriggerUsage', () => {

@@ -1,3 +1,4 @@
+import { visitSequentially } from '../../../utils/visitSequentially.js';
 import { createHash } from 'node:crypto';
 
 import { MAX_INTEGRATION_REQUEST_PATH_LENGTH } from '../../../config/integration-constants.js';
@@ -351,11 +352,13 @@ export class IntegrationOperationCatalog {
     const userId = this.currentUserId();
     const skills = await store.listByUser(userId, { type: 'skills', tag: `integration:${context.descriptor.provider}` });
     const generated = generateSkill(context.descriptor, context.spec.specHash, operations, context.grantedScopes);
-    const reads = await Promise.all(skills.map(async summary => ({
+    const reads = await Promise.all(skills.items.map(async summary => ({
       summary,
       skill: await readGeneratedSkillForStatus(store, userId, summary),
     })));
-    const result: IntegrationSkillStatus[] = [];
+    const result: IntegrationSkillStatus[] = skills.failures.map(failure => ({
+      skill_name: failure.reference ?? 'collection', status: 'unreadable', guidance: failure.error.message,
+    }));
     for (const { summary, skill } of reads) {
       if (skill === 'unreadable') {
         result.push({ skill_name: summary.canonicalName, status: 'unreadable', guidance: GENERATED_SKILL_STATUS_GUIDANCE.unreadable });
@@ -397,14 +400,14 @@ export class IntegrationOperationCatalog {
       ? [await this.options.descriptorStore.findVisibleByProvider(session, input.provider as UserIntegrationProvider)]
       : await this.options.descriptorStore.listVisible(session);
     const promoted: IntegrationOperationDetails[] = [];
-    for (const descriptor of descriptors) {
-      if (!descriptor) continue;
+    await visitSequentially(descriptors.values(), async descriptor => {
+      if (!descriptor) return;
       const promotedIds = readPromotedOperationIds(descriptor.operationPromotion);
-      if (promotedIds.size === 0) continue;
+      if (promotedIds.size === 0) return;
       const spec = await this.options.specStore.findByDescriptorId(descriptor.id);
-      if (!spec) continue;
+      if (!spec) return;
       const grantedScopes = await this.resolveGrantedScopesForPromotion(session, descriptor);
-      if (!grantedScopes) continue;
+      if (!grantedScopes) return;
       const operations = deriveOperationDetails(descriptor, spec.spec, grantedScopes);
       for (const operation of operations) {
         if (!operation.available || !promotedIds.has(operation.operationId)) continue;
@@ -417,7 +420,7 @@ export class IntegrationOperationCatalog {
           scopeAvailability: scopeAvailability(),
         });
       }
-    }
+    });
     return promoted.sort((left, right) => left.gatewayRequest.provider.localeCompare(right.gatewayRequest.provider) ||
       left.operationId.localeCompare(right.operationId));
   }

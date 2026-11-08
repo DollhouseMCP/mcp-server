@@ -26,6 +26,7 @@
  * See docs/architecture/memory-autoload-architectures.md for detailed comparison.
  */
 
+import type { CollectionFailure } from '../elements/base/CollectionReport.js';
 import { PortfolioManager, ElementType } from '../portfolio/PortfolioManager.js';
 import { MigrationManager } from '../portfolio/MigrationManager.js';
 import { FileLockManager } from '../security/fileLockManager.js';
@@ -285,6 +286,12 @@ export class ServerStartup {
     }
   }
 
+  private reportAutoLoadFailures(failures: readonly CollectionFailure[]): void {
+    for (const failure of failures) {
+      logger.warn(`[ServerStartup] Auto-load discovery failed for ${failure.reference ?? 'collection'}: ${failure.error.message}`);
+    }
+  }
+
   /**
    * Initialize auto-load memories
    * Issue #1430: Automatically load baseline memories on server startup
@@ -332,10 +339,13 @@ export class ServerStartup {
       logger.info('[ServerStartup] ✅ Seed installation complete');
 
       logger.info('[ServerStartup] 🔍 Fetching auto-load memories...');
-      const autoLoadMemories = await memoryManager.getAutoLoadMemories();
+      const autoLoadReport = await memoryManager.getAutoLoadMemoryReport();
+      const autoLoadMemories = autoLoadReport.items;
+      warningCount += autoLoadReport.failures.length;
+      this.reportAutoLoadFailures(autoLoadReport.failures);
       logger.info(`[ServerStartup] 📋 Auto-load memories found: ${autoLoadMemories.length}`);
 
-      if (autoLoadMemories.length === 0) {
+      if (autoLoadMemories.length === 0 && autoLoadReport.complete) {
         logger.warn('[ServerStartup] ⚠️  No auto-load memories configured - baseline knowledge may not be available');
         return;
       }
@@ -398,7 +408,7 @@ export class ServerStartup {
         type: 'MEMORY_LOADED',
         severity: 'LOW',
         source: 'ServerStartup.initializeAutoLoadMemories',
-        details: `Auto-load complete: ${loadedCount} loaded, ${skippedCount} skipped`,
+        details: `Auto-load complete: ${loadedCount} loaded, ${skippedCount} skipped, ${warningCount} warnings`,
         additionalData: {
           loadedCount,
           skippedCount,

@@ -55,6 +55,22 @@ it('uses the same absent and uncertain target policy for directory and file list
   expect(await backend.listDirectories(root)).toEqual(['directory.yaml', 'uncertain.yaml']);
   expect(await backend.listFiles(root, '.yaml')).toEqual(['file.yaml', 'uncertain.yaml']);
 });
+it.each(['ENOENT', 'ENOTDIR'])('skips a vanished file but refuses a misplaced one during guarded inventory (%s)', async code => {
+  const root = await directory(); const ops = createTestFileOperationsService(); const backend = new FileStorageBackend(ops);
+  await fs.writeFile(path.join(root, 'healthy.yaml'), 'name: Healthy\nentries: []');
+  await fs.writeFile(path.join(root, 'gone.yaml'), 'name: Gone\nentries: []');
+  const read = backend.readFile.bind(backend);
+  jest.spyOn(backend, 'readFile').mockImplementation(async target => {
+    if (path.basename(target) === 'gone.yaml') throw Object.assign(new Error('gone'), { code });
+    return read(target);
+  });
+  const layer = new MemoryStorageLayer(ops, { memoriesDir: root, storageBackend: backend });
+  try {
+    const inventory = layer.readFreshSummariesAtDirectory(root);
+    if (code === 'ENOENT') expect((await inventory).map(entry => entry.filePath)).toEqual(['healthy.yaml']);
+    else await expect(inventory).rejects.toMatchObject({ name: 'StorageScanError', code: 'ENOTDIR', relativePath: 'gone.yaml' });
+  } finally { await layer.dispose(); }
+});
 it('discovers system, adapters, sorted dates and root in that order', async () => {
   const root = await directory(); const ops = createTestFileOperationsService(); const backend = new FileStorageBackend(ops);
   jest.spyOn(backend, 'listDirectories').mockResolvedValue(['adapters', '2026-02-01', 'system', '2026-01-01']);

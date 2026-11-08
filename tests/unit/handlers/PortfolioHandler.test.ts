@@ -120,6 +120,21 @@ describe('PortfolioHandler', () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
+  it('refuses an unreadable sync count without recording an empty type', async () => {
+    const failure = new Error('Collection unavailable');
+    const progress = { elementCounts: {}, totalElements: 0 };
+    const host = { getElementsList: async () => { throw failure; }, assertMemoryOperation: () => {} };
+    await expect(PortfolioHandler.prototype['countSyncType'].call(host as any, progress as any, 'skills')).rejects.toBe(failure);
+    expect(progress.elementCounts).not.toHaveProperty('skills');
+  });
+
+  it('refuses to report zero elements when directory enumeration fails', async () => {
+    fileOperationsService.exists.mockResolvedValue(true);
+    fileOperationsService.listDirectory.mockRejectedValue(Object.assign(new Error('denied'), { code: 'EACCES' }));
+    await expect((handler as any).countElementsInDir(path.join(tempDir, 'skills')))
+      .rejects.toMatchObject({ name: 'ElementUnreadableError' });
+  });
+
   describe('portfolioStatus', () => {
     it('requires authentication when username missing', async () => {
       authManager.getAuthStatus.mockResolvedValue({ isAuthenticated: false });
@@ -191,4 +206,20 @@ describe('PortfolioHandler', () => {
       expect(text).toContain('Repository name: custom-portfolio');
     });
   });
+
+  describe('searchPortfolio report notice', () => {
+    it('adds the listing notice only when the report is incomplete', async () => {
+      const report = { items: [], failures: [] as any[], complete: true };
+      portfolioIndexManager.searchReport = jest.fn(async () => report);
+      const complete = await handler.searchPortfolio({ query: 'anything' });
+      expect(complete.content).toHaveLength(1);
+      expect(complete.content.every(block => block.text.length > 0)).toBe(true);
+      report.complete = false;
+      report.failures = [{ reference: 'broken.md', error: new Error('Element read failed') }];
+      const incomplete = await handler.searchPortfolio({ query: 'anything' });
+      expect(incomplete.content).toHaveLength(2);
+      expect(incomplete.content[1].text).toContain('Listing incomplete');
+    });
+  });
+
 });

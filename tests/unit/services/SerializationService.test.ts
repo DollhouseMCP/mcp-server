@@ -23,6 +23,9 @@
 import {
   SerializationService
 } from '../../../src/services/SerializationService.js';
+import { jest } from '@jest/globals';
+import { isContentRejection } from '../../../src/security/contentRejection.js';
+import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
 
 describe('SerializationService', () => {
   let service: SerializationService;
@@ -43,6 +46,23 @@ describe('SerializationService', () => {
   // ========================================================================
 
   describe('parsePureYaml', () => {
+    it('marks deterministic YAML rejection but not a failing warning observer', () => {
+      const capture = (input: string) => {
+        try { service.parsePureYaml(input); } catch (error) { return error; }
+        throw new Error('Expected parsing refusal');
+      };
+      expect(isContentRejection(capture('metadata: [unfinished'))).toBe(true);
+      const failure = new Error('Warning observer unavailable');
+      const warning = jest.spyOn(SecurityMonitor, 'logSecurityEvent').mockImplementation(() => { throw failure; });
+      try {
+        const refused = capture('%YAML 1.3\n---\nname: example');
+        expect(refused).toHaveProperty('cause', failure);
+        expect(isContentRejection(refused)).toBe(false);
+      } finally {
+        warning.mockRestore();
+      }
+    });
+
     describe('Valid YAML Objects', () => {
       it('should parse simple YAML object', () => {
         const yaml = `
@@ -1183,52 +1203,15 @@ description: Pure YAML
   // ========================================================================
 
   describe('detectFormat', () => {
-    it('should detect frontmatter format', () => {
-      const data = '---\nname: test\n---\n\nContent';
-
-      const format = service.detectFormat(data);
-
-      expect(format).toBe('frontmatter');
-    });
-
-    it('should detect JSON object format', () => {
-      const data = '{"name": "test"}';
-
-      const format = service.detectFormat(data);
-
-      expect(format).toBe('json');
-    });
-
-    it('should detect JSON array format', () => {
-      const data = '[{"name": "test"}]';
-
-      const format = service.detectFormat(data);
-
-      expect(format).toBe('json');
-    });
-
-    it('should detect pure YAML format', () => {
-      const data = 'name: test\ndescription: Pure YAML';
-
-      const format = service.detectFormat(data);
-
-      expect(format).toBe('yaml');
-    });
-
-    it('should return unknown for invalid formats', () => {
-      const data = 'just some random text';
-
-      const format = service.detectFormat(data);
-
-      expect(format).toBe('unknown');
-    });
-
-    it('should handle whitespace before format markers', () => {
-      const data = '\n\n---\nname: test\n---\n\nContent';
-
-      const format = service.detectFormat(data);
-
-      expect(format).toBe('frontmatter');
+    it.each([
+      ['frontmatter', '---\nname: test\n---\n\nContent', 'frontmatter'],
+      ['JSON object', '{"name": "test"}', 'json'],
+      ['JSON array', '[{"name": "test"}]', 'json'],
+      ['pure YAML', 'name: test\ndescription: Pure YAML', 'yaml'],
+      ['invalid text', 'just some random text', 'unknown'],
+      ['leading whitespace', '\n\n---\nname: test\n---\n\nContent', 'frontmatter'],
+    ])('detects %s format', (_label, data, expected) => {
+      expect(service.detectFormat(data)).toBe(expected);
     });
 
     it('should distinguish between YAML and JSON', () => {

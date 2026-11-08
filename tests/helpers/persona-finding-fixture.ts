@@ -93,9 +93,20 @@ export function createPersonaFindingFixture() {
     } as Persona
   ];
 
+  // Every seeded persona is also a definition file the storage layer can list, stat and read, so a
+  // lookup through the read contract finds what the cache holds (a cached persona always has a file).
+  const files = new Map<string, string>();
+  const definitionOf = (persona: Persona): string => ['---',
+    `name: ${JSON.stringify(persona.metadata.name)}`,
+    `description: ${JSON.stringify(persona.metadata.description ?? '')}`,
+    `unique_id: ${JSON.stringify(persona.metadata.unique_id ?? persona.unique_id ?? '')}`,
+    `version: ${JSON.stringify(persona.metadata.version ?? '1.0')}`,
+    '---', persona.content ?? ''].join('\n');
   const seedPersona = (persona: Persona): void => {
+    files.set(persona.filename, definitionOf(persona));
     publishCachedElement(personaManager, persona, persona.filename);
   };
+  const absent = () => Object.assign(new Error('ENOENT: no such file'), { code: 'ENOENT' });
 
   const mockPortfolioManager = createMockPortfolioManager({
     getElementDir: jest.fn().mockReturnValue(mockPersonasDir)
@@ -111,8 +122,20 @@ export function createPersonaFindingFixture() {
 
   // Mock FileOperationsService
   const mockFileOperationsService: jest.Mocked<FileOperationsService> = {
-    readFile: jest.fn().mockResolvedValue(''),
-    readElementFile: jest.fn().mockResolvedValue(''),
+    readFile: jest.fn((...args: unknown[]) => mockFileOperationsService.readElementFile(...(args as [string]))),
+    readElementFile: jest.fn((filePath: string) => {
+      const content = files.get(path.basename(filePath));
+      return content === undefined ? Promise.reject(absent()) : Promise.resolve(content);
+    }),
+    auditElementRead: jest.fn(),
+    stat: jest.fn((filePath: string) => {
+      const content = files.get(path.basename(filePath));
+      return Promise.resolve(content === undefined
+        ? { isDirectory: () => true, isFile: () => false, mtimeMs: 0, size: 0 }
+        : { isDirectory: () => false, isFile: () => true, mtimeMs: 1, size: content.length });
+    }),
+    listDirectoryWithTypes: jest.fn((directory: string) => Promise.resolve(directory === mockPersonasDir
+      ? [...files.keys()].map(name => ({ name, isFile: true, isDirectory: false })) : [])),
     writeFile: jest.fn().mockResolvedValue(undefined),
     deleteFile: jest.fn().mockResolvedValue(undefined),
     exists: jest.fn().mockResolvedValue(false),
@@ -140,12 +163,12 @@ export function createPersonaFindingFixture() {
     serializationService: new SerializationService(),
     metadataService,
     eventDispatcher: new ElementEventDispatcher(),
-  storageLayerFactory: createTestStorageFactory(),
+  storageLayerFactory: createTestStorageFactory(mockFileOperationsService),
   });
 
   // Populate cache with test personas
   for (const persona of testPersonas) {
     seedPersona(persona);
   }
-  return { personaManager, seedPersona, mockFileOperationsService };
+  return { personaManager, seedPersona, mockFileOperationsService, files };
 }

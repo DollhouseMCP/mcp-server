@@ -47,7 +47,7 @@ export async function validateElement(
       return unsupportedType(normalizedType);
     }
 
-    const element = await resolveElementByName(manager, normalizedType, name);
+    const element = await resolveElementByName(manager, name);
 
     if (!element) {
       // Issue #275: Throw error instead of returning content for missing elements
@@ -186,24 +186,5 @@ function buildReport(
 }
 
 function getManager(context: ElementCrudContext, type: ElementType): ElementManagerOperations<any> | null {
-  switch (type) {
-    // FIX: Issue #281 - PERSONA now uses standard validation flow
-    case ElementType.PERSONA:
-      return context.personaManager;
-    case ElementType.SKILL:
-      return context.skillManager;
-    case ElementType.TEMPLATE:
-      return context.templateManager;
-    case ElementType.AGENT:
-      return context.agentManager;
-    case ElementType.MEMORY:
-      // FIX: Added memory validation support (fixes #1042)
-      // Previously: Memories returned "not yet supported for validation"
-      // Now: Full validation including metadata, retention, entry structure
-      return context.memoryManager;
-    case ElementType.ENSEMBLE:
-      return context.ensembleManager;
-    default:
-      return null;
-  }
+  return (context.getManagerForType(type) as ElementManagerOperations<any> | undefined) ?? null;
 }

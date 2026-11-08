@@ -51,6 +51,32 @@ describe('Memory activation references (#2924)', () => {
     expect(list).not.toHaveBeenCalled();
   });
 
+  it('activates a freshly loaded instance retained by the live session', async () => {
+    const reloaded = memory('evicted-active-memory');
+    registry.getOrCreate('A').memories.add(reloaded.metadata.name);
+    jest.spyOn(manager, 'findByName').mockResolvedValue(reloaded);
+    expect(reloaded.status).not.toBe('active');
+    const result = await inSession('A', () => manager.getActiveMemories());
+    expect(result).toEqual([reloaded]);
+    expect(reloaded.status).toBe('active');
+  });
+
+  it('refuses strict active reads and reports healthy survivors when one reference fails', async () => {
+    const healthy = memory('healthy');
+    registry.getOrCreate('A').memories.add('healthy');
+    registry.getOrCreate('A').memories.add('broken');
+    jest.spyOn(manager, 'scanAndEvict').mockResolvedValue(undefined);
+    jest.spyOn(manager, 'findByName').mockImplementation(async name => {
+      if (name === 'broken') throw new Error('Unreadable definition');
+      return healthy;
+    });
+    await expect(inSession('A', () => manager.getActiveMemories())).rejects.toMatchObject({ kind: 'indeterminate' });
+    expect(await inSession('A', () => manager.getActiveReferenceReport())).toMatchObject({
+      complete: false, items: [healthy], failures: [expect.objectContaining({ reference: 'broken' })],
+    });
+    expect([...registry.getOrCreate('A').memories]).toEqual(['healthy', 'broken']);
+  });
+
   it('keeps session references intact when delayed discovery completes after another session runs', async () => {
     const stateA = registry.getOrCreate('A');
     const stateB = registry.getOrCreate('B');

@@ -5,6 +5,8 @@
 
 import { IElement, ElementValidationResult } from './IElement.js';
 import { ElementType } from '../../portfolio/types.js';
+import type { CollectionReport } from '../../elements/base/CollectionReport.js';
+import type { DeletionReport, ElementDeletionTarget } from '../../elements/base/ElementDeletion.js';
 
 // Generic element manager interface
 export interface IElementManager<T extends IElement> {
@@ -16,10 +18,17 @@ export interface IElementManager<T extends IElement> {
    * Observer errors are logged and contained; they cannot fail an already committed delete.
    */
   delete(path: string, onCommitted?: () => void): Promise<void>;
+  /** Refused bytes can be repaired only by exact storage reference: their display name is unknowable. */
+  resolveDeletionTarget(identifier: string): Promise<ElementDeletionTarget<T>>;
+  deleteResolved(target: ElementDeletionTarget<T>, onCommitted?: () => void): Promise<DeletionReport>;
+  /** False means proven absence; validation or storage failures reject with ElementReadError. */
   exists(path: string): Promise<boolean>;
   
   // Collection operations
+  /** Requires a complete collection; rejects with ElementReadError when discovery or loading fails. */
   list(): Promise<T[]>;
+  /** Advisory reads retain explicit completeness and per-reference failure diagnostics. */
+  listReport(): Promise<CollectionReport<T>>;
   find(predicate: (element: T) => boolean): Promise<T | undefined>;
   findMany(predicate: (element: T) => boolean): Promise<T[]>;
   

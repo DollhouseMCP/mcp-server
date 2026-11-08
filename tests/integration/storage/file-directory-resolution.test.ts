@@ -15,6 +15,7 @@ import { MIGRATION_MARKER_FILENAME } from '../../../src/paths/LegacyDetectingPat
 import { MemoryManager } from '../../../src/elements/memories/MemoryManager.js';
 import { PersonaManager } from '../../../src/persona/PersonaManager.js';
 import { ElementType } from '../../../src/portfolio/types.js';
+import { ValidationError } from '../../../src/security/errors.js';
 
 const environmentKeys = ['DOLLHOUSE_HOME_DIR', 'DOLLHOUSE_PORTFOLIO_DIR', 'DOLLHOUSE_USER'] as const;
 
@@ -67,13 +68,20 @@ describe.each(['flat', 'per-user'])('%s storage directory resolution', layout =>
         await storage.notifySaved('hand-written.md', absolutePath);
       }
       expect(storage.hasCompletedScan()).toBe(false);
-      const list = jest.spyOn(manager, 'list');
+      const summaries = jest.spyOn(storage, 'readCollection');
+      // The lookup reads its selected reference through the loader route (loadStoredReference), never
+      // back through load(); the concurrent external-change auto-reload may read the same file too.
+      const load = jest.spyOn(manager as any, 'loadStoredReference');
       expect((await manager.findByName(identifier))?.metadata.name).toBe('Display Metadata');
-      expect(list).toHaveBeenCalledTimes(1);
+      // This lookup certifies through one pinned snapshot. readIndexedPath waits for the scan that
+      // snapshot starts, so the concurrent external-change auto-reload then reads the authoritative
+      // index instead of requesting a second collection read (previously 2 for 'external change').
+      expect(summaries).toHaveBeenCalledTimes(1);
+      expect(load).toHaveBeenCalledWith('hand-written.md');
     });
   });
 
-  it.each(['slug', 'id'] as const)('preserves cold %s lookup for a noncanonical filename', async lookup => {
+  it('resolves a cold slug through summaries without treating generated ids as names', async () => {
     await inSession(async () => {
       jest.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
       const manager = container.resolve<BaseElementManager<IElement>>('SkillManager');
@@ -83,10 +91,17 @@ describe.each(['flat', 'per-user'])('%s storage directory resolution', layout =>
         '---\nname: Display Metadata\ndescription: Flexible name fixture\n---\nFollow these detailed instructions.');
       const definition = await manager['loadElementDefinition']('hand-written.md');
       expect(manager['storageLayer'].hasCompletedScan()).toBe(false);
+      const summaries = jest.spyOn(manager['storageLayer'], 'readCollection');
       const list = jest.spyOn(manager, 'list');
-      const found = await manager.findByName(lookup === 'slug' ? 'display-metadata' : definition.id);
+      // A certified name is read through the loader route (loadStoredReference), never back through load().
+      const load = jest.spyOn(manager as any, 'loadStoredReference');
+      const found = await manager.findByName('display-metadata');
       expect(found?.metadata.name).toBe('Display Metadata');
-      expect(list).toHaveBeenCalledTimes(1);
+      expect(summaries).toHaveBeenCalledTimes(1);
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(list).not.toHaveBeenCalled();
+      await expect(manager.findByName(definition.id)).resolves.toBeUndefined();
+      expect(list).not.toHaveBeenCalled();
     });
   });
 
@@ -210,7 +225,7 @@ describe.each(['flat', 'per-user'])('%s storage directory resolution', layout =>
       const refreshed = await manager.findByName('directory-probe');
       expect(refreshed).not.toBe(warm);
       expect(refreshed?.metadata.description).toBe('External description');
-      expect(manager['getCachedByAbsolutePath'](file)?.metadata.description).toBe('External description');
+      expect(manager['_cache'].getCachedByAbsolutePath(file)?.metadata.description).toBe('External description');
       expect((await manager['storageLayer'].listSummaries()).find(entry => entry.name === 'directory-probe')?.description)
         .toBe('External description');
     });
@@ -232,7 +247,7 @@ describe.each(['flat', 'per-user'])('%s storage directory resolution', layout =>
       await fs.unlink(path.join(directory, relative));
       await manager['scanAndEvict']();
       expect(manager['storageLayer'].getPathByName('directory-probe')).toBeUndefined();
-      expect(manager['getCachedByAbsolutePath'](path.join(directory, relative))).toBeUndefined();
+      expect(manager['_cache'].getCachedByAbsolutePath(path.join(directory, relative))).toBeUndefined();
       expect(await manager.findByName('directory-probe')).toBeUndefined();
     });
   });
@@ -282,12 +297,13 @@ describe.each(['flat', 'per-user'])('%s storage directory resolution', layout =>
       const storage = manager['storageLayer'] as ElementStorageLayer;
       const state = storage['getState']();
       const fileOps = manager['fileOperations'];
-      const read = fileOps.readElementFile.bind(fileOps);
+      // The definition read happens in the storage layer, through the file service's readFile.
+      const read = fileOps.readFile.bind(fileOps);
       let release!: () => void;
       let entered!: () => void;
       const pending = new Promise<void>(resolve => { release = resolve; });
       const started = new Promise<void>(resolve => { entered = resolve; });
-      jest.spyOn(fileOps, 'readElementFile').mockImplementation(async (...args) => {
+      jest.spyOn(fileOps, 'readFile').mockImplementation(async (...args) => {
         const content = await read(...args);
         entered();
         await pending;
@@ -302,6 +318,43 @@ describe.each(['flat', 'per-user'])('%s storage directory resolution', layout =>
       await load;
     });
   });
+  it('attributes a validator-refused stored file on every consumer and keeps caller errors direct', async () => {
+    await inSession(async () => {
+      const manager = container.resolve<BaseElementManager<IElement>>('SkillManager');
+      const directory = manager['elementDir'];
+      await fs.mkdir(directory, { recursive: true });
+      const skill = (name: string) => `---\nname: ${name}\ndescription: Reference policy fixture\n---\nFollow these detailed instructions.`;
+      await fs.writeFile(path.join(directory, 'healthy.md'), skill('Healthy'));
+      await fs.writeFile(path.join(directory, 'v1..2.md'), skill('Traversal'));
+      const target = path.join(home, 'outside-target.md');
+      await fs.writeFile(target, skill('Outside'));
+      await fs.symlink(target, path.join(directory, 'outside.md'));
+      const report = await manager.listReport();
+      expect(report.items.map(item => item.metadata.name)).toEqual(['Healthy']);
+      expect(report.failures.map(failure => failure.reference).sort()).toEqual(['outside.md', 'v1..2.md']);
+      for (const failure of report.failures) {
+        expect(failure.error).toMatchObject({ kind: 'unreadable', failures: [{ reference: failure.reference,
+          reason: failure.reference === 'outside.md' ? 'Path access denied' : 'Path traversal detected' }] });
+      }
+      const refused = { name: 'ElementIndeterminateError', failures: expect.arrayContaining([expect.objectContaining({ reference: 'outside.md' })]) };
+      await expect(manager.list()).rejects.toMatchObject({ ...refused, failures: expect.arrayContaining([
+        expect.objectContaining({ reference: 'outside.md' }), expect.objectContaining({ reference: 'v1..2.md' })]) });
+      await expect(manager.findByName('outside')).rejects.toMatchObject(refused);
+      // The loader's own policy refuses the stored target first, with the manager's wording; the index record agrees.
+      await expect(manager.load('outside.md')).rejects.toMatchObject({ kind: 'unreadable', failures: [{ reference: 'outside.md', reason: expect.stringContaining('Path access denied') }] });
+      expect((await manager.findByName('Healthy'))?.metadata.name).toBe('Healthy');
+      // Path syntax is first offered as a stored name. The refused outside.md was never parsed and could
+      // carry that name, so the answer is indeterminate, never a certified path refusal (ruling #586 item 7).
+      const indeterminate = { name: 'ElementIndeterminateError' };
+      await expect(manager.findByName(path.join('..', 'outside'))).rejects.toMatchObject(indeterminate);
+      await expect(manager.delete(path.join('..', 'outside.md'))).rejects.toMatchObject(indeterminate);
+      await expect(manager.load(path.join('..', 'outside.md'))).rejects.toMatchObject(indeterminate);
+      await expect(manager.findByStorageIdentity(path.join('..', 'outside.md'))).rejects.toMatchObject(indeterminate);
+      // Path syntax that no record could hold is still refused on its own syntax.
+      await expect(manager.findByName(path.join('..', 'elsewhere'))).rejects.toThrow(ValidationError);
+    });
+  });
+
   it.each(['snapshot', 'save'] as const)('keeps refresh correct after a paused %s and directory churn', async operation => {
     await inSession(async () => {
       const manager = container.resolve<BaseElementManager<IElement>>('SkillManager');
@@ -321,10 +374,10 @@ describe.each(['flat', 'per-user'])('%s storage directory resolution', layout =>
       const started = new Promise<void>(resolve => { entered = resolve; });
       const pause = async () => { entered(); await barrier; };
       if (operation === 'snapshot') {
-        const fileOps = manager['fileOperations'];
-        const read = fileOps.readElementFile.bind(fileOps);
-        jest.spyOn(fileOps, 'readElementFile').mockImplementation(async (...args) => {
-          const bytes = await read(...args);
+        // The delete snapshot reads the definition through the storage layer.
+        const read = storage.readContent.bind(storage);
+        jest.spyOn(storage, 'readContent').mockImplementation(async reference => {
+          const bytes = await read(reference);
           await pause();
           return bytes;
         });
@@ -345,7 +398,7 @@ describe.each(['flat', 'per-user'])('%s storage directory resolution', layout =>
         }
       } finally { release(); }
       await pending;
-      if (operation === 'snapshot') expect(manager['getCachedByAbsolutePath'](file)).toBeUndefined();
+      if (operation === 'snapshot') expect(manager['_cache'].getCachedByAbsolutePath(file)).toBeUndefined();
       else {
         await fs.writeFile(file, content.replace('Original description', 'Edited description'));
         await fs.utimes(file, new Date(), new Date(Date.now() + 2000));

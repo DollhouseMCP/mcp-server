@@ -124,6 +124,10 @@ describe('AgentManager', () => {
     // BaseElementManager.load uses readElementFile. Wire dynamically so tests
     // that reassign readFile via mockResolvedValue still flow through.
     mockFileOperations.readElementFile = jest.fn((...args: unknown[]) => mockFileOperations.readFile(...args));
+    // The storage layer shares this service: definition reads go through it under the scan policy.
+    mockFileOperations.auditElementRead = jest.fn();
+    mockFileOperations.stat = mockFileOperations.stat ?? jest.fn().mockResolvedValue({ isDirectory: () => true, isFile: () => false, mtimeMs: 0, size: 0 });
+    mockFileOperations.listDirectoryWithTypes = mockFileOperations.listDirectoryWithTypes ?? jest.fn().mockResolvedValue([]);
     container.replace<FileOperationsService>('FileOperationsService', () => mockFileOperations);
 
     // Register DI services
@@ -145,7 +149,7 @@ describe('AgentManager', () => {
       serializationService: container.resolve('SerializationService'),
       metadataService: container.resolve('MetadataService'),
       eventDispatcher: new ElementEventDispatcher(),
-    storageLayerFactory: createTestStorageFactory(),
+    storageLayerFactory: createTestStorageFactory(container.resolve('FileOperationsService')),
     }));
 
     agentManager = container.resolve<TestableAgentManager>('AgentManager');
@@ -203,7 +207,7 @@ describe('AgentManager', () => {
 
       expect(result).toEqual([activeAgent]);
       expect(refresh).toHaveBeenCalledWith({ freshAfterInFlight: true });
-      expect(findByName).toHaveBeenCalledWith('active-agent');
+      expect(findByName).toHaveBeenCalledWith('active-agent', { refreshed: true });
       expect(list).not.toHaveBeenCalled();
     });
 
@@ -230,6 +234,8 @@ describe('AgentManager', () => {
         description: 'Cached active agent',
       }, metadataService);
       publishCachedElement(agentManager, cachedAgent, 'cached-agent.md');
+      // The file is unchanged since the agent was cached: the storage layer vouches for the entry.
+      const vouch = jest.spyOn((agentManager as any).storageLayer, 'isCachedReferenceCurrent').mockResolvedValue(true);
       jest.spyOn(agentManager as any, 'scanAndEvict').mockResolvedValue();
       fileOperationsService.readFile.mockClear();
 
@@ -247,6 +253,7 @@ describe('AgentManager', () => {
       expect(second[0]).toBe(cachedAgent);
       expect(cachedAgent.getState().sessionCount).toBe(1);
       expect(fileOperationsService.readFile).not.toHaveBeenCalled();
+      expect(vouch).toHaveBeenCalled();
     });
 
     it('preserves same-name agents with distinct storage identities', async () => {
@@ -1147,13 +1154,15 @@ Content`);
     });
 
     it('should reject duplicate metadata name even with different filename (Issue #613)', async () => {
-      // Create a mock agent with name "my-agent" that list() will return
+      // A stored agent named "my-agent"
       const mockAgent = {
         metadata: { name: 'my-agent', description: 'First agent' },
         id: 'my-agent',
         extensions: {}
       };
-      jest.spyOn(agentManager, 'list').mockResolvedValue([mockAgent as any]);
+      // The stored definition lives under another filename; the selector certifies its metadata name.
+      jest.spyOn((agentManager as any).storageLayer, 'readIndexedPath').mockResolvedValue({ path: 'first-agent.md', indexComplete: true,
+        authoritative: true, unindexed: [], failures: new Map(), candidates: [{ reference: 'first-agent.md', name: mockAgent.metadata.name }] });
 
       // Try to create another agent with the same metadata name
       const result = await agentManager.create('my-agent', 'Second agent', 'Valid content for testing agent creation');
@@ -1202,6 +1211,12 @@ Agent instructions here`);
       expect(agent?.extensions?.decisionFramework).toBe('rule_based');
     });
 
+    it('reports an auxiliary state-file ENOENT as unreadable and preserves the cause', async () => {
+      const cause = Object.assign(new Error('Missing auxiliary state file'), { code: 'ENOENT' });
+      jest.spyOn(agentManager['stateStore'], 'load').mockRejectedValue(cause);
+      await expect(agentManager.read(TEST_AGENT_NAME)).rejects.toMatchObject({ kind: 'unreadable', cause });
+    });
+
     it('should return null for non-existent agent', async () => {
       fileOperationsService.readFile.mockRejectedValue({ code: 'ENOENT' });
 
@@ -1213,7 +1228,7 @@ Agent instructions here`);
       fileOperationsService.readFile.mockResolvedValue('x'.repeat(200 * 1024)); // 200KB
 
       await expect(agentManager.read('huge-agent'))
-        .rejects.toThrow('exceeds maximum size');
+        .rejects.toMatchObject({ cause: expect.objectContaining({ message: expect.stringContaining('exceeds maximum size') }) });
     });
 
     it('should load agent state if available', async () => {
@@ -1329,6 +1344,9 @@ Content`);
   });
 
   describe('Delete', () => {
+    beforeEach(() => {
+      fileOperationsService.readFile.mockResolvedValue('---\nname: test-agent\n---\nReadable agent definition.');
+    });
     it('should delete agent and state files', async () => {
       fileOperationsService.exists.mockResolvedValue(true);
 
@@ -1372,9 +1390,24 @@ Content`);
       
       await expect(agentManager.delete('non-existent')).resolves.not.toThrow();
     });
+
+    it('preserves direct deletion idempotence when neither definition nor state exists', async () => {
+      fileOperationsService.exists.mockResolvedValue(false);
+      fileOperationsService.readFile.mockRejectedValue(Object.assign(new Error('Missing'), { code: 'ENOENT' }));
+      jest.spyOn(agentManager['stateStore'], 'load').mockResolvedValue(null);
+      await expect(agentManager.delete('non-existent.md')).resolves.toBeUndefined();
+      await expect(agentManager.resolveDeletionTarget('non-existent.md')).rejects.toMatchObject({ code: 'ENOENT' });
+    });
   });
 
   describe('List', () => {
+    beforeEach(() => {
+      jest.spyOn(agentManager['storageLayer'], 'readCollection').mockImplementation(async () => ({
+        entries: (await mockPortfolioManager.listElements()).map(filePath => ({ filePath })),
+        unindexed: new Map(), authoritative: true, complete: true, includesPublic: false,
+        diff: { added: [], modified: [], removed: [], unchanged: [] },
+      } as any));
+    });
     it('should list all agents', async () => {
       // Configure the mock to return agent files
       mockPortfolioManager.listElements.mockResolvedValue(['agent1.md', 'agent2.md']);
@@ -1405,8 +1438,7 @@ Content`;
       mockPortfolioManager.listElements.mockResolvedValue(['bad.md']);
       fileOperationsService.readFile.mockRejectedValue(new Error('Read error'));
 
-      const agents = await agentManager.list();
-      expect(agents).toHaveLength(0);
+      await expect(agentManager.list()).rejects.toThrow('could not be read completely');
     });
   });
 
@@ -1686,7 +1718,7 @@ Content`;
 
       // SerializationService provides more specific error messages
       await expect(agentManager.read('bad-agent'))
-        .rejects.toThrow('YAML must contain an object');
+        .rejects.toMatchObject({ cause: expect.objectContaining({ message: expect.stringContaining('YAML must contain an object') }) });
     });
 
     it('should validate element type in files', async () => {
@@ -1697,7 +1729,7 @@ type: persona
 Content`);
 
       await expect(agentManager.read('wrong-type'))
-        .rejects.toThrow("Invalid element type: expected 'agents', got 'persona'");
+        .rejects.toMatchObject({ cause: expect.objectContaining({ message: "Invalid element type: expected 'agents', got 'persona'" }) });
     });
   });
 

@@ -103,6 +103,19 @@ async function fixture() {
 }
 
 
+/** Control transport reads while retaining report, activation, and binding orchestration. */
+function mockMemoryReads(manager: MemoryManager) {
+  const read = jest.fn<(options?: { includePublic?: boolean }) => Promise<Memory[]>>().mockResolvedValue([]);
+  jest.spyOn(manager as any, 'readCollectionReport').mockImplementation(async (options: any, select: any) => {
+    const items = await read(options);
+    return { items: select ? items.filter(item => select(item.metadata)) : items, failures: [], complete: true };
+  });
+  jest.spyOn(manager as any, 'scanAndEvict').mockResolvedValue(undefined);
+  jest.spyOn((manager as any)._listOps, 'refreshCollection').mockResolvedValue(undefined);
+  jest.spyOn(manager, 'findByName').mockImplementation(async name => (await read()).find(item => item.metadata.name === name));
+  return read;
+}
+
 function invocation(tracker: ContextTracker, tenant: string, sessionId = randomUUID()) {
   return tracker.createSessionContext('test', { userId: tenant, sessionId,
     tenantId: null, transport: 'http', createdAt: 1 });
@@ -121,7 +134,8 @@ function remoteCollection(f: Awaited<ReturnType<typeof fixture>>, provider: Tena
   invoke: () => Promise<{content:{type:string;text:string}[]}>): CollectionHandler {
   const paths=new PathService({userResolver:new PerUserPathResolver(f.directory),packageLocator:new PackageResourceLocator(),userIdResolver:()=>f.first});
   const portfolio=new PortfolioManager(f.container.resolve('FileOperationsService'),{baseDir:f.directory},{pathService:paths,contextTracker:f.tracker});
-  const installer=new ElementInstaller({} as GitHubClient,{memoryRegistry:f.registry,portfolioManager:portfolio,fileOperations:f.container.resolve('FileOperationsService')});
+  const installer=new ElementInstaller({} as GitHubClient,{memoryRegistry:f.registry,portfolioManager:portfolio,
+    managerLookup:f.container.resolve('ElementManagerLookup'),fileOperations:f.container.resolve('FileOperationsService')});
   const submit=new SubmitToPortfolioTool(f.container.resolve('APICache'),{memoryRegistry:f.registry,
     authManager:{},portfolioRepoManager:{},portfolioManager:portfolio,rateLimiter:{},fileOperations:f.container.resolve('FileOperationsService'),tokenManager:{}} as unknown as SubmitToPortfolioToolDependencies);
   const browser={browseCollection:async()=>{await invoke();return {items:[]};},formatBrowseResults:()=> 'remote-only collection'};
@@ -144,11 +158,11 @@ describe('attributed database memory startup reads (controlled DB transport)', (
       const operation=await provider.resolve(provider.capture());expect(operation.manager.isGuardedHeadUpdateEnabled()).toBe(false);
       const metadata=f.container.resolve<import('../../../src/services/MetadataService.js').MetadataService>('MetadataService');
       const memory=new Memory({name:'Legacy autoload',autoLoad:true},metadata,operation.manager);
-      const list=jest.spyOn(operation.manager,'list').mockResolvedValue([memory]);
+      const list=mockMemoryReads(operation.manager).mockResolvedValue([memory]);
       const seed=jest.spyOn(operation.manager,'installSeedMemories').mockResolvedValue(undefined);
       const result=await operation.manager.loadAndActivateAutoLoadMemories(operation.assertCurrent);
       expect(result.loaded).toBe(1);expect(result.errors).toEqual([]);expect(seed).toHaveBeenCalledTimes(1);
-      expect(list).toHaveBeenCalledWith({strictDatabase:true});
+      expect(list).toHaveBeenCalled();
     });
   });
 
@@ -159,7 +173,7 @@ describe('attributed database memory startup reads (controlled DB transport)', (
       const operation=await provider.resolve(provider.capture());
       const metadata=f.container.resolve<import('../../../src/services/MetadataService.js').MetadataService>('MetadataService');
       const memory=new Memory({name:'Startup owner',autoLoad:true},metadata,operation.manager);
-      const list=jest.spyOn(operation.manager,'list').mockResolvedValue([memory]);
+      const list=mockMemoryReads(operation.manager).mockResolvedValue([memory]);
       const seed=jest.spyOn(operation.manager,'installSeedMemories');
       f.container.register('DatabaseTenantMemoryRegistry',()=>f.registry);f.container.register('DatabaseInstance',()=>f.db);
       const fixed=jest.fn(()=>{throw new Error('Unattributed root retrieval');});f.container.replace('MemoryManager',fixed);
@@ -182,8 +196,8 @@ describe('attributed database memory startup reads (controlled DB transport)', (
       expect(activate).not.toHaveBeenCalled();expect(remove).not.toHaveBeenCalled();
       expect(seed).not.toHaveBeenCalled();expect(fixed).not.toHaveBeenCalled();operation.assertCurrent();
       const cause=new Error('Captured startup active-owner census failure');
-      list.mockImplementation(async options=>{if(options?.strictDatabase)throw cause;return [];});
-      await expect(container.restoreActivations(store as unknown as import('../../../src/state/IActivationStateStore.js').IActivationStateStore)).rejects.toBe(cause);
+      list.mockRejectedValue(cause);
+      await expect(container.restoreActivations(store as unknown as import('../../../src/state/IActivationStateStore.js').IActivationStateStore)).rejects.toThrow('Storage or validation operation failed');
       expect(remove).not.toHaveBeenCalled();expect(activate).not.toHaveBeenCalled();
       expect(store.getActivations('memory')).toEqual([{name:'Startup owner',activatedAt:'2026-10-08T00:00:00Z'}]);
     });
@@ -198,13 +212,13 @@ describe('attributed database memory startup reads (controlled DB transport)', (
       const late=new Memory({name:'Late autoload',autoLoad:true,priority:9},metadata,manager);
       const early=new Memory({name:'Early autoload',autoLoad:true,priority:1},metadata,manager);
       const omitted=new Memory({name:'Manual owner',autoLoad:false},metadata,manager);
-      const list=jest.spyOn(manager,'list').mockResolvedValue([late,omitted,early]);
+      const list=mockMemoryReads(manager).mockResolvedValue([late,omitted,early]);
       const seed=jest.spyOn(manager,'installSeedMemories');
       await expect(manager.getAutoLoadMemories(operation.assertCurrent)).resolves.toEqual([early,late]);
       const result=await manager.loadAndActivateAutoLoadMemories(operation.assertCurrent);
       expect(result.loaded).toBe(2);expect(result.errors).toEqual([]);expect(seed).not.toHaveBeenCalled();
-      expect(list).toHaveBeenCalledWith({strictDatabase:true});
-      expect((await manager.getActiveMemories()).map(memory=>memory.metadata.name)).toEqual(['Late autoload','Early autoload']);
+      expect(list).toHaveBeenCalled();
+      expect((await manager.getActiveMemories()).map(memory=>memory.metadata.name)).toEqual(['Early autoload','Late autoload']);
       await f.tracker.runAsync(second,async()=>{
         const other=await provider.resolve(provider.capture());expect(other.manager).toBe(manager);
         await expect(other.manager.getActiveMemories()).resolves.toEqual([]);
@@ -218,7 +232,7 @@ describe('attributed database memory startup reads (controlled DB transport)', (
     const context=invocation(f.tracker,f.first);
     await f.tracker.runAsync(context,async()=>{
       const operation=await provider.resolve(provider.capture());const cause=new Error('Original startup DB read rejection');
-      const list=jest.spyOn(operation.manager,'list').mockRejectedValue(cause);
+      const list=mockMemoryReads(operation.manager).mockRejectedValue(cause);
       jest.spyOn(logger,'error').mockImplementation(()=>{throw new Error('Secondary startup observer rejection');});
       await expect(operation.manager.loadAndActivateAutoLoadMemories(operation.assertCurrent)).rejects.toBe(cause);
       const metadata=f.container.resolve<import('../../../src/services/MetadataService.js').MetadataService>('MetadataService');
@@ -295,6 +309,9 @@ describe('trusted memory caller capture with actual registry/managers', () => {
 function crud(f: Awaited<ReturnType<typeof fixture>>, provider: TenantMemoryOperationProvider,
   tracker: ContextTracker, fixed?: MemoryManager, agent?: AgentManager): ElementCRUDHandler {
   const c = f.container;
+  for (const name of ['SkillManager', 'AgentManager', 'EnsembleManager', 'PersonaManager']) {
+    jest.spyOn(c.resolve<any>(name), 'getActiveReferenceReport').mockResolvedValue({items:[],failures:[],complete:true});
+  }
   const initialization = c.resolve<{ensureInitialized:()=>Promise<void>}>('InitializationService');
   jest.spyOn(initialization, 'ensureInitialized').mockResolvedValue(undefined);
   return new ElementCRUDHandler(c.resolve('SkillManager'),c.resolve('TemplateManager'),c.resolve('TemplateRenderer'),
@@ -310,7 +327,7 @@ describe('actual CRUD and activation caller plumbing (transport reads controlled
   it('refuses missing/structural configured providers and a different tracker rather than using a fixed manager', async () => {
     const f=await fixture();const tracker=f.tracker;
     const provider=new TenantMemoryOperationProvider(f.registry,tracker);const fixed=await f.registry.resolve(f.registry.capture());
-    const list=jest.spyOn(fixed,'list');
+    const list=mockMemoryReads(fixed);
     expect(()=>crud(f,undefined as unknown as TenantMemoryOperationProvider,tracker,fixed)).toThrow('Actual trusted');
     expect(()=>crud(f,{} as TenantMemoryOperationProvider,tracker,fixed)).toThrow('Actual trusted');
     expect(()=>crud(f,provider,new ContextTracker(),fixed)).toThrow('tracker binding mismatch');
@@ -322,13 +339,14 @@ describe('actual CRUD and activation caller plumbing (transport reads controlled
     const provider = new TenantMemoryOperationProvider(f.registry, tracker);
     const first = await f.scope.run(f.first, () => f.registry.resolve(f.registry.capture()));
     const second = await f.scope.run(f.second, () => f.registry.resolve(f.registry.capture()));
-    const firstList = jest.spyOn(first,'list').mockResolvedValue([new Memory({name:'first-owner'},f.container.resolve('MetadataService'))]);
-    const secondList = jest.spyOn(second,'list').mockResolvedValue([new Memory({name:'second-owner'},f.container.resolve('MetadataService'))]);
+    const firstList = mockMemoryReads(first).mockResolvedValue([new Memory({name:'first-owner'},f.container.resolve('MetadataService'))]);
+    const secondList = mockMemoryReads(second).mockResolvedValue([new Memory({name:'second-owner'},f.container.resolve('MetadataService'))]);
     const handler = crud(f,provider,tracker,first);
     const resolve = jest.spyOn(provider,'resolve');
     const result = await f.scope.run(f.second, () => tracker.runAsync(invocation(tracker,f.second),
       () => handler.getElements('memory')));
-    expect(result).toHaveLength(1); expect((result[0] as Memory).metadata.name).toBe('second-owner');
+    expect(result.items).toHaveLength(1); expect((result.items[0] as Memory).metadata.name).toBe('second-owner');
+    expect(result.complete).toBe(true);
     expect(firstList).not.toHaveBeenCalled();expect(secondList).toHaveBeenCalledTimes(1);expect(resolve).toHaveBeenCalledTimes(1);
   });
   it('binds the real memory activation strategy to the selected manager with no fixed fallback', async () => {
@@ -347,7 +365,7 @@ describe('actual CRUD and activation caller plumbing (transport reads controlled
   it('refuses missing or changed invocation before initialization or any cached-manager read', async () => {
     const f = await fixture();const tracker = f.tracker;
     const provider = new TenantMemoryOperationProvider(f.registry,tracker);
-    const fixed = await f.registry.resolve(f.registry.capture()); const list = jest.spyOn(fixed,'list').mockResolvedValue([]);
+    const fixed = await f.registry.resolve(f.registry.capture()); const list = mockMemoryReads(fixed).mockResolvedValue([]);
     const handler = crud(f,provider,tracker,fixed);
     await expect(handler.getElements('memory')).rejects.toThrow('Attributed');
     expect(list).not.toHaveBeenCalled();
@@ -383,7 +401,7 @@ describe('actual CRUD and activation caller plumbing (transport reads controlled
     const provider = new TenantMemoryOperationProvider(f.registry,tracker);
     const manager = await f.registry.resolve(f.registry.capture()); const context = invocation(tracker,f.first);
     const entry = deferred(); const release = deferred();
-    const list = jest.spyOn(manager,'list').mockImplementation(async () => {entry.resolve();await release.promise;return [];});
+    const list = mockMemoryReads(manager).mockImplementation(async () => {entry.resolve();await release.promise;return [];});
     const handler = crud(f,provider,tracker);
     await tracker.runAsync(context,async () => {
       const pending=handler.getElements('memory');
@@ -429,7 +447,7 @@ describe('actual CRUD and activation caller plumbing (transport reads controlled
     const one=new Memory({name:'session-one-memory'},f.container.resolve('MetadataService'));
     const two=new Memory({name:'session-two-memory'},f.container.resolve('MetadataService'));
     jest.spyOn(manager,'findByName').mockImplementation(async name=>name===one.metadata.name?one:two);
-    jest.spyOn(manager,'list').mockResolvedValue([one,two]);
+    mockMemoryReads(manager).mockResolvedValue([one,two]);
     const handler=crud(f,provider,tracker);const first=invocation(tracker,f.first);const second=invocation(tracker,f.first);
     await Promise.all([[first,one],[second,two]].map(([context,memory])=>
       tracker.runAsync(context as ReturnType<typeof invocation>,()=>handler.activateElement((memory as Memory).metadata.name,'memory'))));
@@ -496,8 +514,8 @@ describe('actual AQL local caller view and inert pre-gate DB construction', () =
   it('dispatches actual schema CRUD and legacy search through one selected manager without root use or recapture',async()=>{
     const f=await fixture();const provider=new TenantMemoryOperationProvider(f.registry,f.tracker);
     const fixed=await f.registry.resolve(f.registry.capture());const selected=await f.scope.run(f.second,()=>f.registry.resolve(f.registry.capture()));
-    const rootList=jest.spyOn(fixed,'list').mockResolvedValue([]);
-    const list=jest.spyOn(selected,'list').mockResolvedValue([new Memory({name:'selected-owner',description:'selected-description'},f.container.resolve('MetadataService'))]);
+    const rootList=mockMemoryReads(fixed).mockResolvedValue([]);
+    const list=mockMemoryReads(selected).mockResolvedValue([new Memory({name:'selected-owner',description:'selected-description'},f.container.resolve('MetadataService'))]);
     const resolve=jest.spyOn(provider,'resolve');const handler=aql(f,provider,fixed,permissiveGate());
     expect(SchemaDispatcher.canDispatch('list_elements',handler.operations)).toBe(true);
     expect(SchemaDispatcher.canDispatch('query_elements',handler.operations)).toBe(false);
@@ -526,7 +544,7 @@ describe('actual AQL local caller view and inert pre-gate DB construction', () =
   it('refuses changed original invocation during the policy barrier before selected-memory dispatch',async()=>{
     const f=await fixture();const provider=new TenantMemoryOperationProvider(f.registry,f.tracker);const fixed=await f.registry.resolve(f.registry.capture());
     const gate=permissiveGate();const context=invocation(f.tracker,f.first);const handler=aql(f,provider,fixed,gate);
-    const list=jest.spyOn(fixed,'list').mockResolvedValue([]);
+    const list=mockMemoryReads(fixed).mockResolvedValue([]);
     jest.spyOn(gate,'enforce').mockImplementation(()=>{context.requestId=randomUUID();return {allowed:true,permissionLevel:PermissionLevel.AUTO_APPROVE,reason:'Controlled drift'};});
     await f.tracker.runAsync(context,async()=>{
       const result=await handler.handleRead({operation:'list_elements',params:{element_type:'memory'}});
@@ -622,7 +640,7 @@ describe('guarded public memory discovery boundary',()=>{
     await f.tracker.runAsync(invocation(f.tracker,f.first),async()=>{
       const provider=new TenantMemoryOperationProvider(f.registry,f.tracker);
       const operation=await provider.resolve(provider.capture());f.execute.mockClear();
-      await expect(operation.manager.list({includePublic:true,strictDatabase:true})).rejects.toThrow('public inclusion is unavailable');
+      await expect(operation.manager.list({includePublic:true})).rejects.toThrow('public inclusion is unavailable');
       expect(f.execute).not.toHaveBeenCalled();
     });
   });
@@ -705,8 +723,8 @@ describe('configured AQL construction without a root manager', () => {
     const f=await fixture(); const provider=new TenantMemoryOperationProvider(f.registry,f.tracker);
     const fixed=await f.registry.resolve(f.registry.capture());
     const selected=await f.scope.run(f.second,()=>f.registry.resolve(f.registry.capture()));
-    const rootList=jest.spyOn(fixed,'list').mockResolvedValue([]);
-    jest.spyOn(selected,'list').mockResolvedValue([new Memory({name:'selected-tenant-row'},f.container.resolve('MetadataService'))]);
+    const rootList=mockMemoryReads(fixed).mockResolvedValue([]);
+    mockMemoryReads(selected).mockResolvedValue([new Memory({name:'selected-tenant-row'},f.container.resolve('MetadataService'))]);
     const original=aql(f,provider,fixed,permissiveGate());
     const handlers=(original as unknown as {handlers:Omit<HandlerRegistry,'memoryManager'>}).handlers;
     expect(Object.hasOwn(handlers,'memoryManager')).toBe(false);
@@ -773,10 +791,10 @@ describe('actual agent execution retains its authentic selected memory operation
       const operation = await provider.resolve(provider.capture());
       const memory = new Memory({name:'Selected Memory'},f.container.resolve('MetadataService'));
       await memory.addEntry('Selected tenant entry');
-      const list = jest.spyOn(operation.manager,'list').mockResolvedValue([memory]);
+      const list = mockMemoryReads(operation.manager).mockResolvedValue([memory]);
       const result = await manager.executeAgent('Bound Reader',{}, {},{provider,operation});
       expect(result.activeElements.memories).toEqual([{name:'Selected Memory',content:"Memory 'Selected Memory' with 1 entries"}]);
-      expect(list).toHaveBeenCalledTimes(1); expect(list).toHaveBeenCalledWith({strictDatabase:true});
+      expect(list).toHaveBeenCalledTimes(1); expect(list).toHaveBeenCalled();
       await manager.recordAgentStep({agentName:'Bound Reader',goalId:result.goalId,stepDescription:'Read selected memory',outcome:'success'});
       const continued = await manager.continueAgentExecution({agentName:'Bound Reader',goalId:result.goalId},{provider,operation});
       expect(continued.activeElements.memories).toEqual(result.activeElements.memories);
@@ -790,12 +808,12 @@ describe('actual agent execution retains its authentic selected memory operation
     await f.tracker.runAsync(invocation(f.tracker,f.first),async()=>{
       const {manager,resolver}=await composedAgent(f); const selected=await f.registry.resolve(f.registry.capture());
       const memory=new Memory({name:'Selected Memory'},f.container.resolve('MetadataService')); await memory.addEntry('Selected AQL entry');
-      const list=jest.spyOn(selected,'list').mockResolvedValue([memory]);
+      const list=mockMemoryReads(selected).mockResolvedValue([memory]);
       const handler=aql(f,provider,selected,permissiveGate(),{agentManager:manager});
       const resolve=jest.spyOn(provider,'resolve');
       const result=await handler.handleExecute({operation:'execute_agent',params:{element_name:'Bound Reader',parameters:{}}});
       expect(result.success).toBe(true); expect(JSON.stringify(result)).toContain("Memory 'Selected Memory' with 1 entries");
-      expect(list).toHaveBeenCalledWith({strictDatabase:true});expect(resolve).toHaveBeenCalledTimes(1);expect(resolver).not.toHaveBeenCalled();
+      expect(list).toHaveBeenCalled();expect(resolve).toHaveBeenCalledTimes(1);expect(resolver).not.toHaveBeenCalled();
     });
   });
 
@@ -804,7 +822,7 @@ describe('actual agent execution retains its authentic selected memory operation
     await f.tracker.runAsync(invocation(f.tracker,f.first),async()=>{
       const {manager,resolver}=await composedAgent(f); const selected=await f.registry.resolve(f.registry.capture());
       const memory=new Memory({name:'Selected Memory'},f.container.resolve('MetadataService')); await memory.addEntry('Selected CRUD entry');
-      const list=jest.spyOn(selected,'list').mockResolvedValue([memory]); const resolve=jest.spyOn(provider,'resolve');
+      const list=mockMemoryReads(selected).mockResolvedValue([memory]); const resolve=jest.spyOn(provider,'resolve');
       const handler=crud(f,provider,f.tracker,undefined,manager);
       const response=await handler.executeAgent('Bound Reader',{});
       const result=JSON.parse(response.content[0].text);
@@ -821,7 +839,7 @@ describe('actual agent execution retains its authentic selected memory operation
     await f.tracker.runAsync(invocation(f.tracker,f.first),async () => {
       const {manager} = await composedAgent(f);
       const operation = await provider.resolve(provider.capture()); const cause=new Error('Exact selected read failure');
-      jest.spyOn(operation.manager,'list').mockRejectedValue(cause);
+      mockMemoryReads(operation.manager).mockRejectedValue(cause);
       jest.spyOn(logger,'error').mockImplementation(()=>{throw new Error('Secondary logging failure');});
       await expect(manager.executeAgent('Bound Reader',{}, {},{provider,operation})).rejects.toBe(cause);
     });
@@ -832,7 +850,7 @@ describe('actual agent execution retains its authentic selected memory operation
     await f.tracker.runAsync(invocation(f.tracker,f.first),async()=>{
       const {manager}=await composedAgent(f); const selected=await f.registry.resolve(f.registry.capture());
       const memory=new Memory({name:'Selected Memory'},f.container.resolve('MetadataService'));
-      jest.spyOn(selected,'list').mockResolvedValue([memory]);
+      mockMemoryReads(selected).mockResolvedValue([memory]);
       const handler=aql(f,provider,selected,permissiveGate(),{agentManager:manager});
       const policyEntered=deferred(); const releasePolicy=deferred(); const secondTargetReady=deferred();
       const originalExecute=manager.executeAgent.bind(manager); let executionsCompleted=0;
@@ -870,7 +888,7 @@ describe('actual agent execution retains its authentic selected memory operation
     const context = invocation(f.tracker,f.first);
     await f.tracker.runAsync(context,async () => {
       const {manager} = await composedAgent(f); const operation = await provider.resolve(provider.capture());
-      jest.spyOn(operation.manager,'list').mockImplementation(async()=>{context.requestId=randomUUID();return [];});
+      mockMemoryReads(operation.manager).mockImplementation(async()=>{context.requestId=randomUUID();return [];});
       await expect(manager.executeAgent('Bound Reader',{}, {},{provider,operation})).rejects.toThrow('context changed');
     });
   });
@@ -926,7 +944,7 @@ describe('bound portfolio mutation helpers (actual provider, controlled remote/s
       {checkPortfolioExists:async()=>true,getRepositoryName:()=> 'fixture',saveElement:save},undefined,{provider,dependencies:deps}];
     const handler=new PortfolioHandler(...args as ConstructorParameters<typeof PortfolioHandler>);
     await f.tracker.runAsync(invocation(f.tracker,f.first),async()=>{
-      const operation=await provider.resolve(provider.capture());jest.spyOn(operation.manager,'list').mockResolvedValue([]);
+      const operation=await provider.resolve(provider.capture());mockMemoryReads(operation.manager).mockResolvedValue([]);
       await expect(handler.syncPortfolio({direction:'both',force:true,dryRun:false})).rejects.toThrow('admitted UPDATE only');
       expect(save).not.toHaveBeenCalled();expect(files.readFile).not.toHaveBeenCalled();expect(files.listDirectory).not.toHaveBeenCalled();
       expect(p.deps.portfolioManager.initialize).not.toHaveBeenCalled();expect(p.deps.downloader.downloadFromGitHub).not.toHaveBeenCalled();
@@ -982,7 +1000,8 @@ describe('bound portfolio mutation helpers (actual provider, controlled remote/s
     const f=await fixture();const provider=new TenantMemoryOperationProvider(f.registry,f.tracker);
     const fetch=jest.fn(async()=>({}));const sharedInstall=jest.fn(async()=>({action:'installed' as const}));
     const root=new ElementInstaller({fetchFromGitHub:fetch} as unknown as GitHubClient,{memoryRegistry:f.registry,
-      portfolioManager:f.container.resolve('PortfolioManager'),fileOperations:f.container.resolve('FileOperationsService'),
+      portfolioManager:f.container.resolve('PortfolioManager'),managerLookup:f.container.resolve('ElementManagerLookup'),
+      fileOperations:f.container.resolve('FileOperationsService'),
       sharedPoolInstaller:{install:sharedInstall} as unknown as import('../../../src/collection/shared-pool/ISharedPoolInstaller.js').ISharedPoolInstaller});
     await expect(root.installContent('library/memories/owner.yaml')).rejects.toThrow('Authentic selected');
     await f.tracker.runAsync(invocation(f.tracker,f.first),async()=>{
@@ -1025,11 +1044,11 @@ describe('bound sync and submission route contracts (controlled remote ports)', 
     await f.tracker.runAsync(invocation(f.tracker,f.first),async()=>{
       const operation=await provider.resolve(provider.capture());
       const memory=new Memory({name:'Database only owner'},f.container.resolve('MetadataService'));
-      const list=jest.spyOn(operation.manager,'list').mockResolvedValue([memory]);
+      const list=mockMemoryReads(operation.manager).mockResolvedValue([memory]);
       s.deps.fileOperations.listDirectory.mockResolvedValue(['Nonmemory.md']);
       const bound=s.root.bindMemoryOperation(provider,operation);
       await expect(bound.handleSyncOperation({operation:'upload',bulk:true,confirm:true})).rejects.toThrow('remote submission');
-      expect(list).toHaveBeenCalledWith({strictDatabase:true});expect(s.deps.portfolioRepoManager.saveElement).not.toHaveBeenCalled();
+      expect(list).toHaveBeenCalled();expect(s.deps.portfolioRepoManager.saveElement).not.toHaveBeenCalled();
       expect(s.deps.fileOperations.readFile).not.toHaveBeenCalled();
     });
   });

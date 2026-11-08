@@ -6,24 +6,24 @@
  * Services that need to call subclass-overridable methods (parseContent,
  * parseMetadata, createElement, afterLoad, onLoadError) receive them via
  * the ElementLoaderHost interface so late binding is preserved.
- * Extracted from BaseElementManager; no behaviour changed.
+ * Every stored-reference failure it meets is classified into the read contract (ElementReadError).
  */
 
 import { randomUUID } from 'node:crypto';
-import * as path from 'node:path';
-import { BoundedDiagnosticMap } from './BoundedDiagnosticMap.js';
+import { ElementMissingError, ElementReadError, clientReadFailureReason, elementReadFailure, isRejectedDefinition } from './ElementReadError.js';
+import { assertExactReferenceEvidence, couldHoldElementName } from './ElementNameEvidence.js';
+import { BoundedDiagnosticMap } from '../../utils/BoundedDiagnosticMap.js';
 import { IElement } from '../../types/elements/IElement.js';
 import { ElementType } from '../../portfolio/types.js';
 import { logger } from '../../utils/logger.js';
-import { SecureYamlParser } from '../../security/secureYamlParser.js';
-import { FileOperationsService } from '../../services/FileOperationsService.js';
-import { type IStorageLayer, type IWritableStorageLayer, isWritableStorageLayer } from '../../storage/IStorageLayer.js';
+import type { IStorageLayer } from '../../storage/IStorageLayer.js';
 import type { InvalidElementRecord } from './BaseElementManager.js';
-import type { ElementCache, CachePublicationLease } from './ElementCache.js';
+import { type ElementCache, type CachePublicationLease, evictChangedReferences } from './ElementCache.js';
 import type { ElementEventCoordinator } from './ElementEventCoordinator.js';
 
-/** Partial type alias for the static ELEMENT_TYPE_TO_CONTEXT map passed in from the base class. */
+/** Content context per element type, consumed by the persister's guarded parse. */
 export type ElementTypeToContext = Partial<Record<ElementType, 'persona' | 'skill' | 'template' | 'agent' | 'memory'>>;
+
 
 /**
  * Host interface: the loader calls back into BaseElementManager for
@@ -61,9 +61,7 @@ export class ElementLoader<T extends IElement> {
     private readonly host: ElementLoaderHost<T>,
     private readonly cache: ElementCache<T>,
     private readonly events: ElementEventCoordinator<T>,
-    private readonly fileOperations: FileOperationsService,
     private readonly storageLayer: IStorageLayer,
-    private readonly elementTypeToContext: ElementTypeToContext,
   ) {}
 
   /**
@@ -85,16 +83,9 @@ export class ElementLoader<T extends IElement> {
    * Check if a specific file failed validation during load.
    * Used by get_element to distinguish "not found" from "invalid".
    */
-  getInvalidElement(name: string, getFileExtension: () => string, normalizeFilename: (n: string) => string): InvalidElementRecord | undefined {
-    for (const record of this.getInvalidElements()) {
-      const { filePath } = record;
-      if (filePath === name) return record;
-      const basename = path.basename(filePath, getFileExtension());
-      if (basename === name || normalizeFilename(basename) === normalizeFilename(name)) {
-        return record;
-      }
-    }
-    return undefined;
+  getInvalidElement(name: string): InvalidElementRecord | undefined {
+    // Failed loads carry no metadata name, so attribution uses the shared filename rule.
+    return this.getInvalidElements().find(record => couldHoldElementName(record.filePath, [], name));
   }
 
   /**
@@ -121,24 +112,31 @@ export class ElementLoader<T extends IElement> {
   }
 
   /**
-   * Load an element from file or database.
-   * Identical to the former BaseElementManager.load() body.
+   * The read contract: every failure of this stored reference, path policy included, is classified.
+   * A cached instance is served only while the storage layer vouches it is current; otherwise the
+   * stored bytes are read and published (the database never vouches, so every read reads the row).
    */
   async load(filePath: string): Promise<T> {
-    return this.cache.withDirectoryPin(lease => this.loadAndCache(filePath, lease));
+    return this.cache.withDirectoryPin(async lease => {
+      try { return await this.loadAndCache(await this.host.normalizeAndValidatePath(filePath), lease); }
+      catch (cause) { throw elementReadFailure(cause, filePath); }
+    });
   }
 
-  private async loadAndCache(filePath: string, lease: CachePublicationLease): Promise<T> {
-    const { relativePath, absolutePath } = await this.host.normalizeAndValidatePath(filePath);
+  private async loadAndCache(paths: { relativePath: string; absolutePath: string }, lease: CachePublicationLease): Promise<T> {
+    const { relativePath, absolutePath } = paths;
     const correlationId = randomUUID();
-
-    this.events.eventDispatcher.emit(
-      'element:load:start',
-      this.events.createEventPayload({ correlationId, filePath: relativePath }),
-    );
-
     try {
-      const content = await this.readContent(relativePath, absolutePath);
+      await this.prepareCachedRead(relativePath);
+      const cached = await this.currentCached(relativePath);
+      if (cached) return cached;
+      this.events.eventDispatcher.emit(
+        'element:load:start',
+        this.events.createEventPayload({ correlationId, filePath: relativePath }),
+      );
+      // Observed before the bytes are read: a later change makes the check fail, never pass stale.
+      const version = await this.storageLayer.readCacheVersion(relativePath);
+      const content = await this.readContent(relativePath);
       const parsed = this.host.parseContent(content);
       this.host.migrateMetadataDefaults(parsed.data, relativePath);
       const metadata = await this.host.parseMetadata(parsed.data);
@@ -149,7 +147,7 @@ export class ElementLoader<T extends IElement> {
         await this.host.afterLoad(element, relativePath, parsed);
       }
 
-      this.cache.cacheElement(element, relativePath, lease);
+      this.cache.cacheElement(element, relativePath, lease, version);
 
       this.clearInvalidRecord(relativePath);
 
@@ -173,45 +171,66 @@ export class ElementLoader<T extends IElement> {
    * security-sensitive reads that must hydrate their own state snapshot.
    */
   async loadDefinition(filePath: string): Promise<T> {
-    const { relativePath, absolutePath } = await this.host.normalizeAndValidatePath(filePath);
-    const content = await this.readContent(relativePath, absolutePath);
-    return this.loadDefinitionFromContent(content, relativePath);
+    try {
+      const { relativePath } = await this.host.normalizeAndValidatePath(filePath);
+      const content = await this.readContent(relativePath);
+      return await this.loadDefinitionFromContent(content, relativePath);
+    } catch (cause) {
+      throw elementReadFailure(cause, filePath);
+    }
+  }
+
+  private async prepareCachedRead(reference: string): Promise<void> {
+    const index = await this.storageLayer.readIndexedPath([reference], { candidates: false });
+    if (index.authoritative) {
+      assertExactReferenceEvidence(reference, true, index.failures);
+      return;
+    }
+    const snapshot = await this.storageLayer.readCollection();
+    evictChangedReferences(this.cache, snapshot.diff);
+    if (snapshot.unindexed.has(reference)) this.cache.uncacheByPath(reference);
+    assertExactReferenceEvidence(reference, snapshot.authoritative, snapshot.unindexed, snapshot.unsettled);
   }
 
   /** Hydrate the exact bytes paired with a guarded update snapshot. */
   async loadDefinitionFromContent(content: string, relativePath: string): Promise<T> {
-    const parsed = this.host.parseContent(content);
-    this.host.migrateMetadataDefaults(parsed.data, relativePath);
-    const metadata = await this.host.parseMetadata(parsed.data);
-    return this.host.createElement(metadata, parsed.content);
+    try {
+      const parsed = this.host.parseContent(content);
+      this.host.migrateMetadataDefaults(parsed.data, relativePath);
+      const metadata = await this.host.parseMetadata(parsed.data);
+      return this.host.createElement(metadata, parsed.content);
+    } catch (cause) {
+      throw elementReadFailure(cause, relativePath);
+    }
   }
 
   /** Hydrate a same-read snapshot completely without reading storage or publishing cache state. */
   async hydrateDefinitionFromContent(content: string, relativePath: string, options?: { suppressLoadPolicy?: boolean; quietMemory?: boolean }): Promise<T> {
-    const parsed = this.host.parseContent(content);
-    this.host.migrateMetadataDefaults(parsed.data, relativePath);
-    const metadata = await this.host.parseMetadata(parsed.data);
-    const element = this.host.createElement(metadata, parsed.content, options);
-    this.host.captureLoadedContent?.(element, content, relativePath);
-    if (parsed.data.extensions && typeof parsed.data.extensions === 'object' && !Array.isArray(parsed.data.extensions)) {
-      element.extensions = structuredClone(parsed.data.extensions as Record<string, unknown>);
+    try {
+      const parsed = this.host.parseContent(content);
+      this.host.migrateMetadataDefaults(parsed.data, relativePath);
+      const metadata = await this.host.parseMetadata(parsed.data);
+      const element = this.host.createElement(metadata, parsed.content, options);
+      this.host.captureLoadedContent?.(element, content, relativePath);
+      if (parsed.data.extensions && typeof parsed.data.extensions === 'object' && !Array.isArray(parsed.data.extensions)) {
+        element.extensions = structuredClone(parsed.data.extensions as Record<string, unknown>);
+      }
+      if (this.host.afterLoad) await this.host.afterLoad(element, relativePath, parsed, options);
+      return element;
+    } catch (cause) {
+      throw elementReadFailure(cause, relativePath);
     }
-    if (this.host.afterLoad) await this.host.afterLoad(element, relativePath, parsed, options);
-    return element;
   }
 
-  private async readContent(relativePath: string, absolutePath: string): Promise<string> {
-    if (isWritableStorageLayer(this.storageLayer)) {
-      return this.storageLayer.readContent(relativePath);
+  /** Every layer reads a reference under the storage reference policy; the file layer audits the read. */
+  private async readContent(relativePath: string): Promise<string> {
+    try {
+      return await this.storageLayer.readContent(relativePath);
+    } catch (cause) {
+      // Only the storage definition-read contract establishes absence of this reference.
+      if ((cause as NodeJS.ErrnoException)?.code === 'ENOENT') throw new ElementMissingError(relativePath, cause);
+      throw elementReadFailure(cause, relativePath);
     }
-    return this.fileOperations.readElementFile(absolutePath, this.host.elementType, {
-      source: `${this.host.constructor?.name ?? 'ElementLoader'}.load`,
-    });
-  }
-
-  /** Record a storage-reported failure without reading or caching the element. */
-  recordUnreadableElement(relativePath: string, error: Error): void {
-    this.handleLoadError(error, relativePath, path.join(this.host.elementDir, relativePath), randomUUID());
   }
 
   private handleLoadError(
@@ -221,7 +240,7 @@ export class ElementLoader<T extends IElement> {
     correlationId: string,
   ): void {
     const namespace = this.cache.getNamespace();
-    const isFileNotFound = (error as NodeJS.ErrnoException).code === 'ENOENT';
+    const isFileNotFound = error instanceof ElementMissingError;
     let isRepeatError = false;
 
     if (isFileNotFound) {
@@ -233,9 +252,14 @@ export class ElementLoader<T extends IElement> {
       const existing = records.get(relativePath);
       isRepeatError = existing?.reason === reason;
 
+      const readError = elementReadFailure(error, relativePath);
+      const clientSafeReason = readError instanceof ElementReadError
+        ? readError.failures.find(failure => failure.reference === relativePath)?.reason : undefined;
       records.set(relativePath, {
         filePath: relativePath,
         reason,
+        clientSafeReason: clientSafeReason ?? clientReadFailureReason(readError),
+        contentRejected: isRejectedDefinition(readError),
         failedAt: isRepeatError ? existing!.failedAt : new Date().toISOString(),
       });
     }
@@ -262,37 +286,40 @@ export class ElementLoader<T extends IElement> {
     }
   }
 
+  /** The cached instance for a reference, when the storage layer vouches it is still current. */
+  private async currentCached(reference: string): Promise<T | undefined> {
+    if (this.storageLayer.cachedInstanceCurrency === 'unverifiable') return undefined;
+    const cached = this.cache.getCachedByPath(reference);
+    return cached && await this.storageLayer.isCachedReferenceCurrent(reference, this.cache.versionOf(cached)) ? cached : undefined;
+  }
+
+  /**
+   * A lookup by exact storage reference, by the storage layer's cachedInstanceCurrency: on an
+   * unverifiable layer the instance already resolved for the reference is kept; otherwise the load,
+   * which serves a cached instance only while it is vouched current and replaces it only after a
+   * successful read.
+   */
+  async loadByReference(reference: string, load: (reference: string) => Promise<T>): Promise<T> {
+    const resolved = this.storageLayer.cachedInstanceCurrency === 'unverifiable' ? this.cache.getCachedByPath(reference) : undefined;
+    return resolved ?? load(reference);
+  }
+
   /**
    * Load an element snapshot from file for validation (e.g., canDelete guard).
    * Newly read validation snapshots are not published into the shared cache.
    */
-  async loadElementSnapshot(absolutePath: string, relativePath: string): Promise<T> {
-    const cached = this.cache.getCachedByAbsolutePath(absolutePath);
-    if (cached) return cached;
+  async loadElementSnapshot(reference: string): Promise<T> {
+    try {
+      const cached = await this.currentCached(reference);
+      if (cached) return cached;
 
-    const raw = await this.fileOperations.readElementFile(absolutePath, this.host.elementType, {
-      source: 'ElementLoader.loadElementSnapshot',
-    });
-    const contentContext = this.elementTypeToContext[this.host.elementType];
-    const parsed = SecureYamlParser.safeMatter(raw, undefined, { contentContext });
-    this.host.migrateMetadataDefaults(parsed.data, relativePath);
-    const metadata = await this.host.parseMetadata(parsed.data);
-    const element = this.host.createElement(metadata, parsed.content);
-    return element;
-  }
-
-  /**
-   * Load an element snapshot from the database for validation (e.g., canDelete guard).
-   */
-  async loadElementSnapshotFromDb(relativePath: string): Promise<T> {
-    const cached = this.cache.getCachedByPath(relativePath);
-    if (cached) return cached;
-
-    const raw = await (this.storageLayer as IWritableStorageLayer).readContent(relativePath);
-    const parsed = this.host.parseContent(raw);
-    this.host.migrateMetadataDefaults(parsed.data, relativePath);
-    const metadata = await this.host.parseMetadata(parsed.data);
-    const element = this.host.createElement(metadata, parsed.content);
-    return element;
+      const raw = await this.readContent(reference);
+      const parsed = this.host.parseContent(raw);
+      this.host.migrateMetadataDefaults(parsed.data, reference);
+      const metadata = await this.host.parseMetadata(parsed.data);
+      return this.host.createElement(metadata, parsed.content);
+    } catch (cause) {
+      throw elementReadFailure(cause, reference);
+    }
   }
 }

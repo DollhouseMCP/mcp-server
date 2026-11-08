@@ -4,8 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createRealSkillManager, createRealEnsembleManager } from '../../helpers/di-mocks.js';
-import { createTestStorageFactory } from '../../helpers/createTestStorageFactory.js';
+import { createRealSkillManager, createRealEnsembleManager, createRealPersonaManager } from '../../helpers/di-mocks.js';
 import { SkillManager } from '../../../src/elements/skills/SkillManager.js';
 import { EnsembleManager } from '../../../src/elements/ensembles/EnsembleManager.js';
 import { ActivationMetricsTracker } from '../../../src/metrics/ActivationMetricsTracker.js';
@@ -14,6 +13,32 @@ import { ValidationError } from '../../../src/security/errors.js';
 import { logger } from '../../../src/utils/logger.js';
 
 const names = Array.from({ length: 5 }, (_, index) => `item-${index}`);
+
+describe('persona failed reference reporting', () => {
+  it('reports persona notices and propagates disk identity failures before name fallback', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'persona-notices-'));
+    const manager = createRealPersonaManager(dir);
+    try {
+      manager['getActivationSet']().add('broken.md');
+      const failure = new Error('Private diagnostic');
+      const identity = jest.spyOn(manager, 'findByStorageIdentity').mockRejectedValue(failure);
+      const name = jest.spyOn(manager, 'findByName');
+      await expect(manager['performLookup']('broken.md')).rejects.toBe(failure);
+      expect(identity).toHaveBeenCalledWith('broken.md');
+      expect(name).not.toHaveBeenCalled();
+      jest.spyOn(manager, 'findPersonaAsync').mockRejectedValue(failure);
+      const notices = await manager['collectRetainedReferenceNotices']();
+      expect(notices.join('\n')).toContain('Active persona reference "broken.md"');
+      expect(notices.join('\n')).toContain('is kept');
+      expect(notices.join('\n')).not.toContain('Private diagnostic');
+      expect(manager['getActivationSet']().has('broken.md')).toBe(true);
+    } finally {
+      jest.restoreAllMocks();
+      await manager.dispose();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe.each(['skill', 'ensemble'] as const)('%s uncertain activation cleanup', type => {
   let dir: string;
@@ -45,8 +70,9 @@ describe.each(['skill', 'ensemble'] as const)('%s uncertain activation cleanup',
   it.each(['unparseable', 'removed'])('retains a %s reference and returns neutral advice', async state => {
     if (state === 'removed') await fs.unlink(path.join(dir, `${type}s`, 'item-0.md'));
     else await fs.writeFile(path.join(dir, `${type}s`, 'item-0.md'), '---\nname: [invalid\n---\n');
-    expect((await manager.list()).map(item => item.metadata.name)).toEqual(names.slice(1));
+    expect((await manager.listReport()).items.map(item => item.metadata.name)).toEqual(names.slice(1));
     const warn = jest.spyOn(logger, 'warn');
+    if (state === 'unparseable') await expect(manager.list()).rejects.toThrow('could not be read completely');
     const result = await (manager instanceof SkillManager ? manager.activateSkill('item-1') : manager.activateEnsemble('item-1'));
     expect(result.success).toBe(true);
     await cleanup();
@@ -58,9 +84,10 @@ describe.each(['skill', 'ensemble'] as const)('%s uncertain activation cleanup',
     expect(result.message).toContain('limit reached');
     expect(result.message).toContain(`Active ${type} reference "item-0" could not be loaded and is kept.`);
     expect(result.message).toContain('Check its definition and storage, or deactivate this exact reference if it was deleted or is no longer needed.');
-    expect(result.message.includes('While it fails to load, no active')).toBe(state === 'unparseable');
-    expect(tracker.getMetrics()).toBe(1);
-    expect(warn.mock.calls.filter(([message]) => message.startsWith('[Activation]'))).toHaveLength(1);
+    expect(result.message.includes('policy evaluation is unavailable')).toBe(state === 'unparseable');
+    const uncertainCount = 1;
+    expect(tracker.getMetrics()).toBe(uncertainCount);
+    expect(warn.mock.calls.filter(([entry]) => entry.startsWith('[Activation]'))).toHaveLength(uncertainCount);
     expect((await deactivate('item-0')).success).toBe(true);
     expect(manager['getActivationSet']().has('item-0')).toBe(false);
   });
@@ -88,16 +115,10 @@ describe.each(['skill', 'ensemble'] as const)('%s uncertain activation cleanup',
     expect(warn.mock.calls.filter(([message]) => message.startsWith('[Activation] Retained'))).toHaveLength(2);
   });
   it('retains every active reference when every lookup fails at the storage layer', async () => {
-    await manager.dispose();
-    const fileFactory = createTestStorageFactory();
-    // A writable storage test double exercises listFromDatabase's swallowed-error path.
-    const storageLayerFactory = { createForElement: (...args: Parameters<typeof fileFactory.createForElement>) =>
-      Object.assign(fileFactory.createForElement(...args), { writeContent: async () => undefined }) };
-    manager = (type === 'skill' ? createRealSkillManager : createRealEnsembleManager)(dir,
-      { storageLayerFactory, activationMetricsTracker: tracker });
-    for (const name of names) manager['getActivationSet']().add(name);
-    const scan = jest.spyOn(manager['storageLayer'], 'scan').mockRejectedValue(new Error('storage unavailable'));
-    expect(await manager.list()).toEqual([]);
+    const cause = new Error('storage unavailable');
+    const scan = jest.spyOn(manager['storageLayer'], 'readCollection').mockRejectedValue(cause);
+    jest.spyOn(manager['storageLayer'], 'readIndexedPath').mockRejectedValue(cause);
+    await expect(manager.list()).rejects.toThrow('Storage or validation operation failed');
     const notices = await cleanup();
     expect(notices).toHaveLength(Math.min(names.length, MAX_RETAINED_NOTICE_LINES));
     expect(notices[0]).toContain('could not be loaded and is kept.');

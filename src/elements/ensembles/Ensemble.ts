@@ -20,6 +20,7 @@
  */
 
 import { BaseElement } from '../BaseElement.js';
+import { visitSequentially } from '../../utils/visitSequentially.js';
 import {
   IElement,
   ElementValidationResult,
@@ -196,7 +197,8 @@ export class Ensemble extends BaseElement implements IElement {
     // NOTE: resourceLimits is optional - per-ensemble overrides are resolved via getEffectiveLimits()
     this.metadata = {
       ...this.metadata,
-      name: sanitizedMetadata.name ?? this.metadata.name,
+      // The base's canonical name wins; an empty name is restored so validation catches it.
+      name: sanitizedMetadata.name === '' ? '' : this.metadata.name,
       activationStrategy: strategy,
       conflictResolution: conflictRes,
       contextSharing: metadata.contextSharing || ENSEMBLE_DEFAULTS.CONTEXT_SHARING,
@@ -685,9 +687,10 @@ export class Ensemble extends BaseElement implements IElement {
    * Activate the element (BaseElement interface implementation)
    * For ensembles, this is a no-op. Use activateEnsemble() for full activation.
    */
-  public override async activate(): Promise<void> {
+  public override activate(): Promise<void> {
     this._status = ElementStatus.ACTIVE;
     logger.debug(`Ensemble ${this.id} activated (use activateEnsemble() for full orchestration)`);
+    return Promise.resolve();
   }
 
   /**
@@ -1051,9 +1054,9 @@ export class Ensemble extends BaseElement implements IElement {
     managers: import('./types.js').ElementManagers,
     nestingDepth: number
   ): Promise<void> {
-    for (const elementName of order) {
-      await this.activateSingleElement(elementName, result, portfolioManager, managers, nestingDepth);
-    }
+    // One element at a time, in dependency order.
+    await visitSequentially(order.values(), elementName =>
+      this.activateSingleElement(elementName, result, portfolioManager, managers, nestingDepth));
   }
 
   /**
@@ -1105,7 +1108,8 @@ export class Ensemble extends BaseElement implements IElement {
     // Track activation start time for context building
     const activationStartTime = Date.now();
 
-    for (const elementName of order) {
+    // One element at a time, in dependency order.
+    await visitSequentially(order.values(), async elementName => {
       const element = this.findElementByName(elementName)!;
 
       // Determine if element should be activated
@@ -1140,7 +1144,7 @@ export class Ensemble extends BaseElement implements IElement {
       if (shouldActivate) {
         await this.activateSingleElement(elementName, result, portfolioManager, managers, nestingDepth);
       }
-    }
+    });
   }
 
   /**

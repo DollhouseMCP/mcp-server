@@ -1,4 +1,5 @@
 import { integrationRetryGuidance } from '../../security/IntegrationEntryPoint.js';
+import type { PolicyReport } from '../../services/policy/PolicyReport.js';
 import { effectiveCliApprovalScopes } from './CliApprovalScopes.js';
 import type { OperationRegistry } from './OperationRegistry.js';
 import { randomUUID } from 'node:crypto';
@@ -76,7 +77,7 @@ export interface GatekeeperHandlerDeps {
   executingAgents: Map<string, ExecutingAgentEntry>;
   verificationMetrics: VerificationMetricsRecorder;
   getActiveElements(sessionId?: string): Promise<ActiveElement[]>;
-  getPolicyReportElements(sessionId?: string): Promise<ActiveElement[]>;
+  getPolicyReportElements(sessionId?: string): Promise<PolicyReport<ActiveElement>>;
   getEndpointForOperation(operation: string): CRUDEndpoint;
   issueDeadlockReliefChallenge(): unknown;
   completeDeadlockRelief(challengeId: string, code: string): Promise<unknown>;
@@ -844,9 +845,10 @@ export class GatekeeperHandler {
     const toolInput = (params.tool_input as Record<string, unknown> | undefined) ?? {};
     const reportSessionId = typeof params.session_id === 'string' ? params.session_id : undefined;
     const reportingScope = params.reporting_scope === 'dashboard';
-    const policyElements = reportingScope && !toolName
+    const report: PolicyReport<ActiveElement> = reportingScope && !toolName
       ? await this.deps.getPolicyReportElements(reportSessionId)
-      : await this.deps.getActiveElements();
+      : { items: await this.deps.getActiveElements(), failures: [], complete: true };
+    const policyElements = report.items;
     const elementPolicies = this.buildElementPolicyReport(policyElements);
     const combined = this.combineElementPolicies(elementPolicies);
     const evaluation = toolName ? this.evaluateToolAgainstPolicies(toolName, toolInput, policyElements) : undefined;
@@ -854,6 +856,8 @@ export class GatekeeperHandler {
 
     return {
       activeElementCount: policyElements.length,
+      complete: report.complete,
+      failures: report.failures,
       hasAllowlist: combined.allowPatterns.length > 0 || combined.allowOperations.length > 0,
       elements: elementPolicies,
       combinedAllowPatterns: combined.allowPatterns,
@@ -865,10 +869,11 @@ export class GatekeeperHandler {
       evaluation,
       permissionPromptActive: this.deps.gatekeeper.isPermissionPromptActive,
       hookInstalled: enforcement.hookInstalled,
-      enforcementReady: enforcement.enforcementReady,
+      enforcementReady: report.complete && enforcement.enforcementReady,
       hookHost: enforcement.hookHost,
       invalidPolicyElementCount: enforcement.invalidPolicyElementCount,
-      advisory: enforcement.advisory,
+      advisory: report.complete ? enforcement.advisory
+        : 'Some active policies could not be read. Policy evaluation is unavailable until the reported failures are resolved.',
     };
   }
 

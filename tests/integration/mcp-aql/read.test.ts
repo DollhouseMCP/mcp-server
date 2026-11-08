@@ -18,6 +18,8 @@
 import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import { DollhouseMCPServer } from '../../../src/index.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
+import { ElementType } from '../../../src/handlers/mcp-aql/types.js';
+import type { ExportPackage } from '../../../src/handlers/mcp-aql/shared.js';
 import { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
 import { createPortfolioTestEnvironment, preConfirmAllOperations, waitForCacheSettle, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
 
@@ -524,7 +526,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
       if (result.success) {
         const data = result.data as { items?: unknown[]; pagination?: { totalItems: number } };
         expect(data.items).toBeDefined();
-        expect(data.items!.length).toBe(0);
+        expect(data.items!).toHaveLength(0);
         expect(data.pagination!.totalItems).toBe(0);
       }
     });
@@ -1020,7 +1022,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
           data?: string;
         };
         expect(data.exportVersion).toBe('1.0');
-        expect(data.elementType).toBe('personas');
+        expect(data.elementType).toBe('persona');
         expect(data.elementName).toBe(PERSONA_1_NAME);
         expect(data.format).toBe('json');
         expect(data.data).toBeDefined();
@@ -1028,6 +1030,44 @@ describe('MCP-AQL READ Endpoint Integration', () => {
         expect(() => JSON.parse(data.data!)).not.toThrow();
       }
     });
+
+    it.each(['top-level singular', 'params-only plural', 'legacy plural package'] as const)(
+      'round trips a persona through %s', async variant => {
+        const result = await mcpAqlHandler.handleRead({
+          operation: 'export_element',
+          ...(variant === 'params-only plural' ? {} : { element_type: ElementType.Persona }),
+          params: {
+            element_name: PERSONA_1_NAME,
+            ...(variant === 'params-only plural' ? { element_type: 'personas' } : {}),
+            format: 'json',
+          },
+        });
+        expect(result.success).toBe(true);
+        if (!result.success) throw new Error(result.error);
+        const exported = result.data as ExportPackage;
+        expect(exported.elementType).toBe('persona');
+        expect(exported.elementName).toBe(PERSONA_1_NAME);
+        const imported = await mcpAqlHandler.handleCreate({
+          operation: 'import_element',
+          params: {
+            data: variant === 'legacy plural package' ? { ...exported, elementType: 'personas' } : exported,
+            overwrite: true,
+          },
+        });
+        expect(imported).toMatchObject({ success: true });
+        const reexported = await mcpAqlHandler.handleRead({
+          operation: 'export_element',
+          element_type: ElementType.Persona,
+          params: { element_name: PERSONA_1_NAME, format: 'json' },
+        });
+        expect(reexported.success).toBe(true);
+        if (!reexported.success) throw new Error(reexported.error);
+        const restored = reexported.data as ExportPackage;
+        expect(restored.elementType).toBe('persona');
+        expect(restored.elementName).toBe(exported.elementName);
+        expect(JSON.parse(restored.data)).toEqual(JSON.parse(exported.data));
+      },
+    );
 
     it('should export a skill to YAML format', async () => {
       const result = await mcpAqlHandler.handleRead({
@@ -1079,12 +1119,8 @@ describe('MCP-AQL READ Endpoint Integration', () => {
 
       expect(result.success).toBe(true);
       if (result.success) {
-        // export returns ExportPackage with elementType
-        // elementType may be singular 'template' or plural 'templates' depending on normalization
         const data = result.data as { elementType?: string };
-        expect(data.elementType).toBeDefined();
-        // Accept either singular or plural form
-        expect(['template', 'templates']).toContain(data.elementType);
+        expect(data.elementType).toBe('template');
       }
     });
 

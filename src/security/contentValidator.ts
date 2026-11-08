@@ -8,6 +8,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { markContentRejection } from './contentRejection.js';
 import { SecurityError } from './errors.js';
 import { SecurityMonitor } from './securityMonitor.js';
 import { logger } from '../utils/logger.js';
@@ -492,9 +493,9 @@ export class ContentValidator {
     // while still allowing legitimate content with some Unicode overhead
     const DOS_PREVENTION_MULTIPLIER = 2;
     if (!options.skipSizeCheck && content.length > maxLength * DOS_PREVENTION_MULTIPLIER) {
-      throw new SecurityError(
+      throw markContentRejection(new SecurityError(
         `Content exceeds maximum length of ${maxLength} characters (${content.length} provided)`
-      );
+      ));
     }
 
     const detectedPatterns: string[] = [];
@@ -506,9 +507,9 @@ export class ContentValidator {
     // This prevents bypass attacks using combining characters or zero-width chars
     // that would inflate raw length but collapse after normalization
     if (!options.skipSizeCheck && unicodeCheck.sanitized.length > maxLength) {
-      throw new SecurityError(
+      throw markContentRejection(new SecurityError(
         `Content exceeds maximum length of ${maxLength} characters after normalization (${unicodeCheck.sanitized.length} provided)`
-      );
+      ));
     }
 
     // Skip injection-pattern scanning for verified bundled elements.
@@ -900,7 +901,7 @@ export class ContentValidator {
 
     // Validate YAML
     if (!this.validateYamlContent(yamlContent)) {
-      throw new SecurityError('Malicious YAML detected in persona frontmatter');
+      throw markContentRejection(new SecurityError('Malicious YAML detected in persona frontmatter'));
     }
 
     // Validate markdown content

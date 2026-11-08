@@ -118,36 +118,19 @@ describe('SharedPoolServiceRegistrar', () => {
       }
     });
 
-    it('SharedPoolInstaller resolves without throwing', async () => {
-      const container = createMockContainer();
-      await registrar.bootstrapAndRegister(container);
+    it.each(['SharedPoolInstaller', 'DeploymentSeedLoader', 'PublicElementDiscovery', 'ForkOnEditStrategy'])(
+      '%s resolves without throwing', async service => {
+        const container = createMockContainer();
+        // The audited file service every shared-pool read goes through is a core registration.
+        container.register('FileOperationsService', () => ({}));
+        await registrar.bootstrapAndRegister(container);
 
-      expect(() => container.resolve('SharedPoolInstaller')).not.toThrow();
-    });
-
-    it('DeploymentSeedLoader resolves without throwing', async () => {
-      const container = createMockContainer();
-      await registrar.bootstrapAndRegister(container);
-
-      expect(() => container.resolve('DeploymentSeedLoader')).not.toThrow();
-    });
-
-    it('PublicElementDiscovery resolves without throwing', async () => {
-      const container = createMockContainer();
-      await registrar.bootstrapAndRegister(container);
-
-      expect(() => container.resolve('PublicElementDiscovery')).not.toThrow();
-    });
-
-    it('ForkOnEditStrategy resolves without throwing', async () => {
-      const container = createMockContainer();
-      await registrar.bootstrapAndRegister(container);
-
-      expect(() => container.resolve('ForkOnEditStrategy')).not.toThrow();
-    });
+        expect(() => container.resolve(service)).not.toThrow();
+      });
 
     it('all services resolve without throwing (no remaining placeholders)', async () => {
       const container = createMockContainer();
+      container.register('FileOperationsService', () => ({}));
       await registrar.bootstrapAndRegister(container);
 
       const allServices = [

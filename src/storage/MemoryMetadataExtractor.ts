@@ -13,7 +13,7 @@ import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { MEMORY_CONSTANTS, DEFAULT_MEMORY_NAME } from '../elements/memories/constants.js';
 import { validateMemoryControlFields } from '../elements/memories/memoryYamlValidation.js';
 import type { ElementIndexEntry } from './types.js';
-import { YAMLException } from 'js-yaml';
+import { isContentRejection, markContentRejection } from '../security/contentRejection.js';
 import { SecurityError } from '../errors/SecurityError.js';
 
 /** Metadata rejected by parsing or validation must not be indexed with defaults. */
@@ -80,7 +80,7 @@ export class MemoryMetadataExtractor {
       // No frame means default metadata; only parsed metadata gets Unicode validation.
       // Framed prose is not metadata, matching the loader content policy.
       if (rawContent.length > MemoryMetadataExtractor.MAX_YAML_SIZE) {
-        throw SecurityError.contentValidation('Memory document exceeds size limits');
+        throw markContentRejection(SecurityError.contentValidation('Memory document exceeds size limits'));
       }
       let yamlContent = rawContent;
       if (hasFrontmatterFraming(rawContent)) {
@@ -93,11 +93,11 @@ export class MemoryMetadataExtractor {
         contentPolicy: 'structure-only',
       });
       if (!validateMemoryControlFields(data)) {
-        throw SecurityError.contentValidation('Malicious memory control content detected');
+        throw markContentRejection(SecurityError.contentValidation('Malicious memory control content detected'));
       }
       return data;
     } catch (error) {
-      if (!(error instanceof SecurityError) && !(error instanceof YAMLException)) throw error;
+      if (!isContentRejection(error)) throw error;
       throw new MemoryMetadataExtractionError(relativePath, error);
     }
   }

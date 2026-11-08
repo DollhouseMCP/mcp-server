@@ -2,8 +2,8 @@
  * File system utilities for integration tests
  */
 
-import * as fs from 'fs/promises';
-import * as path from 'path';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import matter from '../../src/security/frontmatter.js';
 import { v4 as uuidv4 } from 'uuid';
 import { Persona } from '../../src/types/persona.js';
@@ -38,13 +38,21 @@ export async function createTestPersonaFiles(
  * Clean a directory
  */
 export async function cleanDirectory(dir: string): Promise<void> {
+  let files: string[];
   try {
-    const files = await fs.readdir(dir);
-    await Promise.all(
-      files.map(file => fs.unlink(path.join(dir, file)))
-    );
-  } catch {
-    // Directory might not exist or be empty
+    files = await fs.readdir(dir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  // Never leave removals running when a caller reuses this directory after cleanup.
+  const results = await Promise.allSettled(
+    files.map(file => fs.rm(path.join(dir, file), { recursive: true, force: true }))
+  );
+  const failures = results.filter((result): result is PromiseRejectedResult =>
+    result.status === 'rejected' && result.reason?.code !== 'ENOENT');
+  if (failures.length > 0) {
+    throw new AggregateError(failures.map(result => result.reason), `Failed to clean directory: ${dir}`);
   }
 }
 
@@ -82,14 +90,17 @@ export async function waitForFile(
 ): Promise<void> {
   const startTime = Date.now();
   
-  while (Date.now() - startTime < timeout) {
-    if (await fileExists(filePath)) {
-      return;
+  async function poll(): Promise<void> {
+    if (Date.now() - startTime < timeout) {
+      if (await fileExists(filePath)) {
+        return;
+      }
+      await new Promise(resolve => setTimeout(resolve, 100));
+      return poll();
     }
-    await new Promise(resolve => setTimeout(resolve, 100));
+    throw new Error(`File ${filePath} did not appear within ${timeout}ms`);
   }
-  
-  throw new Error(`File ${filePath} did not appear within ${timeout}ms`);
+  return poll();
 }
 
 /**

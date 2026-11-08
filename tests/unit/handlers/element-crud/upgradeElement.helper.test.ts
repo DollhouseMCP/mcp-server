@@ -1,3 +1,4 @@
+import { ElementType } from '../../../../src/portfolio/types.js';
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 
 const { upgradeElement } = await import('../../../../src/handlers/element-crud/upgradeElement.js');
@@ -31,6 +32,7 @@ describe('upgradeElement helper', () => {
   function makeManager(element: any = null) {
     return {
       list: jest.fn().mockResolvedValue(element ? [element] : []),
+      findByName: jest.fn().mockResolvedValue(element),
       load: jest.fn().mockResolvedValue(element),
       save: jest.fn().mockResolvedValue(undefined),
     };
@@ -47,6 +49,11 @@ describe('upgradeElement helper', () => {
       ensureInitialized: jest.fn().mockResolvedValue(undefined),
       getPersonaIndicator: jest.fn().mockReturnValue(''),
     } as any;
+    mockContext.getManagerForType = (type: string) => ({
+      [ElementType.PERSONA]: mockContext.personaManager, [ElementType.SKILL]: mockContext.skillManager,
+      [ElementType.TEMPLATE]: mockContext.templateManager, [ElementType.AGENT]: mockContext.agentManager,
+      [ElementType.MEMORY]: mockContext.memoryManager, [ElementType.ENSEMBLE]: mockContext.ensembleManager,
+    } as Record<string, unknown>)[type];
   });
 
   describe('input validation', () => {

@@ -134,5 +134,5 @@ it('preserves a same-path recreation against a stale guarded update', async () =
   const raw = fs.readFileSync(path.join(directory, 'skills', 'recreated-skill.md'), 'utf8');
   expect(raw).not.toContain('Stale update');
   expect(raw).toContain('Replacement reference');
-  expect(await store.listByUser(USER_ID, { type: 'skills' })).toHaveLength(1);
+  expect((await store.listByUser(USER_ID, { type: 'skills' })).items).toHaveLength(1);
 });
