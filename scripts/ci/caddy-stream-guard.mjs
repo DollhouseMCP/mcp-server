@@ -52,7 +52,7 @@ export function parseClientOutput(options, result, elapsedMs) {
 export function collectOwnedDiagnostics(ids, owned, run) {
   if (!Array.isArray(ids) || ids.length > 2 || new Set(ids).size !== ids.length ||
       ids.some(id => typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id) || !owned.includes(id))) {
-    return { error: 'invalid-owned-diagnostic-targets' };
+    return [{ error: 'invalid-owned-diagnostic-targets' }];
   }
   const bounded = value => String(value ?? '').slice(0, 65536);
   return ids.map(id => {

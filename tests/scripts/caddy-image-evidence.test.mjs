@@ -213,7 +213,7 @@ test('diagnostics inspect only exact owned containers and bound failures', () =>
     return { status:0, stdout:'x'.repeat(70000), stderr:'' };
   };
   for (const ids of [[first, first], [first, second, first], ['bad'], [second]]) {
-    assert.deepEqual(collectOwnedDiagnostics(ids, [first], run), { error:'invalid-owned-diagnostic-targets' });
+    assert.deepEqual(collectOwnedDiagnostics(ids, [first], run), [{ error:'invalid-owned-diagnostic-targets' }]);
   }
   assert.equal(calls.length, 0);
   const result = collectOwnedDiagnostics([first], [first], run);
