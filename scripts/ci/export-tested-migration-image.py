@@ -33,7 +33,7 @@ def validate_environment(config, role):
     env = config.get('Env')
     require(isinstance(env, list) and all(isinstance(item, str) and '=' in item for item in env),
             'Invalid migration image environment')
-    environment = dict(item.split('=', 1) for item in env)
+    environment = {key: value for key, value in (item.split('=', 1) for item in env)}
     require(len(env) == len(expected_environment) and environment == expected_environment,
             'Unexpected migration image environment; do not upload')
 
