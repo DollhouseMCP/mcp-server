@@ -59,7 +59,7 @@ export function validatePayload(root, md5sums, arch) {
   visit(rootReal);
   const lines = md5sums.trimEnd().split('\n'); const seen = new Set();
   for (const line of lines) {
-    const match = /^([a-f0-9]{32})[ ]{2}([A-Za-z0-9+._/-]+)$/.exec(line);
+    const match = /^([a-f0-9]{32}) {2}([A-Za-z0-9+._/-]+)$/.exec(line);
     requireValue(match, 'Invalid md5 entry'); const [, digest, rel] = match; safeRelative(rel);
     requireValue(!seen.has(rel) && files.get(rel) === digest, 'Payload checksum mismatch'); seen.add(rel);
   }
