@@ -34,6 +34,17 @@ fail() {
   exit 1
 }
 
+log "checking commented and active Caddy environment fields"
+COMMENT_ENV="${TMP_ROOT}/commented.env"
+printf '  # DOLLHOUSE_HOSTED_CADDY_IMAGE=example\n\t# CADDY_IMAGE=example\n  \n' > "${COMMENT_ENV}"
+bash -c 'source "$1"; ENV_FILE="$2"; die() { exit 1; }; validate_persisted_caddy_fields' \
+  _ "${REPO_ROOT}/scripts/hosted-deploy/validation.sh" "${COMMENT_ENV}" || fail "comments should be ignored"
+printf 'export DOLLHOUSE_HOSTED_CADDY_IMAGE=unsafe\n' >> "${COMMENT_ENV}"
+if bash -c 'source "$1"; ENV_FILE="$2"; die() { exit 1; }; validate_persisted_caddy_fields' \
+  _ "${REPO_ROOT}/scripts/hosted-deploy/validation.sh" "${COMMENT_ENV}"; then
+  fail "active unsafe Caddy assignment should be refused"
+fi
+
 assert_contains() {
   local file="$1"
   local expected="$2"
@@ -283,11 +294,22 @@ DOLLHOUSE_HOSTED_SOURCE_DIR="${SOURCE_REPO}" \
 [[ ! -s "${DOCKER_LOG}" ]] || fail "dry-run install should not call docker"
 [[ ! -s "${CURL_LOG}" ]] || fail "dry-run install should not call curl"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would run database migrations"
+assert_contains "${DRY_RUN_OUTPUT}" "would retain a verified unchanged hardened caddy proxy; otherwise pull and admit"
+assert_contains "${DRY_RUN_OUTPUT}" "retaining an unchanged qualified caddy proxy when applicable"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would apply post-migration database grants"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would write ${DRY_RUN_DEPLOY_DIR}/apply-post-migration-grants.sh to pass grant passwords through container environment"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would write ${DRY_RUN_DEPLOY_DIR}/bootstrap-admin.sh to use the admin database URL inside the maintenance container"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would verify https://mcp.example.com/healthz"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would warn, not fail, if /readyz reports bootstrap_required"
+PATH="${FAKE_BIN}:${PATH}" \
+DOLLHOUSE_FAKE_DOCKER_LOG="${DOCKER_LOG}" \
+DOLLHOUSE_FAKE_CURL_LOG="${CURL_LOG}" \
+DOLLHOUSE_HOSTED_DEPLOY_DIR="${DRY_RUN_DEPLOY_DIR}" \
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+DOLLHOUSE_HOSTED_SOURCE_DIR="${SOURCE_REPO}" \
+  bash "${HOSTED_DEPLOY}" --dry-run update > "${DRY_RUN_OUTPUT}"
+assert_contains "${DRY_RUN_OUTPUT}" "retain an unchanged qualified caddy proxy or refresh it after admission"
+[[ ! -s "${DOCKER_LOG}" && ! -s "${CURL_LOG}" ]] || fail "dry-run update must not call docker or curl"
 
 log "checking HTTP verification retries"
 : > "${CURL_LOG}"
@@ -339,6 +361,7 @@ DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=dummy-secret \
 assert_contains "${BOOTSTRAP_OUTPUT}" "/readyz reports bootstrap_required"
 
 log "running install workflow"
+DOCKER_LOG="${TMP_ROOT}/docker-install.log"
 run_hosted install
 assert_file_equals "${DEPLOY_DIR}/server/version.txt" "v1"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} build dollhousemcp dollhousemcp-migrate"
@@ -349,6 +372,7 @@ assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d"
 assert_contains "${CURL_LOG}" "https://mcp.example.com/healthz"
 
 log "running update workflow"
+DOCKER_LOG="${TMP_ROOT}/docker-update.log"
 commit_source_version "v2"
 run_hosted update
 assert_file_equals "${DEPLOY_DIR}/server/version.txt" "v2"
@@ -356,20 +380,22 @@ previous_bundle="$(latest_dir 'server.prev-*')"
 [[ -n "${previous_bundle}" ]] || fail "expected update to retain a previous server bundle"
 assert_file_equals "${previous_bundle}/version.txt" "v1"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d --pull never dollhousemcp"
-assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} pull caddy"
+if grep -Fq "${COMPOSE_CMD} pull caddy" "${DOCKER_LOG}"; then fail "unchanged proxy was unexpectedly pulled during update"; fi
 
 log "running bootstrap-admin workflow"
+DOCKER_LOG="${TMP_ROOT}/docker-bootstrap.log"
 run_hosted_with_bootstrap bootstrap-admin octocat
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} run --rm dollhousemcp-migrate /usr/local/bin/dollhouse-bootstrap-admin --method github --github-username octocat"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} exec -T postgres /usr/local/bin/apply-post-migration-grants"
 
 log "running rollback workflow"
+DOCKER_LOG="${TMP_ROOT}/docker-rollback.log"
 run_hosted rollback
 assert_file_equals "${DEPLOY_DIR}/server/version.txt" "v1"
 rollback_bundle="$(latest_dir 'server.rollback-from-*')"
 [[ -n "${rollback_bundle}" ]] || fail "expected rollback to retain the rolled-back current bundle"
 assert_file_equals "${rollback_bundle}/version.txt" "v2"
-assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} pull caddy"
+if grep -Fq "${COMPOSE_CMD} pull caddy" "${DOCKER_LOG}"; then fail "proxy recovery unexpectedly pulled caddy during rollback"; fi
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d --pull never dollhousemcp"
 
 log "checking invalid source error"

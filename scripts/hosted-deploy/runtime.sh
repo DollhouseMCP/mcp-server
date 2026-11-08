@@ -372,7 +372,7 @@ start_or_update() {
   resolve_allowed_hosts
   validate_render_inputs
   if [[ ! -d "${DEPLOY_DIR}" ]]; then
-    mkdir -p "${DEPLOY_DIR}"
+    (umask 077; mkdir -p "${DEPLOY_DIR}")
   fi
   acquire_caddy_deployment_lock
   transition_status="$(caddy_transition status)" || die "Caddy transition state is unavailable"

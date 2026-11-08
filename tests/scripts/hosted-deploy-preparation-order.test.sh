@@ -170,6 +170,7 @@ if [[ "${1:-}" == --case ]]; then
 fi
 
 TMP_ROOT="$(mktemp -d)"
+TMP_ROOT="$(cd "${TMP_ROOT}" && pwd -P)"
 trap 'rm -rf -- "${TMP_ROOT}"' EXIT
 fail() { printf 'preparation-order test: %s\n' "$*" >&2; exit 1; }
 assert_order() {
@@ -262,4 +263,31 @@ for service in app all; do
   for mode in migration-failure bootstrap-failure replacement-failure success fresh-install; do
     check_fixture update "${mode}" "${service}"
   done
+done
+
+# Exercise the real root creation and lock validation before any transition.
+for mode in fresh-000 fresh-002 existing-unsafe; do
+  root="${TMP_ROOT}/${mode}"
+  if [[ "${mode}" == existing-unsafe ]]; then mkdir "${root}"; chmod 0777 "${root}"; fi
+  mask="${mode#fresh-}"
+  [[ "${mode}" != existing-unsafe ]] || mask=077
+  if (umask "${mask}"; bash -c '
+    source "$1"
+    DEPLOY_DIR="$2"; SERVER_DIR="$2/server"
+    ensure_prerequisites() { :; }; validate_git_url_for_clone() { :; }
+    resolve_public_base_url() { :; }; resolve_hostname() { :; }
+    resolve_allowed_hosts() { :; }; validate_render_inputs() { :; }
+    need_command() { :; }; flock() { :; }; die() { exit 1; }
+    caddy_transition() { return 1; }
+    start_or_update
+  ' _ "${REPO_ROOT}/scripts/hosted-deploy/runtime.sh" "${root}"); then
+    fail "root fixture unexpectedly advanced past transition"
+  fi
+  if [[ "${mode}" == existing-unsafe ]]; then
+    [[ ! -e "${root}/.caddy-deploy.lock" ]] || fail "unsafe existing root was modified"
+  else
+    [[ -f "${root}/.caddy-deploy.lock" ]] || fail "fresh root did not reach lock"
+    python3 -c 'import os,stat,sys; sys.exit(0 if stat.S_IMODE(os.stat(sys.argv[1]).st_mode)==0o700 else 1)' "${root}" || fail "fresh root is not private"
+  fi
+  printf 'preparation-order PASS root/%s\n' "${mode}"
 done

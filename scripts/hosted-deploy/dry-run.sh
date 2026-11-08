@@ -63,15 +63,15 @@ dry_run_start_or_update() {
   describe_source_plan
   log "dry-run: would build dollhousemcp image"
   log "dry-run: would check the pinned running postgres without recreation for up to ${POSTGRES_READY_TIMEOUT}s; start postgres only if no application is running"
-  log "dry-run: would pull caddy before stopping the current app"
+  log "dry-run: would retain a verified unchanged hardened caddy proxy; otherwise pull and admit the selected image before stopping the current app"
   log "dry-run: would require non-force graceful stop before schema or admin changes"
   log "dry-run: would run database migrations"
   log "dry-run: would apply post-migration database grants"
   describe_bootstrap_plan optional
   if [[ "${service}" == "app" ]]; then
-    log "dry-run: would restart dollhousemcp service and refresh caddy proxy"
+    log "dry-run: would restart dollhousemcp; retain an unchanged qualified caddy proxy or refresh it after admission"
   else
-    log "dry-run: would start or update the full compose stack"
+    log "dry-run: would start or update the compose stack, retaining an unchanged qualified caddy proxy when applicable"
   fi
   log "dry-run: would record deployed revision and time only after replacement succeeds"
   log "dry-run: would verify ${PUBLIC_BASE_URL}/healthz, /readyz, and /mcp for up to ${VERIFY_READY_TIMEOUT}s"

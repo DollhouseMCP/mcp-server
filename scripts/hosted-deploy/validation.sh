@@ -461,6 +461,7 @@ validate_persisted_caddy_fields() {
   [[ -f "${ENV_FILE}" ]] || return 0
   local line value image_count=0 data_count=0 config_count=0
   while IFS= read -r line || [[ -n "${line}" ]]; do
+    [[ "${line}" =~ ^[[:space:]]*\# || "${line}" =~ ^[[:space:]]*$ ]] && continue
     if [[ "${line}" =~ ^[[:space:]]*(export[[:space:]]+)?(CADDY_IMAGE|CADDY_DATA_VOLUME|CADDY_CONFIG_VOLUME|CADDY_ADMISSION_RECEIPT|CADDY_RECOVERY_VERIFIED|CADDY_KEEP_PROXY|CADDY_TRANSITION_TOKEN|PREVIOUS_BUNDLE|HOSTED_CADDY_[A-Z_]+)= ]]; then
       die "Internal Caddy aliases are forbidden in the deployment environment file"
     fi
