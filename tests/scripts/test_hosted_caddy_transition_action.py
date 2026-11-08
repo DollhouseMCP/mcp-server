@@ -13,6 +13,7 @@ import caddy_transition_state as state
 import caddy_unchanged_action
 import caddy_pending_proxy_action
 import test_hosted_caddy_unchanged_action as fixtures
+import test_hosted_caddy_transition_state as state_fixtures
 
 
 class TransitionActionTests(unittest.TestCase):
@@ -57,6 +58,29 @@ class TransitionActionTests(unittest.TestCase):
             result = caddy_pending_proxy_action.restore_current(self.root, 'site', self.fx.run_docker, self.fx.qualify)
         self.assertEqual(result['outcome'], 'unchanged')
         self.assertFalse(any(call[1] in ('stop', 'start', 'rename') for call in self.fx.calls))
+
+    def test_rollback_complete_accepts_selected_source_and_refuses_mutation(self):
+        value = state_fixtures.pending(self.root, 'rollback')
+        value['source'] = caddy_bundle_identity.bundle_identity(self.root / 'server')
+        state.begin(self.root, value)
+        state.mark_staged(self.root, value['token'], value['source'])
+        (self.root / 'server' / 'app').write_text('changed after stage')
+        with self.assertRaises(ValueError):
+            action.complete(self.root, value['token'])
+        self.assertIsNotNone(state.read_state(self.root)['pending'])
+        (self.root / 'server' / 'app').write_text('fixture')
+        self.assertIsNone(action.complete(self.root, value['token'])['pending'])
+
+    def test_rollback_complete_rejects_inconsistent_staged_identity(self):
+        value = state_fixtures.pending(self.root, 'rollback')
+        state.begin(self.root, value)
+        record = state.read_state(self.root)
+        record['pending']['phase'] = 'staged'
+        record['pending']['staged_source'] = caddy_bundle_identity.bundle_identity(self.root / 'server')
+        state.write_state(self.root, record)
+        with self.assertRaises(ValueError):
+            action.complete(self.root, value['token'])
+        self.assertIsNotNone(state.read_state(self.root)['pending'])
 
     def test_completed_pointer_does_not_sort_random_bundle_names(self):
         selected = []

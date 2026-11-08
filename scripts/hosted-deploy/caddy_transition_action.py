@@ -149,6 +149,8 @@ def complete(root, token):
     pending = state['pending']
     if not isinstance(pending, dict) or pending['token'] != token or pending['staged_source'] is None:
         raise ValueError('no staged transition matches the completion request')
+    if pending['kind'] == 'rollback' and pending['staged_source'] != pending['source']:
+        raise ValueError('rollback source differs from the selected bundle')
     if bundle_identity(root / 'server') != pending['staged_source']:
         raise ValueError('current source differs from staged transition')
     if pending['kind'] == 'update':

@@ -210,6 +210,8 @@ def mark_staged(root, token, source):
     if not isinstance(pending, dict) or pending['token'] != token or pending['phase'] != 'admitted':
         raise ValueError('Caddy transition cannot accept staged source')
     validate_identity(source)
+    if pending['kind'] == 'rollback' and source != pending['source']:
+        raise ValueError('rollback source differs from the selected bundle')
     pending['staged_source'] = source
     pending['phase'] = 'staged'
     write_state(root, state)
@@ -220,6 +222,8 @@ def finish(root, token):
     pending = state['pending']
     if not isinstance(pending, dict) or pending['token'] != token or pending['phase'] != 'staged':
         raise ValueError('Caddy transition has no verified staged source')
+    if pending['kind'] == 'rollback' and pending['staged_source'] != pending['source']:
+        raise ValueError('rollback source differs from the selected bundle')
     if pending['kind'] == 'update':
         state['completed'] = {key: pending[key] for key in ('previous', 'receipt', 'receipt_sha256', 'source')}
     elif pending['kind'] == 'rollback':

@@ -26,6 +26,33 @@ def pending(root, kind='update'):
 
 
 class TransitionStateTests(unittest.TestCase):
+    def test_rollback_stage_requires_selected_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            value = pending(root, 'rollback')
+            state.begin(root, value)
+            wrong = {'sha256': '1' * 64, 'entries': 2, 'bytes': 3}
+            with self.assertRaises(ValueError):
+                state.mark_staged(root, value['token'], wrong)
+            self.assertEqual(state.read_state(root)['pending']['phase'], 'admitted')
+            state.mark_staged(root, value['token'], value['source'])
+            self.assertIsNone(state.finish(root, value['token'])['pending'])
+
+    def test_rollback_finish_rejects_inconsistent_staged_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            value = pending(root, 'rollback')
+            state.begin(root, value)
+            record = state.read_state(root)
+            completed = {key: value[key] for key in ('previous', 'receipt', 'receipt_sha256', 'source')}
+            record['completed'] = completed
+            record['pending']['phase'] = 'staged'
+            record['pending']['staged_source'] = {'sha256': '1' * 64, 'entries': 2, 'bytes': 3}
+            state.write_state(root, record)
+            with self.assertRaises(ValueError):
+                state.finish(root, value['token'])
+            self.assertIsNotNone(state.read_state(root)['pending'])
+            self.assertEqual(state.read_state(root)['completed'], completed)
     def test_pending_preserves_completed_until_verified_finish(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
