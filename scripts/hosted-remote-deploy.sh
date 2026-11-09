@@ -57,6 +57,9 @@ TRUSTED_PROXIES="${DOLLHOUSE_TRUSTED_PROXIES:-}"
 CADDY_ACCESS_LOG="${DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG:-}"
 CADDY_TRUSTED_PROXIES="${DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES:-}"
 CADDY_IMAGE="${DOLLHOUSE_HOSTED_CADDY_IMAGE:-}"
+IMAGE_MODE="${DOLLHOUSE_HOSTED_IMAGE_MODE:-}"
+RUNTIME_IMAGE="${DOLLHOUSE_HOSTED_RUNTIME_IMAGE:-}"
+MIGRATION_IMAGE="${DOLLHOUSE_HOSTED_MIGRATION_IMAGE:-}"
 CADDY_DATA_VOLUME="${DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME:-}"
 CADDY_CONFIG_VOLUME="${DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME:-}"
 BOOTSTRAP_GITHUB_USERNAME="${DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME:-}"
@@ -1063,6 +1066,9 @@ run_remote_action() {
     "${CADDY_IMAGE}"
     "${CADDY_DATA_VOLUME}"
     "${CADDY_CONFIG_VOLUME}"
+    "${IMAGE_MODE}"
+    "${RUNTIME_IMAGE}"
+    "${MIGRATION_IMAGE}"
   )
   remote_command="bash -s --"
   for remote_payload_arg in "${remote_payload_args[@]}"; do
@@ -1137,6 +1143,9 @@ auth_generation="${40}"
 caddy_image="${41}"
 caddy_data_volume="${42}"
 caddy_config_volume="${43}"
+image_mode="${44}"
+runtime_image="${45}"
+migration_image="${46}"
 workdir=""
 
 remote_log() {
@@ -1421,6 +1430,9 @@ run_hosted_helper() {
   [[ -z "${caddy_image}" ]] || helper_env+=("DOLLHOUSE_HOSTED_CADDY_IMAGE=${caddy_image}")
   [[ -z "${caddy_data_volume}" ]] || helper_env+=("DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME=${caddy_data_volume}")
   [[ -z "${caddy_config_volume}" ]] || helper_env+=("DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME=${caddy_config_volume}")
+  [[ -z "${image_mode}" ]] || helper_env+=("DOLLHOUSE_HOSTED_IMAGE_MODE=${image_mode}")
+  [[ -z "${runtime_image}" ]] || helper_env+=("DOLLHOUSE_HOSTED_RUNTIME_IMAGE=${runtime_image}")
+  [[ -z "${migration_image}" ]] || helper_env+=("DOLLHOUSE_HOSTED_MIGRATION_IMAGE=${migration_image}")
   [[ -z "${bootstrap_github_username}" ]] || helper_env+=("DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME=${bootstrap_github_username}")
   [[ -z "${bootstrap_github_id}" ]] || helper_env+=("DOLLHOUSE_BOOTSTRAP_GITHUB_ID=${bootstrap_github_id}")
   [[ -z "${deploy_mode}" ]] || helper_env+=("DOLLHOUSE_HOSTED_MODE=${deploy_mode}")
@@ -1461,6 +1473,9 @@ run_hosted_helper() {
     unset DOLLHOUSE_HOSTED_CADDY_IMAGE
     unset DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME
     unset DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME
+    unset DOLLHOUSE_HOSTED_IMAGE_MODE
+    unset DOLLHOUSE_HOSTED_RUNTIME_IMAGE
+    unset DOLLHOUSE_HOSTED_MIGRATION_IMAGE
     unset DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME
     unset DOLLHOUSE_BOOTSTRAP_GITHUB_ID
     unset DOLLHOUSE_AUTH_PROVIDER

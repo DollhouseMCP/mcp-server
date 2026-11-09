@@ -109,6 +109,9 @@ hosted_deploy_init_config() {
   # App trusted proxies describe the direct hop into the app container
   # (usually Caddy on Docker). Caddy trusted proxies describe the public edge
   # hop, such as Cloudflare, that Caddy may trust for real client IP headers.
+  IMAGE_MODE="${DOLLHOUSE_HOSTED_IMAGE_MODE:-}"
+  RUNTIME_IMAGE="${DOLLHOUSE_HOSTED_RUNTIME_IMAGE:-}"
+  MIGRATION_IMAGE="${DOLLHOUSE_HOSTED_MIGRATION_IMAGE:-}"
   CADDY_IMAGE="${DOLLHOUSE_HOSTED_CADDY_IMAGE:-}"
   CADDY_DATA_VOLUME="${DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME:-}"
   CADDY_CONFIG_VOLUME="${DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME:-}"
@@ -204,6 +207,9 @@ Common environment:
   DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_FILE=5
   DOLLHOUSE_HOSTED_SOURCE_DIR=/path/to/local/repo
   DOLLHOUSE_HOSTED_GIT_REF=codex/hosted-http-integration
+  DOLLHOUSE_HOSTED_IMAGE_MODE=build|registry
+  DOLLHOUSE_HOSTED_RUNTIME_IMAGE=registry/repository@sha256:<64 lowercase hex>
+  DOLLHOUSE_HOSTED_MIGRATION_IMAGE=registry/repository@sha256:<64 lowercase hex>
   DOLLHOUSE_HOSTED_IMAGE_TAG=dollhousemcp-hosted:alpha
   DOLLHOUSE_AUTH_PROVIDER=embedded|oidc|local
   DOLLHOUSE_AUTH_METHODS=github

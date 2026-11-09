@@ -265,6 +265,9 @@ write_env_defaults() {
   sync_legacy_env_values
   upsert_env_value DOLLHOUSE_HOSTED_INSTANCE_NAME "${INSTANCE_NAME}"
   upsert_env_value DOLLHOUSE_HOSTED_IMAGE_TAG "${IMAGE_TAG}"
+  upsert_env_value DOLLHOUSE_HOSTED_IMAGE_MODE "${IMAGE_MODE}"
+  upsert_env_value DOLLHOUSE_HOSTED_RUNTIME_IMAGE "${RUNTIME_IMAGE}"
+  upsert_env_value DOLLHOUSE_HOSTED_MIGRATION_IMAGE "${MIGRATION_IMAGE}"
   upsert_env_value DOLLHOUSE_HOSTED_MODE "${DEPLOY_MODE}"
   upsert_env_value DOLLHOUSE_HOSTED_HOSTNAME "${HOSTNAME}"
   upsert_env_value DOLLHOUSE_PUBLIC_BASE_URL "${PUBLIC_BASE_URL}"

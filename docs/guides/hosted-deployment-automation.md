@@ -707,3 +707,23 @@ This runs both the generated-file render test and a Docker-stubbed workflow test
 
 - Add a wrapper installer that can be served from a stable URL.
 - Add optional real-container integration coverage for Docker environments.
+
+### Digest-selected application images
+
+Set `DOLLHOUSE_HOSTED_IMAGE_MODE=registry` with independent immutable
+`DOLLHOUSE_HOSTED_RUNTIME_IMAGE` and `DOLLHOUSE_HOSTED_MIGRATION_IMAGE`
+references in `registry/repository@sha256:<digest>` form. These operands are
+persisted for subsequent local and remote operations. Registry mode renders no
+application or maintenance build sections. It pulls and checks both image roles
+and their native platform before draining the application, then rechecks the
+selected identities before maintenance and replacement. Their matching source
+labels express pair consistency only; separately qualify image provenance and
+security before selection.
+
+After a successful drain, the application is always recreated with a fresh
+private control layer, even when both digest selections are unchanged. The
+unchanged qualified Caddy proxy is retained. Registry-mode rollback is refused
+before proxy recovery or source movement: select a separately qualified
+roll-forward plan instead. Switching an existing registry deployment back to
+build mode in place is also refused. Existing Caddy migration and one-time legacy offline
+handoff gates still apply; selecting application digests does not bypass them.

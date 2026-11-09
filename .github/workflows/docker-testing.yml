@@ -682,6 +682,23 @@ jobs:
           bash tests/scripts/migration-image-native.sh "$builder_id" "$migration_id" "$GITHUB_SHA" "$RUNNER_TEMP/slim-migration-proof.json"
           test "$(docker image inspect --format "$DOCKER_IMAGE_ID_FORMAT" "$migration_tag")" = "$migration_id"
 
+      - name: Verify digest-selected images with a disposable loopback registry
+        id: registry_fixture
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tests/scripts/hosted-registry-native.sh
+
+      - name: Retain loopback registry fixture receipt
+        if: always() && steps.registry_fixture.outcome != 'skipped'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: registry-fixture-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/registry-fixture-proof.json
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Rehearse a synthetic legacy maintenance checkpoint restore
         id: legacy_checkpoint
         shell: bash

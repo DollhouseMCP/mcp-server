@@ -138,9 +138,29 @@ build_app_image() {
   return 0
 }
 
+prepare_app_images() {
+  if [[ "${IMAGE_MODE}" == registry ]]; then
+    REGISTRY_ADMISSION="$(python3 "${HOSTED_DEPLOY_LIB_DIR}/registry_image_admission.py" prepare "${RUNTIME_IMAGE}" "${MIGRATION_IMAGE}")" || die "registry image pair preparation failed"
+  else
+    build_app_image
+  fi
+}
+
+recheck_registry_images() {
+  [[ "${IMAGE_MODE}" == registry ]] || return 0
+  local current
+  current="$(python3 "${HOSTED_DEPLOY_LIB_DIR}/registry_image_admission.py" inspect "${RUNTIME_IMAGE}" "${MIGRATION_IMAGE}")" || die "registry image pair recheck failed"
+  [[ -n "${REGISTRY_ADMISSION:-}" && "${current}" == "${REGISTRY_ADMISSION}" ]] || die "registry image pair changed after preparation"
+}
+
 run_database_migrations() {
   log "running database migrations"
-  compose run --rm dollhousemcp-migrate
+  recheck_registry_images
+  if [[ "${IMAGE_MODE}" == registry ]]; then
+    compose run --rm --pull never --no-deps dollhousemcp-migrate
+  else
+    compose run --rm dollhousemcp-migrate
+  fi
   log "applying post-migration database grants"
   [[ -r "${POST_MIGRATION_GRANTS_FILE}" ]] || \
     die "post-migration grants file is not readable at ${POST_MIGRATION_GRANTS_FILE}; run render or install again"
@@ -316,10 +336,11 @@ restart_caddy_proxy() {
 prepare_existing_stack() {
   ensure_runtime_prerequisites
   ensure_server_source
-  require_slim_maintenance_source
+  resolve_mode_defaults
+  if [[ "${IMAGE_MODE}" == build ]]; then require_slim_maintenance_source; fi
   render_files
-  build_app_image
-  wait_for_postgres
+  prepare_app_images
+  prepare_postgres_before_app_stop
 
   return 0
 }
@@ -346,9 +367,12 @@ run_bootstrap_admin() {
   fi
 
   log "bootstrapping GitHub admin"
-  compose run --rm \
-    dollhousemcp-migrate \
-    node dist/cli/admin-bootstrap.js --require-admin-url "${args[@]}"
+  recheck_registry_images
+  if [[ "${IMAGE_MODE}" == registry ]]; then
+    compose run --rm --pull never --no-deps dollhousemcp-migrate node dist/cli/admin-bootstrap.js --require-admin-url "${args[@]}"
+  else
+    compose run --rm dollhousemcp-migrate node dist/cli/admin-bootstrap.js --require-admin-url "${args[@]}"
+  fi
 
   return 0
 }
@@ -372,7 +396,6 @@ gracefully_stop_existing_app() {
 }
 
 start_or_update() {
-  local service="${1:-all}"
   local fresh="false"
   local transition_status
   ensure_prerequisites
@@ -415,7 +438,7 @@ start_or_update() {
   fi
   stage_source
   caddy_transition stage >/dev/null || die "staged source identity could not be recorded"
-  build_app_image
+  prepare_app_images
   prepare_postgres_before_app_stop
   if [[ "${CADDY_KEEP_PROXY:-false}" == true ]]; then
     caddy_recovery_request_json "${PREVIOUS_BUNDLE}" | python3 "${HOSTED_DEPLOY_LIB_DIR}/caddy_verify_noop_action.py" >/dev/null || \
@@ -424,23 +447,17 @@ start_or_update() {
     recheck_caddy_image
     recheck_caddy_transition "${fresh}"
   fi
+  recheck_registry_images
   gracefully_stop_existing_app
   # Schema and identity writes require the successful drain fence. Failure here
   # leaves the app stopped; old-image restart needs a compatible recovery plan.
   run_database_migrations
   run_bootstrap_admin optional
-  if [[ "${service}" == "app" ]]; then
-    compose up -d --pull never dollhousemcp
-    if [[ "${CADDY_KEEP_PROXY:-false}" != true ]]; then
-      recheck_caddy_transition "${fresh}"
-      restart_caddy_proxy
-    fi
-  elif [[ "${CADDY_KEEP_PROXY:-false}" == true ]]; then
-    compose up -d --pull never postgres dollhousemcp
-  else
-    recheck_caddy_image
+  recheck_registry_images
+  compose up -d --pull never --no-build --no-deps --force-recreate dollhousemcp
+  if [[ "${CADDY_KEEP_PROXY:-false}" != true ]]; then
     recheck_caddy_transition "${fresh}"
-    compose up -d --pull never
+    restart_caddy_proxy
   fi
   printf '%s\n' "${STAGED_REVISION}" > "${DEPLOY_DIR}/DEPLOYED_REVISION"
   date -u +%Y-%m-%dT%H:%M:%SZ > "${DEPLOY_DIR}/DEPLOYED_AT"
@@ -571,6 +588,8 @@ rollback_server() {
   ensure_runtime_prerequisites
   validate_persisted_caddy_fields
   resolve_mode_defaults
+  validate_registry_selection
+  [[ "${IMAGE_MODE}" != registry ]] || die "registry rollback is unsupported; select a qualified roll-forward plan before any recovery"
   validate_caddy_selection "${CADDY_IMAGE}" "${CADDY_DATA_VOLUME}" "${CADDY_CONFIG_VOLUME}"
   acquire_caddy_deployment_lock
   previous="$(caddy_transition select-rollback)" || die "no unambiguous completed rollback source is available"
@@ -604,7 +623,7 @@ rollback_server() {
   # Prepare the selected rollback bundle and images while the current app is
   # healthy. A failed move/build/pull must not create an avoidable outage.
   gracefully_stop_existing_app
-  compose up -d --pull never dollhousemcp
+  compose up -d --pull never --no-build --no-deps --force-recreate dollhousemcp
   printf 'rollback:%s\n' "${previous_name}" > "${DEPLOY_DIR}/DEPLOYED_REVISION"
   date -u +%Y-%m-%dT%H:%M:%SZ > "${DEPLOY_DIR}/DEPLOYED_AT"
 

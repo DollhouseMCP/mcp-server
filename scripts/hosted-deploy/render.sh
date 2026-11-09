@@ -1,6 +1,22 @@
 # shellcheck shell=bash
 # Generated deployment file rendering for hosted-deploy.
 
+app_image_yaml() {
+  if [[ "${IMAGE_MODE}" == registry ]]; then
+    printf '    image: %s\n' "${RUNTIME_IMAGE}"
+  else
+    printf '    build:\n      context: ./server\n      dockerfile: docker/Dockerfile\n      target: production\n    image: %s\n' "${IMAGE_TAG}"
+  fi
+}
+
+migration_image_yaml() {
+  if [[ "${IMAGE_MODE}" == registry ]]; then
+    printf '    image: %s\n' "${MIGRATION_IMAGE}"
+  else
+    printf '    build:\n      context: ./server\n      dockerfile: docker/Dockerfile\n      target: migration\n    image: %s-migrate\n' "${IMAGE_TAG}"
+  fi
+}
+
 write_compose() {
   cat > "${COMPOSE_FILE}" <<EOF
 name: ${INSTANCE_NAME}
@@ -35,11 +51,7 @@ services:
       retries: 10
 
   dollhousemcp:
-    build:
-      context: ./server
-      dockerfile: docker/Dockerfile
-      target: production
-    image: ${IMAGE_TAG}
+$(app_image_yaml)
     container_name: ${APP_CONTAINER_NAME}
     restart: unless-stopped
     logging: *dollhouse-logging
@@ -96,11 +108,7 @@ services:
     cpus: ${CPU_LIMIT}
 
   dollhousemcp-migrate:
-    build:
-      context: ./server
-      dockerfile: docker/Dockerfile
-      target: migration
-    image: ${IMAGE_TAG}-migrate
+$(migration_image_yaml)
     profiles:
       - maintenance
     logging: *dollhouse-logging
@@ -401,16 +409,21 @@ EOF
 
 render_files() {
   local expected_caddy_image expected_caddy_data expected_caddy_config
+  local expected_image_mode expected_runtime_image expected_migration_image
   resolve_public_base_url
   resolve_hostname
   resolve_allowed_hosts
   validate_render_inputs
   ensure_supported_python
   require_safe_caddyfile_change
+  expected_image_mode="${IMAGE_MODE}"; expected_runtime_image="${RUNTIME_IMAGE}"; expected_migration_image="${MIGRATION_IMAGE}"
   expected_caddy_image="${CADDY_IMAGE}"; expected_caddy_data="${CADDY_DATA_VOLUME}"; expected_caddy_config="${CADDY_CONFIG_VOLUME}"
   ensure_layout
   write_env_defaults
   load_env_file
+  validate_registry_selection
+  [[ "${IMAGE_MODE}" == "${expected_image_mode}" && "${RUNTIME_IMAGE}" == "${expected_runtime_image}" && "${MIGRATION_IMAGE}" == "${expected_migration_image}" ]] ||
+    die "image selection changed while loading the deployment environment"
   validate_caddy_selection "${CADDY_IMAGE}" "${CADDY_DATA_VOLUME}" "${CADDY_CONFIG_VOLUME}"
   [[ "${CADDY_IMAGE}" == "${expected_caddy_image}" && "${CADDY_DATA_VOLUME}" == "${expected_caddy_data}" && "${CADDY_CONFIG_VOLUME}" == "${expected_caddy_config}" ]] ||
     die "Caddy selection changed while loading the deployment environment"
