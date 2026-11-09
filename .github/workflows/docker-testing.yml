@@ -197,6 +197,7 @@ jobs:
             --platform ${{ matrix.platform }} \
             --target builder \
             --tag dollhousemcp:builder-${PLATFORM_TAG} \
+            --label org.dollhousemcp.engine-proof-source=${{ github.sha }} \
             --cache-from type=local,src=/tmp/.buildx-cache \
             --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
             --progress=plain \
@@ -680,6 +681,28 @@ jobs:
           printf '%s\n' "$migration_id" > "$RUNNER_TEMP/beta3-tested-migration.id"
           bash tests/scripts/migration-image-native.sh "$builder_id" "$migration_id" "$GITHUB_SHA" "$RUNNER_TEMP/slim-migration-proof.json"
           test "$(docker image inspect --format "$DOCKER_IMAGE_ID_FORMAT" "$migration_tag")" = "$migration_id"
+
+      - name: Rehearse a synthetic legacy maintenance checkpoint restore
+        id: legacy_checkpoint
+        shell: bash
+        env:
+          EVIDENCE_PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          arch="${EVIDENCE_PLATFORM#linux/}"
+          platform_tag="linux-${arch}"
+          builder_id=$(timeout --kill-after=1s 9s docker image inspect --format "$DOCKER_IMAGE_ID_FORMAT" "dollhousemcp:builder-${platform_tag}")
+          bash tests/scripts/legacy-maintenance-restore-native.sh "$builder_id" "$GITHUB_SHA" "$RUNNER_TEMP/legacy-maintenance-${arch}.json" "$arch"
+          test -s "$RUNNER_TEMP/legacy-maintenance-${arch}.json"
+
+      - name: Retain synthetic checkpoint rehearsal receipt
+        if: always() && steps.legacy_checkpoint.outcome != 'skipped'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: synthetic-legacy-checkpoint-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/legacy-maintenance-*.json
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Retain exact tested migration image
         shell: bash

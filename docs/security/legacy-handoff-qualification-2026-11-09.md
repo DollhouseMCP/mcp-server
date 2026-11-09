@@ -11,3 +11,5 @@ The [portable regression](../../tests/scripts/legacy-handoff-counterexample.test
 Separately, the image's storage cleanup can cancel a pending debounced `_index.json` write; that index is derived data and this does not by itself establish primary memory loss. The observed host's pending work and any actual data loss are unknown. The current helper's regression confirms that a legacy profile without the v2 capability is refused before Docker exec or TERM. No production admission, shutdown, or replacement behavior changes in this record.
 
 A future handoff needs independently verified admission fencing and a trustworthy way to establish settlement of accepted work and failures for the exact running image and boot, plus qualified lifecycle behavior. No such legacy settlement observable has been established here.
+
+For the separate, unqualified one-time persisted-checkpoint and recovery plan, see the [legacy maintenance checkpoint guide](../guides/legacy-maintenance-checkpoint.md).
