@@ -11,6 +11,7 @@ import { waitForReady, hardenedRuntimeConfig } from './export-tested-caddy-image
 import { writeNativeCaddyfile } from './caddy-native-render.mjs';
 import { clientExecFailure, collectOwnedDiagnostics, parseClientOutput } from './caddy-stream-guard.mjs';
 import { clientSource } from './caddy-stream-client.mjs';
+import { upstreamSource } from './caddy-stream-upstream.mjs';
 
 const [image, fixtureImage, inspectorFile, connection] = process.argv.slice(2);
 assert.match(image ?? '', /^(?:sha256:)?[a-f0-9]{64}$/);
@@ -51,6 +52,8 @@ const rendererSha = createHash('sha256').update(fs.readFileSync(renderer)).diges
 const harnessSha = createHash('sha256').update(fs.readFileSync(fileURLToPath(import.meta.url))).digest('hex');
 const guardSha = createHash('sha256').update(fs.readFileSync(new URL('./caddy-stream-guard.mjs', import.meta.url))).digest('hex');
 const clientSha = createHash('sha256').update(fs.readFileSync(new URL('./caddy-stream-client.mjs', import.meta.url))).digest('hex');
+const upstreamSha = createHash('sha256').update(fs.readFileSync(new URL('./caddy-stream-upstream.mjs', import.meta.url))).digest('hex');
+const upstreamSourceSha = createHash('sha256').update(upstreamSource).digest('hex');
 const marker = 'CADDY_PUBLIC_QUALIFICATION_SECRET_MARKER';
 
 function container(args) {
@@ -110,19 +113,6 @@ function render(mode, trusted) {
   return file;
 }
 
-const upstreamSource = String.raw`
-const http=require('node:http');
-http.createServer((req,res)=>{
- if(req.url==='/quiet') {
-  res.writeHead(200, {'content-type':'text/event-stream','cache-control':'no-cache'});
-  res.write('event: start\ndata: method='+req.method+'\n\n');
-  setTimeout(()=>res.end('event: done\ndata: survived\n\n'),76000);
- } else {
-  res.writeHead(200, {'content-type':'application/json'});
-  res.end(JSON.stringify({headers:req.headers,url:req.url}));
- }
-}).listen(8081,'0.0.0.0');
-`;
 
 function accessLogs(id) {
   const result = spawnSync(engineExecutable, [...engineArgs, 'logs', id], { encoding:'utf8', timeout:10_000, maxBuffer:2_000_000 });
@@ -317,7 +307,7 @@ try {
   assert.equal((await waitForReady(request, { h2:true, path:'/after-restart' })).status, 200);
   observations.push('same private volumes preserve internal PKI across normal restart');
   console.log(JSON.stringify({ imageId:imageInfo.Id, architecture:imageInfo.Architecture,
-    nativeDaemonArchitecture:native, rendererSha256:rendererSha, harnessSha256:harnessSha, guardSha256:guardSha, clientSha256:clientSha, configSources, observations,
+    nativeDaemonArchitecture:native, rendererSha256:rendererSha, harnessSha256:harnessSha, guardSha256:guardSha, clientSha256:clientSha, upstreamSha256:upstreamSha, upstreamSourceSha256:upstreamSourceSha, configSources, observations,
     quietStreams:quietStreams.map(({body,...metrics})=>metrics), streamOutcomes, processProfile, negativeWithoutCapability, legacyVolumeRefusal, normalStop,
     productionActions:false }, null, 2));
 } catch (error) {
@@ -328,7 +318,7 @@ try {
     containerDiagnostics = collectOwnedDiagnostics(ids, ownedContainers, args => spawnSync(
       engineExecutable, [...engineArgs, ...args], { encoding:'utf8', timeout:3000, maxBuffer:65536 }));
   } catch { containerDiagnostics = { error:'unavailable' }; }
-  console.error(JSON.stringify({ containerDiagnostics, qualificationFailure:true, rendererSha256:rendererSha, harnessSha256:harnessSha, guardSha256:guardSha, clientSha256:clientSha, configSources, observations, streamOutcomes, processProfile, negativeWithoutCapability, legacyVolumeRefusal, normalStop }));
+  console.error(JSON.stringify({ containerDiagnostics, qualificationFailure:true, rendererSha256:rendererSha, harnessSha256:harnessSha, guardSha256:guardSha, clientSha256:clientSha, upstreamSha256:upstreamSha, upstreamSourceSha256:upstreamSourceSha, configSources, observations, streamOutcomes, processProfile, negativeWithoutCapability, legacyVolumeRefusal, normalStop }));
 } finally {
   // Every identity here was created by this invocation; no broad pruning.
   const errors = primaryError ? [primaryError] : [];
