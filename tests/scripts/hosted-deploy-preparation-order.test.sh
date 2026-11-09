@@ -65,9 +65,10 @@ if [[ "${1:-}" == --case ]]; then
   python3() {
     local command_path="$1"
     if [[ "${command_path}" == */registry_image_admission.py ]]; then
-      printf 'registry-%s\n' "$2" >> "${EVENTS}"
-      [[ "${MODE}" != registry-pull-failure || "$2" != prepare ]] || return 1
-      if [[ "${MODE}" == registry-drift && "$2" == inspect && -f "${DEPLOY_DIR}/stopped" ]]; then
+      local registry_operation="${2:-}"
+      printf 'registry-%s\n' "${registry_operation}" >> "${EVENTS}"
+      [[ "${MODE}" != registry-pull-failure || "${registry_operation}" != prepare ]] || return 1
+      if [[ "${MODE}" == registry-drift && "${registry_operation}" == inspect && -f "${DEPLOY_DIR}/stopped" ]]; then
         printf 'changed-pair\n'
       else
         printf 'fixture-pair\n'
@@ -242,6 +243,10 @@ check_fixture() {
       if grep -q "^compose:build " "${fixture}/events"; then fail "registry mode built an image"; fi
     fi
     assert_order "${fixture}/events" graceful-stop replacement
+    if [[ "${action}" == update ]]; then
+      grep -q '^compose:run --rm --pull never --no-deps dollhousemcp-migrate$' "${fixture}/events" || fail "migration omitted no-pull/no-deps flags"
+      grep -q '^compose:run --rm --pull never --no-deps dollhousemcp-migrate node dist/cli/admin-bootstrap.js' "${fixture}/events" || fail "bootstrap omitted no-pull/no-deps flags"
+    fi
     if [[ "${action}" == rollback ]]; then expected_revision='rollback:server.prev-20000101'
     else expected_revision=new-revision; assert_order "${fixture}/events" graceful-stop migration
     fi

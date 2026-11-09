@@ -156,11 +156,7 @@ recheck_registry_images() {
 run_database_migrations() {
   log "running database migrations"
   recheck_registry_images
-  if [[ "${IMAGE_MODE}" == registry ]]; then
-    compose run --rm --pull never --no-deps dollhousemcp-migrate
-  else
-    compose run --rm dollhousemcp-migrate
-  fi
+  compose run --rm --pull never --no-deps dollhousemcp-migrate
   log "applying post-migration database grants"
   [[ -r "${POST_MIGRATION_GRANTS_FILE}" ]] || \
     die "post-migration grants file is not readable at ${POST_MIGRATION_GRANTS_FILE}; run render or install again"
@@ -368,11 +364,7 @@ run_bootstrap_admin() {
 
   log "bootstrapping GitHub admin"
   recheck_registry_images
-  if [[ "${IMAGE_MODE}" == registry ]]; then
-    compose run --rm --pull never --no-deps dollhousemcp-migrate node dist/cli/admin-bootstrap.js --require-admin-url "${args[@]}"
-  else
-    compose run --rm dollhousemcp-migrate node dist/cli/admin-bootstrap.js --require-admin-url "${args[@]}"
-  fi
+  compose run --rm --pull never --no-deps dollhousemcp-migrate node dist/cli/admin-bootstrap.js --require-admin-url "${args[@]}"
 
   return 0
 }

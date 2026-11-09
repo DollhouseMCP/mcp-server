@@ -7,7 +7,7 @@ migration_id="$(cat "${RUNNER_TEMP}/beta3-tested-migration.id")"
 work="$(mktemp -d "${RUNNER_TEMP}/registry-fixture.XXXXXXXX")"
 project="registryfixture${GITHUB_RUN_ID}${GITHUB_RUN_ATTEMPT}$(printf '%s' "$RUNNER_ARCH" | tr '[:upper:]' '[:lower:]')"
 registry_id='' tag_runtime='' tag_migration='' runtime_ref='' migration_ref='' pulled_runtime_id='' pulled_migration_id='' old_id='' new_id='' dependency_id=''
-runtime_tagged=false migration_tagged=false app_possible=false sentinel_possible=false registry_possible=false
+runtime_tagged=false migration_tagged=false app_possible=false sentinel_possible=false registry_possible=false maintenance_possible=false
 completed=false
 operation_end=$((SECONDS + 420))
 run() {
@@ -18,7 +18,7 @@ run() {
   timeout --kill-after=2s "${cap}s" "$@"
 }
 cleanup() {
-  local result=$? owner owned_id identity tag expected tagged cleanup_ok=true
+  local result=$? owner owned_id identity tag expected tagged remaining cleanup_ok=true
   local cleanup_end=$((SECONDS + 100))
   trap - EXIT
   cleanup_run() {
@@ -40,6 +40,17 @@ cleanup() {
       else cleanup_ok=false; fi
     else cleanup_ok=false; fi
   done
+  if [[ "$maintenance_possible" == true ]]; then
+    if identity=$(cleanup_run 10 docker inspect --format '{{.Id}}|{{index .Config.Labels "com.docker.compose.project"}}' "${project}-maintenance" 2>/dev/null); then
+      owned_id="${identity%%|*}"; owner="${identity#*|}"
+      if [[ "$owned_id" =~ ^[a-f0-9]{64}$ && "$owner" == "$project" ]]; then
+        cleanup_run 10 docker rm -f --volumes "$owned_id" >/dev/null || cleanup_ok=false
+      else cleanup_ok=false; fi
+    else
+      remaining=$(cleanup_run 10 docker ps -aq --no-trunc --filter "name=^/${project}-maintenance$") || cleanup_ok=false
+      [[ -z "$remaining" ]] || cleanup_ok=false
+    fi
+  fi
   if [[ "$registry_possible" == true ]]; then
     if identity=$(cleanup_run 10 docker inspect --format '{{.Id}}|{{index .Config.Labels "dollhouse.fixture"}}' "${project}-registry" 2>/dev/null); then
       owned_id="${identity%%|*}"; owner="${identity#*|}"
@@ -79,7 +90,7 @@ case "${RUNNER_ARCH}:${daemon_platform}" in
   *) exit 1 ;;
 esac
 run 10 docker info --format '{{json .SecurityOptions}}' | python3 -c 'import json,sys; opts=json.load(sys.stdin); assert isinstance(opts,list) and not any("rootless" in x.lower() for x in opts)'
-for name in "${project}-app" "${project}-sentinel" "${project}-registry"; do
+for name in "${project}-app" "${project}-sentinel" "${project}-registry" "${project}-maintenance"; do
   if run 10 docker inspect "$name" >/dev/null 2>&1; then exit 1; fi
 done
 registry='docker.io/library/registry@sha256:38907510915c3f1604c7e83d6ab602ab3020d092f73bdaed8696773693ff768c'
@@ -93,7 +104,7 @@ port=$(run 15 docker port "$registry_id" 5000/tcp)
 endpoint="$port"
 ready=false
 for _ in {1..30}; do
-  if run 3 curl --silent --fail --max-time 2 "http://${endpoint}/v2/" >/dev/null; then ready=true; break; fi
+  if run 3 curl --disable --noproxy '*' --proto '=http' --silent --fail --max-time 2 "http://${endpoint}/v2/" >/dev/null; then ready=true; break; fi
   run 2 sleep 1
 done
 [[ "$ready" == true ]]
@@ -129,13 +140,21 @@ for key in ('Config', 'RootFS', 'Os', 'Architecture'):
     if built.get(key) != pulled.get(key): raise SystemExit('pulled image differs from built image: ' + key)
 PY_COMPARE
 done
+printf 'FIXTURE_CONFIG_REVISION=original\n' > "$work/fixture.env"
 cat > "$work/compose.yml" <<YAML
 services:
   sentinel:
     container_name: ${project}-sentinel
     image: ${runtime_ref}
+    env_file: [fixture.env]
     network_mode: none
     command: ["node", "-e", "process.on('SIGTERM',()=>process.exit(0)); require('fs').writeFileSync('/app/.memory-upgrade-control/fixture-ready','ready'); setInterval(()=>{},1000)"]
+  maintenance:
+    image: ${migration_ref}
+    env_file: [fixture.env]
+    network_mode: none
+    depends_on: [sentinel]
+    command: ["node", "-e", "if(process.env.FIXTURE_CONFIG_REVISION!=='changed') process.exit(1)"]
   app:
     container_name: ${project}-app
     image: ${runtime_ref}
@@ -152,6 +171,15 @@ dependency_id=$(run 15 docker compose -p "$project" -f "$work/compose.yml" ps -q
 [[ "$old_id" =~ ^[a-f0-9]{64}$ && "$dependency_id" =~ ^[a-f0-9]{64}$ ]]
 old_started=$(run 15 docker inspect --format '{{.State.StartedAt}}' "$old_id")
 dependency_started=$(run 15 docker inspect --format '{{.State.StartedAt}}' "$dependency_id")
+# A shared env-file change changes the sentinel's desired configuration.
+# The migration-image command override only checks that updated fixture input.
+printf 'FIXTURE_CONFIG_REVISION=changed\n' > "$work/fixture.env"
+maintenance_possible=true
+run 30 docker compose -p "$project" -f "$work/compose.yml" run --name "${project}-maintenance" --rm --pull never --no-deps maintenance
+[[ "$(run 15 docker inspect --format '{{.State.Running}}|{{.State.StartedAt}}' "$dependency_id")" == "true|$dependency_started" ]]
+[[ "$(run 15 docker compose -p "$project" -f "$work/compose.yml" ps -q sentinel)" == "$dependency_id" ]]
+[[ "$(run 15 docker image inspect --format '{{.Id}}' "$runtime_ref")" == "$pulled_runtime_id" ]]
+[[ "$(run 15 docker image inspect --format '{{.Id}}' "$migration_ref")" == "$pulled_migration_id" ]]
 missing="${endpoint}/${project}-missing@sha256:$(printf '0%.0s' {1..64})"
 if run 90 python3 scripts/hosted-deploy/registry_image_admission.py prepare "$runtime_ref" "$missing" > /dev/null 2>&1; then exit 1; fi
 [[ "$(run 15 docker inspect --format '{{.State.Running}}|{{.State.StartedAt}}' "$old_id")" == "true|$old_started" ]]

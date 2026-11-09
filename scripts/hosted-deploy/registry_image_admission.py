@@ -20,6 +20,7 @@ spec.loader.exec_module(scanner)
 REFERENCE = re.compile(r'[a-z0-9][a-z0-9.-]*(?::(?a:\d)+)?(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)+@sha256:[0-9a-f]{64}')
 DIGEST = re.compile(r'sha256:[0-9a-f]{64}')
 SOURCE = re.compile(r'[0-9a-f]{40}')
+SOURCE_LABEL = 'org.dollhousemcp.engine-proof-source'
 
 
 def native_platform(image, daemon):
@@ -53,11 +54,11 @@ def validate_health(config, role):
 
 def source_label(config, role):
     labels = config.get('Labels')
-    if not isinstance(labels, dict) or not isinstance(labels.get('org.dollhousemcp.engine-proof-source'), str) or not SOURCE.fullmatch(labels['org.dollhousemcp.engine-proof-source']):
+    if not isinstance(labels, dict) or not isinstance(labels.get(SOURCE_LABEL), str) or not SOURCE.fullmatch(labels[SOURCE_LABEL]):
         raise ValueError('image pair source label missing')
     if role == 'runtime' and labels.get('org.dollhousemcp.memory-upgrade-drain') != 'v2':
         raise ValueError('runtime drain contract missing')
-    return labels['org.dollhousemcp.engine-proof-source']
+    return labels[SOURCE_LABEL]
 
 
 def image_profile(image, role):
