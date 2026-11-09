@@ -27,45 +27,82 @@ async function closeEmptyFixture(operator: MemoryUpgradeOperator): Promise<void>
 }
 
 unix('Private memory admission control', () => {
-  it('closes admission before held intent I/O and refuses an expired request without flushing original work', () => owned(async directory => {
+  it('closes admission before held intent I/O and refuses an expired request without flushing original work', () => {
+    const started = process.hrtime.bigint();
+    let sequence = 0;
+    let clientSettled = 'pending';
+    let intentWasEntered = false;
+    const mark = (phase: string): void => {
+      process.stderr.write(`${JSON.stringify({ test: 'held-intent-deadline', sequence: ++sequence,
+        elapsedMs: Number(process.hrtime.bigint() - started) / 1_000_000,
+        phase, clientSettled, intentEntered: intentWasEntered })}\n`);
+    };
+    mark('owned-start');
+    return owned(async directory => {
+    mark('prepare-start');
     const operator = await MemoryUpgradeOperator.prepare(directory);
+    mark('prepare-complete');
     const lifecycle = new MemoryUpgradeLifecycle();
     operator.bindLifecycle(lifecycle); operator.enableOriginalDrain();
+    mark('listen-start');
     await operator.listen();
+    mark('listen-complete');
     let releaseIntent!: () => void;
     let enteredIntent!: () => void;
     const intentEntered = new Promise<void>(resolve => { enteredIntent = resolve; });
     const intentHeld = new Promise<void>(resolve => { releaseIntent = resolve; });
     const request = operator.state.request.bind(operator.state);
     const intent = jest.spyOn(operator.state, 'request').mockImplementation(async (...args) => {
-      enteredIntent(); await intentHeld; return request(...args);
+      intentWasEntered = true; mark('intent-entered');
+      enteredIntent(); await intentHeld;
+      mark('intent-released');
+      return request(...args);
     });
     let releaseOriginal!: () => void;
     const originalHeld = new Promise<void>(resolve => { releaseOriginal = resolve; });
     const original = lifecycle.runRequest(() => lifecycle.runWrite(() => originalHeld));
     const stopped = jest.fn();
     lifecycle.registerStopSource(stopped);
+    mark('client-start');
     const client = requestMemoryDrain(directory, containerId, nonce, 50);
+    void client.then(() => { clientSettled = 'fulfilled'; mark('client-fulfilled'); },
+      () => { clientSettled = 'rejected'; mark('client-rejected'); });
     const refusal = expect(client).rejects.toThrow();
+    mark('wait-intent-start');
     await intentEntered;
+    mark('wait-intent-complete');
     expect(lifecycle.getSummary()).toMatchObject({ state: 'quiescing', admitted: 1, writes: 1 });
     await expect(lifecycle.runRequest(async () => undefined)).rejects.toMatchObject({ code: 'EMEMORYDRAIN' });
     expect(stopped).not.toHaveBeenCalled();
+    mark('wait-refusal-start');
     await refusal;
+    mark('wait-refusal-complete');
+    mark('release-intent');
     releaseIntent();
     // Wait for the original server-side attempt, not a second drain/replay.
     const pending = (operator as unknown as { drainAttempt: Promise<unknown> }).drainAttempt;
+    mark('wait-attempt-start');
     await expect(pending).rejects.toThrow('deadline');
+    mark('wait-attempt-complete');
     intent.mockRestore();
     expect(stopped).not.toHaveBeenCalled();
+    mark('state-read-start');
     expect((await operator.state.read()).kind).toBe('requested');
+    mark('state-read-complete');
     expect(lifecycle.getSummary()).toMatchObject({ state: 'quiescing', admitted: 1, writes: 1 });
+    mark('release-original');
     releaseOriginal(); await original;
+    mark('original-complete');
+    mark('retry-start');
     const ack = await requestMemoryDrain(directory, containerId, nonce, 1000);
+    mark('retry-complete');
     expect(ack.phase).toBe('drained');
     expect(stopped).toHaveBeenCalledTimes(1);
+    mark('operator-close-start');
     await operator.closeAfterDrain();
-  }));
+    mark('body-complete');
+    }).then(() => mark('owned-complete'), error => { mark('owned-failed'); throw error; });
+  });
 
   it.each(['nonce', 'bootId', 'containerId'])('rejects a JSON array in the %s token without creating intent', field => owned(async directory => {
     const operator = await MemoryUpgradeOperator.prepare(directory);
