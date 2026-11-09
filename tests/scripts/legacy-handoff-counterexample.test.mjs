@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { before } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -6,15 +6,17 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { fixture, append } from '../fixtures/legacy-handoff/harness.mjs';
 
-const bytes = readFileSync(new URL('../fixtures/legacy-handoff/compiled-methods.json', import.meta.url));
-assert.equal(createHash('sha256').update(bytes).digest('hex'), '30941ff7c199739f8f976294295a0a55a530f8c4bd013dda69fd8f90aa6bfc5d');
-const record = JSON.parse(bytes);
-const moduleBytes = readFileSync(new URL('../fixtures/legacy-handoff/compiled-fragments.mjs', import.meta.url), 'utf8');
-for (const fragment of Object.values(record.fragments)) {
-  assert.equal(createHash('sha256').update(fragment.compiled_bytes).digest('hex'), fragment.method_sha256);
-  assert.equal(fragment.full_file_sha256, record.files[fragment.source]);
-  assert.equal(moduleBytes.split(fragment.compiled_bytes).length, 2, 'exact compiled fragment must occur once');
-}
+before(() => {
+  const bytes = readFileSync(new URL('../fixtures/legacy-handoff/compiled-methods.json', import.meta.url));
+  assert.equal(createHash('sha256').update(bytes).digest('hex'), '30941ff7c199739f8f976294295a0a55a530f8c4bd013dda69fd8f90aa6bfc5d');
+  const record = JSON.parse(bytes);
+  const moduleBytes = readFileSync(new URL('../fixtures/legacy-handoff/compiled-fragments.mjs', import.meta.url), 'utf8');
+  for (const fragment of Object.values(record.fragments)) {
+    assert.equal(createHash('sha256').update(fragment.compiled_bytes).digest('hex'), fragment.method_sha256);
+    assert.equal(fragment.full_file_sha256, record.files[fragment.source]);
+    assert.equal(moduleBytes.split(fragment.compiled_bytes).length, 2, 'exact compiled fragment must occur once');
+  }
+});
 
 test('archived fragments acknowledge and then exit zero with a deferred save', async () => {
   const script = fileURLToPath(new URL('../fixtures/legacy-handoff/exit-child.mjs', import.meta.url));
