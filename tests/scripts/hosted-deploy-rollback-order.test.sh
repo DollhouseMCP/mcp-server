@@ -63,7 +63,9 @@ if [[ "${1:-}" == "--case" ]]; then
     printf 'compose:%s\n' "$*" >> "${EVENTS}"
     case "$1" in
       build)
+        [[ "$*" == "build dollhousemcp" ]]
         [[ "$(cat "${SERVER_DIR}/version")" == "previous" ]]
+        ! grep -q 'AS migration' "${SERVER_DIR}/docker/Dockerfile"
         [[ "${MODE}" != "build-failure" ]]
         ;;
       pull) [[ "${MODE}" != "pull-failure" ]] ;;
@@ -93,6 +95,8 @@ for mode in recovery-failure promotion-failure build-failure readiness-failure d
   mkdir -p "${fixture}/server" "${fixture}/server.prev-20000101"
   printf 'current\n' > "${fixture}/server/version"
   printf 'previous\n' > "${fixture}/server.prev-20000101/version"
+  mkdir -p "${fixture}/server.prev-20000101/docker"
+  printf 'FROM node AS builder\nFROM builder AS production\n' > "${fixture}/server.prev-20000101/docker/Dockerfile"
   printf 'fixture-config\n' > "${fixture}/Caddyfile"
   printf 'current-revision\n' > "${fixture}/DEPLOYED_REVISION"
   printf '2000-01-01T00:00:00Z\n' > "${fixture}/DEPLOYED_AT"
@@ -104,7 +108,7 @@ for mode in recovery-failure promotion-failure build-failure readiness-failure d
   if [[ "${mode}" == "success" || "${mode}" == "noop-same" ]]; then
     [[ "${status}" == 0 ]] || fail "success exited ${status}"
     # Compare the whole sequence, including the chosen source and image build.
-    expected=$'proxy-recovery:server.prev-20000101\nmove:server\nmove:server.prev-20000101\ncompose:build dollhousemcp dollhousemcp-migrate\npostgres-ready\ngraceful-stop\ncompose:up -d --pull never dollhousemcp\nreplacement'
+    expected=$'proxy-recovery:server.prev-20000101\nmove:server\nmove:server.prev-20000101\ncompose:build dollhousemcp\npostgres-ready\ngraceful-stop\ncompose:up -d --pull never dollhousemcp\nreplacement'
     [[ "$(cat "${fixture}/events")" == "${expected}" ]] || fail "unexpected replacement order"
     [[ "$(cat "${fixture}/DEPLOYED_REVISION")" == "rollback:server.prev-20000101" ]] || fail "successful replacement marker missing"
     [[ "$(cat "${fixture}/DEPLOYED_AT")" != "2000-01-01T00:00:00Z" ]] || fail "successful replacement timestamp missing"

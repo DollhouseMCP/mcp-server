@@ -154,3 +154,13 @@ ENV NODE_ENV=production \
 
 # Default command with explicit platform handling
 CMD ["node", "--trace-warnings", "dist/index.js"]
+
+# Dedicated non-server image: only SQL and Drizzle's journal are added.
+FROM production AS migration
+COPY --chown=1001:1001 src/database/migrations/*.sql /app/src/database/migrations/
+COPY --chown=1001:1001 src/database/migrations/meta/_journal.json /app/src/database/migrations/meta/_journal.json
+HEALTHCHECK NONE
+CMD ["node", "dist/cli/migrate-database.js"]
+
+# Keep a plain `docker build` selecting the server, not the maintenance image.
+FROM production AS default-production

@@ -77,6 +77,8 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests/scripts -p 'test_hosted_caddy*.py'
           node --test tests/scripts/caddy-volume-copy.test.mjs
           npm run test:hosted-deploy
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/scripts/test_migration_export_environment.py
+          bash tests/scripts/hosted-maintenance-source.test.sh
           bash tests/scripts/hosted-deploy-preparation-order.test.sh
           bash tests/scripts/hosted-deploy-rollback-order.test.sh
           bash tests/scripts/hosted-deploy-transition-order.test.sh

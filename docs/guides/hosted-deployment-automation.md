@@ -570,7 +570,7 @@ Renders files, rebuilds the current `dollhousemcp` image if needed, waits for Po
 docker compose --env-file .env.production run --rm dollhousemcp-migrate
 ```
 
-The `dollhousemcp-migrate` service is built from the Dockerfile `builder` target so `drizzle-kit` and the Drizzle config are available without adding migration tooling to the runtime production image.
+The `dollhousemcp-migrate` service uses the shell-free `migration` target. It requires `DOLLHOUSE_DATABASE_ADMIN_URL` and runs the compiled Drizzle ORM migrator against the same SQL journal and migration history table. The hosted bootstrap command also requires that administrator URL and runs directly with Node. The separate builder target remains available for development; it is not the hosted maintenance image. URL `sslmode` settings are preserved; conflicting explicit `DOLLHOUSE_DATABASE_SSL` settings and URL-specified certificate or key file paths are refused rather than silently ignored. A receipt-bound rollback builds only the selected application image and does not run migrations; assess schema compatibility before rolling back.
 
 Use this when the database needs to be brought current without staging new source:
 
@@ -606,6 +606,8 @@ DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com npm run hosted:deploy -- rollback
 ```
 
 Rollback restores the application source bundle only. It does not roll database schema backward; use it for ordinary failed app deploys, not for a migration that requires a planned database restore.
+
+After rolling back to a source bundle that predates slim maintenance, `migrate` and `bootstrap-admin` are unavailable until the server is rolled forward to a supported source and rendered again. Rollback builds only the application image and does not run migrations.
 
 A preparation failure leaves the running app and deployed revision/timestamp markers in place; `server` and image tags may already contain the prepared rollback candidate, while `server.rollback-from-*` retains the current source. The prepared source/tag may therefore differ from the running image; this is not a completed rollback or a restored active source pointer. Use the retained bundle for source recovery. Deployed markers change only after successful replacement. A drain refusal prevents replacement and retains the old process and its work. No forced stop follows that refusal.
 

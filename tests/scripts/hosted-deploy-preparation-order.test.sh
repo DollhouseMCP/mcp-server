@@ -84,6 +84,9 @@ if [[ "${1:-}" == --case ]]; then
   sleep() { :; }
   stage_from_source_dir() {
     local incoming="$1"
+    mkdir -p "${incoming}/docker" "${incoming}/src/cli"
+    printf 'FROM production AS migration\n' > "${incoming}/docker/Dockerfile"
+    : > "${incoming}/src/cli/migrate-database.ts"
     printf 'new\n' > "${incoming}/version"
     printf 'new-revision\n'
   }
@@ -103,7 +106,7 @@ if [[ "${1:-}" == --case ]]; then
     [[ "${MODE}" != replacement-failure ]]
   }
   maintenance_command() {
-    if [[ "$*" == *dollhouse-bootstrap-admin* ]]; then
+    if [[ "$*" == *dist/cli/admin-bootstrap.js* ]]; then
       printf 'bootstrap\n' >> "${EVENTS}"
       [[ "${MODE}" != bootstrap-failure ]]
     else

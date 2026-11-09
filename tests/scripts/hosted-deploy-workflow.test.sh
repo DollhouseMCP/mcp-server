@@ -226,11 +226,12 @@ EOF
 
 create_source_repo() {
   SOURCE_REPO="${TMP_ROOT}/source"
-  mkdir -p "${SOURCE_REPO}/docker"
+  mkdir -p "${SOURCE_REPO}/docker" "${SOURCE_REPO}/src/cli"
   git -C "${SOURCE_REPO}" init -q
   git -C "${SOURCE_REPO}" config user.email "test@example.com"
   git -C "${SOURCE_REPO}" config user.name "Hosted Deploy Test"
-  printf 'FROM scratch\n' > "${SOURCE_REPO}/docker/Dockerfile"
+  printf 'FROM scratch\nFROM production AS migration\n' > "${SOURCE_REPO}/docker/Dockerfile"
+  : > "${SOURCE_REPO}/src/cli/migrate-database.ts"
   printf '{"scripts":{"db:migrate":"echo migrate"}}\n' > "${SOURCE_REPO}/package.json"
   printf 'v1' > "${SOURCE_REPO}/version.txt"
   git -C "${SOURCE_REPO}" add .
@@ -298,7 +299,7 @@ assert_contains "${DRY_RUN_OUTPUT}" "would retain a verified unchanged hardened 
 assert_contains "${DRY_RUN_OUTPUT}" "retaining an unchanged qualified caddy proxy when applicable"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would apply post-migration database grants"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would write ${DRY_RUN_DEPLOY_DIR}/apply-post-migration-grants.sh to pass grant passwords through container environment"
-assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would write ${DRY_RUN_DEPLOY_DIR}/bootstrap-admin.sh to use the admin database URL inside the maintenance container"
+assert_contains "${DRY_RUN_OUTPUT}" "dry-run: hosted bootstrap requires the administrator database URL inside the maintenance container"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would verify https://mcp.example.com/healthz"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would warn, not fail, if /readyz reports bootstrap_required"
 PATH="${FAKE_BIN}:${PATH}" \
@@ -385,7 +386,7 @@ if grep -Fq "${COMPOSE_CMD} pull caddy" "${DOCKER_LOG}"; then fail "unchanged pr
 log "running bootstrap-admin workflow"
 DOCKER_LOG="${TMP_ROOT}/docker-bootstrap.log"
 run_hosted_with_bootstrap bootstrap-admin octocat
-assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} run --rm dollhousemcp-migrate /usr/local/bin/dollhouse-bootstrap-admin --method github --github-username octocat"
+assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} run --rm dollhousemcp-migrate node dist/cli/admin-bootstrap.js --require-admin-url --method github --github-username octocat"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} exec -T postgres /usr/local/bin/apply-post-migration-grants"
 
 log "running rollback workflow"

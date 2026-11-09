@@ -122,7 +122,16 @@ prepare_postgres_before_app_stop() {
   wait_for_postgres
 }
 
+require_slim_maintenance_source() {
+  local dockerfile="${SERVER_DIR}/docker/Dockerfile"
+  local cli="${SERVER_DIR}/src/cli/migrate-database.ts"
+  [[ -f "${dockerfile}" && -f "${cli}" ]] && \
+    [[ $(grep -Ec '^FROM[[:space:]]+production[[:space:]]+AS[[:space:]]+migration[[:space:]]*$' "${dockerfile}") == 1 ]] || \
+    die "this source predates slim maintenance; roll forward to a supported source and render again before migrate or bootstrap-admin"
+}
+
 build_app_image() {
+  require_slim_maintenance_source
   log "building dollhousemcp image"
   compose build dollhousemcp dollhousemcp-migrate
 
@@ -306,8 +315,9 @@ restart_caddy_proxy() {
 
 prepare_existing_stack() {
   ensure_runtime_prerequisites
-  render_files
   ensure_server_source
+  require_slim_maintenance_source
+  render_files
   build_app_image
   wait_for_postgres
 
@@ -338,7 +348,7 @@ run_bootstrap_admin() {
   log "bootstrapping GitHub admin"
   compose run --rm \
     dollhousemcp-migrate \
-    /usr/local/bin/dollhouse-bootstrap-admin "${args[@]}"
+    node dist/cli/admin-bootstrap.js --require-admin-url "${args[@]}"
 
   return 0
 }
@@ -588,7 +598,8 @@ rollback_server() {
   fi
   caddy_transition stage >/dev/null || die "rollback source identity could not be recorded"
 
-  build_app_image
+  # Rollback does not run migrations; previous source may predate the slim target.
+  compose build dollhousemcp
   prepare_postgres_before_app_stop
   # Prepare the selected rollback bundle and images while the current app is
   # healthy. A failed move/build/pull must not create an avoidable outage.

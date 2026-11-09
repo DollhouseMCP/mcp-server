@@ -30,8 +30,24 @@ for (const file of ['docker/Dockerfile', 'docker/Dockerfile.prebuilt']) {
     assert.equal(users.at(-1), 'USER 1001:1001');
     assert.match(runtime, /^ENTRYPOINT \[\]$/m);
     assert.match(runtime, /^CMD \["node", "--trace-warnings", "dist\/index\.js"\]$/m);
+    const [beforeMigration, afterMigration] = source.split('FROM production AS migration\n');
+    assert.ok(beforeMigration && afterMigration, 'named migration stage is required');
+    const [migration, defaultProduction] = afterMigration.split('FROM production AS default-production\n');
+    assert.equal(defaultProduction, '', 'plain Docker build must end at the production alias');
+    assert.match(migration, /COPY --chown=1001:1001 src\/database\/migrations\/\*\.sql \/app\/src\/database\/migrations\//);
+    assert.match(migration, /COPY --chown=1001:1001 src\/database\/migrations\/meta\/_journal\.json/);
+    assert.match(migration, /^HEALTHCHECK NONE$/m);
+    assert.match(migration, /^CMD \["node", "dist\/cli\/migrate-database\.js"\]$/m);
+    assert.doesNotMatch(migration, /^RUN |\bnpm\b|\/bin\/sh/m);
     assert.ok(runtime.includes('HOME=/home/dollhouse'));
     assert.ok(runtime.includes('/app/node_modules/.bin:/nodejs/bin:'));
     if (file === 'docker/Dockerfile') assert.match(runtime, /CMD \["\/nodejs\/bin\/node", "-e",/);
   });
 }
+
+test('prebuilt context retains the root exclusions while admitting compiled dist', () => {
+  const root = readFileSync('.dockerignore', 'utf8');
+  const prebuilt = readFileSync('docker/Dockerfile.prebuilt.dockerignore', 'utf8');
+  assert.equal(prebuilt, root.replace('# Build artifacts (rebuilt in container)\ndist/\n',
+    '# Prebuilt Dockerfile consumes the supplied compiled dist.\n'));
+});
