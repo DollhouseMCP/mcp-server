@@ -104,7 +104,7 @@ if [[ "${1:-}" == --case ]]; then
     printf 'new-revision\n'
   }
   selected_postgres() {
-    if [[ "${MODE}" == missing-pg || "${MODE}" == fresh-install || "${MODE}" == fresh-retry ]]; then
+    if [[ "${MODE}" == missing-pg || "${MODE}" == stopped-missing-pg || "${MODE}" == fresh-install || "${MODE}" == fresh-retry ]]; then
       [[ -f "${DEPLOY_DIR}/pg-started" ]] || return 0
     fi
     if [[ -f "${DEPLOY_DIR}/selection-changed" ]]; then
@@ -133,7 +133,7 @@ if [[ "${1:-}" == --case ]]; then
     printf 'compose:%s\n' "$*" >> "${EVENTS}"
     case "${operation}" in
       ps)
-        local service="$3"
+        local service="${*: -1}"
         if [[ "${service}" == postgres ]]; then selected_postgres
         elif [[ "${MODE}" != fresh-install && "${MODE}" != fresh-retry ]]; then printf '%s\n' "${APP_ID}"
         fi
@@ -175,11 +175,26 @@ if [[ "${1:-}" == --case ]]; then
     else die "unexpected docker operation"
     fi
   }
-  gracefully_stop_existing_app() {
-    printf 'graceful-stop\n' >> "${EVENTS}"
-    [[ "${MODE}" != drain-refusal ]] || return 1
-    touch "${DEPLOY_DIR}/stopped"
-  }
+  if [[ "${MODE}" == stopped-existing ]]; then
+    HOSTED_DEPLOY_SCRIPT_DIR="${REPO_ROOT}/scripts"
+    mkdir -p "${DEPLOY_DIR}/fake-bin"
+    export FIXTURE_APP_ID="${APP_ID}" FIXTURE_DOCKER_EVENTS="${DEPLOY_DIR}/strict-docker-events"
+    cat > "${DEPLOY_DIR}/fake-bin/docker" <<'DOCKER'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$1" >> "${FIXTURE_DOCKER_EVENTS}"
+[[ "$1" == inspect ]] || exit 1
+printf '{"id":"%s","running":false,"exitCode":0,"oomKilled":false,"startedAt":"2026-01-01T00:00:00Z","restartCount":0,"restarting":false,"readonly":false,"mounts":[],"enabled":"enabled","capability":"v2"}\n' "${FIXTURE_APP_ID}"
+DOCKER
+    chmod 0755 "${DEPLOY_DIR}/fake-bin/docker"
+    export PATH="${DEPLOY_DIR}/fake-bin:${PATH}"
+  else
+    gracefully_stop_existing_app() {
+      printf 'graceful-stop\n' >> "${EVENTS}"
+      [[ "${MODE}" != drain-refusal ]] || return 1
+      touch "${DEPLOY_DIR}/stopped"
+    }
+  fi
   case "${ACTION}" in
     rollback) rollback_server ;;
     migrate) run_migrations ;;
@@ -258,6 +273,17 @@ check_fixture() {
     case "${mode}" in
       migration-failure|bootstrap-failure|replacement-failure|registry-drift) [[ -f "${fixture}/stopped" ]] || fail "missing strict drain" ;;
       drain-refusal) grep -q '^graceful-stop$' "${fixture}/events" || fail "missing refusal" ;;
+      stopped-missing-pg)
+        grep -q '^compose:ps --all -q dollhousemcp$' "${fixture}/events" || fail "stopped app was not selected before database preparation"
+        grep -q 'existing application has no running postgres; refusing database recreation' "${fixture}/stderr" || fail "missing database refusal not reported"
+        if grep -Eq '^compose:up |^(migration|bootstrap|replacement)$' "${fixture}/events"; then fail "stopped app advanced to database or app mutation"; fi
+        ;;
+      stopped-existing)
+        grep -q '^compose:ps --all -q dollhousemcp$' "${fixture}/events" || fail "stopped app was not selected"
+        grep -q 'Stopped container has no live drain acknowledgement; replacement refused' "${fixture}/stderr" || fail "strict stopped-app refusal missing"
+        [[ "$(cat "${fixture}/strict-docker-events")" == inspect ]] || fail "stopped app received exec or signal"
+        if grep -Eq '^(migration|bootstrap|replacement)$' "${fixture}/events"; then fail "stopped app advanced to mutation"; fi
+        ;;
       *) if grep -q '^graceful-stop$' "${fixture}/events"; then fail "healthy app stopped on preparation failure"; fi ;;
     esac
     if [[ "${mode}" != replacement-failure ]] && grep -q '^replacement$' "${fixture}/events"; then fail "replacement after failure"; fi
@@ -337,3 +363,6 @@ for action in migrate bootstrap; do
   if grep -q '^graceful-stop$' "${fixture}/events"; then fail "registry ${action} unexpectedly stopped app"; fi
   printf 'preparation-order PASS registry %s\n' "${action}"
 done
+
+check_fixture update stopped-existing app
+check_fixture update stopped-missing-pg app

@@ -109,6 +109,15 @@ wait_for_running_postgres() {
   return 0
 }
 
+existing_app_id() {
+  local selected immutable_id
+  selected="$(compose ps --all -q dollhousemcp)" || die "cannot resolve application container"
+  [[ -n "${selected}" ]] || return 0
+  immutable_id="$(docker inspect --format '{{.Id}}' "${selected}")" || die "cannot inspect application identity"
+  [[ "${immutable_id}" =~ ^[a-f0-9]{64}$ ]] || die "invalid application container identity"
+  printf '%s\n' "${immutable_id}"
+}
+
 prepare_postgres_before_app_stop() {
   local postgres_id app_id
   postgres_id="$(running_service_id postgres)" || die "cannot resolve running postgres"
@@ -116,8 +125,8 @@ prepare_postgres_before_app_stop() {
     wait_for_running_postgres "${postgres_id}"
     return 0
   fi
-  app_id="$(running_service_id dollhousemcp)" || die "cannot resolve running application"
-  [[ -z "${app_id}" ]] || die "running application has no running postgres; refusing database recreation"
+  app_id="$(existing_app_id)" || die "cannot resolve existing application"
+  [[ -z "${app_id}" ]] || die "existing application has no running postgres; refusing database recreation"
   # Only an install/recovery with no running application may start PostgreSQL.
   wait_for_postgres
 }
@@ -380,10 +389,9 @@ bootstrap_admin() {
 # Resolve and stop only this application's current immutable container.
 # No compose stop/down/recreate may precede this successful fence.
 gracefully_stop_existing_app() {
-  local current_id immutable_id
-  current_id="$(compose ps -q dollhousemcp)"
-  [[ -n "${current_id}" ]] || return 0
-  immutable_id="$(docker inspect --format '{{.Id}}' "${current_id}")"
+  local immutable_id
+  immutable_id="$(existing_app_id)" || die "cannot resolve existing application"
+  [[ -n "${immutable_id}" ]] || return 0
   bash "${HOSTED_DEPLOY_SCRIPT_DIR}/hosted-graceful-stop.sh" "${immutable_id}" 60
 }
 
