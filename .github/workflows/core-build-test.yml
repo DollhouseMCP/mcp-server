@@ -75,7 +75,7 @@ jobs:
         run: |
           python3 -c 'import sys; assert sys.version_info >= (3, 11), "Python 3.11 or newer required"'
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests/scripts -p 'test_hosted_caddy*.py'
-          node --test tests/scripts/caddy-volume-copy.test.mjs
+          node --test tests/scripts/caddy-volume-copy.test.mjs tests/scripts/legacy-handoff-counterexample.test.mjs
           npm run test:hosted-deploy
           PYTHONDONTWRITEBYTECODE=1 python3 tests/scripts/test_migration_export_environment.py
           bash tests/scripts/hosted-maintenance-source.test.sh
