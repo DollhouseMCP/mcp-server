@@ -19,7 +19,7 @@ from image_scan_intake import unique_object
 SHA = re.compile(r'[0-9a-f]{64}\Z')
 LEGACY_IMAGE = 'sha256:13d294b73a003c602676a8978f3ec27f2ab820fc45bf597eebc072629216c64a'
 LEGACY_CONFIG = 'sha256:2ba0fe4a3d0192990d2cf6ad0d4a4dc0f8d60022bcc0ec8278edc6d0bca6a6fd'
-MISSING_SNAPSHOT = 'snapshot: not taken (no credential)'
+MISSING_SNAPSHOT = 'snapshot: not taken (no hcloud context)'
 BOUNDARY = 'persisted checkpoint; in-memory settlement not established'
 STATE = '.legacy-handoff'
 MANIFEST_FILE = 'manifest.json'

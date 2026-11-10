@@ -224,7 +224,7 @@ The remote wrapper additionally creates operator backups before it invokes the h
 
 Database readiness and `pg_dump` receive bounded retries before `update`, `migrate`, and `rollback` continue. Retry delays use exponential backoff from the configured base delay. If a dump attempt writes partial output and then fails, the wrapper moves that partial output to `backups/pre-remote-<action>-<timestamp>.sql.failed-attempt-<n>` with `0600` permissions before retrying or failing.
 
-Set `DOLLHOUSE_REMOTE_SKIP_BACKUP=true` or pass `--skip-backup` only when a separate backup already exists.
+Set `DOLLHOUSE_REMOTE_SKIP_BACKUP=true` or pass `--skip-backup` only when a separate backup already exists. For the explicit `legacy-offline-update` action, skipping is refused: the existing Compose file, `.env`, `.env.production`, successful database readiness and a nonempty dump are mandatory before invoking the helper. Set `DOLLHOUSE_HOSTED_LEGACY_CHECKPOINT` to the protected absolute checkpoint directory on the remote host; it is forwarded as one quoted argument only for that action, never persisted or inherited from stale remote state. These standard SQL/env backups supplement the independently verified VM dump and restore proof; see [the one-time handoff contract](legacy-maintenance-checkpoint.md).
 
 ## Configuration
 

@@ -173,7 +173,7 @@ class HandoffTests(unittest.TestCase):
         self.assertFalse(any(c[1] == 'stop' for c in self.calls))
 
     def test_snapshot_absence_is_only_the_exact_owner_selected_literal(self):
-        for value in (None, '', {}, 'not taken', {'id': '', 'status': 'taken'}):
+        for value in (None, '', {}, 'not taken', 'snapshot: not taken (no credential)', {'id': '', 'status': 'taken'}):
             with self.subTest(value=value):
                 self.request['snapshot'] = value; self.rebuild()
                 with self.assertRaises(ValueError): self.stop()

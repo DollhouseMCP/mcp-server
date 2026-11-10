@@ -94,6 +94,7 @@ if [[ "${DOLLHOUSE_FAKE_REMOTE_STALE_CADDY_ENV:-false}" == "true" ]]; then
   export DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG=stale
   export DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES=198.51.100.0/24
   export DOLLHOUSE_HOSTED_CADDY_IMAGE=stale DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME=stale_data DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME=stale_config
+  export DOLLHOUSE_HOSTED_LEGACY_CHECKPOINT=/stale-checkpoint
 fi
 if [[ "${DOLLHOUSE_FAKE_REMOTE_STALE_REGISTRY_ENV:-false}" == true ]]; then
   export DOLLHOUSE_HOSTED_IMAGE_MODE=registry DOLLHOUSE_HOSTED_RUNTIME_IMAGE=stale DOLLHOUSE_HOSTED_MIGRATION_IMAGE=stale
@@ -264,6 +265,8 @@ fi
     "${DOLLHOUSE_HOSTED_IMAGE_MODE+x}" "${DOLLHOUSE_HOSTED_IMAGE_MODE:-}" \
     "${DOLLHOUSE_HOSTED_RUNTIME_IMAGE+x}" "${DOLLHOUSE_HOSTED_RUNTIME_IMAGE:-}" \
     "${DOLLHOUSE_HOSTED_MIGRATION_IMAGE+x}" "${DOLLHOUSE_HOSTED_MIGRATION_IMAGE:-}"
+  printf 'legacy_checkpoint_set=%s legacy_checkpoint=%s ' \
+    "${DOLLHOUSE_HOSTED_LEGACY_CHECKPOINT+x}" "${DOLLHOUSE_HOSTED_LEGACY_CHECKPOINT:-}"
   printf 'bootstrap_username_set=%s bootstrap_username=%s bootstrap_id_set=%s bootstrap_id=%s ' \
     "${DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME+x}" "${DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME:-}" "${DOLLHOUSE_BOOTSTRAP_GITHUB_ID+x}" "${DOLLHOUSE_BOOTSTRAP_GITHUB_ID:-}"
   printf 'auth_provider_set=%s auth_provider=%s auth_issuer_set=%s auth_issuer=%s auth_audience_set=%s auth_audience=%s ' \
@@ -554,6 +557,8 @@ DOLLHOUSE_FAKE_REMOTE_STALE_CADDY_ENV=true \
   run_remote --skip-backup update > "${TMP_ROOT}/stale-caddy-env.out"
 assert_contains "${REMOTE_LOG}" "caddy_access_log_set= caddy_access_log= caddy_trusted_proxies_set= caddy_trusted_proxies="
 assert_not_contains "${REMOTE_LOG}" "caddy_access_log=stale"
+assert_contains "${REMOTE_LOG}" "legacy_checkpoint_set= legacy_checkpoint="
+assert_not_contains "${REMOTE_LOG}" "/stale-checkpoint"
 assert_not_contains "${REMOTE_LOG}" "caddy_trusted_proxies=198.51.100.0/24"
 assert_contains "${REMOTE_LOG}" "caddy_image_set= caddy_image= caddy_data_set= caddy_data= caddy_config_set= caddy_config="
 
@@ -787,6 +792,74 @@ success_count="$(
 if [[ "${success_count}" != "0" ]]; then
   fail "expected no finalized backup after permanent pg_dump failure, got ${success_count}"
 fi
+
+log "checking legacy handoff standard backups and exact checkpoint forwarding"
+reset_fake_state
+rm -R "${DEPLOY_DIR}/backups" 2>/dev/null || true
+legacy_checkpoint="${TMP_ROOT}/checkpoint with 'quotes' and \$(literal)"
+DOLLHOUSE_HOSTED_LEGACY_CHECKPOINT="${legacy_checkpoint}" DOLLHOUSE_FAKE_REMOTE_STALE_CADDY_ENV=true \
+  run_remote legacy-offline-update > "${TMP_ROOT}/legacy-backup.out"
+assert_contains "${REMOTE_LOG}" 'hosted action=legacy-offline-update'
+assert_contains "${REMOTE_LOG}" "legacy_checkpoint_set=x legacy_checkpoint=${legacy_checkpoint}"
+assert_not_contains "${REMOTE_LOG}" '/stale-checkpoint'
+node - "${DEPLOY_DIR}/backups" "${REMOTE_LOG}" <<'NODE'
+const fs = require('fs');
+const assert = require('node:assert/strict');
+const files = fs.readdirSync(process.argv[2]);
+for (const prefix of ['env.pre-remote-legacy-offline-update-', 'env.production.pre-remote-legacy-offline-update-', 'pre-remote-legacy-offline-update-']) {
+  const matches = files.filter(name => name.startsWith(prefix));
+  assert.equal(matches.length, 1, `one standard backup for ${prefix}`);
+  const path = `${process.argv[2]}/${matches[0]}`;
+  assert.equal(fs.statSync(path).mode & 0o777, 0o600);
+  assert.ok(fs.statSync(path).size > 0);
+}
+const log = fs.readFileSync(process.argv[3], 'utf8');
+const dump = log.indexOf('pg_dump');
+const clone = log.indexOf('git clone');
+const helper = log.indexOf('hosted action=legacy-offline-update');
+assert.ok(dump >= 0 && dump < clone && clone < helper, 'backup before clone and helper');
+NODE
+
+log "checking legacy handoff cannot skip backups or inherit a checkpoint"
+for bad in '' relative $'/absolute\ninvalid'; do
+  reset_fake_state
+  : > "${SSH_LOG}"
+  if DOLLHOUSE_HOSTED_LEGACY_CHECKPOINT="${bad}" run_remote legacy-offline-update > "${TMP_ROOT}/legacy-input.out" 2>&1; then
+    fail 'legacy handoff accepted a missing or invalid checkpoint'
+  fi
+  assert_contains "${TMP_ROOT}/legacy-input.out" 'requires an explicit absolute'
+  [[ ! -s "${SSH_LOG}" ]] || fail 'invalid checkpoint reached SSH'
+done
+reset_fake_state
+: > "${SSH_LOG}"
+if DOLLHOUSE_HOSTED_LEGACY_CHECKPOINT="${legacy_checkpoint}" run_remote --skip-backup legacy-offline-update > "${TMP_ROOT}/legacy-skip.out" 2>&1; then
+  fail 'legacy handoff skipped its standard backup'
+fi
+assert_contains "${TMP_ROOT}/legacy-skip.out" 'standard DB/env backups; --skip-backup is refused'
+[[ ! -s "${SSH_LOG}" ]] || fail 'skip-backup refusal reached SSH'
+
+log "checking legacy backup failures never reach the helper"
+for missing in compose.yml .env .env.production; do
+  reset_fake_state
+  mv "${DEPLOY_DIR}/${missing}" "${TMP_ROOT}/held-input"
+  if DOLLHOUSE_HOSTED_LEGACY_CHECKPOINT="${legacy_checkpoint}" run_remote legacy-offline-update > "${TMP_ROOT}/legacy-missing.out" 2>&1; then
+    fail 'legacy handoff accepted missing backup inputs'
+  fi
+  mv "${TMP_ROOT}/held-input" "${DEPLOY_DIR}/${missing}"
+  assert_contains "${TMP_ROOT}/legacy-missing.out" 'requires existing compose.yml, .env and .env.production'
+  assert_not_contains "${REMOTE_LOG}" 'git clone'
+  assert_not_contains "${REMOTE_LOG}" 'hosted action=legacy-offline-update'
+done
+for failure in DOLLHOUSE_FAKE_PG_ISREADY_FAILS DOLLHOUSE_FAKE_PG_DUMP_FAILS; do
+  reset_fake_state
+  export "${failure}=9"
+  if DOLLHOUSE_HOSTED_LEGACY_CHECKPOINT="${legacy_checkpoint}" run_remote legacy-offline-update > "${TMP_ROOT}/legacy-database.out" 2>&1; then
+    fail 'legacy handoff accepted a failed database backup'
+  fi
+  unset "${failure}"
+  assert_contains "${TMP_ROOT}/legacy-database.out" 'backup'
+  assert_not_contains "${REMOTE_LOG}" 'hosted action=legacy-offline-update'
+done
 
 log "checking missing target error"
 MISSING_TARGET_OUTPUT="${TMP_ROOT}/missing-target.out"

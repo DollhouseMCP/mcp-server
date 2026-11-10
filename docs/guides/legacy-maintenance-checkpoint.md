@@ -10,7 +10,7 @@ The legacy app can acknowledge work before its deferred save completes. Quiet tr
 
 Mick's selected backup mechanism is a Hetzner server snapshot plus an off-server `pg_dump` on the Dev Work VM. The restore authority restores the VM-retained bytes into disposable Postgres and verifies all migration ledger hashes and user-table row counts against the same exported source snapshot as the dump. Globals/roles are captured separately. Table counts are not per-row content or production authentication tests.
 
-The receipt supports a provider snapshot ID. For now the **only** permitted absence record is the literal `snapshot: not taken (no credential)`. This records a missing snapshot; it does not decide whether Mick requires one before the window. Do not ask for or improvise credentials when none are configured. Do not substitute the ephemeral PostgreSQL exported-snapshot hash for a Hetzner snapshot ID. The prior proposed Object Lock requirement is superseded by this owner decision.
+The receipt supports a provider snapshot ID. For now the **only** permitted absence record is the literal `snapshot: not taken (no hcloud context)`. This records the owner-accepted standard-backup fallback when no usable context exists; it never claims a provider snapshot was taken. Do not ask for or improvise credentials when none are configured. Do not substitute the ephemeral PostgreSQL exported-snapshot hash for a Hetzner snapshot ID. The prior proposed Object Lock requirement is superseded by this owner decision.
 
 ## Protected checkpoint input
 
@@ -35,7 +35,7 @@ Stage a new canonical directory owned by the deployment operator, mode `0700`. E
   "manifest_sha256": "<manifest.json SHA256>",
   "vm_receipt_sha256": "<vm-receipt.json SHA256>",
   "restore_proof_sha256": "<restore-proof.json SHA256>",
-  "snapshot": "snapshot: not taken (no credential)",
+  "snapshot": "snapshot: not taken (no hcloud context)",
   "accepted_boundary": "persisted checkpoint; in-memory settlement not established"
 }
 ```
@@ -44,14 +44,16 @@ When a provider snapshot exists, replace `snapshot` with `{"id":"12345678","stat
 
 ## Execution order and refusal behavior
 
+The standard remote wrapper creates its existing pre-action SQL dump and `.env`/`.env.production` backups before invoking the helper. For this one-time action it requires the existing Compose and both env files, successful database readiness and a nonempty dump; `--skip-backup` is refused. These supplementary plain SQL/env backups do not replace the VM-retained custom-format dump or the disposable restore proof bound by the handoff. SSH host access does not imply a Hetzner API context. If no usable existing `hcloud` context is available, Mick accepts the explicit absence record above plus these standard backups and the verified VM dump/restore proof. If a working context exists, take the provider snapshot immediately before the window and bind its real ID instead. Do not install/configure credentials or create a snapshot during source preparation.
+
 Use the existing runbook to verify/pull the runtime, migration, Caddy and helper images by digest before any outage. The action requires explicit registry mode and an existing app/database; it cannot install a fresh stack or build images. The internal `legacy_handoff.py preflight` accepts its bounded request on stdin and validates checkpoint/current service identities without stopping anything; the action repeats that preflight before staging or proxy changes. The request keys are `deploy_dir`, `instance`, `data_volume`, `config_volume`, `token` (empty for preflight), `checkpoint_dir`, `app_id`, and `postgres_id`.
 
-After START WINDOW and the approved offline Caddy preparation, invoke the existing helper with the same qualified image/volume selections and:
+After START WINDOW and the approved offline Caddy preparation, invoke the remote wrapper with the same qualified image/volume selections and the actual remote checkpoint path:
 
 ```bash
 DOLLHOUSE_HOSTED_IMAGE_MODE=registry \
 DOLLHOUSE_HOSTED_LEGACY_CHECKPOINT=/protected/actual-window-checkpoint \
-  scripts/hosted-deploy.sh legacy-offline-update
+  scripts/hosted-remote-deploy.sh legacy-offline-update
 ```
 
 This follows the ordinary guarded update's image admission, PostgreSQL readiness, source/recovery binding and Caddy verification profile. Only after the active/startup Caddy profile and public negative probes are verified does it consume the checkpoint. It requires the exact legacy app/container boot, unchanged image/command/configuration/storage, no direct published app port, no other Docker writer to the portfolio, and the same running PostgreSQL identity/mounts as the backup.
