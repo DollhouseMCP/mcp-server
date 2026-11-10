@@ -47,8 +47,9 @@ if [[ "${1:-}" == --case ]]; then
     fi
   }
   legacy_recovery_boundary() {
-    printf 'recovery-%s\n' "$1" >> "${EVENTS}"
-    [[ "${MODE}" != "registry-recovery-$1-refusal" ]]
+    local action="$1"
+    printf 'recovery-%s\n' "${action}" >> "${EVENTS}"
+    [[ "${MODE}" != "registry-recovery-${action}-refusal" ]]
   }
   IMAGE_MODE=build
   if [[ "${MODE}" == registry-* ]]; then IMAGE_MODE=registry; fi
