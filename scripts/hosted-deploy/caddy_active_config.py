@@ -28,6 +28,7 @@ CURL = '/usr/bin/curl'
 DOCKER = '/usr/bin/docker'
 LIMIT = 1024 * 1024
 IDENTIFIER = re.compile(r'[0-9a-f]{64}\Z')
+PROC = '/proc/'
 
 
 def system_docker(command, timeout, maximum):
@@ -84,6 +85,42 @@ def canonical(data):
     return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False, allow_nan=False).encode('utf-8')
 
 
+def write_bound_contents(fd, directory, expected, replacement, identity, bound_pid):
+    if bound_pid is not None:
+        if type(bound_pid) is not int or bound_pid <= 0:
+            raise ValueError('invalid Caddy PID')
+        mounted = os.stat(PROC + str(bound_pid) + '/root/etc/caddy/Caddyfile')
+        if identity != (mounted.st_dev, mounted.st_ino):
+            raise ValueError('Caddy startup file is not the bound inode')
+    current = bytearray()
+    while len(current) <= LIMIT:
+        chunk = os.read(fd, min(65536, LIMIT + 1 - len(current)))
+        if not chunk:
+            break
+        current.extend(chunk)
+    if bytes(current) != expected or os.fstat(fd).st_size != len(expected):
+        raise ValueError('Caddy startup file content changed')
+    os.lseek(fd, 0, os.SEEK_SET)
+    os.ftruncate(fd, 0)
+    offset = 0
+    while offset < len(replacement):
+        count = os.write(fd, replacement[offset:])
+        if count <= 0:
+            raise ValueError('Caddy startup file write was incomplete')
+        offset += count
+    os.fsync(fd)
+    os.lseek(fd, 0, os.SEEK_SET)
+    if os.read(fd, LIMIT + 1) != replacement:
+        raise ValueError('Caddy startup file readback differs')
+    linked = os.stat('Caddyfile', dir_fd=directory, follow_symlinks=False)
+    if (linked.st_dev, linked.st_ino) != identity:
+        raise ValueError('Caddy startup file was replaced')
+    if bound_pid is not None:
+        mounted = os.stat(PROC + str(bound_pid) + '/root/etc/caddy/Caddyfile')
+        if identity != (mounted.st_dev, mounted.st_ino):
+            raise ValueError('Caddy startup bind changed during write')
+
+
 def write_startup_file(root, expected, replacement, bound_pid=None):
     """Change only the validated bound inode, preserving it across restart."""
     if any(not isinstance(value, bytes) or len(value) > LIMIT for value in (expected, replacement)):
@@ -104,39 +141,7 @@ def write_startup_file(root, expected, replacement, bound_pid=None):
             if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1
                     or info.st_mode & 0o022 or info.st_size > LIMIT or identity != (linked.st_dev, linked.st_ino)):
                 raise ValueError('Caddy startup file is unsafe or changed')
-            if bound_pid is not None:
-                if type(bound_pid) is not int or bound_pid <= 0:
-                    raise ValueError('invalid Caddy PID')
-                mounted = os.stat('/proc/' + str(bound_pid) + '/root/etc/caddy/Caddyfile')
-                if identity != (mounted.st_dev, mounted.st_ino):
-                    raise ValueError('Caddy startup file is not the bound inode')
-            current = bytearray()
-            while len(current) <= LIMIT:
-                chunk = os.read(fd, min(65536, LIMIT + 1 - len(current)))
-                if not chunk:
-                    break
-                current.extend(chunk)
-            if bytes(current) != expected or os.fstat(fd).st_size != len(expected):
-                raise ValueError('Caddy startup file content changed')
-            os.lseek(fd, 0, os.SEEK_SET)
-            os.ftruncate(fd, 0)
-            offset = 0
-            while offset < len(replacement):
-                count = os.write(fd, replacement[offset:])
-                if count <= 0:
-                    raise ValueError('Caddy startup file write was incomplete')
-                offset += count
-            os.fsync(fd)
-            os.lseek(fd, 0, os.SEEK_SET)
-            if os.read(fd, LIMIT + 1) != replacement:
-                raise ValueError('Caddy startup file readback differs')
-            linked = os.stat('Caddyfile', dir_fd=directory, follow_symlinks=False)
-            if (linked.st_dev, linked.st_ino) != identity:
-                raise ValueError('Caddy startup file was replaced')
-            if bound_pid is not None:
-                mounted = os.stat('/proc/' + str(bound_pid) + '/root/etc/caddy/Caddyfile')
-                if identity != (mounted.st_dev, mounted.st_ino):
-                    raise ValueError('Caddy startup bind changed during write')
+            write_bound_contents(fd, directory, expected, replacement, identity, bound_pid)
             os.fsync(directory)
             return identity
         finally:
@@ -238,7 +243,7 @@ class ActiveConfig:
     def __init__(self, identifier, run=system_docker):
         self.run = run
         self.identity = boot(run, identifier)
-        self.fd = os.open('/proc/' + str(self.identity['pid']) + '/ns/net', os.O_RDONLY | os.O_CLOEXEC)
+        self.fd = os.open(PROC + str(self.identity['pid']) + '/ns/net', os.O_RDONLY | os.O_CLOEXEC)
         try:
             namespace = os.fstat(self.fd)
             self.namespace = (namespace.st_dev, namespace.st_ino)
@@ -253,7 +258,7 @@ class ActiveConfig:
     def recheck(self):
         if boot(self.run, self.identity['id']) != self.identity:
             raise ValueError('Caddy boot changed during private control')
-        path = '/proc/' + str(self.identity['pid']) + '/ns/net'
+        path = PROC + str(self.identity['pid']) + '/ns/net'
         opened, current = os.fstat(self.fd), os.stat(path)
         if (opened.st_dev, opened.st_ino) != self.namespace or (current.st_dev, current.st_ino) != self.namespace:
             raise ValueError('Caddy network namespace changed during private control')

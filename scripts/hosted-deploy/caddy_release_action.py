@@ -32,7 +32,7 @@ def object_digest(value):
     return digest(json.dumps(value, sort_keys=True, separators=(',', ':')).encode('utf-8'))
 
 
-def render_profiles(renderer, token):
+def validate_renderer(renderer):
     keys = {'PROXY_MODE', 'HOSTNAME', 'HTTP_BIND_PORT', 'MCP_PORT', 'CADDY_TRUSTED_PROXIES', 'CADDY_ACCESS_LOG'}
     if not isinstance(renderer, dict) or set(renderer) != keys or any(
             not isinstance(value, str) or any(char in value for char in '\n\r\x00') for value in renderer.values()):
@@ -44,7 +44,7 @@ def render_profiles(renderer, token):
         raise ValueError('invalid fixed Caddy renderer host')
     for key in ('HTTP_BIND_PORT', 'MCP_PORT'):
         value = renderer[key]
-        if not re.fullmatch(r'[1-9][0-9]{0,4}', value) or int(value) > 65535:
+        if not re.fullmatch(r'[1-9]\d{0,4}', value, flags=re.ASCII) or int(value) > 65535:
             raise ValueError('invalid fixed Caddy renderer port')
     if not re.fullmatch(r'[0-9A-Fa-f:.,/]*', renderer['CADDY_TRUSTED_PROXIES']):
         raise ValueError('invalid fixed Caddy trusted proxy list')
@@ -53,6 +53,10 @@ def render_profiles(renderer, token):
             if '/' not in network:
                 raise ValueError('invalid fixed Caddy trusted proxy list')
             ipaddress.ip_network(network, strict=False)
+
+
+def render_profiles(renderer, token):
+    validate_renderer(renderer)
     executable('/bin/bash')
     script = str(Path(__file__).with_name('render.sh'))
     if not re.fullmatch(r'[0-9a-f]{32}', token):

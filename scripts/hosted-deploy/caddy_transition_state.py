@@ -88,24 +88,15 @@ def validate_transition_phase(value):
             raise ValueError('transition source phase is inconsistent')
 
 
-def validate_control(control):
-    if control is None:
-        return
-    fields = {'phase', 'normal_sha256', 'verification_sha256', 'normal_config_sha256', 'verification_config_sha256', 'proxy', 'public_origin'}
-    if not isinstance(control, dict) or set(control) != fields or control['phase'] not in ('prepared', 'fenced', 'probed', 'accepted', 'releasing', 'released'):
-        raise ValueError('invalid Caddy verification control')
-    for key in ('normal_sha256', 'verification_sha256'):
-        if not isinstance(control[key], str) or not SHA256.fullmatch(control[key]):
-            raise ValueError('invalid Caddy verification file hash')
-    if not isinstance(control['public_origin'], str) or not re.fullmatch(r'https?://[a-z0-9][a-z0-9.-]*(?::[1-9][0-9]{0,4})?', control['public_origin']):
+def validate_control_origin(control):
+    if not isinstance(control['public_origin'], str) or not re.fullmatch(r'https?://[a-z0-9][a-z0-9.-]*(?::[1-9]\d{0,4})?', control['public_origin'], flags=re.ASCII):
         raise ValueError('invalid Caddy verification public origin')
     origin = urlsplit(control['public_origin'])
     if '..' in origin.hostname or origin.hostname.endswith('.') or (origin.port is not None and origin.port > 65535):
         raise ValueError('invalid Caddy verification public origin')
-    if control['phase'] == 'prepared':
-        if any(control[key] is not None for key in ('normal_config_sha256', 'verification_config_sha256', 'proxy')):
-            raise ValueError('unbound Caddy verification has unexpected evidence')
-        return
+
+
+def validate_bound_control(control):
     for key in ('normal_config_sha256', 'verification_config_sha256'):
         if not isinstance(control[key], str) or not SHA256.fullmatch(control[key]):
             raise ValueError('invalid Caddy active configuration hash')
@@ -121,6 +112,23 @@ def validate_control(control):
     for key in ('profile_sha256', 'volumes_sha256'):
         if not isinstance(proxy[key], str) or not SHA256.fullmatch(proxy[key]):
             raise ValueError('invalid Caddy verification profile hash')
+
+
+def validate_control(control):
+    if control is None:
+        return
+    fields = {'phase', 'normal_sha256', 'verification_sha256', 'normal_config_sha256', 'verification_config_sha256', 'proxy', 'public_origin'}
+    if not isinstance(control, dict) or set(control) != fields or control['phase'] not in ('prepared', 'fenced', 'probed', 'accepted', 'releasing', 'released'):
+        raise ValueError('invalid Caddy verification control')
+    for key in ('normal_sha256', 'verification_sha256'):
+        if not isinstance(control[key], str) or not SHA256.fullmatch(control[key]):
+            raise ValueError('invalid Caddy verification file hash')
+    validate_control_origin(control)
+    if control['phase'] == 'prepared':
+        if any(control[key] is not None for key in ('normal_config_sha256', 'verification_config_sha256', 'proxy')):
+            raise ValueError('unbound Caddy verification has unexpected evidence')
+        return
+    validate_bound_control(control)
 
 
 def validate_pending(value, root):

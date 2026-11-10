@@ -96,8 +96,9 @@ if [[ "${1:-}" == --case ]]; then
   recheck_caddy_transition() { printf 'caddy-transition-rechecked\n' >> "${EVENTS}"; }
   render_files() { printf 'render\n' >> "${EVENTS}"; }
   caddy_release() {
-    printf 'release-%s\n' "$1" >> "${EVENTS}"
-    [[ "${MODE}" != "release-$1-failure" ]]
+    local action="$1"
+    printf 'release-%s\n' "${action}" >> "${EVENTS}"
+    [[ "${MODE}" != "release-${action}-failure" ]]
   }
   finish_caddy_transition() { printf 'transition-finished\n' >> "${EVENTS}"; }
   sleep() { :; }

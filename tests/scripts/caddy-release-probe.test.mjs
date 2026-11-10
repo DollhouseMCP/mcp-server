@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
-import test from 'node:test';
+import test, { before } from 'node:test';
 
 const source = fs.readFileSync(new URL('../../scripts/ci/caddy-image-runtime.mjs', import.meta.url), 'utf8');
 const embedded = source.match(/const probeSource = String\.raw`\n([\s\S]*?)\n`;/)?.[1];
-assert.ok(embedded);
+before(() => assert.ok(embedded));
 const token = 'a'.repeat(32);
 
 for (const truncated of [false, true]) {
