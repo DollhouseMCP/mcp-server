@@ -55,13 +55,22 @@ describe_bootstrap_plan() {
   return 0
 }
 
+describe_image_preparation() {
+  if [[ "${IMAGE_MODE}" == registry ]]; then
+    log "dry-run: would pull and verify both digest-qualified runtime and migration images before draining the app"
+    log "dry-run: image-pair source labels establish consistency, not provenance or security qualification"
+  else
+    log "dry-run: would build dollhousemcp image"
+  fi
+}
+
 dry_run_start_or_update() {
   local service="${1:-all}"
 
   validate_git_url_for_clone
   describe_render_plan
   describe_source_plan
-  log "dry-run: would build dollhousemcp image"
+  describe_image_preparation
   log "dry-run: would check the pinned running postgres without recreation for up to ${POSTGRES_READY_TIMEOUT}s; start postgres only if no application is running"
   log "dry-run: would retain a verified unchanged hardened caddy proxy; otherwise pull and admit the selected image before stopping the current app"
   log "dry-run: would require non-force graceful stop before schema or admin changes"
@@ -71,7 +80,7 @@ dry_run_start_or_update() {
   if [[ "${service}" == "app" ]]; then
     log "dry-run: would restart dollhousemcp; retain an unchanged qualified caddy proxy or refresh it after admission"
   else
-    log "dry-run: would start or update the compose stack, retaining an unchanged qualified caddy proxy when applicable"
+    log "dry-run: would recreate the application, retaining an unchanged qualified caddy proxy when applicable"
   fi
   log "dry-run: would record deployed revision and time only after replacement succeeds"
   log "dry-run: would verify ${PUBLIC_BASE_URL}/healthz, /readyz, and /mcp for up to ${VERIFY_READY_TIMEOUT}s"
@@ -83,7 +92,7 @@ dry_run_start_or_update() {
 dry_run_migrations() {
   describe_render_plan
   log "dry-run: would require existing server source at ${SERVER_DIR}"
-  log "dry-run: would build dollhousemcp image"
+  describe_image_preparation
   log "dry-run: would start postgres and wait up to ${POSTGRES_READY_TIMEOUT}s"
   log "dry-run: would run database migrations"
   log "dry-run: would apply post-migration database grants"
@@ -94,7 +103,7 @@ dry_run_migrations() {
 dry_run_bootstrap_admin() {
   describe_render_plan
   log "dry-run: would require existing server source at ${SERVER_DIR}"
-  log "dry-run: would build dollhousemcp image"
+  describe_image_preparation
   log "dry-run: would start postgres and wait up to ${POSTGRES_READY_TIMEOUT}s"
   log "dry-run: would run database migrations"
   log "dry-run: would apply post-migration database grants"
@@ -105,6 +114,7 @@ dry_run_bootstrap_admin() {
 
 dry_run_rollback() {
   describe_render_plan
+  [[ "${IMAGE_MODE}" != registry ]] || die "registry rollback is unsupported; select a qualified roll-forward plan before any recovery"
   log "dry-run: would use the exact completed receipt-bound rollback source"
   if [[ -d "${SERVER_DIR}" ]]; then
     log "dry-run: current server bundle exists at ${SERVER_DIR}"

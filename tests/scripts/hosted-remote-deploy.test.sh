@@ -95,6 +95,9 @@ if [[ "${DOLLHOUSE_FAKE_REMOTE_STALE_CADDY_ENV:-false}" == "true" ]]; then
   export DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES=198.51.100.0/24
   export DOLLHOUSE_HOSTED_CADDY_IMAGE=stale DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME=stale_data DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME=stale_config
 fi
+if [[ "${DOLLHOUSE_FAKE_REMOTE_STALE_REGISTRY_ENV:-false}" == true ]]; then
+  export DOLLHOUSE_HOSTED_IMAGE_MODE=registry DOLLHOUSE_HOSTED_RUNTIME_IMAGE=stale DOLLHOUSE_HOSTED_MIGRATION_IMAGE=stale
+fi
 bash -c "${remote_command}"
 EOF
 
@@ -218,6 +221,18 @@ if [[ "${DOLLHOUSE_FAKE_VALIDATE_CADDY:-false}" == true ]]; then
     "${DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME:-$(persisted DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME)}"
 fi
 
+
+if [[ "${DOLLHOUSE_FAKE_VALIDATE_REGISTRY:-false}" == true ]]; then
+  source "${DOLLHOUSE_FAKE_VALIDATION:?}"
+  die() { printf '%s\n' "$*" >&2; exit 1; }
+  env_file="${DOLLHOUSE_HOSTED_DEPLOY_DIR}/.env.production"
+  persisted() { local key="$1"; if [[ -f "${env_file}" ]]; then sed -n "s/^${key}=//p" "${env_file}"; fi; }
+  IMAGE_MODE="${DOLLHOUSE_HOSTED_IMAGE_MODE:-$(persisted DOLLHOUSE_HOSTED_IMAGE_MODE)}"
+  RUNTIME_IMAGE="${DOLLHOUSE_HOSTED_RUNTIME_IMAGE:-$(persisted DOLLHOUSE_HOSTED_RUNTIME_IMAGE)}"
+  MIGRATION_IMAGE="${DOLLHOUSE_HOSTED_MIGRATION_IMAGE:-$(persisted DOLLHOUSE_HOSTED_MIGRATION_IMAGE)}"
+  validate_registry_selection
+fi
+
 {
   printf 'hosted action=%s ref=%s source=%s deploy=%s ' \
     "${1:-}" "${DOLLHOUSE_HOSTED_GIT_REF:-}" "${DOLLHOUSE_HOSTED_SOURCE_DIR:-}" "${DOLLHOUSE_HOSTED_DEPLOY_DIR:-}"
@@ -245,6 +260,10 @@ fi
     "${DOLLHOUSE_HOSTED_CADDY_IMAGE+x}" "${DOLLHOUSE_HOSTED_CADDY_IMAGE:-}" \
     "${DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME+x}" "${DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME:-}" \
     "${DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME+x}" "${DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME:-}"
+  printf 'registry_mode_set=%s registry_mode=%s runtime_image_set=%s runtime_image=%s migration_image_set=%s migration_image=%s ' \
+    "${DOLLHOUSE_HOSTED_IMAGE_MODE+x}" "${DOLLHOUSE_HOSTED_IMAGE_MODE:-}" \
+    "${DOLLHOUSE_HOSTED_RUNTIME_IMAGE+x}" "${DOLLHOUSE_HOSTED_RUNTIME_IMAGE:-}" \
+    "${DOLLHOUSE_HOSTED_MIGRATION_IMAGE+x}" "${DOLLHOUSE_HOSTED_MIGRATION_IMAGE:-}"
   printf 'bootstrap_username_set=%s bootstrap_username=%s bootstrap_id_set=%s bootstrap_id=%s ' \
     "${DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME+x}" "${DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME:-}" "${DOLLHOUSE_BOOTSTRAP_GITHUB_ID+x}" "${DOLLHOUSE_BOOTSTRAP_GITHUB_ID:-}"
   printf 'auth_provider_set=%s auth_provider=%s auth_issuer_set=%s auth_issuer=%s auth_audience_set=%s auth_audience=%s ' \
@@ -590,6 +609,38 @@ for invalid in 'bad/name' '-leading' $'bad\nname' 'other_config'; do
 done
 [[ ! -e "${sentinel}" ]] || fail "remote Caddy input executed"
 cp "${TMP_ROOT}/original.env" "${DEPLOY_DIR}/.env.production"
+
+log "checking registry selection transport and persisted fallback"
+REG_RUNTIME="registry.example.test/team/runtime@sha256:$(printf 'c%.0s' {1..64})"
+REG_MIGRATION="registry.example.test/team/migration@sha256:$(printf 'd%.0s' {1..64})"
+reset_fake_state
+DOLLHOUSE_FAKE_VALIDATE_REGISTRY=true DOLLHOUSE_HOSTED_IMAGE_MODE=registry \
+DOLLHOUSE_HOSTED_RUNTIME_IMAGE="${REG_RUNTIME}" DOLLHOUSE_HOSTED_MIGRATION_IMAGE="${REG_MIGRATION}" \
+  run_remote --skip-backup update > "${TMP_ROOT}/registry-explicit.out"
+assert_contains "${REMOTE_LOG}" "registry_mode_set=x registry_mode=registry runtime_image_set=x runtime_image=${REG_RUNTIME} migration_image_set=x migration_image=${REG_MIGRATION}"
+cp "${DEPLOY_DIR}/.env.production" "${TMP_ROOT}/registry-original.env"
+printf 'DOLLHOUSE_HOSTED_IMAGE_MODE=registry\nDOLLHOUSE_HOSTED_RUNTIME_IMAGE=%s\nDOLLHOUSE_HOSTED_MIGRATION_IMAGE=%s\n' "${REG_RUNTIME}" "${REG_MIGRATION}" >> "${DEPLOY_DIR}/.env.production"
+cp "${DEPLOY_DIR}/.env.production" "${TMP_ROOT}/registry-expected.env"
+reset_fake_state
+DOLLHOUSE_FAKE_VALIDATE_REGISTRY=true DOLLHOUSE_FAKE_REMOTE_STALE_REGISTRY_ENV=true run_remote --skip-backup update > "${TMP_ROOT}/registry-fallback.out"
+assert_contains "${REMOTE_LOG}" 'registry_mode_set= registry_mode= runtime_image_set= runtime_image= migration_image_set= migration_image='
+cmp -s "${DEPLOY_DIR}/.env.production" "${TMP_ROOT}/registry-expected.env" || fail "registry fallback altered persisted selection"
+reset_fake_state
+if DOLLHOUSE_FAKE_VALIDATE_REGISTRY=true DOLLHOUSE_HOSTED_IMAGE_MODE=registry \
+  DOLLHOUSE_HOSTED_RUNTIME_IMAGE='invalid:latest' DOLLHOUSE_HOSTED_MIGRATION_IMAGE="${REG_MIGRATION}" \
+  run_remote --skip-backup update > "${TMP_ROOT}/registry-invalid.out" 2>&1; then
+  fail "invalid registry selector accepted"
+fi
+for invalid in "\$(touch ${sentinel})" "registry.example.test/'quote" $'registry.example.test/team/runtime\ninvalid'; do
+  reset_fake_state
+  if DOLLHOUSE_FAKE_VALIDATE_REGISTRY=true DOLLHOUSE_HOSTED_IMAGE_MODE=registry \
+    DOLLHOUSE_HOSTED_RUNTIME_IMAGE="${invalid}" DOLLHOUSE_HOSTED_MIGRATION_IMAGE="${REG_MIGRATION}" \
+    run_remote --skip-backup update > "${TMP_ROOT}/registry-invalid.out" 2>&1; then
+    fail "unsafe registry selector accepted"
+  fi
+done
+[[ ! -e "${sentinel}" ]] || fail "registry selector executed"
+cp "${TMP_ROOT}/registry-original.env" "${DEPLOY_DIR}/.env.production"
 
 log "checking remote runtime overrides reach hosted helper"
 reset_fake_state

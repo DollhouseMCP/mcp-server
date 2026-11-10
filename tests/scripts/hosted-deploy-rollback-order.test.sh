@@ -27,7 +27,10 @@ if [[ "${1:-}" == "--case" ]]; then
   validate_persisted_caddy_fields() { :; }
   resolve_mode_defaults() { :; }
   validate_caddy_selection() { :; }
+  validate_registry_selection() { :; }
   acquire_caddy_deployment_lock() { :; }
+  IMAGE_MODE=build
+  [[ "${MODE}" != registry-refusal ]] || IMAGE_MODE=registry
   CADDY_IMAGE=fixture CADDY_DATA_VOLUME=fixture_data CADDY_CONFIG_VOLUME=fixture_config
   caddy_transition() {
     local action="$1"
@@ -90,7 +93,7 @@ trap 'rm -rf -- "${TMP_ROOT}"' EXIT
 
 fail() { printf 'rollback-order test: %s\n' "$*" >&2; exit 1; }
 
-for mode in recovery-failure promotion-failure build-failure readiness-failure drain-refusal success noop-same noop-changed invalid-result; do
+for mode in registry-refusal recovery-failure promotion-failure build-failure readiness-failure drain-refusal success noop-same noop-changed invalid-result; do
   fixture="${TMP_ROOT}/${mode}"
   mkdir -p "${fixture}/server" "${fixture}/server.prev-20000101"
   printf 'current\n' > "${fixture}/server/version"
@@ -98,6 +101,7 @@ for mode in recovery-failure promotion-failure build-failure readiness-failure d
   mkdir -p "${fixture}/server.prev-20000101/docker"
   printf 'FROM node AS builder\nFROM builder AS production\n' > "${fixture}/server.prev-20000101/docker/Dockerfile"
   printf 'fixture-config\n' > "${fixture}/Caddyfile"
+  : > "${fixture}/events"
   printf 'current-revision\n' > "${fixture}/DEPLOYED_REVISION"
   printf '2000-01-01T00:00:00Z\n' > "${fixture}/DEPLOYED_AT"
   set +e
@@ -108,7 +112,7 @@ for mode in recovery-failure promotion-failure build-failure readiness-failure d
   if [[ "${mode}" == "success" || "${mode}" == "noop-same" ]]; then
     [[ "${status}" == 0 ]] || fail "success exited ${status}"
     # Compare the whole sequence, including the chosen source and image build.
-    expected=$'proxy-recovery:server.prev-20000101\nmove:server\nmove:server.prev-20000101\ncompose:build dollhousemcp\npostgres-ready\ngraceful-stop\ncompose:up -d --pull never dollhousemcp\nreplacement'
+    expected=$'proxy-recovery:server.prev-20000101\nmove:server\nmove:server.prev-20000101\ncompose:build dollhousemcp\npostgres-ready\ngraceful-stop\ncompose:up -d --pull never --no-build --no-deps --force-recreate dollhousemcp\nreplacement'
     [[ "$(cat "${fixture}/events")" == "${expected}" ]] || fail "unexpected replacement order"
     [[ "$(cat "${fixture}/DEPLOYED_REVISION")" == "rollback:server.prev-20000101" ]] || fail "successful replacement marker missing"
     [[ "$(cat "${fixture}/DEPLOYED_AT")" != "2000-01-01T00:00:00Z" ]] || fail "successful replacement timestamp missing"
@@ -123,7 +127,10 @@ for mode in recovery-failure promotion-failure build-failure readiness-failure d
       fail "healthy app stopped before ${mode}"
     fi
   fi
-  if [[ "${mode}" == "promotion-failure" || "${mode}" == "recovery-failure" || "${mode}" == "noop-changed" || "${mode}" == "invalid-result" ]]; then
+  if [[ "${mode}" == "registry-refusal" ]]; then
+    [[ ! -s "${fixture}/events" ]] || fail "registry refusal occurred after mutation"
+  fi
+  if [[ "${mode}" == "registry-refusal" || "${mode}" == "promotion-failure" || "${mode}" == "recovery-failure" || "${mode}" == "noop-changed" || "${mode}" == "invalid-result" ]]; then
     [[ "$(cat "${fixture}/server/version")" == "current" ]] || fail "failed promotion lost current bundle"
     [[ "$(cat "${fixture}/server.prev-20000101/version")" == "previous" ]] || fail "failed promotion lost previous bundle"
   else

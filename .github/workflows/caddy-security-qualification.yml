@@ -28,7 +28,7 @@ jobs:
       - name: Guard and evidence controls
         shell: bash
         run: |
-          node --test tests/scripts/caddy-runtime-packages.test.mjs tests/scripts/caddy-image-evidence.test.mjs
+          node --test tests/scripts/caddy-runtime-packages.test.mjs tests/scripts/caddy-image-evidence.test.mjs tests/scripts/caddy-stream-upstream.test.mjs
           sh -n docker/caddy/prepare-runtime.sh
           sh -n scripts/ci/caddy-upstream-tests.sh
       - name: Build and test the qualified upstream module graph offline

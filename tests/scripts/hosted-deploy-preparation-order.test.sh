@@ -35,7 +35,11 @@ if [[ "${1:-}" == --case ]]; then
   validate_persisted_caddy_fields() { :; }
   resolve_mode_defaults() { :; }
   validate_caddy_selection() { :; }
+  validate_registry_selection() { :; }
   acquire_caddy_deployment_lock() { :; }
+  IMAGE_MODE=build
+  if [[ "${MODE}" == registry-* ]]; then IMAGE_MODE=registry; fi
+  RUNTIME_IMAGE=fixture-runtime MIGRATION_IMAGE=fixture-migration
   CADDY_IMAGE=fixture CADDY_DATA_VOLUME=fixture_data CADDY_CONFIG_VOLUME=fixture_config
   verify_prepared_caddy() {
     printf 'prepared-clone\n' >> "${EVENTS}"
@@ -60,7 +64,16 @@ if [[ "${1:-}" == --case ]]; then
   caddy_recovery_request_json() { printf '{}\n'; }
   python3() {
     local command_path="$1"
-    if [[ "${command_path}" == */caddy_unchanged_action.py ]]; then
+    if [[ "${command_path}" == */registry_image_admission.py ]]; then
+      local registry_operation="${2:-}"
+      printf 'registry-%s\n' "${registry_operation}" >> "${EVENTS}"
+      [[ "${MODE}" != registry-pull-failure || "${registry_operation}" != prepare ]] || return 1
+      if [[ "${MODE}" == registry-drift && "${registry_operation}" == inspect && -f "${DEPLOY_DIR}/stopped" ]]; then
+        printf 'changed-pair\n'
+      else
+        printf 'fixture-pair\n'
+      fi
+    elif [[ "${command_path}" == */caddy_unchanged_action.py ]]; then
       cat >/dev/null
       printf 'prepared-clone\n' >> "${EVENTS}"
       printf '%s\n' "${DEPLOY_DIR}/server.prev-fixture"
@@ -91,7 +104,7 @@ if [[ "${1:-}" == --case ]]; then
     printf 'new-revision\n'
   }
   selected_postgres() {
-    if [[ "${MODE}" == missing-pg || "${MODE}" == fresh-install || "${MODE}" == fresh-retry ]]; then
+    if [[ "${MODE}" == missing-pg || "${MODE}" == stopped-missing-pg || "${MODE}" == fresh-install || "${MODE}" == fresh-retry ]]; then
       [[ -f "${DEPLOY_DIR}/pg-started" ]] || return 0
     fi
     if [[ -f "${DEPLOY_DIR}/selection-changed" ]]; then
@@ -111,7 +124,7 @@ if [[ "${1:-}" == --case ]]; then
       [[ "${MODE}" != bootstrap-failure ]]
     else
       printf 'migration\n' >> "${EVENTS}"
-      [[ -f "${DEPLOY_DIR}/stopped" ]] || die "migration before drain"
+      [[ -f "${DEPLOY_DIR}/stopped" || "${ACTION}" == migrate || "${ACTION}" == bootstrap ]] || die "migration before drain"
       [[ "${MODE}" != migration-failure ]]
     fi
   }
@@ -120,7 +133,7 @@ if [[ "${1:-}" == --case ]]; then
     printf 'compose:%s\n' "$*" >> "${EVENTS}"
     case "${operation}" in
       ps)
-        local service="$3"
+        local service="${*: -1}"
         if [[ "${service}" == postgres ]]; then selected_postgres
         elif [[ "${MODE}" != fresh-install && "${MODE}" != fresh-retry ]]; then printf '%s\n' "${APP_ID}"
         fi
@@ -131,6 +144,7 @@ if [[ "${1:-}" == --case ]]; then
         if [[ "$*" == 'up -d --pull never postgres' ]]; then
           [[ "${MODE}" == fresh-install || "${MODE}" == fresh-retry ]] || die "existing PG recreation"
           touch "${DEPLOY_DIR}/pg-started"
+        elif [[ "$*" == *' caddy' ]]; then :
         else record_replacement
         fi
         ;;
@@ -161,14 +175,32 @@ if [[ "${1:-}" == --case ]]; then
     else die "unexpected docker operation"
     fi
   }
-  gracefully_stop_existing_app() {
-    printf 'graceful-stop\n' >> "${EVENTS}"
-    [[ "${MODE}" != drain-refusal ]] || return 1
-    touch "${DEPLOY_DIR}/stopped"
-  }
-  if [[ "${ACTION}" == rollback ]]; then rollback_server
-  else start_or_update "${SERVICE}"
+  if [[ "${MODE}" == stopped-existing ]]; then
+    HOSTED_DEPLOY_SCRIPT_DIR="${REPO_ROOT}/scripts"
+    mkdir -p "${DEPLOY_DIR}/fake-bin"
+    export FIXTURE_APP_ID="${APP_ID}" FIXTURE_DOCKER_EVENTS="${DEPLOY_DIR}/strict-docker-events"
+    cat > "${DEPLOY_DIR}/fake-bin/docker" <<'DOCKER'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$1" >> "${FIXTURE_DOCKER_EVENTS}"
+[[ "$1" == inspect ]] || exit 1
+printf '{"id":"%s","running":false,"exitCode":0,"oomKilled":false,"startedAt":"2026-01-01T00:00:00Z","restartCount":0,"restarting":false,"readonly":false,"mounts":[],"enabled":"enabled","capability":"v2"}\n' "${FIXTURE_APP_ID}"
+DOCKER
+    chmod 0755 "${DEPLOY_DIR}/fake-bin/docker"
+    export PATH="${DEPLOY_DIR}/fake-bin:${PATH}"
+  else
+    gracefully_stop_existing_app() {
+      printf 'graceful-stop\n' >> "${EVENTS}"
+      [[ "${MODE}" != drain-refusal ]] || return 1
+      touch "${DEPLOY_DIR}/stopped"
+    }
   fi
+  case "${ACTION}" in
+    rollback) rollback_server ;;
+    migrate) run_migrations ;;
+    bootstrap) bootstrap_admin ;;
+    *) start_or_update "${SERVICE}" ;;
+  esac
   exit 0
 fi
 
@@ -203,7 +235,7 @@ check_fixture() {
   bash "$0" --case "${action}" "${mode}" "${fixture}" "${service}" > "${fixture}/stdout" 2> "${fixture}/stderr"
   status=$?
   set -e
-  if [[ "${mode}" == success || "${mode}" == fresh-install || "${mode}" == fresh-retry || "${mode}" == hardened ]]; then
+  if [[ "${mode}" == success || "${mode}" == fresh-install || "${mode}" == fresh-retry || "${mode}" == hardened || "${mode}" == registry-success ]]; then
     [[ "${status}" == 0 ]] || fail "${action}/${service}/${mode} exited ${status}"
     if [[ "${mode}" == fresh-retry ]]; then
       assert_order "${fixture}/events" transition-retry render
@@ -219,7 +251,17 @@ check_fixture() {
     else
       assert_order "${fixture}/events" 'compose:pull caddy' graceful-stop
     fi
+    if [[ "${mode}" == registry-success ]]; then
+      assert_order "${fixture}/events" registry-prepare graceful-stop
+      assert_order "${fixture}/events" graceful-stop replacement
+      grep -q "^compose:run --rm --pull never --no-deps dollhousemcp-migrate$" "${fixture}/events" || fail "registry migration flags missing"
+      if grep -q "^compose:build " "${fixture}/events"; then fail "registry mode built an image"; fi
+    fi
     assert_order "${fixture}/events" graceful-stop replacement
+    if [[ "${action}" == update ]]; then
+      grep -q '^compose:run --rm --pull never --no-deps dollhousemcp-migrate$' "${fixture}/events" || fail "migration omitted no-pull/no-deps flags"
+      grep -q '^compose:run --rm --pull never --no-deps dollhousemcp-migrate node dist/cli/admin-bootstrap.js' "${fixture}/events" || fail "bootstrap omitted no-pull/no-deps flags"
+    fi
     if [[ "${action}" == rollback ]]; then expected_revision='rollback:server.prev-20000101'
     else expected_revision=new-revision; assert_order "${fixture}/events" graceful-stop migration
     fi
@@ -229,8 +271,19 @@ check_fixture() {
     [[ "$(cat "${fixture}/DEPLOYED_REVISION")" == old-revision ]] || fail "failed operation changed deployed revision"
     [[ "$(cat "${fixture}/DEPLOYED_AT")" == '2000-01-01T00:00:00Z' ]] || fail "failed operation changed deployed time"
     case "${mode}" in
-      migration-failure|bootstrap-failure|replacement-failure) [[ -f "${fixture}/stopped" ]] || fail "missing strict drain" ;;
+      migration-failure|bootstrap-failure|replacement-failure|registry-drift) [[ -f "${fixture}/stopped" ]] || fail "missing strict drain" ;;
       drain-refusal) grep -q '^graceful-stop$' "${fixture}/events" || fail "missing refusal" ;;
+      stopped-missing-pg)
+        grep -q '^compose:ps --all -q dollhousemcp$' "${fixture}/events" || fail "stopped app was not selected before database preparation"
+        grep -q 'existing application has no running postgres; refusing database recreation' "${fixture}/stderr" || fail "missing database refusal not reported"
+        if grep -Eq '^compose:up |^(migration|bootstrap|replacement)$' "${fixture}/events"; then fail "stopped app advanced to database or app mutation"; fi
+        ;;
+      stopped-existing)
+        grep -q '^compose:ps --all -q dollhousemcp$' "${fixture}/events" || fail "stopped app was not selected"
+        grep -q 'Stopped container has no live drain acknowledgement; replacement refused' "${fixture}/stderr" || fail "strict stopped-app refusal missing"
+        [[ "$(cat "${fixture}/strict-docker-events")" == inspect ]] || fail "stopped app received exec or signal"
+        if grep -Eq '^(migration|bootstrap|replacement)$' "${fixture}/events"; then fail "stopped app advanced to mutation"; fi
+        ;;
       *) if grep -q '^graceful-stop$' "${fixture}/events"; then fail "healthy app stopped on preparation failure"; fi ;;
     esac
     if [[ "${mode}" != replacement-failure ]] && grep -q '^replacement$' "${fixture}/events"; then fail "replacement after failure"; fi
@@ -294,3 +347,22 @@ for mode in fresh-000 fresh-002 existing-unsafe; do
   fi
   printf 'preparation-order PASS root/%s\n' "${mode}"
 done
+
+check_fixture update registry-success app
+check_fixture update registry-pull-failure app
+check_fixture update registry-drift app
+
+for action in migrate bootstrap; do
+  fixture="$(mktemp -d "${TMP_ROOT}/registry-${action}.XXXXXX")"
+  mkdir -p "${fixture}/server"
+  printf 'SELECT 1;\n' > "${fixture}/grants.sql"
+  bash "$0" --case "${action}" registry-success "${fixture}" app > "${fixture}/stdout" 2> "${fixture}/stderr" || fail "registry ${action} failed"
+  grep -q '^registry-prepare$' "${fixture}/events" || fail "registry ${action} skipped image preparation"
+  grep -q '^compose:run --rm --pull never --no-deps dollhousemcp-migrate' "${fixture}/events" || fail "registry ${action} has unsafe execution flags"
+  if grep -q '^compose:build ' "${fixture}/events"; then fail "registry ${action} built an image"; fi
+  if grep -q '^graceful-stop$' "${fixture}/events"; then fail "registry ${action} unexpectedly stopped app"; fi
+  printf 'preparation-order PASS registry %s\n' "${action}"
+done
+
+check_fixture update stopped-existing app
+check_fixture update stopped-missing-pg app

@@ -312,6 +312,46 @@ DOLLHOUSE_HOSTED_SOURCE_DIR="${SOURCE_REPO}" \
 assert_contains "${DRY_RUN_OUTPUT}" "retain an unchanged qualified caddy proxy or refresh it after admission"
 [[ ! -s "${DOCKER_LOG}" && ! -s "${CURL_LOG}" ]] || fail "dry-run update must not call docker or curl"
 
+log "checking digest render and persisted selectors"
+REGISTRY_DIR="${TMP_ROOT}/registry-render"
+REG_RUNTIME="registry.example.test/team/runtime@sha256:$(printf 'c%.0s' {1..64})"
+REG_MIGRATION="registry.example.test/team/migration@sha256:$(printf 'd%.0s' {1..64})"
+PATH="${FAKE_BIN}:${PATH}" DOLLHOUSE_HOSTED_DEPLOY_DIR="${REGISTRY_DIR}" \
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com DOLLHOUSE_HOSTED_IMAGE_MODE=registry \
+DOLLHOUSE_HOSTED_RUNTIME_IMAGE="${REG_RUNTIME}" DOLLHOUSE_HOSTED_MIGRATION_IMAGE="${REG_MIGRATION}" \
+  bash "${HOSTED_DEPLOY}" render > "${TMP_ROOT}/registry-render.out"
+assert_contains "${REGISTRY_DIR}/compose.yml" "image: ${REG_RUNTIME}"
+assert_contains "${REGISTRY_DIR}/compose.yml" "image: ${REG_MIGRATION}"
+if grep -q '^    build:' "${REGISTRY_DIR}/compose.yml"; then fail "registry render retained a build section"; fi
+PATH="${FAKE_BIN}:${PATH}" DOLLHOUSE_HOSTED_DEPLOY_DIR="${REGISTRY_DIR}" \
+  bash "${HOSTED_DEPLOY}" render > "${TMP_ROOT}/registry-rerender.out"
+assert_contains "${REGISTRY_DIR}/compose.yml" "image: ${REG_RUNTIME}"
+assert_contains "${REGISTRY_DIR}/compose.yml" "image: ${REG_MIGRATION}"
+REGISTRY_ROLLBACK_LOG="${TMP_ROOT}/registry-rollback-docker.log"
+: > "${REGISTRY_ROLLBACK_LOG}"
+if PATH="${FAKE_BIN}:${PATH}" DOLLHOUSE_FAKE_DOCKER_LOG="${REGISTRY_ROLLBACK_LOG}" \
+  DOLLHOUSE_HOSTED_DEPLOY_DIR="${REGISTRY_DIR}" DOLLHOUSE_HOSTED_IMAGE_MODE=build \
+  bash "${HOSTED_DEPLOY}" rollback > "${TMP_ROOT}/registry-rollback.out" 2>&1; then
+  fail "build override bypassed persisted registry rollback refusal"
+fi
+assert_contains "${TMP_ROOT}/registry-rollback.out" 'cannot switch an existing registry deployment to build mode in place'
+if grep -Ev '^docker compose version$' "${REGISTRY_ROLLBACK_LOG}" | grep -q .; then fail "registry rollback override invoked Docker mutation"; fi
+BAD_BUILD_DIR="${TMP_ROOT}/registry-malformed-build"
+mkdir -p "${BAD_BUILD_DIR}"
+sed 's/^DOLLHOUSE_HOSTED_IMAGE_MODE=registry$/DOLLHOUSE_HOSTED_IMAGE_MODE=build/' "${REGISTRY_DIR}/.env.production" > "${BAD_BUILD_DIR}/.env.production"
+: > "${REGISTRY_ROLLBACK_LOG}"
+if PATH="${FAKE_BIN}:${PATH}" DOLLHOUSE_FAKE_DOCKER_LOG="${REGISTRY_ROLLBACK_LOG}" \
+  DOLLHOUSE_HOSTED_DEPLOY_DIR="${BAD_BUILD_DIR}" bash "${HOSTED_DEPLOY}" rollback > "${TMP_ROOT}/registry-malformed-rollback.out" 2>&1; then
+  fail "build mode with registry selectors allowed rollback"
+fi
+assert_contains "${TMP_ROOT}/registry-malformed-rollback.out" 'build mode cannot use registry image selectors'
+if grep -Ev '^docker compose version$' "${REGISTRY_ROLLBACK_LOG}" | grep -q .; then fail "malformed rollback invoked Docker mutation"; fi
+printf 'export DOLLHOUSE_HOSTED_RUNTIME_IMAGE=unsafe\n' >> "${REGISTRY_DIR}/.env.production"
+if PATH="${FAKE_BIN}:${PATH}" DOLLHOUSE_HOSTED_DEPLOY_DIR="${REGISTRY_DIR}" \
+  bash "${HOSTED_DEPLOY}" render > "${TMP_ROOT}/registry-unsafe.out" 2>&1; then
+  fail "unsafe persisted registry selector was accepted"
+fi
+
 log "checking HTTP verification retries"
 : > "${CURL_LOG}"
 RETRY_OUTPUT="${TMP_ROOT}/retry-verify.out"
@@ -366,7 +406,7 @@ DOCKER_LOG="${TMP_ROOT}/docker-install.log"
 run_hosted install
 assert_file_equals "${DEPLOY_DIR}/server/version.txt" "v1"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} build dollhousemcp dollhousemcp-migrate"
-assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} run --rm dollhousemcp-migrate"
+assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} run --rm --pull never --no-deps dollhousemcp-migrate"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} exec -T postgres /usr/local/bin/apply-post-migration-grants"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} pull caddy"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d"
@@ -380,13 +420,13 @@ assert_file_equals "${DEPLOY_DIR}/server/version.txt" "v2"
 previous_bundle="$(latest_dir 'server.prev-*')"
 [[ -n "${previous_bundle}" ]] || fail "expected update to retain a previous server bundle"
 assert_file_equals "${previous_bundle}/version.txt" "v1"
-assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d --pull never dollhousemcp"
+assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d --pull never --no-build --no-deps --force-recreate dollhousemcp"
 if grep -Fq "${COMPOSE_CMD} pull caddy" "${DOCKER_LOG}"; then fail "unchanged proxy was unexpectedly pulled during update"; fi
 
 log "running bootstrap-admin workflow"
 DOCKER_LOG="${TMP_ROOT}/docker-bootstrap.log"
 run_hosted_with_bootstrap bootstrap-admin octocat
-assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} run --rm dollhousemcp-migrate node dist/cli/admin-bootstrap.js --require-admin-url --method github --github-username octocat"
+assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} run --rm --pull never --no-deps dollhousemcp-migrate node dist/cli/admin-bootstrap.js --require-admin-url --method github --github-username octocat"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} exec -T postgres /usr/local/bin/apply-post-migration-grants"
 
 log "running rollback workflow"
@@ -397,7 +437,7 @@ rollback_bundle="$(latest_dir 'server.rollback-from-*')"
 [[ -n "${rollback_bundle}" ]] || fail "expected rollback to retain the rolled-back current bundle"
 assert_file_equals "${rollback_bundle}/version.txt" "v2"
 if grep -Fq "${COMPOSE_CMD} pull caddy" "${DOCKER_LOG}"; then fail "proxy recovery unexpectedly pulled caddy during rollback"; fi
-assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d --pull never dollhousemcp"
+assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d --pull never --no-build --no-deps --force-recreate dollhousemcp"
 
 log "checking invalid source error"
 bad_output="${TMP_ROOT}/bad-source.out"
