@@ -36,6 +36,15 @@ def exact_container(run, identifier, expected, name, running, boot=None):
     return current
 
 
+def port_identity(item, protocol):
+    if (not isinstance(item, dict) or set(item) != {'HostIp', 'HostPort'}
+            or not isinstance(item['HostPort'], str) or not PORT.fullmatch(item['HostPort'])
+            or int(item['HostPort']) > 65535):
+        raise ValueError('published-port identity is invalid')
+    address = ipaddress.ip_address(item['HostIp'] or '0.0.0.0')
+    return str(address), int(item['HostPort']), protocol
+
+
 def published(bindings):
     if not isinstance(bindings, dict):
         raise ValueError('published-port inventory is unavailable')
@@ -47,13 +56,7 @@ def published(bindings):
             continue
         if not isinstance(entries, list):
             raise ValueError('published-port records are unavailable')
-        for item in entries:
-            if (not isinstance(item, dict) or set(item) != {'HostIp', 'HostPort'}
-                    or not isinstance(item['HostPort'], str) or not PORT.fullmatch(item['HostPort'])
-                    or int(item['HostPort']) > 65535):
-                raise ValueError('published-port identity is invalid')
-            address = ipaddress.ip_address(item['HostIp'] or '0.0.0.0')
-            result.add((str(address), int(item['HostPort']), port.split('/')[1]))
+        result.update(port_identity(item, port.split('/')[1]) for item in entries)
     return result
 
 
@@ -80,23 +83,29 @@ def ingress_available(run, ports, excluded=()):
             raise ValueError('another running container owns recovery ingress')
 
 
+def network_names(item, network_name):
+    settings = item.get('NetworkSettings')
+    networks = settings.get('Networks') if isinstance(settings, dict) else None
+    if not isinstance(networks, dict):
+        raise ValueError('running network inventory is unavailable')
+    if network_name not in networks:
+        return set()
+    connection = networks[network_name]
+    if not isinstance(connection, dict):
+        raise ValueError('serving network connection is unavailable')
+    aliases = connection.get('Aliases')
+    if aliases is None:
+        aliases = []
+    if not isinstance(aliases, list) or any(not isinstance(alias, str) for alias in aliases):
+        raise ValueError('serving network aliases are unavailable')
+    return {item.get('Name', '').removeprefix('/'), *aliases}
+
+
 def serving_dns(run, instance, app_id, app_running=True):
     selected = []
     network_name = instance + '_default'
     for item in running_containers(run):
-        settings = item.get('NetworkSettings')
-        networks = settings.get('Networks') if isinstance(settings, dict) else None
-        if not isinstance(networks, dict):
-            raise ValueError('running network inventory is unavailable')
-        if network_name not in networks:
-            continue
-        connection = networks[network_name]
-        aliases = connection.get('Aliases') if isinstance(connection, dict) else None
-        if aliases is None:
-            aliases = []
-        if not isinstance(aliases, list) or any(not isinstance(alias, str) for alias in aliases):
-            raise ValueError('serving network aliases are unavailable')
-        names = {item.get('Name', '').removeprefix('/'), *aliases}
+        names = network_names(item, network_name)
         if names & {instance, 'dollhousemcp'}:
             selected.append(item.get('Id'))
     if selected != ([app_id] if app_running else []):
