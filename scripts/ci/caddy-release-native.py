@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import time
 
+sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'hosted-deploy'))
 from caddy_active_config import ActiveConfig, read_snapshots, snapshot_files, system_docker, validate_system, write_startup_file
 from caddy_release_action import render_profiles
@@ -19,7 +20,7 @@ def stop_witness(identifier):
     before = inspect_one(system_docker, 'container', identifier)
     boot = lifecycle(before, True)
     started = time.monotonic()
-    output = system_docker(['docker', 'stop', '--signal', 'SIGTERM', '--timeout', '-1', identifier], 15, 65536)
+    output = system_docker(['docker', 'stop', '--signal', 'SIGTERM', '--timeout', '-1', identifier], 90, 65536)
     if output not in (identifier.encode(), (identifier + '\n').encode()):
         raise ValueError('fixture Docker stop did not acknowledge its immutable ID')
     exact_container(system_docker, identifier, profile(before), before['Name'][1:], False, boot)

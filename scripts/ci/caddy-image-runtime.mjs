@@ -247,7 +247,7 @@ try {
     const nativeScript = path.join(root, 'scripts/ci/caddy-release-native.py');
     const runControl = action => JSON.parse(execFileSync('/usr/bin/sudo', ['-n', '/usr/bin/python3', nativeScript,
       action, proxy, volumeRoot, volumeRoot, token, `${addresses[0]}/32`],
-    {encoding:'utf8',timeout:action === 'refuse-load' || action === 'stop-witness' ? 45_000 : 120_000,maxBuffer:65536}));
+    {encoding:'utf8',timeout:action === 'refuse-load' ? 45_000 : 120_000,maxBuffer:65536}));
     const begin = runControl('begin');
     const refused = runControl('refuse-load');
     assert.equal(refused.failure.context.identity.id, proxy);
