@@ -42,7 +42,7 @@ def automatic(root, value, run):
         state, pending, _ = checks.forward_state(root, value, armed, baseline['forward_state'])
         if recovered['app_id'] != value['app_id'] or recovered['retained_id'] != baseline['current_id']:
             raise ValueError('completed recovery identities differ from the armed window')
-        checks.database(root, value, armed, run)
+        checks.database(value, armed, run)
         app = exact_container(run, value['app_id'], armed['profiles']['app'], value['instance'], True, recovered['app_boot'])
         postgres = inspect_one(run, 'container', value['postgres_id'])
         proxy = inspect_one(run, 'container', recovered['proxy_id'])
