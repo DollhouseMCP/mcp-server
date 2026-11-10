@@ -208,7 +208,9 @@ def read_state(root):
 
 
 def refuse_control(root):
-    pending = read_state(root)['pending']
+    from legacy_control_resolution import unresolved_pending
+    state = read_state(root)
+    pending = unresolved_pending(root, state)
     if isinstance(pending, dict) and pending.get('control') is not None:
         raise ValueError('Caddy verification or release is pending; operator reconciliation is required')
 
@@ -236,10 +238,15 @@ def write_state(root, value):
 
 def begin(root, pending):
     state = read_state(root)
+    consumption = None
     if state['pending'] is not None:
-        raise ValueError('an earlier Caddy transition is pending and requires operator recovery')
+        from legacy_control_resolution import issue_consumption
+        consumption = issue_consumption(root, state, pending)
     state['pending'] = pending
     write_state(root, state)
+    if consumption is not None:
+        from legacy_control_resolution import complete_consumption
+        complete_consumption(consumption, root)
     return state
 
 

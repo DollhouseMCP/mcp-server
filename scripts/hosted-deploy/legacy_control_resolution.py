@@ -31,12 +31,27 @@ def raw_state(root):
 
 
 def verify_handoff_hashes(root, record):
-    if set(record['handoff']) != {'issued.json', 'receipt.json'}:
+    if set(record['handoff']) != {'issued.json', 'stop-acknowledged.json', 'receipt.json'}:
         raise ValueError('reconciled handoff inventory is incomplete')
-    directory = private_directory(root / handoff.STATE)
+    relative = Path(record['handoff_directory'])
+    if (relative.parts != (handoff.STATE,) and (len(relative.parts) != 2 or relative.parts[0] != handoff.STATE
+            or not re.fullmatch(r'window-[0-9a-f]{32}', relative.parts[1]))):
+        raise ValueError('historical handoff directory is outside the qualified namespace')
+    try:
+        directory = private_directory(root / relative)
+    except FileNotFoundError:
+        if all(value is None for value in record['handoff'].values()):
+            return
+        raise
     try:
         for name, expected in record['handoff'].items():
-            if handoff.digest(read_private(directory, name, MAX_RECORD)) != expected:
+            try:
+                raw = read_private(directory, name, MAX_RECORD)
+            except FileNotFoundError:
+                if expected is None:
+                    continue
+                raise ValueError('historical handoff evidence disappeared') from None
+            if expected is None or handoff.digest(raw) != expected:
                 raise ValueError('historical handoff evidence changed')
     finally:
         os.close(directory)

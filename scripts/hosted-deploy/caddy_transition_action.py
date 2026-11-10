@@ -98,7 +98,7 @@ def check_fresh_absence(value, root, run):
             raise ValueError('deployment markers forbid a fresh-install retry')
     check_local_daemon(run, os.environ.get('DOCKER_HOST'))
     no_running_services(run, value['instance'])
-    if unique_proxy(run, value['instance'], required=False) is not None:
+    if unique_proxy(run, value['instance'], required=False, root=root) is not None:
         raise ValueError('a Caddy service prevents a fresh-install retry')
     existing = run(['docker', 'ps', '--all', '--no-trunc', '--filter',
                     'name=^/' + value['instance'] + '-caddy$', '--format', '{{.ID}}'], 15, 65536)
@@ -249,7 +249,8 @@ def begin_fresh(value, root, run):
 def dispatch(action, value, run=docker_run, admit=None):
     root = validate_values(value)
     if action == 'status':
-        pending = read_state(root)['pending']
+        from legacy_control_resolution import unresolved_pending
+        pending = unresolved_pending(root, read_state(root))
         return 'none' if pending is None else pending['kind']
     if action == 'begin-update':
         return begin_update(value, root)
@@ -266,6 +267,10 @@ def dispatch(action, value, run=docker_run, admit=None):
         sync_root(root)
         mark_staged(root, value['token'], bundle_identity(root / 'server'))
         return 'staged'
+    if action == 'start-proxy':
+        from caddy_image_admission import qualify
+        from caddy_native_replacement import start
+        return start(root, value, run, admit or qualify)
     if action == 'finish':
         complete(root, value['token'], value['instance'])
         return 'complete'
@@ -292,7 +297,7 @@ def main():
     if action in ('status', 'select-rollback', 'select-proxy'):
         print(dispatch(action, value))
         return
-    lock = acquire_lock(validate_values(value), allow_control=(action == 'finish'))
+    lock = acquire_lock(validate_values(value), allow_control=action in ('finish', 'start-proxy'))
     try:
         print(dispatch(action, value))
     finally:

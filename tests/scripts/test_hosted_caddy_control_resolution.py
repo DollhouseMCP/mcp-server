@@ -47,11 +47,12 @@ class ControlResolutionTests(unittest.TestCase):
             p = self.root / '.legacy-handoff' / name
             self.put(p, b'fixture-completed-handoff')
             hashes[name] = handoff.digest(p.read_bytes())
+        hashes['stop-acknowledged.json'] = None  # The accepted older manual recovery predates this receipt.
         authority = {'schema': 'qualified-proxy-retirement-v1', 'host': self.host, 'instance': 'site'}
         self.put(self.operation / 'retirement-authority.json', handoff.encoded(authority))
         self.record = {'schema': 'legacy-controls-reconciled-v1', 'token': self.token, 'host': self.host,
                        'instance': 'site', 'implementation': resolution.bundle_identity(resolution.IMPLEMENTATION),
-                       'source': self.source, 'files': files, 'handoff': hashes,
+                       'source': self.source, 'files': files, 'handoff': hashes, 'handoff_directory': '.legacy-handoff',
                        'failed_state': self.state, 'failed_state_sha256': handoff.digest(self.raw),
                        'retirement_authority_sha256': handoff.digest(handoff.encoded(authority))}
         self.write_record()

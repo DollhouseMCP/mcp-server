@@ -18,7 +18,7 @@ from caddy_image_admission import scanner, qualify
 from caddy_hardened_profile import validate_hardened_profile
 from caddy_legacy_profile import legacy_mounts, legacy_network, validate_legacy_profile
 from caddy_recovery_receipt import create_receipt, read_current_caddyfile
-from caddy_service_guard import unique_proxy
+from caddy_service_guard import proxy_startup_path, unique_proxy
 from caddy_volume_guard import refuse_writers
 from caddy_volume_migration import (check_local_daemon, check_stopped_proxy, create_destinations,
                                     inspect_one, inspect_volumes, migrate_volumes,
@@ -128,14 +128,17 @@ def prepare_recovery_directory(root):
 
 
 def capture_profile(run, root, instance, admit=qualify, expected_running=False):
-    selected = unique_proxy(run, instance)
+    selected = unique_proxy(run, instance, root=root)
     container = inspect_one(run, 'container', selected)
     state = container.get('State')
     if not isinstance(state, dict) or state.get('Running') is not expected_running:
         raise ValueError('Caddy proxy state differs from the required profile')
     image = inspect_one(run, 'image', container.get('Image'))
     config = container.get('Config')
+    caddyfile = proxy_startup_path(root, instance, selected, run)
     if isinstance(config, dict) and config.get('User') == '1001:1001':
+        if caddyfile != root / 'Caddyfile':
+            raise ValueError('protected original bind is supported only for a qualified legacy proxy')
         if stat.S_IMODE((root / 'Caddyfile').lstat().st_mode) != 0o644:
             raise ValueError('hardened proxy requires its existing public Caddyfile mode')
         reference = config.get('Image')
@@ -143,7 +146,7 @@ def capture_profile(run, root, instance, admit=qualify, expected_running=False):
         names = legacy_mounts(container.get('Mounts'), str(root / 'Caddyfile'))
         ports, _ = legacy_network(container, container.get('HostConfig', {}), instance + '_default')
         return validate_hardened_profile(container, image, admission, instance, str(root / 'Caddyfile'), names, ports)
-    return validate_legacy_profile(container, image, str(root / 'Caddyfile'), instance + '_default')
+    return validate_legacy_profile(container, image, str(caddyfile), instance + '_default')
 
 
 def clone(value, run=docker_run, admit=qualify):
@@ -163,13 +166,14 @@ def clone_locked(value, root, run, admit=qualify):
     original = bundle_identity(current)
     caddyfile = read_current_caddyfile(root)
     profile = capture_profile(run, root, value['instance'], admit)
+    startup = str(proxy_startup_path(root, value['instance'], profile['container_id'], run))
     source_names = [profile['data_volume'], profile['config_volume']]
     targets = [value['data_volume'], value['config_volume']]
     if len(set(source_names + targets)) != 4:
         raise ValueError('source and destination volumes must be distinct')
     sources = inspect_volumes(run, source_names)
     refuse_writers(running_containers(run), sources)
-    check_stopped_proxy(run, profile, str(root / 'Caddyfile'), admit)
+    check_stopped_proxy(run, profile, startup, admit)
     token = secrets.token_hex(16)
     previous = root / ('server.prev-' + token)
     if previous.exists() or previous.is_symlink():
@@ -177,7 +181,7 @@ def clone_locked(value, root, run, admit=qualify):
     recovery_root = prepare_recovery_directory(root)
     create_destinations(run, source_names, targets, token)
     helper = Path(__file__).with_name('caddy_volume_copy.mjs')
-    copied = migrate_volumes(run, profile, sources, targets, token, helper, str(root / 'Caddyfile'), docker_host, admit)
+    copied = migrate_volumes(run, profile, sources, targets, token, helper, startup, docker_host, admit)
     if bundle_identity(current) != original or read_current_caddyfile(root) != caddyfile:
         raise ValueError('source bundle or Caddyfile changed during cloning')
     record = {'schema': 1, 'bundle': str(previous), 'bundle_identity': original,

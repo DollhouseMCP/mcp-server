@@ -21,7 +21,7 @@ def verify(value, run=docker_run, admit=qualify):
         raise ValueError('invalid fresh Caddy recheck request')
     root = validate_request({key: value[key] for key in ('deploy_dir', 'instance', 'data_volume', 'config_volume')})
     check_local_daemon(run, os.environ.get('DOCKER_HOST'))
-    if unique_proxy(run, value['instance'], required=False) is not None:
+    if unique_proxy(run, value['instance'], required=False, root=root) is not None:
         raise ValueError('an unexpected Caddy service already exists')
     helper = require_helper_image(run)
     admission = admit(value['image'])

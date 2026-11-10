@@ -71,7 +71,7 @@ def inventory(root, instance, run):
             raise ValueError('retired proxy inventory exceeds its bound')
         result = set()
         for name in names:
-            if name == 'serving.json':
+            if re.fullmatch(r'serving-[0-9a-f]{64}\.json', name):
                 continue
             if not re.fullmatch(r'proxy-[0-9a-f]{64}\.json', name):
                 raise ValueError('retired proxy inventory has an unknown entry')
@@ -114,7 +114,9 @@ def startup_path(root, instance, identifier, run, require_root_copy=True):
         return root / 'Caddyfile'
     try:
         try:
-            record, _ = handoff.read_json(directory, 'serving.json')
+            if not isinstance(identifier, str) or not ID.fullmatch(identifier):
+                raise ValueError('reconciled serving proxy ID is invalid')
+            record, _ = handoff.read_json(directory, 'serving-' + identifier + '.json')
         except FileNotFoundError:
             return root / 'Caddyfile'
     finally:
@@ -124,7 +126,7 @@ def startup_path(root, instance, identifier, run, require_root_copy=True):
         raise ValueError('reconciled serving proxy authority differs')
     serving = record['serving']
     if serving['id'] != identifier:
-        return root / 'Caddyfile'
+        raise ValueError('reconciled serving proxy selector differs')
     current = inspect_one(run, 'container', identifier)
     if profile(current) != serving['profile'] or current.get('Name') != '/' + instance + '-caddy':
         raise ValueError('reconciled serving proxy profile changed')

@@ -42,7 +42,7 @@ def forward_state(root, value, armed, expected=None):
 
 def handoff_state(root, value, armed, pending, run):
     try:
-        directory = private_directory(root / handoff.STATE)
+        directory = private_directory(handoff.state_path(root, value))
     except FileNotFoundError:
         _, checkpoint_sha, app = handoff.verify_inputs(value, run)
         if checkpoint_sha != armed['checkpoint_sha256'] or app != armed['app']:
@@ -89,7 +89,13 @@ def preconditions(root, value, armed, run, admit):
     app_status = handoff_state(root, value, armed, pending, run)
     plan = preflight(root, value['instance'], Path(armed['previous']), pending['image'], run, admit)
     current = inspect_one(run, 'container', plan['current_id'])
-    boot = lifecycle(current, True)
+    running = plan['current_running']
+    boot = lifecycle(current, running)
+    if not running:
+        if control['phase'] != 'prepared' or app_status['mode'] != 'never-stopped':
+            raise ValueError('a stopped replacement has no known pre-handoff recovery fence')
+        from caddy_native_replacement import verify_failed_start_fence
+        verify_failed_start_fence(root, value['token'], current)
     if control['proxy'] is not None:
         bound = control['proxy']
         if (bound['id'] != current['Id'] or bound['started_at'] != boot['started_at']
@@ -102,7 +108,7 @@ def preconditions(root, value, armed, run, admit):
     serving_dns(run, value['instance'], value['app_id'], app_running=app_status['mode'] == 'never-stopped')
     exact_container(run, value['app_id'], armed['profiles']['app'], value['instance'],
                     app_status['mode'] == 'never-stopped', app_status['app_boot'])
-    return plan, {'forward_state': state, 'proxy_profile': profile(current), 'proxy_boot': boot,
+    return plan, {'forward_state': state, 'proxy_profile': profile(current), 'proxy_boot': boot, 'proxy_running': running,
                   'app': app_status, 'current_id': current['Id']}
 
 

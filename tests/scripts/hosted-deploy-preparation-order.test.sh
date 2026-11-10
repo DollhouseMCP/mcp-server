@@ -67,6 +67,7 @@ if [[ "${1:-}" == --case ]]; then
       status) if [[ "${MODE}" == fresh-retry ]]; then printf 'fresh\n'; else printf 'none\n'; fi ;;
       begin-update|begin-fresh|begin-rollback) printf 'transition-pending\n' >> "${EVENTS}"; printf '%032d\n' 0 ;;
       retry-fresh) printf 'transition-retry\n' >> "${EVENTS}"; printf '%032d\n' 0 ;;
+      start-proxy) printf 'compose\n' ;;
       retain-unstarted) mv "${SERVER_DIR}" "${DEPLOY_DIR}/server.unstarted-fixture" ;;
       select-rollback) printf '%s/server.prev-20000101\n' "${DEPLOY_DIR}" ;;
       stage) printf 'transition-staged\n' >> "${EVENTS}" ;;

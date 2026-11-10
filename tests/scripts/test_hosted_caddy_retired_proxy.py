@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts' / 'hosted-deploy'))
 import caddy_retired_proxy as retired
+from caddy_service_guard import unique_proxy
 import legacy_handoff as handoff
 from legacy_recovery_profile import profile
 
@@ -95,6 +96,29 @@ class RetiredProxyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'unknown entry'):
             retired.inventory(self.root, 'site', self.run_docker)
 
+    def test_selector_excludes_only_qualified_retained_id_and_still_rejects_duplicate_or_extra_ids(self):
+        self.register()
+        identifiers = [ID, SERVING]
+
+        def run(argv, timeout, maximum):
+            if argv[1] == 'ps':
+                return '\n'.join(identifiers).encode()
+            return self.run_docker(argv, timeout, maximum)
+
+        with self.assertRaisesRegex(ValueError, 'ambiguous'):
+            unique_proxy(run, 'site')
+        self.assertEqual(unique_proxy(run, 'site', root=self.root), SERVING)
+        identifiers.append(ID)
+        with self.assertRaisesRegex(ValueError, 'ambiguous'):
+            unique_proxy(run, 'site', root=self.root)
+        identifiers[:] = [ID, SERVING, '9' * 64]
+        with self.assertRaisesRegex(ValueError, 'ambiguous'):
+            unique_proxy(run, 'site', root=self.root)
+        identifiers[:] = [ID]
+        with self.assertRaisesRegex(ValueError, 'missing'):
+            unique_proxy(run, 'site', root=self.root)
+        self.assertIsNone(unique_proxy(run, 'site', required=False, root=self.root))
+
     def test_serving_path_is_only_the_qualified_old_private_bind_with_equal_root_bytes(self):
         path = self.root / '.caddy-recovery' / ('proxy-' + '1' * 32) / 'Caddyfile'
         path.parent.mkdir(parents=True, mode=0o700)
@@ -110,7 +134,7 @@ class RetiredProxyTests(unittest.TestCase):
         self.write_proof()
         self.register()
         value = {'authority': {'path': str(self.proof), 'sha256': handoff.digest(self.proof.read_bytes())}, 'serving': serving}
-        record_path = self.root / retired.DIRECTORY / 'serving.json'
+        record_path = self.root / retired.DIRECTORY / ('serving-' + SERVING + '.json')
         record_path.write_bytes(handoff.encoded(value))
         record_path.chmod(0o600)
         self.assertEqual(retired.startup_path(self.root, 'site', SERVING, self.run_docker), path)
@@ -119,6 +143,13 @@ class RetiredProxyTests(unittest.TestCase):
         (self.root / 'Caddyfile').write_bytes(b'changed root bytes')
         with self.assertRaisesRegex(ValueError, 'startup bytes differ'):
             retired.startup_path(self.root, 'site', SERVING, self.run_docker)
+        # The prestart guard has already staged new source/rendered root bytes;
+        # its original proxy still uses the separate, qualified old bind.
+        self.assertEqual(retired.startup_path(self.root, 'site', SERVING, self.run_docker,
+                                              require_root_copy=False), path)
+        path.write_bytes(b'changed protected original')
+        with self.assertRaisesRegex(ValueError, 'startup bytes differ'):
+            retired.startup_path(self.root, 'site', SERVING, self.run_docker, require_root_copy=False)
 
 
 if __name__ == '__main__':

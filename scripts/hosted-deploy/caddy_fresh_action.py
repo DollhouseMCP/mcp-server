@@ -203,7 +203,7 @@ def prepare_locked(value, root, run, admit):
         raise ValueError('fresh volume initialization cannot modify an existing deployment')
     check_local_daemon(run, os.environ.get('DOCKER_HOST'))
     helper_id = require_helper_image(run)
-    if unique_proxy(run, value['instance'], required=False) is not None:
+    if unique_proxy(run, value['instance'], required=False, root=root) is not None:
         raise ValueError('fresh initialization refuses an existing Compose Caddy service')
     existing = run(['docker', 'ps', '--all', '--no-trunc', '--filter',
                     'name=^/' + value['instance'] + '-caddy$', '--format', '{{.ID}}'], 15, 65536)

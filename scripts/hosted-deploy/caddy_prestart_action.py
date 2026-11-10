@@ -10,7 +10,7 @@ sys.dont_write_bytecode = True
 from caddy_clone_action import docker_run, validate_request
 from caddy_image_admission import qualify
 from caddy_recovery_preflight import find_previous_receipt
-from caddy_service_guard import unique_proxy
+from caddy_service_guard import proxy_startup_path, unique_proxy
 from caddy_volume_migration import check_local_daemon, verify_prepared
 from image_scan_intake import unique_object
 
@@ -27,10 +27,13 @@ def verify(value, run=docker_run, admit=qualify):
         raise ValueError('selected volumes differ from the clone receipt')
     profile = record['profile']
     check_local_daemon(run, os.environ.get('DOCKER_HOST'))
-    if unique_proxy(run, value['instance']) != profile['container_id']:
+    if unique_proxy(run, value['instance'], root=root) != profile['container_id']:
         raise ValueError('selected original proxy changed')
     helper = Path(__file__).with_name('caddy_volume_copy.mjs')
-    verify_prepared(run, profile, record['clone'], helper, str(root / 'Caddyfile'), os.environ.get('DOCKER_HOST'), admit)
+    # Rendering has replaced root/Caddyfile; the qualified original proxy still
+    # has its separate immutable, receipt-bound old startup file.
+    startup = proxy_startup_path(root, value['instance'], profile['container_id'], run, require_root_copy=False)
+    verify_prepared(run, profile, record['clone'], helper, str(startup), os.environ.get('DOCKER_HOST'), admit)
     return True
 
 

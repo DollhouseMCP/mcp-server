@@ -201,6 +201,7 @@ case "${1:-}" in
     case "${2:-}" in
       status) printf 'none\n' ;;
       begin-fresh|begin-update|begin-rollback) printf 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' ;;
+      start-proxy) printf 'compose\n' ;;
       select-rollback|select-proxy) printf '%s/server.prev-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' "${DOLLHOUSE_HOSTED_DEPLOY_DIR:?}" ;;
       stage|bind-admission) printf 'ok\n' ;;
       finish)

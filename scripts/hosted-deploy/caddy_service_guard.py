@@ -1,5 +1,6 @@
 """Require unambiguous Compose proxy ownership before Caddy operations."""
 import re
+from pathlib import Path
 
 from caddy_volume_migration import inspect_one
 
@@ -7,14 +8,26 @@ ID = re.compile(r'[0-9a-f]{64}\Z')
 INSTANCE = re.compile(r'[a-z0-9][a-z0-9_-]{0,62}\Z')
 
 
-def unique_proxy(run, instance, required=True):
+def proxy_startup_path(root, instance, identifier, run, require_root_copy=True):
+    # Lazy import avoids a cycle through legacy checkpoint/release observers.
+    from caddy_retired_proxy import startup_path
+    return startup_path(Path(root), instance, identifier, run, require_root_copy)
+
+
+def unique_proxy(run, instance, required=True, root=None):
     if not isinstance(instance, str) or not INSTANCE.fullmatch(instance):
         raise ValueError('invalid Compose instance')
     raw = run(['docker', 'ps', '--all', '--no-trunc', '--filter',
                'label=com.docker.compose.project=' + instance, '--filter',
                'label=com.docker.compose.service=caddy', '--format', '{{.ID}}'], 15, 1024 * 1024)
     identifiers = raw.decode('ascii').splitlines()
-    if len(identifiers) > 1 or len(set(identifiers)) != len(identifiers) or any(not ID.fullmatch(item) for item in identifiers):
+    if len(set(identifiers)) != len(identifiers) or any(not ID.fullmatch(item) for item in identifiers):
+        raise ValueError('Caddy Compose service identity is ambiguous')
+    if root is not None:
+        from caddy_retired_proxy import inventory
+        retired = inventory(Path(root), instance, run)
+        identifiers = [identifier for identifier in identifiers if identifier not in retired]
+    if len(identifiers) > 1:
         raise ValueError('Caddy Compose service identity is ambiguous')
     if not identifiers:
         if required:

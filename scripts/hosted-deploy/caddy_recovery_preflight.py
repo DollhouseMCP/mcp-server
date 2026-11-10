@@ -89,7 +89,7 @@ def preflight(root, instance, previous, image_reference, run, qualify):
     helper = Path(__file__).with_name('caddy_volume_copy.mjs')
     verify_original_volumes(run, record['clone'], helper, os.environ.get('DOCKER_HOST'))
     admission = qualify(image_reference)
-    current = inspect_one(run, 'container', unique_proxy(run, instance))
+    current = inspect_one(run, 'container', unique_proxy(run, instance, root=root))
     current_image = inspect_one(run, 'image', image_reference)
     current_id, current_running, current_profile = validate_replacement(current, current_image, instance, image_reference, admission, record, root / 'Caddyfile')
     return {'receipt': path, 'record': record, 'previous': previous, 'current_id': current_id,
