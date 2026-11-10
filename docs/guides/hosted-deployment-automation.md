@@ -622,12 +622,25 @@ Prefer `DOLLHOUSE_BOOTSTRAP_GITHUB_ID` when you already know the numeric GitHub 
 
 ### `rollback`
 
-Validates the selected previous source bundle and its unique proxy receipt,
-then restores or verifies that recorded proxy contract before moving source.
-It keeps the current source as `server.rollback-from-*`, rebuilds the app
-image, and waits for PostgreSQL. Only after that preparation succeeds does it
-require the non-force graceful-stop fence and replace `dollhousemcp`, then
-verify. The proxy can therefore switch before the source move or app drain.
+Validates the selected previous source bundle and its unique proxy receipt.
+Rollback proceeds only when that receipt matches the unchanged running proxy;
+a rollback requiring a different proxy is refused before source or proxy
+mutation. It retains the current source as `server.rollback-from-*`, rebuilds
+the app image, and checks PostgreSQL. It then verifies a restricted Caddy
+profile before the non-force app drain and replacement. Public acceptance runs
+behind that profile; only after it passes does the operation activate and
+read back the normal profile, finish the receipt, and write deployed markers.
+
+This control requires rootful Linux, fixed system `nsenter`, `curl`, and Docker
+tools, and permission to enter the selected proxy's network namespace. The
+temporary persisted profile permits only the three unauthenticated HTTP/1.1
+GET probes with an empty body; it binds their responses to the transition.
+Authenticated acceptance requires a separately qualified private probe before
+release. A failed or unacknowledged activation remains pending: a bounded stop
+is attempted, but an unknown stop can leave ingress active. Retain the
+recovery point and reconcile it explicitly; the pending marker is not itself
+a network fence. Normal operation restores the ordinary HTTP/1.1 and HTTP/2
+profile and does not require another clone for an unchanged proxy.
 
 The shared PostgreSQL preparation checks the pinned running container without recreation and refuses if a running app has no running PostgreSQL. It may start PostgreSQL only when no app is running.
 

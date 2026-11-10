@@ -4,6 +4,7 @@ export const upstreamSource = String.raw`
 const http=require('node:http');
 const expected=Buffer.from('{"jsonrpc":"2.0","id":1,"method":"qualification"}');
 http.createServer((req,res)=>{
+ if(['/healthz','/readyz','/mcp'].includes(req.url)) console.log(JSON.stringify({fixture:'probe',path:req.url,method:req.method}));
  if(req.url==='/quiet') {
   let bytes=0, rejected=false, ended=false, timer;
   const chunks=[];
@@ -33,7 +34,7 @@ http.createServer((req,res)=>{
    timer=setTimeout(()=>res.end('event: done\ndata: survived\n\n'),76000);
   });
  } else {
-  res.writeHead(200, {'content-type':'application/json'});
+  res.writeHead(req.url==='/mcp' ? 401 : 200, {'content-type':'application/json', ...(['/healthz','/readyz','/mcp'].includes(req.url) ? {'x-dollhouse-verification':'spoofed'} : {})});
   res.end(JSON.stringify({headers:req.headers,url:req.url}));
  }
 }).listen(8081,'0.0.0.0');

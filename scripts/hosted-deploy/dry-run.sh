@@ -73,6 +73,7 @@ dry_run_start_or_update() {
   describe_image_preparation
   log "dry-run: would check the pinned running postgres without recreation for up to ${POSTGRES_READY_TIMEOUT}s; start postgres only if no application is running"
   log "dry-run: would retain a verified unchanged hardened caddy proxy; otherwise pull and admit the selected image before stopping the current app"
+  log "dry-run: would persist and verify the restricted Caddy profile before app drain; only three unauthenticated HTTP/1.1 probes are allowed"
   log "dry-run: would require non-force graceful stop before schema or admin changes"
   log "dry-run: would run database migrations"
   log "dry-run: would apply post-migration database grants"
@@ -82,9 +83,9 @@ dry_run_start_or_update() {
   else
     log "dry-run: would recreate the application, retaining an unchanged qualified caddy proxy when applicable"
   fi
-  log "dry-run: would record deployed revision and time only after replacement succeeds"
   log "dry-run: would verify ${PUBLIC_BASE_URL}/healthz, /readyz, and /mcp for up to ${VERIFY_READY_TIMEOUT}s"
   log "dry-run: would warn, not fail, if /readyz reports bootstrap_required before the first admin is claimed"
+  log "dry-run: would activate and verify the normal Caddy profile, finish the receipt, then record revision and time"
 
   return 0
 }
@@ -127,10 +128,12 @@ dry_run_rollback() {
   else
     log "dry-run: no completed, unambiguous rollback candidate is available"
   fi
-  log "dry-run: would validate and restore or retain the recorded proxy before moving source"
+  log "dry-run: would require the recorded proxy to be the unchanged running proxy before moving source; changed-proxy rollback is refused"
   log "dry-run: would rebuild dollhousemcp, check pinned postgres, and require non-force graceful stop before app replacement"
+  log "dry-run: would persist and verify the restricted Caddy profile before app drain"
   log "dry-run: would verify ${PUBLIC_BASE_URL}/healthz, /readyz, and /mcp for up to ${VERIFY_READY_TIMEOUT}s"
   log "dry-run: would warn, not fail, if /readyz reports bootstrap_required before the first admin is claimed"
+  log "dry-run: would activate and verify the normal Caddy profile, finish the receipt, then record revision and time"
 
   return 0
 }

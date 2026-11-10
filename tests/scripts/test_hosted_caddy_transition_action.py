@@ -12,6 +12,7 @@ import caddy_transition_action as action
 import caddy_transition_state as state
 import caddy_unchanged_action
 import caddy_pending_proxy_action
+import caddy_release_action
 import test_hosted_caddy_unchanged_action as fixtures
 import test_hosted_caddy_transition_state as state_fixtures
 
@@ -38,7 +39,9 @@ class TransitionActionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             action.selected(self.root)
         self.assertEqual(action.selected(self.root, allow_pending=True), previous)
-        action.complete(self.root, token)
+        state_fixtures.release_fixture(self.root)
+        with patch.object(caddy_release_action, 'verify_released'):
+            action.complete(self.root, token, 'site')
         self.assertEqual(action.selected(self.root), previous)
         pending = action.pending_base(self.value, 'update')
         selected_state = state.read_state(self.root)['completed']
@@ -66,10 +69,12 @@ class TransitionActionTests(unittest.TestCase):
         state.mark_staged(self.root, value['token'], value['source'])
         (self.root / 'server' / 'app').write_text('changed after stage')
         with self.assertRaises(ValueError):
-            action.complete(self.root, value['token'])
+            action.complete(self.root, value['token'], 'site')
         self.assertIsNotNone(state.read_state(self.root)['pending'])
         (self.root / 'server' / 'app').write_text('fixture')
-        self.assertIsNone(action.complete(self.root, value['token'])['pending'])
+        state_fixtures.release_fixture(self.root)
+        with patch.object(caddy_release_action, 'verify_released'):
+            self.assertIsNone(action.complete(self.root, value['token'], 'site')['pending'])
 
     def test_rollback_complete_rejects_inconsistent_staged_identity(self):
         value = state_fixtures.pending(self.root, 'rollback')
@@ -79,7 +84,7 @@ class TransitionActionTests(unittest.TestCase):
         record['pending']['staged_source'] = caddy_bundle_identity.bundle_identity(self.root / 'server')
         state.write_state(self.root, record)
         with self.assertRaises(ValueError):
-            action.complete(self.root, value['token'])
+            action.complete(self.root, value['token'], 'site')
         self.assertIsNotNone(state.read_state(self.root)['pending'])
 
     def test_completed_pointer_does_not_sort_random_bundle_names(self):
@@ -94,7 +99,9 @@ class TransitionActionTests(unittest.TestCase):
                 (self.root / 'server').mkdir()
                 (self.root / 'server' / 'app').write_text(token_text)
                 state.mark_staged(self.root, token, caddy_bundle_identity.bundle_identity(self.root / 'server'))
-                action.complete(self.root, token)
+                state_fixtures.release_fixture(self.root)
+                with patch.object(caddy_release_action, 'verify_released'):
+                    action.complete(self.root, token, 'site')
                 selected.append(previous)
         self.assertLess(str(selected[1]), str(selected[0]))
         self.assertEqual(action.selected(self.root), selected[1])

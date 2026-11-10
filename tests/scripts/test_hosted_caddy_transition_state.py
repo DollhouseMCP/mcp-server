@@ -25,6 +25,17 @@ def pending(root, kind='update'):
             'phase': 'admitted', 'admission': admission}
 
 
+def release_fixture(root):
+    """Synthetic state for unit tests; this is not an operation receipt."""
+    record = state.read_state(root)
+    record['pending']['control'] = {'phase': 'released', 'normal_sha256': '1' * 64,
+        'verification_sha256': '2' * 64, 'normal_config_sha256': '3' * 64,
+        'verification_config_sha256': '4' * 64, 'public_origin': 'https://fixture.example',
+        'proxy': {'id': '5' * 64, 'pid': 1, 'started_at': 'fixture', 'restart_count': 0,
+                  'net_device': 1, 'net_inode': 1, 'profile_sha256': '6' * 64, 'volumes_sha256': '7' * 64}}
+    state.write_state(root, record)
+
+
 class TransitionStateTests(unittest.TestCase):
     def test_rollback_stage_requires_selected_identity(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -36,6 +47,9 @@ class TransitionStateTests(unittest.TestCase):
                 state.mark_staged(root, value['token'], wrong)
             self.assertEqual(state.read_state(root)['pending']['phase'], 'admitted')
             state.mark_staged(root, value['token'], value['source'])
+            with self.assertRaises(ValueError):
+                state.finish(root, value['token'])
+            release_fixture(root)
             self.assertIsNone(state.finish(root, value['token'])['pending'])
 
     def test_rollback_finish_rejects_inconsistent_staged_identity(self):
@@ -63,6 +77,9 @@ class TransitionStateTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 state.begin(root, duplicate)
             state.mark_staged(root, first['token'], {'sha256': '1' * 64, 'entries': 1, 'bytes': 1})
+            with self.assertRaises(ValueError):
+                state.finish(root, first['token'])
+            release_fixture(root)
             completed = state.finish(root, first['token'])['completed']
             self.assertEqual(completed['previous'], first['previous'])
             second = pending(root)

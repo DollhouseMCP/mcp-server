@@ -222,6 +222,8 @@ acquire_caddy_deployment_lock() {
   flock --nonblock "${HOSTED_CADDY_LOCK_FD}" || die "another Caddy deployment operation holds the lock"
   [[ ! -e "${DEPLOY_DIR}/.caddy-offline-stop-issued" && ! -L "${DEPLOY_DIR}/.caddy-offline-stop-issued" ]] || \
     die "an earlier Caddy stop has an unknown outcome; operator reconciliation is required"
+  python3 "${HOSTED_DEPLOY_LIB_DIR}/caddy_transition_state.py" "${DEPLOY_DIR}" || \
+    die "a Caddy verification or release requires operator reconciliation"
 }
 
 verify_prepared_caddy() {
@@ -285,6 +287,28 @@ caddy_transition() {
 
 finish_caddy_transition() {
   caddy_transition finish >/dev/null || die "the completed deployment could not be recorded; operator recovery is required"
+}
+
+caddy_release_request_json() {
+  HOSTED_CADDY_REQUEST_ROOT="${DEPLOY_DIR}" HOSTED_CADDY_REQUEST_INSTANCE="${INSTANCE_NAME}" \
+    HOSTED_CADDY_REQUEST_DATA="${CADDY_DATA_VOLUME}" HOSTED_CADDY_REQUEST_CONFIG="${CADDY_CONFIG_VOLUME}" \
+    HOSTED_CADDY_TRANSITION_TOKEN="${CADDY_TRANSITION_TOKEN:-}" HOSTED_CADDY_KEEP="${CADDY_KEEP_PROXY:-false}" \
+    HOSTED_CADDY_PUBLIC_URL="${PUBLIC_BASE_URL}" HOSTED_CADDY_VERIFY_TIMEOUT="${VERIFY_READY_TIMEOUT}" \
+    HOSTED_RENDER_MODE="${PROXY_MODE}" HOSTED_RENDER_HOST="${HOSTNAME}" HOSTED_RENDER_HTTP="${HTTP_BIND_PORT}" \
+    HOSTED_RENDER_MCP="${MCP_PORT}" HOSTED_RENDER_TRUSTED="${CADDY_TRUSTED_PROXIES}" HOSTED_RENDER_LOG="${CADDY_ACCESS_LOG}" \
+    python3 -c 'import json, os; e=os.environ; print(json.dumps({"deploy_dir":e["HOSTED_CADDY_REQUEST_ROOT"],"instance":e["HOSTED_CADDY_REQUEST_INSTANCE"],"data_volume":e["HOSTED_CADDY_REQUEST_DATA"],"config_volume":e["HOSTED_CADDY_REQUEST_CONFIG"],"token":e["HOSTED_CADDY_TRANSITION_TOKEN"],"keep_proxy":e["HOSTED_CADDY_KEEP"]=="true","public_base_url":e["HOSTED_CADDY_PUBLIC_URL"],"timeout":int(e["HOSTED_CADDY_VERIFY_TIMEOUT"]),"allow_bootstrap":True,"renderer":{"PROXY_MODE":e["HOSTED_RENDER_MODE"],"HOSTNAME":e["HOSTED_RENDER_HOST"],"HTTP_BIND_PORT":e["HOSTED_RENDER_HTTP"],"MCP_PORT":e["HOSTED_RENDER_MCP"],"CADDY_TRUSTED_PROXIES":e["HOSTED_RENDER_TRUSTED"],"CADDY_ACCESS_LOG":e["HOSTED_RENDER_LOG"]}}))'
+}
+
+caddy_release() {
+  local action="$1"
+  caddy_release_request_json | HOSTED_CADDY_LOCK_FD="${HOSTED_CADDY_LOCK_FD}" \
+    python3 "${HOSTED_DEPLOY_LIB_DIR}/caddy_release_action.py" "${action}" || \
+    die "Caddy verification or release failed; inspect the pending state before any recovery"
+}
+
+write_deployed_markers() {
+  printf '%s\n' "${STAGED_REVISION}" > "${DEPLOY_DIR}/DEPLOYED_REVISION"
+  date -u +%Y-%m-%dT%H:%M:%SZ > "${DEPLOY_DIR}/DEPLOYED_AT"
 }
 
 caddy_fresh_request_json() {
@@ -458,6 +482,13 @@ start_or_update() {
     recheck_caddy_image
     recheck_caddy_transition "${fresh}"
   fi
+  caddy_release prepare
+  if [[ "${CADDY_KEEP_PROXY:-false}" != true ]]; then
+    recheck_caddy_image
+    compose up -d --pull never --no-deps --force-recreate caddy
+  fi
+  caddy_release confirm
+  caddy_release probe-fence
   recheck_registry_images
   gracefully_stop_existing_app
   # Schema and identity writes require the successful drain fence. Failure here
@@ -466,13 +497,6 @@ start_or_update() {
   run_bootstrap_admin optional
   recheck_registry_images
   compose up -d --pull never --no-build --no-deps --force-recreate dollhousemcp
-  if [[ "${CADDY_KEEP_PROXY:-false}" != true ]]; then
-    recheck_caddy_transition "${fresh}"
-    restart_caddy_proxy
-  fi
-  printf '%s\n' "${STAGED_REVISION}" > "${DEPLOY_DIR}/DEPLOYED_REVISION"
-  date -u +%Y-%m-%dT%H:%M:%SZ > "${DEPLOY_DIR}/DEPLOYED_AT"
-
   return 0
 }
 
@@ -495,8 +519,12 @@ curl_status() {
   local url="$1"
   local body_file="$2"
   local status
+  local -a verification_args=()
+  if [[ "${CADDY_VERIFICATION_ACTIVE:-false}" == true ]]; then
+    verification_args=(--http1.1 --header 'Content-Length: 0')
+  fi
 
-  if ! status="$(curl -sS -o "${body_file}" -w '%{http_code}' "${url}" 2>/dev/null)"; then
+  if ! status="$(curl -sS "${verification_args[@]}" -o "${body_file}" -w '%{http_code}' "${url}" 2>/dev/null)"; then
     status="000"
   fi
   printf '%s\n' "${status}"
@@ -594,7 +622,7 @@ check_mcp_unauthenticated() {
 }
 
 rollback_server() {
-  local previous timestamp current_backup previous_name recovery_result recovery_kind
+  local previous timestamp current_backup previous_name
 
   ensure_runtime_prerequisites
   validate_persisted_caddy_fields
@@ -606,14 +634,10 @@ rollback_server() {
   previous="$(caddy_transition select-rollback)" || die "no unambiguous completed rollback source is available"
   [[ -d "${SERVER_DIR}" ]] || die "no current server bundle found at ${SERVER_DIR}"
   PREVIOUS_BUNDLE="${previous}"
+  caddy_recovery_request_json "${previous}" | python3 "${HOSTED_DEPLOY_LIB_DIR}/caddy_rollback_guard.py" || \
+    die "rollback requires a different proxy; retain the recovery point for a separately qualified plan"
   CADDY_TRANSITION_TOKEN="$(caddy_transition begin-rollback)" || die "could not record the rollback transition"
-  recovery_result="$(recover_selected_caddy "${previous}")" || die "proxy recovery failed"
-  recovery_kind="$(printf '%s' "${recovery_result}" | python3 -c 'import json,re,sys; v=json.load(sys.stdin); same=isinstance(v,dict) and v=={"outcome":"unchanged"}; restored=isinstance(v,dict) and set(v)=={"restored_id","preserved_replacement_id"} and all(isinstance(v[k],str) and re.fullmatch("[0-9a-f]{64}",v[k]) for k in v); sys.exit(1) if not (same or restored) else print("unchanged" if same else "restored")')" || die "invalid proxy recovery result"
-  if [[ "${recovery_kind}" == unchanged ]]; then
-    CADDY_KEEP_PROXY=true
-  else
-    CADDY_RECOVERY_VERIFIED=true
-  fi
+  CADDY_KEEP_PROXY=true
   render_files
 
   timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -631,12 +655,14 @@ rollback_server() {
   # Rollback does not run migrations; previous source may predate the slim target.
   compose build dollhousemcp
   prepare_postgres_before_app_stop
+  caddy_release prepare
+  caddy_release confirm
+  caddy_release probe-fence
   # Prepare the selected rollback bundle and images while the current app is
   # healthy. A failed move/build/pull must not create an avoidable outage.
   gracefully_stop_existing_app
   compose up -d --pull never --no-build --no-deps --force-recreate dollhousemcp
-  printf 'rollback:%s\n' "${previous_name}" > "${DEPLOY_DIR}/DEPLOYED_REVISION"
-  date -u +%Y-%m-%dT%H:%M:%SZ > "${DEPLOY_DIR}/DEPLOYED_AT"
+  STAGED_REVISION="rollback:${previous_name}"
 
   return 0
 }
