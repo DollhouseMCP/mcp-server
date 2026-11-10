@@ -41,6 +41,7 @@ class NativeReplacementTests(unittest.TestCase):
         self.candidate['Config']['Labels']['org.dollhousemcp.proxy-recovery-token'] = self.token
         self.created = False
         self.lose_start = False
+        self.start_was_applied = True
         self.calls = []
         self.control = {'phase': 'prepared', **snapshot_files(self.root, self.token, b'normal', b'verification')}
         startup = self.root / 'Caddyfile'
@@ -92,7 +93,8 @@ class NativeReplacementTests(unittest.TestCase):
             return (self.candidate['Id'] + '\n').encode()
         if argv[1] == 'start':
             self.assertEqual(argv[-1], self.candidate['Id'])
-            self.candidate['State'].update(Running=True, StartedAt='2026-01-01T00:02:00Z')
+            if self.start_was_applied:
+                self.candidate['State'].update(Running=True, StartedAt='2026-01-01T00:02:00Z')
             if self.lose_start:
                 raise TimeoutError('fixture lost native start acknowledgement')
             return (self.candidate['Id'] + '\n').encode()
@@ -138,6 +140,20 @@ class NativeReplacementTests(unittest.TestCase):
         native.verify_failed_start_fence(self.root, self.token, self.candidate)
         self.candidate['HostConfig']['ReadonlyRootfs'] = False
         with self.assertRaisesRegex(ValueError, 'offline fence is UNKNOWN'):
+            native.verify_failed_start_fence(self.root, self.token, self.candidate)
+
+    def test_stopped_read_after_unknown_start_does_not_prove_a_fence(self):
+        self.lose_start = True
+        self.start_was_applied = False
+        with self.assertRaisesRegex(ValueError, 'stopped observation is not an acknowledged fence'):
+            self.replace()
+        proof = self.root / native.DIRECTORY / ('replace-' + self.token)
+        self.assertTrue((proof / 'failed-start-unproven.json').is_file())
+        self.assertTrue((proof / 'start-proxy-failed.json').is_file())
+        self.assertFalse((proof / 'failed-start-fenced.json').exists())
+        self.assertFalse((proof / 'started.json').exists())
+        self.assertFalse(any(argv[1] == 'stop' for argv in self.calls))
+        with self.assertRaisesRegex(ValueError, 'missing acknowledged stop'):
             native.verify_failed_start_fence(self.root, self.token, self.candidate)
 
     def test_compose_route_is_only_for_unambiguous_stopped_original_without_retirement(self):

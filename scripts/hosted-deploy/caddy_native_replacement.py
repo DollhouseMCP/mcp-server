@@ -22,6 +22,7 @@ from legacy_recovery_profile import profile
 
 DIRECTORY = '.caddy-native-replacements'
 REPLACEMENT_PREFIX = 'replace-'
+FENCE_UNPROVEN = 'native failed-start offline fence is UNKNOWN'
 
 
 def replacement_path(root, token):
@@ -161,30 +162,38 @@ def fence_failed_start(operation, candidate, expected, run):
     if type(running) is not bool:
         raise ValueError('native proxy start is UNKNOWN; independent fencing required')
     checked_candidate(run, candidate, expected, running)
-    if running:
-        result = once(operation, 'fence-failed-start',
-                      ['docker', 'stop', '--signal', 'SIGTERM', '--timeout', '-1', candidate], run, 60)
-        if result != (candidate + '\n').encode():
-            raise ValueError('native failed-start fence acknowledgement is UNKNOWN')
-        stopped = checked_candidate(run, candidate, expected, False)
-        record(operation, 'failed-start-fenced', {'id': candidate, 'profile': profile(stopped),
-                                                   'boot': lifecycle(stopped, False)})
+    if not running:
+        # A lost start can still be pending in the daemon. Observing a stopped
+        # candidate is diagnostic only and cannot replace a known stop.
+        record(operation, 'failed-start-unproven', {'id': candidate, 'observed_running': False,
+                                                   'outcome': 'UNKNOWN'})
+        raise ValueError(FENCE_UNPROVEN + '; stopped observation is not an acknowledged fence')
+    result = once(operation, 'fence-failed-start',
+                  ['docker', 'stop', '--signal', 'SIGTERM', '--timeout', '-1', candidate], run, 60)
+    if result != (candidate + '\n').encode():
+        raise ValueError('native failed-start fence acknowledgement is UNKNOWN')
+    stopped = checked_candidate(run, candidate, expected, False)
+    record(operation, 'failed-start-fenced', {'id': candidate, 'profile': profile(stopped),
+                                               'boot': lifecycle(stopped, False)})
 
 
 def verify_failed_start_fence(root, token, current):
     """Use only our known compensating stop, never a later inferred start."""
     path = replacement_path(root, token)
-    owner = private_directory(path)
     try:
-        proof, _ = handoff.read_json(owner, 'failed-start-fenced.json')
-        ack, _ = handoff.read_json(owner, 'fence-failed-start-acknowledged.json')
-    finally:
-        os.close(owner)
+        owner = private_directory(path)
+        try:
+            proof, _ = handoff.read_json(owner, 'failed-start-fenced.json')
+            ack, _ = handoff.read_json(owner, 'fence-failed-start-acknowledged.json')
+        finally:
+            os.close(owner)
+    except FileNotFoundError:
+        raise ValueError(FENCE_UNPROVEN + '; missing acknowledged stop') from None
     identity = current['Id']
     if (proof != {'id': identity, 'profile': profile(current), 'boot': lifecycle(current, False)}
             or ack.get('exit_code') != 0 or ack.get('stdout_sha256') != handoff.digest((identity + '\n').encode())
             or current.get('Config', {}).get('Labels', {}).get('org.dollhousemcp.proxy-recovery-token') != token):
-        raise ValueError('native failed-start offline fence is UNKNOWN')
+        raise ValueError(FENCE_UNPROVEN)
 
 
 def start_candidate(root, operation, candidate, expected, control, run):

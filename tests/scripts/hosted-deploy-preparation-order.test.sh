@@ -234,7 +234,8 @@ check_prepared_proxy_route() (
   local mode="$1"
   source "${REPO_ROOT}/scripts/hosted-deploy/runtime.sh"
   caddy_transition() {
-    [[ "$1" == start-proxy ]] || fail 'wrong transition request'
+    local action="$1"
+    [[ "${action}" == start-proxy ]] || fail 'wrong transition request'
     if [[ "${mode}" == refused ]]; then return 1; fi
     printf '%s\n' "${mode}"
   }

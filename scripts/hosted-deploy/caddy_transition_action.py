@@ -246,12 +246,25 @@ def begin_fresh(value, root, run):
     return pending['token']
 
 
-def dispatch(action, value, run=docker_run, admit=None):
-    root = validate_values(value)
+def dispatch_control(action, root, value, run, admit):
     if action == 'status':
         from legacy_control_resolution import unresolved_pending
         pending = unresolved_pending(root, read_state(root))
         return 'none' if pending is None else pending['kind']
+    if action == 'start-proxy':
+        from caddy_image_admission import qualify
+        from caddy_native_replacement import start
+        return start(root, value, run, admit or qualify)
+    if action == 'finish':
+        complete(root, value['token'], value['instance'])
+        return 'complete'
+    raise ValueError('unsupported Caddy transition control action')
+
+
+def dispatch(action, value, run=docker_run, admit=None):
+    root = validate_values(value)
+    if action in ('status', 'start-proxy', 'finish'):
+        return dispatch_control(action, root, value, run, admit)
     if action == 'begin-update':
         return begin_update(value, root)
     if action == 'begin-fresh':
@@ -267,13 +280,6 @@ def dispatch(action, value, run=docker_run, admit=None):
         sync_root(root)
         mark_staged(root, value['token'], bundle_identity(root / 'server'))
         return 'staged'
-    if action == 'start-proxy':
-        from caddy_image_admission import qualify
-        from caddy_native_replacement import start
-        return start(root, value, run, admit or qualify)
-    if action == 'finish':
-        complete(root, value['token'], value['instance'])
-        return 'complete'
     if action == 'select-rollback':
         return str(selected(root))
     if action == 'select-proxy':
