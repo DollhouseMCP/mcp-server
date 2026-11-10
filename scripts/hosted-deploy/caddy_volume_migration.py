@@ -208,6 +208,14 @@ def run_owned_helper(run, names, helper_path, token, image_id, mode=None):
     return raw
 
 
+def validate_legacy_directory_modes(result):
+    if 'legacy_directory_modes' in result:
+        legacy = result['legacy_directory_modes']
+        if (not isinstance(legacy, dict) or not legacy or not set(legacy) <= {'data/caddy', 'config/caddy'}
+                or any(type(mode) is not int or mode != 0o1777 for mode in legacy.values())):
+            raise ValueError('invalid legacy Caddy directory modes')
+
+
 def validate_copy_receipt(result):
     fields = {'schema', 'entries', 'bytes', 'root_modes', 'inventory_sha256', 'certificate_sha256'}
     if (not isinstance(result, dict) or set(result) not in (fields, fields | {'legacy_directory_modes'})
@@ -217,11 +225,7 @@ def validate_copy_receipt(result):
         value = result[key]
         if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= limit:
             raise ValueError('invalid volume-copy limits')
-    if 'legacy_directory_modes' in result:
-        legacy = result['legacy_directory_modes']
-        if (not isinstance(legacy, dict) or not legacy or not set(legacy) <= {'data/caddy', 'config/caddy'}
-                or any(type(mode) is not int or mode != 0o1777 for mode in legacy.values())):
-            raise ValueError('invalid legacy Caddy directory modes')
+    validate_legacy_directory_modes(result)
     certs = result['certificate_sha256']
     modes = result['root_modes']
     if not isinstance(modes, dict) or set(modes) != {'data', 'config'} or any(isinstance(mode, bool) or not isinstance(mode, int) or not 0 <= mode <= 0o7777 or mode & 0o700 != 0o700 or mode & 0o022 for mode in modes.values()):

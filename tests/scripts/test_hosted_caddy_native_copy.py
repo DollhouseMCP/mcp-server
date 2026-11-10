@@ -1,6 +1,8 @@
 """Inert checks for bounded, exact-owned native fixture cleanup."""
 import importlib.util
 import json
+import contextlib
+import io
 from pathlib import Path
 import time
 import unittest
@@ -72,6 +74,18 @@ class NativeCopyCleanupTests(unittest.TestCase):
             self.runner.cleanup(self.name)
         self.assertFalse(self.present)
         self.assertEqual([command[-1] for command in self.commands if command[:2] == ['docker', 'rm']], [self.identifier])
+
+    def test_source_refusal_requires_known_reason_and_completed_cleanup(self):
+        error = ValueError('Unsafe Caddy volume directory')
+        with patch.object(native, 'invoke', side_effect=error), self.assertRaises(ValueError):
+            native.exercise_source_refusal(self.runner, native.ROOT / 'scripts/hosted-deploy/caddy_volume_copy.mjs')
+        self.runner.active.clear()
+        with patch.object(native, 'invoke', side_effect=ValueError('unrelated failure')), self.assertRaises(ValueError):
+            native.exercise_source_refusal(self.runner, native.ROOT / 'scripts/hosted-deploy/caddy_volume_copy.mjs')
+        out = io.StringIO()
+        with patch.object(native, 'invoke', side_effect=error), contextlib.redirect_stdout(out):
+            native.exercise_source_refusal(self.runner, native.ROOT / 'scripts/hosted-deploy/caddy_volume_copy.mjs')
+        self.assertEqual(json.loads(out.getvalue()), {'unsafeSourceRefused': True, 'ownedCleanupConfirmed': True})
 
     def test_changed_mount_is_never_removed(self):
         self.wrong_mount = True

@@ -157,6 +157,17 @@ def exercise_copy(runner, helper):
     return copied
 
 
+def exercise_source_refusal(runner, helper):
+    try:
+        invoke(runner, helper, '--verify-source')
+    except ValueError as error:
+        if runner.active or 'Unsafe Caddy volume directory' not in str(error) + runner.start_stderr:
+            raise
+    else:
+        raise ValueError('unsafe legacy mode was accepted')
+    print(json.dumps({'unsafeSourceRefused': True, 'ownedCleanupConfirmed': not runner.active}))
+
+
 def main():
     started = time.monotonic()
     negative = sys.argv[1:2] == ['--expect-unsafe-source']
@@ -169,14 +180,7 @@ def main():
 
     try:
         if negative:
-            try:
-                invoke(runner, helper, '--verify-source')
-            except ValueError as error:
-                if runner.active or 'Unsafe Caddy volume directory' not in str(error) + runner.start_stderr:
-                    raise
-            else:
-                raise ValueError('unsafe legacy mode was accepted')
-            print(json.dumps({'unsafeSourceRefused': True, 'ownedCleanupConfirmed': not runner.active}))
+            exercise_source_refusal(runner, helper)
             return
         # Same source-only production preflight; no target mounts or writes.
         preflight = FixtureRunner(image, names[:2], started)

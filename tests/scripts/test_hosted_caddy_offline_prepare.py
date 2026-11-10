@@ -82,6 +82,25 @@ class OfflinePrepareTests(unittest.TestCase):
         self.assertFalse(any(item[1] == 'stop' and '--help' not in item for item in self.calls))
         self.assertFalse(any(item[1:3] == ['volume', 'create'] for item in self.calls))
 
+    def test_changed_source_or_config_during_qualification_refuses_before_stop(self):
+        for changed in ('Caddyfile', 'server/app'):
+            with self.subTest(changed=changed):
+                original = self.run_docker
+                path = self.fake.root / changed
+                before = path.read_bytes()
+                self.calls.clear()
+                def run(argv, timeout, limit):
+                    result = original(argv, timeout, limit)
+                    if argv[1] == 'rm':
+                        path.write_text('changed during source qualification')
+                    return result
+                with patch.dict('os.environ', {'DOCKER_HOST': ''}), self.assertRaisesRegex(ValueError, 'during source qualification'):
+                    offline.prepare(self.request, run, lambda reference: {'reference': reference})
+                self.assertTrue(self.fake.proxy['State']['Running'])
+                self.assertFalse((self.fake.root / offline.STOP_FENCE).exists())
+                self.assertFalse(any(item[1] == 'stop' and '--help' not in item for item in self.calls))
+                path.write_bytes(before)
+
     def test_source_cleanup_unknown_leaves_ingress_open(self):
         original = self.run_docker
         def run(argv, timeout, limit):

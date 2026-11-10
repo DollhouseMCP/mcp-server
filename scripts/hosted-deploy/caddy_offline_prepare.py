@@ -141,9 +141,12 @@ def prepare_locked(value, request, root, run, admit):
     from caddy_volume_migration import qualify_source_volumes
     qualify_source_volumes(run, volumes, Path(__file__).with_name('caddy_volume_copy.mjs'))
     # Source-only helper completion AND owned cleanup must precede any stop.
-    if (capture_profile(run, root, value['instance'], admit, expected_running=True) != profile
-            or proxy_boot(run, identifier, True) != boot or inspect_volumes(run, old_names) != volumes):
-        raise ValueError('proxy or source changed during source qualification')
+    if (unique_proxy(run, value['instance']) != identifier
+            or capture_profile(run, root, value['instance'], admit, expected_running=True) != profile
+            or proxy_boot(run, identifier, True) != boot or inspect_volumes(run, old_names) != volumes
+            or bundle_identity(root / 'server') != source or read_current_caddyfile(root) != caddyfile
+            or admit(value['image']) != admission):
+        raise ValueError('proxy, source or admission changed during source qualification')
     no_other_writers(run, identifier, volumes)
     destination_absent(run, new_names)
     fence = create_stop_fence(root, identifier, boot, profile)
