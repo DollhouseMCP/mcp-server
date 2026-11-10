@@ -21,6 +21,27 @@ function checkedDirectory(location) {
   return st;
 }
 
+// The legacy image created only these two immediate, root-owned sticky dirs.
+// Originals retain their raw modes; only their destination copies are hardened.
+function legacyStickyDirectory(relative, st) {
+  return ['data/caddy', 'config/caddy'].includes(relative) && st.isDirectory() &&
+    !st.isSymbolicLink() && st.uid === 0 && st.gid === 0 && (st.mode & 0o7777) === 0o1777;
+}
+
+function sourceDirectory(location, relative) {
+  const st = fs.lstatSync(location);
+  return legacyStickyDirectory(relative, st) ? st : checkedDirectory(location);
+}
+
+function destinationMode(relative, st) {
+  return legacyStickyDirectory(relative, st) ? 0o750 : st.mode & 0o7777;
+}
+
+function destinationRows(rows) {
+  return rows.map(row => row.type === 'directory' && row.mode === 0o1777 &&
+    ['data/caddy', 'config/caddy'].includes(row.path) ? { ...row, mode: 0o750 } : row);
+}
+
 function checkedFile(st) {
   if (!st.isFile() || st.isSymbolicLink() || st.nlink !== 1 || st.size > MAX_FILE || !(st.mode & 0o400) || (st.mode & 0o022)) {
     throw new Error('Unsafe or oversized Caddy volume file');
@@ -82,13 +103,13 @@ function stableDirectory(location, before, names) {
   }
 }
 
-function setOwnership(location, stat, uid, gid) {
+function setOwnership(location, stat, uid, gid, mode = stat.mode & 0o7777) {
   fs.chownSync(location, uid, gid);
-  fs.chmodSync(location, stat.mode & 0o7777);
+  fs.chmodSync(location, mode);
 }
 
 function copyTree(source, target, prefix, state, uid, gid) {
-  const before = checkedDirectory(source);
+  const before = sourceDirectory(source, prefix);
   checkedDirectory(target);
   const names = fs.readdirSync(source).sort();
   for (const name of names) {
@@ -103,7 +124,7 @@ function copyTree(source, target, prefix, state, uid, gid) {
       countEntry(state);
       fs.mkdirSync(dst, { mode: 0o700 });
       copyTree(src, dst, relative, state, uid, gid);
-      setOwnership(dst, st, uid, gid);
+      setOwnership(dst, st, uid, gid, destinationMode(relative, st));
       state.rows.push({ path: relative, type: 'directory', mode: st.mode & 0o7777 });
     } else {
       checkedFile(st);
@@ -117,7 +138,7 @@ function copyTree(source, target, prefix, state, uid, gid) {
 }
 
 function snapshotTree(root, prefix, state, owner) {
-  const before = checkedDirectory(root);
+  const before = owner ? checkedDirectory(root) : sourceDirectory(root, prefix);
   if (owner && (before.uid !== owner.uid || before.gid !== owner.gid)) throw new Error('Caddy destination owner mismatch');
   const names = fs.readdirSync(root).sort();
   for (const name of names) {
@@ -145,11 +166,14 @@ function snapshot(roots, owner) {
 }
 
 function volumeReceipt(rows, rootModes) {
+  const legacyModes = Object.fromEntries(rows.filter(row => row.type === 'directory' && row.mode === 0o1777 &&
+    ['data/caddy', 'config/caddy'].includes(row.path)).map(row => [row.path, row.mode]));
   return {
     schema: 'caddy-volume-clone-v1',
     entries: rows.length,
     bytes: rows.reduce((sum, row) => sum + (row.size ?? 0), 0),
     root_modes: rootModes,
+    ...(Object.keys(legacyModes).length ? { legacy_directory_modes: legacyModes } : {}),
     inventory_sha256: crypto.createHash('sha256').update(JSON.stringify(rows)).digest('hex'),
     certificate_sha256: rows.filter(row => row.type === 'file' && /\.(crt|pem)$/i.test(row.path)).map(row => row.sha256).sort(),
   };
@@ -169,7 +193,7 @@ export function verifyVolumes(sourceRoots, targetRoots, uid = 1001, gid = 1001) 
   }
   if (new Set(identities).size !== identities.length) throw new Error('Caddy source and destination roots must be distinct');
   const original = snapshot(sourceRoots);
-  if (JSON.stringify(snapshot(targetRoots, { uid, gid })) !== JSON.stringify(original)) {
+  if (JSON.stringify(snapshot(targetRoots, { uid, gid })) !== JSON.stringify(destinationRows(original))) {
     throw new Error('Caddy volume tree changed or differs after copy');
   }
   return volumeReceipt(original, rootModes);
@@ -237,7 +261,7 @@ export function copyVolumes(sourceRoots, targetRoots, uid = 1001, gid = 1001) {
         (checkedDirectory(targetRoots[kind]).mode & 0o7777) !== rootModes[kind]) throw new Error('Caddy volume root mode mismatch');
   }
   const expected = JSON.stringify(state.rows);
-  if (JSON.stringify(snapshot(sourceRoots)) !== expected || JSON.stringify(snapshot(targetRoots, { uid, gid })) !== expected) {
+  if (JSON.stringify(snapshot(sourceRoots)) !== expected || JSON.stringify(snapshot(targetRoots, { uid, gid })) !== JSON.stringify(destinationRows(state.rows))) {
     throw new Error('Caddy volume tree changed or differs after copy');
   }
   return volumeReceipt(state.rows, rootModes);

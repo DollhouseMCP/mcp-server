@@ -358,20 +358,39 @@ else { const allowed=mode.startsWith('allowed'); const headers={'host':'fixture.
     assert.equal(stoppedForCopy.Running, false);
     assert.equal(stoppedForCopy.ExitCode, 0);
     assert.equal(stoppedForCopy.OOMKilled, false);
-    const seed = container(['--network', 'none', '--read-only', '--user', '0:0',
-      '--cap-drop', 'ALL', '--cap-add', 'CHOWN', '--cap-add', 'FOWNER', '--cap-add', 'DAC_OVERRIDE',
-      '--security-opt', 'no-new-privileges:true',
-      '--mount', `type=volume,source=${ownedVolumes[0]},target=/data,volume-nocopy`,
-      '--mount', `type=volume,source=${ownedVolumes[1]},target=/config,volume-nocopy`,
-      '--entrypoint', 'node', fixtureImage, '-e',
-      'const f=require("node:fs"),p=require("node:path");function own(x){const s=f.lstatSync(x);if(s.isSymbolicLink())throw Error("unexpected symlink");if(s.isDirectory())for(const n of f.readdirSync(x))own(p.join(x,n));else if(!s.isFile())throw Error("unexpected type");f.chownSync(x,0,0)}own("/data");own("/config");']);
-    engine(['start', '--attach', seed]);
-    assert.equal(inspect(seed).State.ExitCode, 0);
     const copiedData = volume('copy-data');
     const copiedConfig = volume('copy-config');
     const copyScript = path.join(root, 'scripts/ci/caddy-volume-copy-native.py');
-    nativeCopy = JSON.parse(execFileSync('/usr/bin/python3', [copyScript, ownedVolumes[0], ownedVolumes[1], copiedData, copiedConfig],
-      {encoding:'utf8', timeout:240_000, maxBuffer:65536, env:{...process.env, PYTHONDONTWRITEBYTECODE:'1'}}));
+    const copyOptions = {encoding:'utf8', timeout:240_000, maxBuffer:65536,
+      env:{...process.env, PYTHONDONTWRITEBYTECODE:'1'}};
+    let negativeCopy;
+    for (const legacyMode of [0o1775, 0o1777]) {
+      const seed = container(['--network', 'none', '--read-only', '--user', '0:0',
+        '--cap-drop', 'ALL', '--cap-add', 'CHOWN', '--cap-add', 'FOWNER', '--cap-add', 'DAC_OVERRIDE',
+        '--security-opt', 'no-new-privileges:true',
+        '--mount', `type=volume,source=${ownedVolumes[0]},target=/data,volume-nocopy`,
+        '--mount', `type=volume,source=${ownedVolumes[1]},target=/config,volume-nocopy`,
+        '--entrypoint', 'node', fixtureImage, '-e',
+        'const f=require("node:fs"),p=require("node:path");function own(x){const s=f.lstatSync(x);if(s.isSymbolicLink())throw Error("unexpected symlink");if(s.isDirectory())for(const n of f.readdirSync(x))own(p.join(x,n));else if(!s.isFile())throw Error("unexpected type");f.chownSync(x,0,0)}own("/data");own("/config");for(const x of ["/data","/config"]){f.chmodSync(x,0o755);f.chmodSync(x+"/caddy",Number(process.argv[1]))}',
+        String(legacyMode)]);
+      engine(['start', '--attach', seed]);
+      assert.equal(inspect(seed).State.ExitCode, 0);
+      const args = [copyScript, ...(legacyMode === 0o1775 ? ['--expect-unsafe-source'] : []),
+        ownedVolumes[0], ownedVolumes[1], copiedData, copiedConfig];
+      const result = JSON.parse(execFileSync('/usr/bin/python3', args, copyOptions));
+      if (legacyMode === 0o1775) negativeCopy = result;
+      else nativeCopy = result;
+    }
+    assert.equal(negativeCopy.unsafeSourceRefused, true);
+    assert.equal(negativeCopy.ownedCleanupConfirmed, true);
+    nativeCopy.unsafeSourceRefused = true;
+    nativeCopy.sourceLegacyModes = nativeCopy.inventory.legacy_directory_modes;
+    assert.deepEqual(nativeCopy.sourceLegacyModes, {'data/caddy':0o1777, 'config/caddy':0o1777});
+    const daemon = JSON.parse(engine(['info', '--format', '{{json .}}']));
+    nativeCopy.daemon = {version:daemon.ServerVersion, storageDriver:daemon.Driver,
+      driverStatus:daemon.DriverStatus, architecture:daemon.Architecture};
+    nativeCopy.volumeDrivers = [ownedVolumes[0], ownedVolumes[1], copiedData, copiedConfig].map(
+      name => JSON.parse(engine(['volume', 'inspect', name]))[0].Driver);
     nativeCopy.fixtureSha256 = createHash('sha256').update(fs.readFileSync(copyScript)).digest('hex');
     nativeCopy.copyHelperSha256 = createHash('sha256').update(fs.readFileSync(path.join(root, 'scripts/hosted-deploy/caddy_volume_copy.mjs'))).digest('hex');
     assert.equal(nativeCopy.sourceUnchanged, true);
@@ -395,6 +414,7 @@ else { const allowed=mode.startsWith('allowed'); const headers={'host':'fixture.
     for (const directory of ['/data','/data/caddy','/config','/config/caddy']) {
       assert.equal(copiedProfile.paths[directory].UID, 1001);
       assert.equal(copiedProfile.paths[directory].GID, 1001);
+      assert.equal(copiedProfile.paths[directory].Mode & 0o7777, directory.endsWith('/caddy') ? 0o750 : 0o755);
     }
     observations.push('owned rootful fixture copy preserves PKI and UID 1001 access; nonempty reuse refused');
   }

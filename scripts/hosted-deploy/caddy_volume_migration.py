@@ -98,6 +98,8 @@ def require_helper_image(run):
 def helper_args(names, helper_path, token, mode=None):
     if mode not in (None, '--verify', '--verify-source', '--verify-fresh'):
         raise ValueError('unsupported helper mode')
+    if len(names) not in (2, 4) or (len(names) == 2 and mode != '--verify-source'):
+        raise ValueError('source-only helper requires exactly two names and source verification')
     source = str(Path(helper_path).resolve(strict=True))
     if ',' in source or '\n' in source:
         raise ValueError('unsupported helper path')
@@ -105,7 +107,7 @@ def helper_args(names, helper_path, token, mode=None):
             '--label', 'org.dollhousemcp.caddy-clone-token=' + token, '--network', 'none', '--read-only',
             '--security-opt', 'no-new-privileges:true', '--cap-drop', 'ALL', '--cap-add', 'CHOWN', '--cap-add', 'FOWNER',
             '--cap-add', 'DAC_READ_SEARCH', '--user', '0:0']
-    for index, target in enumerate(('/source/data', '/source/config', '/target/data', '/target/config')):
+    for index, target in enumerate(('/source/data', '/source/config', '/target/data', '/target/config')[:len(names)]):
         mount = 'type=volume,src=' + names[index] + ',dst=' + target + ',volume-nocopy'
         if index < 2 or mode:
             mount += ',readonly'
@@ -142,10 +144,12 @@ def validate_helper_runtime(config, host, token, mode):
 
 
 def validate_helper_mounts(mounts, names, helper_path, mode):
-    if not isinstance(mounts, list) or len(mounts) != 5:
+    if len(names) not in (2, 4) or (len(names) == 2 and mode != '--verify-source'):
+        raise ValueError('invalid source-only helper mode')
+    if not isinstance(mounts, list) or len(mounts) != len(names) + 1:
         raise ValueError('owned helper mounts changed')
     by_target = {item.get('Destination'): item for item in mounts if isinstance(item, dict)}
-    for index, target in enumerate(('/source/data', '/source/config', '/target/data', '/target/config')):
+    for index, target in enumerate(('/source/data', '/source/config', '/target/data', '/target/config')[:len(names)]):
         item = by_target.get(target, {})
         if item.get('Type') != 'volume' or item.get('Name') != names[index] or item.get('RW') is not (index >= 2 and not mode):
             raise ValueError('owned helper volume mounts changed')
@@ -206,12 +210,18 @@ def run_owned_helper(run, names, helper_path, token, image_id, mode=None):
 
 def validate_copy_receipt(result):
     fields = {'schema', 'entries', 'bytes', 'root_modes', 'inventory_sha256', 'certificate_sha256'}
-    if not isinstance(result, dict) or set(result) != fields or result['schema'] != 'caddy-volume-clone-v1':
+    if (not isinstance(result, dict) or set(result) not in (fields, fields | {'legacy_directory_modes'})
+            or result['schema'] != 'caddy-volume-clone-v1'):
         raise ValueError('invalid volume-copy receipt')
     for key, limit in (('entries', 100_000), ('bytes', 1024 ** 3)):
         value = result[key]
         if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= limit:
             raise ValueError('invalid volume-copy limits')
+    if 'legacy_directory_modes' in result:
+        legacy = result['legacy_directory_modes']
+        if (not isinstance(legacy, dict) or not legacy or not set(legacy) <= {'data/caddy', 'config/caddy'}
+                or any(type(mode) is not int or mode != 0o1777 for mode in legacy.values())):
+            raise ValueError('invalid legacy Caddy directory modes')
     certs = result['certificate_sha256']
     modes = result['root_modes']
     if not isinstance(modes, dict) or set(modes) != {'data', 'config'} or any(isinstance(mode, bool) or not isinstance(mode, int) or not 0 <= mode <= 0o7777 or mode & 0o700 != 0o700 or mode & 0o022 for mode in modes.values()):
@@ -242,6 +252,24 @@ def create_destinations(run, source_names, destination_names, token):
         labels = inspect_one(run, 'volume', name).get('Labels')
         if not isinstance(labels, dict) or labels.get(CLONE_TOKEN_LABEL) != token:
             raise ValueError('destination is not owned by this transaction')
+
+
+def qualify_source_volumes(run, sources, helper_path):
+    """Read-only copier admission while the original proxy still serves.
+
+    Live content may change before stop. This is an early refusal, never a
+    substitute for the frozen source/copy verification after the clean stop.
+    No destination names are passed, mounted or implicitly created.
+    """
+    names = [volume['name'] for volume in sources]
+    if len(names) != 2 or len(set(names)) != 2 or inspect_volumes(run, names) != sources:
+        raise ValueError('source volume identity changed before qualification')
+    image = require_helper_image(run)
+    raw = run_owned_helper(run, names, helper_path, secrets.token_hex(16), image, '--verify-source')
+    result = validate_copy_receipt(json.loads(raw, object_pairs_hook=unique_object))
+    if inspect_volumes(run, names) != sources:
+        raise ValueError('source volume identity changed during qualification')
+    return result
 
 
 def migrate_volumes(run, profile, admitted_sources, destination_names, token, helper_path, caddyfile, docker_host=None, admit=qualify):

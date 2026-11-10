@@ -60,6 +60,40 @@ class OfflinePrepareTests(unittest.TestCase):
         self.assertLess(self.calls.index(stop), next(i for i, item in enumerate(self.calls) if item[1:3] == ['volume', 'create']))
         self.assertFalse(any(item[:2] == ['docker', 'start'] and item[-1] == self.fake.proxy['Id'] for item in self.calls))
 
+    def test_source_qualification_and_cleanup_before_stop_without_targets(self):
+        self.prepare()
+        source = next(item for item in self.calls if item[1] == 'create')
+        self.assertIn('--verify-source', source)
+        mounts = [item for item in source if item.startswith('type=')]
+        self.assertEqual(len(mounts), 3)
+        self.assertTrue(all(',readonly' in item for item in mounts))
+        self.assertTrue(all('/target/' not in item for item in mounts))
+        cleanup = next(i for i, item in enumerate(self.calls) if item[1] == 'rm')
+        stop = next(i for i, item in enumerate(self.calls) if item[1] == 'stop' and '--help' not in item)
+        self.assertLess(cleanup, stop)
+        self.assertFalse(any(item[1:3] == ['volume', 'create'] for item in self.calls[:stop]))
+
+    def test_source_refusal_leaves_ingress_open_and_no_stop_fence_or_destinations(self):
+        self.fake.preflight_error = ValueError('Unsafe Caddy volume directory')
+        with self.assertRaisesRegex(ValueError, 'Unsafe Caddy volume directory'):
+            self.prepare()
+        self.assertTrue(self.fake.proxy['State']['Running'])
+        self.assertFalse((self.fake.root / offline.STOP_FENCE).exists())
+        self.assertFalse(any(item[1] == 'stop' and '--help' not in item for item in self.calls))
+        self.assertFalse(any(item[1:3] == ['volume', 'create'] for item in self.calls))
+
+    def test_source_cleanup_unknown_leaves_ingress_open(self):
+        original = self.run_docker
+        def run(argv, timeout, limit):
+            if argv[1] == 'rm':
+                raise TimeoutError('fixture source helper cleanup UNKNOWN')
+            return original(argv, timeout, limit)
+        with patch.dict('os.environ', {'DOCKER_HOST': ''}), self.assertRaisesRegex(TimeoutError, 'cleanup UNKNOWN'):
+            offline.prepare(self.request, run, lambda reference: {'reference': reference})
+        self.assertTrue(self.fake.proxy['State']['Running'])
+        self.assertFalse((self.fake.root / offline.STOP_FENCE).exists())
+        self.assertFalse(any(item[1:3] == ['volume', 'create'] for item in self.calls))
+
     def test_unsupported_stop_signal_refuses_before_stop(self):
         self.fake.proxy['Config']['StopSignal'] = 'SIGKILL'
         with self.assertRaisesRegex(ValueError, 'stop signal'):

@@ -138,6 +138,14 @@ def prepare_locked(value, request, root, run, admit):
         raise ValueError('proxy, source or admission changed before stop')
     no_other_writers(run, identifier, volumes)
     destination_absent(run, new_names)
+    from caddy_volume_migration import qualify_source_volumes
+    qualify_source_volumes(run, volumes, Path(__file__).with_name('caddy_volume_copy.mjs'))
+    # Source-only helper completion AND owned cleanup must precede any stop.
+    if (capture_profile(run, root, value['instance'], admit, expected_running=True) != profile
+            or proxy_boot(run, identifier, True) != boot or inspect_volumes(run, old_names) != volumes):
+        raise ValueError('proxy or source changed during source qualification')
+    no_other_writers(run, identifier, volumes)
+    destination_absent(run, new_names)
     fence = create_stop_fence(root, identifier, boot, profile)
     # Docker's infinite grace avoids its default SIGKILL fallback. A client
     # timeout is UNKNOWN; never retry or automatically restart the old proxy.
@@ -170,4 +178,6 @@ if __name__ == '__main__':
         main()
     except Exception as error:
         print('Offline Caddy preparation refused; ingress may be closed: ' + str(error), file=sys.stderr)
+        for note in getattr(error, '__notes__', ()):
+            print(note, file=sys.stderr)
         sys.exit(1)

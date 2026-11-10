@@ -159,15 +159,37 @@ def exercise_copy(runner, helper):
 
 def main():
     started = time.monotonic()
-    names = sys.argv[1:]
+    negative = sys.argv[1:2] == ['--expect-unsafe-source']
+    names = sys.argv[2:] if negative else sys.argv[1:]
     if len(names) != 4 or len(set(names)) != 4:
         raise ValueError('four distinct owned fixture volumes are required')
     helper = ROOT / 'scripts/hosted-deploy/caddy_volume_copy.mjs'
     image = require_helper_image(docker_run)
-    runner = FixtureRunner(image, names, started)
+    runner = FixtureRunner(image, names[:2] if negative else names, started)
 
     try:
+        if negative:
+            try:
+                invoke(runner, helper, '--verify-source')
+            except ValueError as error:
+                if runner.active or 'Unsafe Caddy volume directory' not in str(error) + runner.start_stderr:
+                    raise
+            else:
+                raise ValueError('unsafe legacy mode was accepted')
+            print(json.dumps({'unsafeSourceRefused': True, 'ownedCleanupConfirmed': not runner.active}))
+            return
+        # Same source-only production preflight; no target mounts or writes.
+        preflight = FixtureRunner(image, names[:2], started)
+        try:
+            qualified = invoke(preflight, helper, '--verify-source')
+            if qualified.get('legacy_directory_modes') != {'data/caddy': 0o1777, 'config/caddy': 0o1777}:
+                raise ValueError('native fixture did not exercise exact root-owned legacy sticky dirs')
+        finally:
+            if preflight.capabilities:
+                print(json.dumps({'sourceOnlyCapabilities': preflight.capabilities}), file=sys.stderr)
         copied = exercise_copy(runner, helper)
+        if qualified != copied:
+            raise ValueError('fixture source inventory changed between preflight and copy')
         print(json.dumps({'helperImageId': image, 'inventory': copied, 'sourceUnchanged': True,
                           'copiedVerified': True, 'nonemptyReuseRefused': True}, sort_keys=True))
     finally:

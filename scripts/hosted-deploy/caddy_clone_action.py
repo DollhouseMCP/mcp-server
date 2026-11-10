@@ -8,6 +8,7 @@ import re
 import secrets
 import stat
 import sys
+import time
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
@@ -38,9 +39,19 @@ def refuse_stop_fence(root):
 
 
 def docker_run(command, timeout, maximum):
-    status, stdout, _, error = scanner.bounded_process(command, timeout, maximum, stderr_maximum=65536)
+    started = time.monotonic()
+    status, stdout, stderr, error = scanner.bounded_process(command, timeout, maximum, stderr_maximum=65536)
     if status != 0 or error:
-        raise ValueError('bounded Docker operation failed or is UNKNOWN')
+        # Emit before run_owned_helper starts cleanup; the protected operator
+        # log retains the original outcome even if subsequent cleanup fails.
+        # Never log argv: other callers may pass sensitive configuration.
+        diagnostic = {'event': 'caddy-docker-refusal', 'operation': command[1] if len(command) > 1 else 'unknown',
+                      'exit_code': status, 'error': error, 'timeout_seconds': timeout,
+                      'elapsed_seconds': round(time.monotonic() - started, 6),
+                      'stderr': stderr.decode('utf-8', errors='replace')}
+        encoded = json.dumps(diagnostic, sort_keys=True)
+        print(encoded, file=sys.stderr, flush=True)
+        raise ValueError('bounded Docker operation failed or is UNKNOWN: ' + encoded)
     return stdout
 
 
