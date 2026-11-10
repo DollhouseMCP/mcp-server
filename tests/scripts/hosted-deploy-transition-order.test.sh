@@ -10,8 +10,13 @@ if [[ "${1:-}" == --case ]]; then
   source "${REPO_ROOT}/scripts/hosted-deploy/actions.sh"
   start_or_update() { printf 'replace\n' >> "${EVENTS}"; }
   rollback_server() { printf 'replace\n' >> "${EVENTS}"; }
-  verify_deploy() { printf 'public-verify\n' >> "${EVENTS}"; [[ "${MODE}" == success ]]; }
-  finish_caddy_transition() { printf 'state-complete\n' >> "${EVENTS}"; }
+  caddy_release() {
+    local action="$1"
+    printf '%s\n' "${action}" >> "${EVENTS}"
+    [[ "${MODE}" != "${action}-failure" ]]
+  }
+  finish_caddy_transition() { printf 'state-complete\n' >> "${EVENTS}"; [[ "${MODE}" != finish-failure ]]; }
+  write_deployed_markers() { printf 'markers\n' >> "${EVENTS}"; }
   die() { printf '%s\n' "$*" >&2; exit 1; }
   run_action
   exit 0
@@ -20,16 +25,21 @@ fi
 ROOT="$(mktemp -d)"
 trap 'rm -rf -- "${ROOT}"' EXIT
 for action in install update rollback; do
-  for mode in success verify-failure; do
+  for mode in success accept-failure release-failure finish-failure; do
     events="${ROOT}/${action}-${mode}"
     : > "${events}"
     status=0
     bash "$0" --case "${action}" "${mode}" "${events}" || status=$?
     if [[ "${mode}" == success ]]; then
-      [[ "${status}" == 0 && "$(cat "${events}")" == $'replace\npublic-verify\nstate-complete' ]] || exit 1
+      [[ "${status}" == 0 && "$(cat "${events}")" == $'replace\naccept\nrelease\nstate-complete\nmarkers' ]] || exit 1
     else
-      [[ "${status}" != 0 && "$(cat "${events}")" == $'replace\npublic-verify' ]] || exit 1
+      case "${mode}" in
+        accept-failure) expected=$'replace\naccept' ;;
+        release-failure) expected=$'replace\naccept\nrelease' ;;
+        finish-failure) expected=$'replace\naccept\nrelease\nstate-complete' ;;
+      esac
+      [[ "${status}" != 0 && "$(cat "${events}")" == "${expected}" ]] || exit 1
     fi
   done
 done
-printf 'transition-order PASS 6 cases\n'
+printf 'transition-order PASS 12 cases\n'
