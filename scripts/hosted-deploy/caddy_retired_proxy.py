@@ -15,6 +15,8 @@ from legacy_recovery_guards import lifecycle
 from legacy_recovery_profile import profile
 
 DIRECTORY = '.caddy-retired-proxies'
+STARTUP_NAME = 'Caddyfile'
+JSON_SUFFIX = '.json'
 ID = re.compile(r'[0-9a-f]{64}\Z')
 
 
@@ -77,7 +79,7 @@ def inventory(root, instance, run):
                 raise ValueError('retired proxy inventory has an unknown entry')
             record, _ = handoff.read_json(directory, name)
             identifier = verify_retired(Path(root), instance, record, run)
-            if name != 'proxy-' + identifier + '.json' or identifier in result:
+            if name != 'proxy-' + identifier + JSON_SUFFIX or identifier in result:
                 raise ValueError('retired proxy inventory is ambiguous')
             result.add(identifier)
         return result
@@ -100,7 +102,7 @@ def register(root, instance, identifier, name, proof_path, run):
     parent.mkdir(mode=0o700, exist_ok=True)
     directory = private_directory(parent)
     try:
-        write_exclusive(directory, 'proxy-' + identifier + '.json', handoff.encoded(item))
+        write_exclusive(directory, 'proxy-' + identifier + JSON_SUFFIX, handoff.encoded(item))
         os.fsync(directory)
     finally:
         os.close(directory)
@@ -111,14 +113,14 @@ def startup_path(root, instance, identifier, run, require_root_copy=True):
     try:
         directory = private_directory(root / DIRECTORY)
     except FileNotFoundError:
-        return root / 'Caddyfile'
+        return root / STARTUP_NAME
     try:
         try:
             if not isinstance(identifier, str) or not ID.fullmatch(identifier):
                 raise ValueError('reconciled serving proxy ID is invalid')
-            record, _ = handoff.read_json(directory, 'serving-' + identifier + '.json')
+            record, _ = handoff.read_json(directory, 'serving-' + identifier + JSON_SUFFIX)
         except FileNotFoundError:
-            return root / 'Caddyfile'
+            return root / STARTUP_NAME
     finally:
         os.close(directory)
     proof = authority(root, record['authority'])
@@ -137,12 +139,12 @@ def startup_path(root, instance, identifier, run, require_root_copy=True):
     path = Path(serving['caddyfile'])
     relative = path.relative_to(root)
     if (len(relative.parts) != 3 or relative.parts[0] != '.caddy-recovery'
-            or not re.fullmatch(r'proxy-[0-9a-f]{32}', relative.parts[1]) or relative.parts[2] != 'Caddyfile'
+            or not re.fullmatch(r'proxy-[0-9a-f]{32}', relative.parts[1]) or relative.parts[2] != STARTUP_NAME
             or path.resolve(strict=True) != path):
         raise ValueError('reconciled startup path is not an original protected proxy receipt')
     owner = private_directory(path.parent)
     try:
-        content = read_private(owner, 'Caddyfile', MAX_RECORD)
+        content = read_private(owner, STARTUP_NAME, MAX_RECORD)
     finally:
         os.close(owner)
     if (handoff.digest(content) != serving['caddyfile_sha256']

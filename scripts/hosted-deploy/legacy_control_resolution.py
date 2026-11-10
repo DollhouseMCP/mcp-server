@@ -10,16 +10,17 @@ import re
 from caddy_bundle_identity import bundle_identity
 from caddy_recovery_receipt import MAX_RECORD, private_directory, read_private, write_exclusive
 import legacy_handoff as handoff
-from legacy_recovery_boundary import FILES, read_configuration
+from legacy_recovery_boundary import DIRECTORY, FILES, read_configuration
 
 IMPLEMENTATION = Path(__file__).resolve().parent
+CONSUME_PREFIX = 'consume-'
 CORE = ('kind', 'token', 'image', 'volumes', 'previous', 'receipt', 'receipt_sha256', 'source')
 
 
 def operation_path(root, token):
     if not isinstance(token, str) or not re.fullmatch(r'[0-9a-f]{32}', token):
         raise ValueError('invalid reconciliation token')
-    return root / '.legacy-recovery' / ('reconciled-' + token)
+    return root / DIRECTORY / ('reconciled-' + token)
 
 
 def raw_state(root):
@@ -103,7 +104,7 @@ def lookup(root, state):
     verify_files(root, record['files'])
     directory = private_directory(operation_path(root, pending['token']))
     try:
-        if any(name.startswith('consume-') for name in os.listdir(directory)):
+        if any(name.startswith(CONSUME_PREFIX) for name in os.listdir(directory)):
             raise ValueError('reconciliation consumption was already issued or is UNKNOWN')
     finally:
         os.close(directory)
@@ -126,7 +127,7 @@ def issue_consumption(root, state, pending):
     if pending['kind'] != 'update' or pending['source'] != record['source'] or pending['token'] == record['token']:
         raise ValueError('new transition does not consume the qualified legacy source')
     directory = private_directory(operation_path(root, record['token']))
-    name = 'consume-' + pending['token']
+    name = CONSUME_PREFIX + pending['token']
     value = {'schema': 'legacy-reconciliation-consumption-v1', 'resolution_sha256': digest,
              'old_token': record['token'], 'host': record['host'], 'pending': core(pending)}
     try:
@@ -147,7 +148,7 @@ def complete_consumption(issued, root):
         os.fsync(directory)
     finally:
         os.close(directory)
-    parent = private_directory(root / '.legacy-recovery')
+    parent = private_directory(root / DIRECTORY)
     try:
         write_exclusive(parent, 'lineage-' + value['pending']['token'] + '.json', handoff.encoded(
             {'old_token': value['old_token'], 'consumption_sha256': handoff.digest(handoff.encoded(value))}))
@@ -160,7 +161,7 @@ def consumed(root, state, token):
     pending = state.get('pending')
     if not isinstance(pending, dict) or pending['token'] != token:
         raise ValueError('handoff lineage requires the active transition token')
-    parent = private_directory(root / '.legacy-recovery')
+    parent = private_directory(root / DIRECTORY)
     try:
         lineage, _ = handoff.read_json(parent, 'lineage-' + token + '.json')
     finally:
@@ -168,9 +169,9 @@ def consumed(root, state, token):
     record, digest = read_resolution(root, lineage['old_token'])
     directory = private_directory(operation_path(root, record['token']))
     try:
-        issued, sha = handoff.read_json(directory, 'consume-' + token + '-issued.json', lineage['consumption_sha256'])
-        completed, _ = handoff.read_json(directory, 'consume-' + token + '-completed.json', sha)
-        old = read_private(directory, 'consume-' + token + '-failed-state.json', MAX_RECORD)
+        issued, sha = handoff.read_json(directory, CONSUME_PREFIX + token + '-issued.json', lineage['consumption_sha256'])
+        completed, _ = handoff.read_json(directory, CONSUME_PREFIX + token + '-completed.json', sha)
+        old = read_private(directory, CONSUME_PREFIX + token + '-failed-state.json', MAX_RECORD)
     finally:
         os.close(directory)
     if (issued != completed or issued['resolution_sha256'] != digest or issued['pending'] != core(pending)

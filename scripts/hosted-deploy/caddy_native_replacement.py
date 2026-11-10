@@ -15,11 +15,19 @@ from caddy_unchanged_action import no_other_writers
 from caddy_volume_guard import refuse_writers
 from caddy_volume_migration import inspect_one, inspect_volumes, running_containers, verify_prepared
 import legacy_handoff as handoff
+from legacy_recovery_boundary import TOKEN
 from caddy_transition_action import sync_root
 from legacy_recovery_guards import exact_container, ingress_available, lifecycle
 from legacy_recovery_profile import profile
 
 DIRECTORY = '.caddy-native-replacements'
+REPLACEMENT_PREFIX = 'replace-'
+
+
+def replacement_path(root, token):
+    if not isinstance(token, str) or not TOKEN.fullmatch(token):
+        raise ValueError('invalid native replacement token')
+    return root / DIRECTORY / (REPLACEMENT_PREFIX + token)
 
 
 def record(path, name, value):
@@ -54,16 +62,17 @@ def validate_startup(root, token, control):
 
 
 def operation_directory(root, token):
-    parent = root / DIRECTORY
+    path = replacement_path(root, token)
+    parent = path.parent
     parent.mkdir(mode=0o700, exist_ok=True)
     owner = private_directory(parent)
     try:
-        os.mkdir('replace-' + token, 0o700, dir_fd=owner)
+        os.mkdir(path.name, 0o700, dir_fd=owner)
         os.fsync(owner)
     finally:
         os.close(owner)
     sync_root(root)
-    return parent / ('replace-' + token)
+    return path
 
 
 def checked_candidate(run, identifier, expected, running):
@@ -164,7 +173,7 @@ def fence_failed_start(operation, candidate, expected, run):
 
 def verify_failed_start_fence(root, token, current):
     """Use only our known compensating stop, never a later inferred start."""
-    path = root / DIRECTORY / ('replace-' + token)
+    path = replacement_path(root, token)
     owner = private_directory(path)
     try:
         proof, _ = handoff.read_json(owner, 'failed-start-fenced.json')
