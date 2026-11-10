@@ -247,8 +247,12 @@ try {
     const nativeScript = path.join(root, 'scripts/ci/caddy-release-native.py');
     const runControl = action => JSON.parse(execFileSync('/usr/bin/sudo', ['-n', '/usr/bin/python3', nativeScript,
       action, proxy, volumeRoot, volumeRoot, token, `${addresses[0]}/32`],
-    {encoding:'utf8',timeout:120_000,maxBuffer:65536}));
+    {encoding:'utf8',timeout:action === 'refuse-load' ? 45_000 : 120_000,maxBuffer:65536}));
     const begin = runControl('begin');
+    const refused = runControl('refuse-load');
+    assert.equal(refused.failure.context.identity.id, proxy);
+    assert.equal(refused.failure.outcome, 'UNKNOWN');
+    assert.equal(refused.forward_applied, false);
     const probeSource = String.raw`
 const http=require('node:http'); const http2=require('node:http2'); const net=require('node:net');
 const mode=process.argv[1], token=process.argv[2];
@@ -264,7 +268,9 @@ else { const allowed=mode.startsWith('allowed'); const headers={'host':'fixture.
     for (const mode of ['allowed','allowed-ready','allowed-mcp']) probe(mode);
     for (const mode of ['query','auth','cookie','post','conflict','cl-conflict','aborted','h2']) probe(mode);
     assert.equal(probeCount(), countBefore + 3, 'unsafe framing or request reached the upstream');
-    engine(['stop', '--signal', 'SIGTERM', '--timeout', '-1', proxy]);
+    const stopped = runControl('stop-witness');
+    assert.equal(stopped.id, proxy);
+    assert.equal(stopped.clean_stop, true);
     assert.equal(inspect(proxy).State.ExitCode, 0);
     engine(['start', proxy]);
     await waitForReady(request, {path:'/healthz',headers:{'content-length':'0'}}, {attempts:10});
@@ -274,7 +280,7 @@ else { const allowed=mode.startsWith('allowed'); const headers={'host':'fixture.
     assert.equal(request({path:'/ready'}).status, 200);
     observations.push('real private admin load/readback, restart-persistent fence, marker and framing denials, then normal-profile restoration');
     const hashSource = source => createHash('sha256').update(fs.readFileSync(path.join(root, source))).digest('hex');
-    configSources.push({releaseWitness:{begin,restarted,restored, scriptSha256:hashSource('scripts/ci/caddy-release-native.py'),
+    configSources.push({releaseWitness:{begin,refused,stopped,restarted,restored, scriptSha256:hashSource('scripts/ci/caddy-release-native.py'),
       activeConfigSha256:hashSource('scripts/hosted-deploy/caddy_active_config.py'),
       releaseActionSha256:hashSource('scripts/hosted-deploy/caddy_release_action.py')}});
   }
