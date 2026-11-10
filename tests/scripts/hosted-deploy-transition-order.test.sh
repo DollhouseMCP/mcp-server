@@ -24,6 +24,19 @@ fi
 
 ROOT="$(mktemp -d)"
 trap 'rm -rf -- "${ROOT}"' EXIT
+expected_failure() {
+  local mode="$1"
+  case "${mode}" in
+    accept-failure) printf 'replace\naccept\n' ;;
+    release-failure) printf 'replace\naccept\nrelease\n' ;;
+    finish-failure) printf 'replace\naccept\nrelease\nstate-complete\n' ;;
+    *) return 1 ;;
+  esac
+}
+if expected_failure unexpected >/dev/null; then
+  printf 'unexpected transition fixture mode was accepted\n' >&2
+  exit 1
+fi
 for action in install update rollback; do
   for mode in success accept-failure release-failure finish-failure; do
     events="${ROOT}/${action}-${mode}"
@@ -33,11 +46,7 @@ for action in install update rollback; do
     if [[ "${mode}" == success ]]; then
       [[ "${status}" == 0 && "$(cat "${events}")" == $'replace\naccept\nrelease\nstate-complete\nmarkers' ]] || exit 1
     else
-      case "${mode}" in
-        accept-failure) expected=$'replace\naccept' ;;
-        release-failure) expected=$'replace\naccept\nrelease' ;;
-        finish-failure) expected=$'replace\naccept\nrelease\nstate-complete' ;;
-      esac
+      expected="$(expected_failure "${mode}")"
       [[ "${status}" != 0 && "$(cat "${events}")" == "${expected}" ]] || exit 1
     fi
   done
