@@ -191,6 +191,29 @@ class HandoffTests(unittest.TestCase):
         self.assertFalse((self.root / handoff.STATE / 'receipt.json').exists())
         with self.assertRaises(FileNotFoundError):
             handoff.verify_completed(self.root, self.value, self.docker_run, lambda *_: self.fence)
+        issued, ack_sha = handoff.verify_stop_acknowledgement(self.root, self.value, self.fence, self.docker_run)
+        self.assertEqual(issued['app']['id'], APP)
+        self.assertEqual(len(ack_sha), 64)
+        self.assertFalse((self.root / handoff.STATE / 'receipt.json').exists())
+
+    def test_recovery_observation_refuses_missing_or_tampered_ack_and_changed_app(self):
+        self.stop()
+        path = self.root / handoff.STATE / 'stop-acknowledged.json'
+        original = path.read_bytes()
+        ack = json.loads(original)
+        for field, value in (('issued_sha256', '0' * 64), ('exit_code', 1), ('stdout_sha256', '0' * 64),
+                             ('elapsed_seconds', -1), ('app_id', PG)):
+            with self.subTest(field=field):
+                path.write_bytes(handoff.encoded({**ack, field: value}))
+                with self.assertRaisesRegex(ValueError, 'acknowledgement is unavailable'):
+                    handoff.verify_stop_acknowledgement(self.root, self.value, self.fence, self.docker_run)
+        path.write_bytes(original)
+        self.app['RestartCount'] += 1
+        with self.assertRaisesRegex(ValueError, 'identity or checkpoint changed'):
+            handoff.verify_stop_acknowledgement(self.root, self.value, self.fence, self.docker_run)
+        path.unlink()
+        with self.assertRaises(FileNotFoundError):
+            handoff.verify_stop_acknowledgement(self.root, self.value, self.fence, self.docker_run)
 
     def test_equal_count_with_wrong_migration_hash_is_refused(self):
         rows = copy.deepcopy(self.source_rows); rows[0]['hashes'][0] = 'f' * 64

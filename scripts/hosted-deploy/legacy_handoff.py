@@ -1,6 +1,7 @@
 """One-shot, operator-invoked legacy handoff. Never a v2 drain acknowledgement."""
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -365,6 +366,40 @@ def handoff(root, value, run=system_docker, verify_fence=fence):
         return receipt
     finally:
         os.close(directory)
+
+
+def verify_stop_acknowledgement(root, value, expected_fence, run=system_docker):
+    """Recovery-only observation. Caller must independently fence ingress.
+
+    This never writes a handoff completion and never authorizes forward SQL.
+    """
+    directory = private_directory(root / STATE)
+    try:
+        issued, issued_sha = read_json(directory, 'issued.json')
+        ack, ack_sha = read_json(directory, 'stop-acknowledged.json')
+    finally:
+        os.close(directory)
+    fields = {'schema', 'kind', 'issued_sha256', 'app_id', 'exit_code', 'stdout_sha256', 'elapsed_seconds'}
+    elapsed = ack.get('elapsed_seconds')
+    output_hashes = {digest(value['app_id'].encode()), digest((value['app_id'] + '\n').encode())}
+    if (set(ack) != fields or type(ack['schema']) is not int or ack['schema'] != 1
+            or ack['kind'] != 'legacy-offline-stop-acknowledged' or ack['issued_sha256'] != issued_sha
+            or ack['app_id'] != value['app_id'] or type(ack['exit_code']) is not int or ack['exit_code'] != 0
+            or ack['stdout_sha256'] not in output_hashes or type(elapsed) not in (int, float)
+            or not math.isfinite(elapsed) or elapsed < 0):
+        raise ValueError('known legacy stop acknowledgement is unavailable')
+    request, receipt_sha, manifest = checkpoint(value['checkpoint_dir'])
+    if (issued.get('schema') != 1 or issued.get('kind') != 'legacy-offline-stop-issued'
+            or issued.get('host') != host_identity() or issued.get('checkpoint_sha256') != receipt_sha
+            or issued.get('dump_sha256') != request['dump_sha256']
+            or issued.get('restore_proof_sha256') != request['restore_proof_sha256']
+            or issued.get('snapshot') != request['snapshot'] or issued.get('accepted_boundary') != BOUNDARY
+            or issued.get('fence') != expected_fence
+            or issued.get('app', {}).get('id') != value['app_id']
+            or app_profile(run, value['instance'], value['app_id'], False, root) != issued['app']):
+        raise ValueError('acknowledged legacy stop identity or checkpoint changed')
+    verify_database(value, manifest, run)
+    return issued, ack_sha
 
 
 def verify_completed(root, value, run=system_docker, verify_fence=fence):
