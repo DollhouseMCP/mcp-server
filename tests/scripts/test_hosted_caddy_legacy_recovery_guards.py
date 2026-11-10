@@ -59,7 +59,9 @@ class RecoveryGuardsTests(unittest.TestCase):
 
     def test_missing_malformed_or_unknown_port_inventory_never_means_free(self):
         for value in (None, [], {'80/tcp': 'unknown'}, {'80/tcp': [{'HostPort': '80'}]},
-                      {'80/sctp': []}, {'80/tcp': [{'HostIp': '0.0.0.0', 'HostPort': '0'}]}):
+                      {'80/sctp': []}, {'8３/tcp': []},
+                      {'80/tcp': [{'HostIp': '0.0.0.0', 'HostPort': '8３'}]},
+                      {'80/tcp': [{'HostIp': '0.0.0.0', 'HostPort': '0'}]}):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 guards.published(value)
         self.assertEqual(guards.published({'80/tcp': None}), set())

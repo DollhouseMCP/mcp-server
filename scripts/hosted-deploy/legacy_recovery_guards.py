@@ -9,7 +9,7 @@ import re
 from caddy_volume_migration import inspect_one, running_containers
 from legacy_recovery_profile import profile
 
-PORT = re.compile(r'[1-9][0-9]{0,4}\Z')
+PORT = re.compile(r'[1-9]\d{0,4}\Z', flags=re.ASCII)
 
 
 def lifecycle(container, running, boot=None):
@@ -50,7 +50,7 @@ def published(bindings):
         raise ValueError('published-port inventory is unavailable')
     result = set()
     for port, entries in bindings.items():
-        if not isinstance(port, str) or not re.fullmatch(r'[1-9][0-9]{0,4}/(tcp|udp)', port):
+        if not isinstance(port, str) or not re.fullmatch(r'[1-9]\d{0,4}/(tcp|udp)', port, flags=re.ASCII):
             raise ValueError('published-port protocol is unavailable')
         if entries is None:
             continue

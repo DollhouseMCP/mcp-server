@@ -24,6 +24,7 @@ LEGACY_CONFIG = 'sha256:2ba0fe4a3d0192990d2cf6ad0d4a4dc0f8d60022bcc0ec8278edc6d0
 MISSING_SNAPSHOT = 'snapshot: not taken (no hcloud context)'
 BOUNDARY = 'persisted checkpoint; in-memory settlement not established'
 STATE = '.legacy-handoff'
+ISSUED_FILE = 'issued.json'
 MANIFEST_FILE = 'manifest.json'
 IMAGE_FIELDS = ('Cmd', 'Entrypoint', 'User', 'WorkingDir', 'Env', 'Labels', 'Healthcheck', 'Volumes', 'ExposedPorts', 'StopSignal', 'StopTimeout')
 IMAGE_CONFIG_SHA = '12c309e424a81fb8d685e591f1c0222b21e0eee9e88b4cd543b75a1391cabc0a'
@@ -334,7 +335,7 @@ def handoff(root, value, run=system_docker, verify_fence=fence):
                   'host': host_identity(), 'app': before, 'fence': bound, 'snapshot': request['snapshot'],
                   'dump_sha256': request['dump_sha256'], 'restore_proof_sha256': request['restore_proof_sha256'],
                   'accepted_boundary': BOUNDARY}
-        write_exclusive(directory, 'issued.json', encoded(issued))
+        write_exclusive(directory, ISSUED_FILE, encoded(issued))
         os.fsync(directory)
         parent = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
@@ -375,7 +376,7 @@ def verify_stop_acknowledgement(root, value, expected_fence, run=system_docker):
     """
     directory = private_directory(root / STATE)
     try:
-        issued, issued_sha = read_json(directory, 'issued.json')
+        issued, issued_sha = read_json(directory, ISSUED_FILE)
         ack, ack_sha = read_json(directory, 'stop-acknowledged.json')
     finally:
         os.close(directory)
@@ -405,7 +406,7 @@ def verify_stop_acknowledgement(root, value, expected_fence, run=system_docker):
 def verify_completed(root, value, run=system_docker, verify_fence=fence):
     directory = private_directory(root / STATE)
     try:
-        issued, _ = read_json(directory, 'issued.json')
+        issued, _ = read_json(directory, ISSUED_FILE)
         receipt, _ = read_json(directory, 'receipt.json')
     finally:
         os.close(directory)
