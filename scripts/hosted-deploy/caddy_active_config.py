@@ -18,6 +18,7 @@ SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
 sys.dont_write_bytecode = True
 from caddy_clone_action import docker_run
+from caddy_control_failure import ControlFailure
 from caddy_image_admission import scanner
 from caddy_recovery_receipt import private_directory, read_private, write_exclusive
 from caddy_volume_migration import check_local_daemon, docker_json, inspect_one
@@ -45,33 +46,76 @@ def executable(path):
     return path
 
 
-def bounded_input(command, payload=b'', pass_fds=(), timeout=15, env=None):
+def cleanup_failed_control(child, issue, deadline, started):
+    try:
+        cleaned = scanner.terminate_process(child, deadline)
+    except Exception:
+        cleaned = False
+    if isinstance(issue, ControlFailure):
+        issue.diagnostic.update(cleanup_confirmed=cleaned, cleanup_exit_code=child.returncode,
+                                total_elapsed_seconds=round(time.monotonic() - started, 6))
+        if not cleaned:
+            issue.unknown()
+    if not cleaned:
+        issue.add_note('private Caddy control child cleanup is UNKNOWN')
+
+
+def capture_failure_reason(child, error):
+    if error:
+        return error
+    if child.poll() is None:
+        return 'child exit is unsettled'
+    return None
+
+
+def bounded_input(command, payload=b'', pass_fds=(), timeout=15, env=None, context=None):
     if not isinstance(payload, bytes) or len(payload) > LIMIT:
         raise ValueError('control input exceeds its limit')
     if timeout <= 3:
         raise ValueError('private Caddy control requires a cleanup reserve')
-    deadline = time.monotonic() + timeout
+    started = time.monotonic()
+    deadline = started + timeout
     work_deadline = deadline - 3
     with tempfile.TemporaryFile() as source:
         source.write(payload)
         source.seek(0)
-        child = subprocess.Popen(command, stdin=source, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                 pass_fds=pass_fds, env=env)
+        try:
+            child = subprocess.Popen(command, stdin=source, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                     pass_fds=pass_fds, env=env)
+        except OSError as issue:
+            failure = ControlFailure(exit_code=None, stderr=b'', elapsed=time.monotonic() - started,
+                                     timeout=timeout, reason='control child did not start', context=context)
+            failure.diagnostic['spawn_errno'] = issue.errno
+            raise failure from issue
         buffers = [bytearray(), bytearray()]
         primary = None
         error = None
         try:
             error = scanner.capture_process(child, work_deadline, LIMIT, 65536, None, buffers)
-            if error or child.returncode != 0 or child.poll() is None:
-                raise ValueError('bounded private Caddy control failed or is UNKNOWN')
+            reason = capture_failure_reason(child, error)
+            if reason or child.returncode != 0:
+                raise ControlFailure(exit_code=child.returncode, stderr=bytes(buffers[1]),
+                                     elapsed=time.monotonic() - started, timeout=timeout,
+                                     reason=reason, context=context)
             return bytes(buffers[0])
         except BaseException as issue:
+            if isinstance(issue, Exception) and not isinstance(issue, ControlFailure):
+                issue = ControlFailure(exit_code=child.returncode, stderr=bytes(buffers[1]),
+                                       elapsed=time.monotonic() - started, timeout=timeout,
+                                       reason=type(issue).__name__, context=context)
             primary = issue
-            if not scanner.terminate_process(child, deadline):
-                issue.add_note('private Caddy control child cleanup is UNKNOWN')
-            raise
+            cleanup_failed_control(child, issue, deadline, started)
+            raise issue
         finally:
-            scanner.close_child_pipes(child, primary, error)
+            try:
+                scanner.close_child_pipes(child, primary, error)
+            except Exception as issue:
+                raise ControlFailure(exit_code=child.returncode, stderr=bytes(buffers[1]),
+                                     elapsed=time.monotonic() - started, timeout=timeout,
+                                     reason='pipe cleanup UNKNOWN', context=context) from issue
+            if isinstance(primary, ControlFailure) and any(
+                    'UNKNOWN' in note for note in getattr(primary, '__notes__', ())):
+                primary.unknown()
 
 
 def canonical(data):
@@ -267,6 +311,10 @@ class ActiveConfig:
         if (opened.st_dev, opened.st_ino) != self.namespace or (current.st_dev, current.st_ino) != self.namespace:
             raise ValueError('Caddy network namespace changed during private control')
 
+    def failure_context(self, operation):
+        return {'operation': operation, 'identity': dict(getattr(self, 'identity', {})),
+                'namespace': list(getattr(self, 'namespace', ()))}
+
     def request(self, method, endpoint, data=b''):
         if (method, endpoint) not in (('GET', '/config/'), ('POST', '/load')):
             raise ValueError('unsupported private Caddy endpoint')
@@ -278,12 +326,19 @@ class ActiveConfig:
             command.extend(['--header', 'Content-Type: application/json', '--data-binary', '@-'])
         command.append('http://127.0.0.1:2019' + endpoint)
         try:
-            result = bounded_input(command, data, (self.fd,))
+            result = bounded_input(command, data, (self.fd,),
+                                   context=self.failure_context(method + ' ' + endpoint))
         except BaseException as error:
             try:
                 self.recheck()
             except Exception:
+                if isinstance(error, ControlFailure):
+                    error.unknown()
+                    error.diagnostic['identity_verified'] = False
                 error.add_note('Caddy control state is UNKNOWN after the failed request')
+            else:
+                if isinstance(error, ControlFailure):
+                    error.diagnostic['identity_verified'] = True
             raise
         else:
             self.recheck()
@@ -293,12 +348,19 @@ class ActiveConfig:
         self.recheck()
         try:
             raw = bounded_input([DOCKER, 'exec', '--interactive', self.identity['id'], '/usr/bin/caddy',
-                                 'adapt', '--config', '-', '--adapter', 'caddyfile'], caddyfile)
+                                 'adapt', '--config', '-', '--adapter', 'caddyfile'], caddyfile,
+                                context=self.failure_context('adapt'))
         except BaseException as error:
             try:
                 self.recheck()
             except Exception:
+                if isinstance(error, ControlFailure):
+                    error.unknown()
+                    error.diagnostic['identity_verified'] = False
                 error.add_note('Caddy control state is UNKNOWN after the failed adaptation')
+            else:
+                if isinstance(error, ControlFailure):
+                    error.diagnostic['identity_verified'] = True
             raise
         else:
             self.recheck()
