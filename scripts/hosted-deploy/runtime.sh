@@ -163,6 +163,7 @@ recheck_registry_images() {
 }
 
 run_database_migrations() {
+  if [[ "${ACTION:-}" == legacy-offline-update ]]; then legacy_recovery_boundary write-intent; fi
   log "running database migrations"
   recheck_registry_images
   compose run --rm --pull never --no-deps dollhousemcp-migrate
@@ -436,8 +437,8 @@ gracefully_stop_existing_app() {
 }
 
 # The explicit legacy action alone may consume a checkpoint, never an env bypass.
-legacy_handoff() {
-  local action="$1" app_id postgres_id
+legacy_request_json() {
+  local app_id postgres_id
   app_id="$(existing_app_id)" || die "legacy app selection failed"
   postgres_id="$(running_service_id postgres)" || die "legacy database selection failed"
   [[ -n "${app_id}" && -n "${postgres_id}" ]] || die "legacy services must already exist"
@@ -445,9 +446,21 @@ legacy_handoff() {
     HOSTED_LEGACY_DATA="${CADDY_DATA_VOLUME}" HOSTED_LEGACY_CONFIG="${CADDY_CONFIG_VOLUME}" \
     HOSTED_LEGACY_TOKEN="${CADDY_TRANSITION_TOKEN:-}" HOSTED_LEGACY_CHECKPOINT="${LEGACY_CHECKPOINT:-}" \
     HOSTED_LEGACY_APP="${app_id}" HOSTED_LEGACY_POSTGRES="${postgres_id}" \
-    python3 -c 'import json,os; e=os.environ; print(json.dumps(dict(zip(("deploy_dir","instance","data_volume","config_volume","token","checkpoint_dir","app_id","postgres_id"),(e["HOSTED_LEGACY_"+k] for k in ("ROOT","INSTANCE","DATA","CONFIG","TOKEN","CHECKPOINT","APP","POSTGRES"))))))' | \
+    python3 -c 'import json,os; e=os.environ; print(json.dumps(dict(zip(("deploy_dir","instance","data_volume","config_volume","token","checkpoint_dir","app_id","postgres_id"),(e["HOSTED_LEGACY_"+k] for k in ("ROOT","INSTANCE","DATA","CONFIG","TOKEN","CHECKPOINT","APP","POSTGRES"))))))'
+}
+
+legacy_handoff() {
+  local action="$1"
+  legacy_request_json | \
     HOSTED_CADDY_LOCK_FD="${HOSTED_CADDY_LOCK_FD}" python3 "${HOSTED_DEPLOY_LIB_DIR}/legacy_handoff.py" "${action}" >/dev/null || \
     die "legacy handoff refused; keep the fence closed and inspect checkpoint/recovery receipts"
+}
+
+legacy_recovery_boundary() {
+  local action="$1"
+  legacy_request_json | \
+    HOSTED_CADDY_LOCK_FD="${HOSTED_CADDY_LOCK_FD}" python3 "${HOSTED_DEPLOY_LIB_DIR}/legacy_recovery_boundary.py" "${action}" || \
+    die "legacy recovery baseline or forward-write boundary refused"
 }
 
 verify_legacy_handoff() {
@@ -492,6 +505,7 @@ start_or_update() {
       CADDY_TRANSITION_TOKEN="$(caddy_transition begin-fresh)" || die "could not record the first-install transition"
     fi
   fi
+  if [[ "${ACTION:-}" == legacy-offline-update ]]; then legacy_recovery_boundary arm; fi
   render_files
   if [[ "${CADDY_KEEP_PROXY:-false}" != true ]]; then
     refresh_caddy_image

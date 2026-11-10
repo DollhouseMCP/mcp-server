@@ -66,6 +66,32 @@ Any failed check keeps the pending state/fence and both completed and incomplete
 
 ## Routine updates and test scope
 
+### Recovery baseline and first-write boundary
+
+For `legacy-offline-update`, the helper arms a private
+`.legacy-recovery/window-<transition-token>/` baseline after selecting the pending
+source/receipt and before rendering any deployment file. It binds the actual
+qualified checkpoint, host, app/Postgres profiles, original source and configuration,
+and current helper implementation. Environment snapshots remain `0600` inside a
+`0700` directory. Required files must already be regular, single-link, protected
+operator-owned files; symlinks and changed configuration refuse admission.
+
+Before the first migration command, the helper revalidates the completed handoff
+and database schema, globals/grants and all 62 ordered ledger hashes. It then
+fsyncs an exclusive `forward-write-issued.json` before migrations, grants or
+bootstrap can execute. Any such record, including an incomplete or unknown result,
+requires qualified checkpoint restoration before legacy data recovery. Preserve
+it; a missing write record alone is insufficient without the complete matching
+armed baseline and supported execution path. Neither boundary action starts,
+stops or restores a service.
+
+Recovery compares Docker mount arrays after sorting complete records by
+`(Destination, Type, Source/Name)`. Every field remains exact; missing, extra,
+changed or duplicate mounts refuse. This canonicalization changes ordering only.
+Database fingerprints cover schema, owners, grants/globals and the ordered ledger;
+they do not claim universal row/WAL equality or prevent an administrator or external
+client from writing outside the approved procedure.
+
 Once v2 is live, use ordinary `update`. It continues to require the private boot-bound v2 drain and zero obligations; a stopped legacy app remains refused. The legacy action cannot accept the v2 image or reuse an issued receipt. No legacy flag is persisted to the deployment environment. Ordinary updates do not repeat this backup, offline Caddy conversion or maintenance window. A single-app drained restart has an interruption covering drain, migration/grants, startup and verification; seconds are a target, not zero downtime or a measured guarantee.
 
 CI uses disposable in-memory backup/Docker fixtures for the bridge's proof crosslinks, refusal ordering, clean/unknown stops and one-shot state, plus the existing supported-contract/native Caddy jobs. Synthetic fixtures are not real host checkpoints or real handoff receipts. Exact-image runtime/recovery observations and the actual window's receipts must be retained separately; no live operation is implied by CI green.
