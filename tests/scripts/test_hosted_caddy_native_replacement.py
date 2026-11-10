@@ -55,13 +55,16 @@ class NativeReplacementTests(unittest.TestCase):
                          'clone_receipt': str(self.fx.receipt), 'clone_receipt_sha256': '8' * 64,
                          'logging': original['profile']['logging']}
         self.pending = {'token': self.token, 'kind': 'update', 'image': self.fx.reference,
-                        'volumes': self.expected['names'], 'control': self.control}
+                        'volumes': self.expected['names'], 'control': self.control,
+                        'previous': str(self.fx.previous), 'receipt': str(self.fx.receipt),
+                        'receipt_sha256': self.expected['clone_receipt_sha256'], 'admission': self.fx.admission}
         self.value = {'instance': 'site', 'token': self.token, 'image': self.fx.reference,
-                      'data_volume': 'new_data', 'config_volume': 'new_config'}
+                      'data_volume': 'new_data', 'config_volume': 'new_config', 'admission': self.fx.admission}
         for module, name, result in ((handoff, 'host_identity', {'hostname': 'fixture', 'machine_id_sha256': '6' * 64}),
                                      (native, 'pending_control', ({'pending': self.pending}, self.pending, self.control)),
                                      (native, 'inspect_volumes', self.expected['volumes']),
-                                     (native, 'prepare_replacement', self.expected)):
+                                     (native, 'recovery_kind', ('legacy', original, self.fx.receipt)),
+                                     (native, 'verify_prepared', None)):
             binding = patch.object(module, name, return_value=result)
             binding.start()
             self.addCleanup(binding.stop)
@@ -75,6 +78,9 @@ class NativeReplacementTests(unittest.TestCase):
             elif '--quiet' in argv:
                 rows = [row for row in rows if row['State']['Running']]
             return '\n'.join(row['Id'] for row in rows).encode()
+        if argv[1:3] == ['image', 'inspect']:
+            self.assertEqual(argv[-1], self.fx.admission['store_id'])
+            return json.dumps([self.fx.current_image]).encode()
         if argv[1:3] == ['container', 'inspect']:
             return json.dumps([next(row for row in rows if row['Id'] == argv[-1])]).encode()
         if argv[1] == 'rename':
@@ -110,6 +116,13 @@ class NativeReplacementTests(unittest.TestCase):
         self.assertEqual(create[-1], self.fx.reference)
         self.assertFalse(any(argv[1] in ('compose', 'pull', 'build', 'rm') for argv in self.calls))
         self.assertEqual(sum(argv[1] == 'start' for argv in self.calls), 1)
+
+    def test_changed_admission_refuses_before_retaining_or_creating(self):
+        self.value['admission'] = {}
+        with self.assertRaisesRegex(ValueError, 'admission changed'):
+            self.replace()
+        self.assertFalse(any(argv[1] in ('rename', 'create', 'start', 'stop') for argv in self.calls))
+        self.assertEqual(self.old['Name'], '/site-caddy')
 
     def test_unknown_start_is_fenced_once_but_not_promoted(self):
         self.lose_start = True
