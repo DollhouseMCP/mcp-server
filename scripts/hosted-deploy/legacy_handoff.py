@@ -1,12 +1,14 @@
 """One-shot, operator-invoked legacy handoff. Never a v2 drain acknowledgement."""
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
 import socket
 import stat
 import sys
+import time
 
 from caddy_active_config import system_docker, validate_system
 from caddy_clone_action import acquire_lock, validate_request
@@ -22,6 +24,7 @@ LEGACY_CONFIG = 'sha256:2ba0fe4a3d0192990d2cf6ad0d4a4dc0f8d60022bcc0ec8278edc6d0
 MISSING_SNAPSHOT = 'snapshot: not taken (no hcloud context)'
 BOUNDARY = 'persisted checkpoint; in-memory settlement not established'
 STATE = '.legacy-handoff'
+ISSUED_FILE = 'issued.json'
 MANIFEST_FILE = 'manifest.json'
 IMAGE_FIELDS = ('Cmd', 'Entrypoint', 'User', 'WorkingDir', 'Env', 'Labels', 'Healthcheck', 'Volumes', 'ExposedPorts', 'StopSignal', 'StopTimeout')
 IMAGE_CONFIG_SHA = '12c309e424a81fb8d685e591f1c0222b21e0eee9e88b4cd543b75a1391cabc0a'
@@ -332,7 +335,7 @@ def handoff(root, value, run=system_docker, verify_fence=fence):
                   'host': host_identity(), 'app': before, 'fence': bound, 'snapshot': request['snapshot'],
                   'dump_sha256': request['dump_sha256'], 'restore_proof_sha256': request['restore_proof_sha256'],
                   'accepted_boundary': BOUNDARY}
-        write_exclusive(directory, 'issued.json', encoded(issued))
+        write_exclusive(directory, ISSUED_FILE, encoded(issued))
         os.fsync(directory)
         parent = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
@@ -341,7 +344,20 @@ def handoff(root, value, run=system_docker, verify_fence=fence):
             os.close(parent)
         # Infinite daemon grace prevents Docker's default SIGKILL escalation.
         # A bounded client failure is UNKNOWN; neither retry nor restart is allowed.
-        run(['docker', 'stop', '--signal', 'SIGTERM', '--timeout', '-1', before['id']], 60, 65536)
+        started = time.monotonic()
+        output = run(['docker', 'stop', '--signal', 'SIGTERM', '--timeout', '-1', before['id']], 60, 65536)
+        if output not in (before['id'].encode('ascii'), (before['id'] + '\n').encode('ascii')):
+            raise ValueError('legacy stop command acknowledgement is UNKNOWN')
+        # A later private Caddy probe can fail after the known stop. Keep the
+        # command acknowledgement separately; it is NOT a completed handoff and
+        # cannot authorize SQL. Independent recovery must recheck clean state,
+        # original identities, checkpoint and the pre-migration boundary.
+        write_exclusive(directory, 'stop-acknowledged.json', encoded({
+            'schema': 1, 'kind': 'legacy-offline-stop-acknowledged',
+            'issued_sha256': digest(encoded(issued)), 'app_id': before['id'],
+            'exit_code': 0, 'stdout_sha256': digest(output),
+            'elapsed_seconds': time.monotonic() - started}))
+        os.fsync(directory)
         after = app_profile(run, value['instance'], before['id'], False, root)
         if before != after or verify_fence(root, value) != bound or checkpoint(value['checkpoint_dir'])[:2] != (request, receipt_sha):
             raise ValueError('legacy handoff changed after stop; recovery required')
@@ -353,10 +369,44 @@ def handoff(root, value, run=system_docker, verify_fence=fence):
         os.close(directory)
 
 
+def verify_stop_acknowledgement(root, value, expected_fence, run=system_docker):
+    """Recovery-only observation. Caller must independently fence ingress.
+
+    This never writes a handoff completion and never authorizes forward SQL.
+    """
+    directory = private_directory(root / STATE)
+    try:
+        issued, issued_sha = read_json(directory, ISSUED_FILE)
+        ack, ack_sha = read_json(directory, 'stop-acknowledged.json')
+    finally:
+        os.close(directory)
+    fields = {'schema', 'kind', 'issued_sha256', 'app_id', 'exit_code', 'stdout_sha256', 'elapsed_seconds'}
+    elapsed = ack.get('elapsed_seconds')
+    output_hashes = {digest(value['app_id'].encode()), digest((value['app_id'] + '\n').encode())}
+    if (set(ack) != fields or type(ack['schema']) is not int or ack['schema'] != 1
+            or ack['kind'] != 'legacy-offline-stop-acknowledged' or ack['issued_sha256'] != issued_sha
+            or ack['app_id'] != value['app_id'] or type(ack['exit_code']) is not int or ack['exit_code'] != 0
+            or ack['stdout_sha256'] not in output_hashes or type(elapsed) not in (int, float)
+            or not math.isfinite(elapsed) or elapsed < 0):
+        raise ValueError('known legacy stop acknowledgement is unavailable')
+    request, receipt_sha, manifest = checkpoint(value['checkpoint_dir'])
+    if (issued.get('schema') != 1 or issued.get('kind') != 'legacy-offline-stop-issued'
+            or issued.get('host') != host_identity() or issued.get('checkpoint_sha256') != receipt_sha
+            or issued.get('dump_sha256') != request['dump_sha256']
+            or issued.get('restore_proof_sha256') != request['restore_proof_sha256']
+            or issued.get('snapshot') != request['snapshot'] or issued.get('accepted_boundary') != BOUNDARY
+            or issued.get('fence') != expected_fence
+            or issued.get('app', {}).get('id') != value['app_id']
+            or app_profile(run, value['instance'], value['app_id'], False, root) != issued['app']):
+        raise ValueError('acknowledged legacy stop identity or checkpoint changed')
+    verify_database(value, manifest, run)
+    return issued, ack_sha
+
+
 def verify_completed(root, value, run=system_docker, verify_fence=fence):
     directory = private_directory(root / STATE)
     try:
-        issued, _ = read_json(directory, 'issued.json')
+        issued, _ = read_json(directory, ISSUED_FILE)
         receipt, _ = read_json(directory, 'receipt.json')
     finally:
         os.close(directory)

@@ -111,6 +111,10 @@ class HandoffTests(unittest.TestCase):
         self.assertEqual(result['accepted_boundary'], handoff.BOUNDARY)
         self.assertTrue((self.root / handoff.STATE / 'issued.json').is_file())
         self.assertTrue((self.root / handoff.STATE / 'receipt.json').is_file())
+        ack = json.loads((self.root / handoff.STATE / 'stop-acknowledged.json').read_bytes())
+        self.assertEqual(ack['app_id'], APP)
+        self.assertEqual(ack['exit_code'], 0)
+        self.assertEqual(ack['stdout_sha256'], handoff.digest(APP.encode()))
         handoff.verify_completed(self.root, self.value, self.docker_run, lambda *_: self.fence)
         with self.assertRaises(ValueError):
             self.stop()
@@ -121,6 +125,7 @@ class HandoffTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'UNKNOWN'):
             self.stop()
         self.assertFalse((self.root / handoff.STATE / 'receipt.json').exists())
+        self.assertFalse((self.root / handoff.STATE / 'stop-acknowledged.json').exists())
         self.stop_error = False
         with self.assertRaisesRegex(ValueError, 'no retry'):
             self.stop()
@@ -153,6 +158,62 @@ class HandoffTests(unittest.TestCase):
         calls = iter([self.fence, dict(self.fence, token='0' * 32)])
         with self.assertRaises(ValueError): self.stop(lambda *_: next(calls))
         self.assertFalse((self.root / handoff.STATE / 'receipt.json').exists())
+        self.assertTrue((self.root / handoff.STATE / 'stop-acknowledged.json').exists())
+        with self.assertRaises(FileNotFoundError):
+            handoff.verify_completed(self.root, self.value, self.docker_run, lambda *_: self.fence)
+
+    def test_wrong_stop_stdout_is_unknown_and_never_creates_a_command_ack(self):
+        original = self.docker_run
+
+        def wrong(command, timeout, maximum):
+            output = original(command, timeout, maximum)
+            return b'wrong-container\n' if command[1] == 'stop' else output
+
+        with self.assertRaisesRegex(ValueError, 'acknowledgement is UNKNOWN'):
+            handoff.handoff(self.root, self.value, wrong, lambda *_: self.fence)
+        self.assertFalse((self.root / handoff.STATE / 'stop-acknowledged.json').exists())
+        self.assertFalse((self.root / handoff.STATE / 'receipt.json').exists())
+
+    def test_failed_private_probe_after_known_stop_preserves_ack_but_never_promotes_forward(self):
+        count = 0
+
+        def private_fence(*_):
+            nonlocal count
+            count += 1
+            if count > 1:
+                raise ValueError('UNKNOWN private Caddy probe')
+            return self.fence
+
+        with self.assertRaisesRegex(ValueError, 'UNKNOWN private Caddy probe'):
+            self.stop(private_fence)
+        self.assertFalse(self.app['State']['Running'])
+        self.assertTrue((self.root / handoff.STATE / 'stop-acknowledged.json').exists())
+        self.assertFalse((self.root / handoff.STATE / 'receipt.json').exists())
+        with self.assertRaises(FileNotFoundError):
+            handoff.verify_completed(self.root, self.value, self.docker_run, lambda *_: self.fence)
+        issued, ack_sha = handoff.verify_stop_acknowledgement(self.root, self.value, self.fence, self.docker_run)
+        self.assertEqual(issued['app']['id'], APP)
+        self.assertEqual(len(ack_sha), 64)
+        self.assertFalse((self.root / handoff.STATE / 'receipt.json').exists())
+
+    def test_recovery_observation_refuses_missing_or_tampered_ack_and_changed_app(self):
+        self.stop()
+        path = self.root / handoff.STATE / 'stop-acknowledged.json'
+        original = path.read_bytes()
+        ack = json.loads(original)
+        for field, value in (('issued_sha256', '0' * 64), ('exit_code', 1), ('stdout_sha256', '0' * 64),
+                             ('elapsed_seconds', -1), ('app_id', PG)):
+            with self.subTest(field=field):
+                path.write_bytes(handoff.encoded({**ack, field: value}))
+                with self.assertRaisesRegex(ValueError, 'acknowledgement is unavailable'):
+                    handoff.verify_stop_acknowledgement(self.root, self.value, self.fence, self.docker_run)
+        path.write_bytes(original)
+        self.app['RestartCount'] += 1
+        with self.assertRaisesRegex(ValueError, 'identity or checkpoint changed'):
+            handoff.verify_stop_acknowledgement(self.root, self.value, self.fence, self.docker_run)
+        path.unlink()
+        with self.assertRaises(FileNotFoundError):
+            handoff.verify_stop_acknowledgement(self.root, self.value, self.fence, self.docker_run)
 
     def test_equal_count_with_wrong_migration_hash_is_refused(self):
         rows = copy.deepcopy(self.source_rows); rows[0]['hashes'][0] = 'f' * 64
