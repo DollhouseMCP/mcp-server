@@ -1,11 +1,14 @@
 """Verify concrete, private legacy selection model without a Docker daemon."""
 import copy
+import json
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts' / 'hosted-deploy'))
 from legacy_control_compose import model
+from legacy_reconcile_action import check_compose
 
 
 def service(identifier, name, labels, mounts, ports=None):
@@ -46,6 +49,17 @@ class LegacyComposeTests(unittest.TestCase):
         self.assertEqual(result['networks'], {'serving': {'external': True, 'name': 'site_default'}})
         self.assertEqual(result['volumes'], {'old-pg': {'external': True, 'name': 'old-pg'}})
         self.assertTrue(all('build' not in item and 'env_file' not in item for item in (app, pg, proxy)))
+
+    def test_canonical_compose_dollars_are_compared_without_losing_literal_values(self):
+        self.app['Config']['Env'] = ['DOLLAR=one$two', 'ESCAPED=one$$two']
+        data = {'app': self.app, 'postgres': self.pg, 'proxy': self.proxy}
+        result = model('site', self.app, self.pg, self.proxy)
+        with patch('legacy_reconcile_action.bounded_input', return_value=json.dumps(result).encode()):
+            check_compose('/fixture/compose.yml', Path('/fixture'), 'site', data)
+        result['services']['dollhousemcp']['environment']['ESCAPED'] = 'one$$two'
+        with patch('legacy_reconcile_action.bounded_input', return_value=json.dumps(result).encode()):
+            with self.assertRaisesRegex(ValueError, 'environment or service identity differs'):
+                check_compose('/fixture/compose.yml', Path('/fixture'), 'site', data)
 
     def test_invalid_environment_duplicate_mount_or_changed_network_refuses(self):
         for field, changed in (('Config', {**self.app['Config'], 'Env': ['KEY=one', 'KEY=two']}),

@@ -158,7 +158,8 @@ def check_compose(path, root, instance, data):
     for name, key in (('dollhousemcp', 'app'), ('postgres', 'postgres'), ('caddy', 'proxy')):
         observed, expected = services[name], data[key]
         if (observed.get('image') != expected['Image'] or observed.get('container_name') != expected['Name'][1:]
-                or observed.get('environment') != compose.environment(expected['Config']['Env'])
+                # Compose's canonical output re-escapes literal dollar signs.
+                or observed.get('environment') != compose.literal(compose.environment(expected['Config']['Env']))
                 or 'build' in observed or 'env_file' in observed):
             raise ValueError('resolved legacy Compose image, environment or service identity differs')
 
