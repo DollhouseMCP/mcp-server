@@ -80,7 +80,7 @@ def ingress_available(run, ports, excluded=()):
             raise ValueError('another running container owns recovery ingress')
 
 
-def serving_dns(run, instance, app_id):
+def serving_dns(run, instance, app_id, app_running=True):
     selected = []
     network_name = instance + '_default'
     for item in running_containers(run):
@@ -99,5 +99,5 @@ def serving_dns(run, instance, app_id):
         names = {item.get('Name', '').removeprefix('/'), *aliases}
         if names & {instance, 'dollhousemcp'}:
             selected.append(item.get('Id'))
-    if selected != [app_id]:
+    if selected != ([app_id] if app_running else []):
         raise ValueError('serving-network application DNS is missing or ambiguous')

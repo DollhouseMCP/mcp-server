@@ -79,6 +79,13 @@ class RecoveryGuardsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'inventory is unavailable'):
             guards.serving_dns(self.docker_run, 'site', APP)
 
+    def test_stopped_app_requires_no_other_running_owner_of_its_serving_alias(self):
+        self.records.remove(self.app)
+        guards.serving_dns(self.docker_run, 'site', APP, app_running=False)
+        self.canary['NetworkSettings']['Networks']['site_default'] = {'Aliases': ['dollhousemcp']}
+        with self.assertRaisesRegex(ValueError, 'DNS is missing or ambiguous'):
+            guards.serving_dns(self.docker_run, 'site', APP, app_running=False)
+
     def test_exact_profile_compares_all_fields_but_canonicalizes_mount_order(self):
         self.app['Mounts'] = [{'Type': 'bind', 'Destination': '/a', 'Source': '/fixture/a'},
                               {'Type': 'volume', 'Destination': '/b', 'Name': 'fixture-b', 'Source': '/fixture/b'}]
