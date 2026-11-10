@@ -81,28 +81,29 @@ def marker_inventory(root, value, data):
         finally:
             os.close(directory)
     hashes = {name: handoff.digest(raw[name]) if name in raw else None for name in HANDOFF_FILES}
-    if 'marker_hashes' in data:
-        expected = data['marker_hashes']
-        if (path != root / handoff.STATE or hashes['stop-acknowledged.json'] is not None
-                or hashes['issued.json'] != expected['.legacy-handoff/issued.json']
-                or hashes['receipt.json'] != expected['.legacy-handoff/receipt.json']):
-            raise ValueError('accepted manual handoff evidence changed')
-    else:
-        observed = data['handoff_observation']
-        if observed['mode'] == 'never-stopped' and raw:
-            raise ValueError('never-stopped recovery unexpectedly has handoff evidence')
-        if observed['mode'] == 'stop-acknowledged':
-            if (hashes['stop-acknowledged.json'] != observed['stop_ack_sha256'] or hashes['receipt.json'] is not None
-                    or json.loads(raw['stop-acknowledged.json'])['issued_sha256'] != hashes['issued.json']):
-                raise ValueError('recovery-only stop evidence changed or was promoted')
-        if observed['mode'] == 'stopped':
-            if hashes['receipt.json'] != observed['handoff_sha256']:
-                raise ValueError('completed legacy handoff receipt changed')
-            issued = json.loads(raw['issued.json'], object_pairs_hook=unique_object)
-            if json.loads(raw['receipt.json'], object_pairs_hook=unique_object) != {
-                    **issued, 'kind': 'legacy-offline-handoff', 'exit_code': 0}:
-                raise ValueError('completed legacy handoff no longer binds its intent')
+    expected = expected_markers(root, path, data)
+    if hashes != expected:
+        raise ValueError('legacy handoff evidence changed or was promoted after recovery')
     return str(path.relative_to(root)), hashes
+
+
+def expected_markers(root, path, data):
+    if 'marker_hashes' in data:
+        if path != root / handoff.STATE:
+            raise ValueError('accepted manual handoff namespace changed')
+        expected = data['marker_hashes']
+        return {name: expected.get('.legacy-handoff/' + name) for name in HANDOFF_FILES}
+    observed = data['handoff_observation']
+    mode = observed['mode']
+    if mode == 'never-stopped':
+        return dict.fromkeys(HANDOFF_FILES)
+    if mode not in ('stop-acknowledged', 'stopped'):
+        raise ValueError('unrecognized recovery handoff observation')
+    return {
+        'issued.json': observed['issued_sha256'],
+        'stop-acknowledged.json': observed['stop_ack_sha256'],
+        'receipt.json': observed['handoff_sha256'] if mode == 'stopped' else None,
+    }
 
 
 def census(root, instance, data, run):

@@ -104,6 +104,22 @@ class ReconciliationTests(unittest.TestCase):
         self.assertEqual((root / '.legacy-handoff' / 'issued.json').read_bytes(), issued)
         self.assertEqual((proof / ('consume-' + pending['token'] + '-failed-state.json')).read_bytes(), self.original_state)
 
+    def test_rewritten_intent_and_ack_refuse_even_with_consistent_linkage(self):
+        self.known_stop_recovery()
+        root = self.fx.root
+        marker_dir = root / '.legacy-handoff'
+        issued_path = marker_dir / 'issued.json'
+        ack_path = marker_dir / 'stop-acknowledged.json'
+        issued = issued_path.read_bytes() + b'\n'
+        ack = json.loads(ack_path.read_bytes())
+        ack['issued_sha256'] = handoff.digest(issued)
+        issued_path.write_bytes(issued)
+        ack_path.write_bytes(handoff.encoded(ack))
+        with self.assertRaisesRegex(ValueError, 'handoff evidence changed'):
+            self.reconcile()
+        self.assertEqual((root / 'server' / 'version').read_text(), 'new-staged-source')
+        self.assertEqual(resolution.raw_state(root), self.original_state)
+
     def test_unknown_extra_proxy_label_refuses_before_any_source_change(self):
         self.known_stop_recovery()
         original = self.run_docker
