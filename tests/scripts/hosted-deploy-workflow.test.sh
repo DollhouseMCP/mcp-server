@@ -312,6 +312,16 @@ DOLLHOUSE_HOSTED_SOURCE_DIR="${SOURCE_REPO}" \
 assert_contains "${DRY_RUN_OUTPUT}" "retain an unchanged qualified caddy proxy or refresh it after admission"
 [[ ! -s "${DOCKER_LOG}" && ! -s "${CURL_LOG}" ]] || fail "dry-run update must not call docker or curl"
 
+PATH="${FAKE_BIN}:${PATH}" \
+DOLLHOUSE_FAKE_DOCKER_LOG="${DOCKER_LOG}" \
+DOLLHOUSE_FAKE_CURL_LOG="${CURL_LOG}" \
+DOLLHOUSE_HOSTED_DEPLOY_DIR="${DRY_RUN_DEPLOY_DIR}" \
+DOLLHOUSE_HOSTED_CADDY_IMAGE="registry.example.test/team/caddy@sha256:$(printf 'a%.0s' {1..64})" \
+DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME="new-data" DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME="new-config" \
+  bash "${HOSTED_DEPLOY}" --dry-run prepare-caddy-offline > "${DRY_RUN_OUTPUT}"
+assert_contains "${DRY_RUN_OUTPUT}" "ingress would remain closed"
+[[ ! -e "${DRY_RUN_DEPLOY_DIR}" && ! -s "${DOCKER_LOG}" && ! -s "${CURL_LOG}" ]] || fail "offline preparation dry-run must not mutate or contact Docker"
+
 log "checking digest render and persisted selectors"
 REGISTRY_DIR="${TMP_ROOT}/registry-render"
 REG_RUNTIME="registry.example.test/team/runtime@sha256:$(printf 'c%.0s' {1..64})"

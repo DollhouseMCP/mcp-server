@@ -1,6 +1,7 @@
 """Exact supported source-built hosted Caddy predecessor profile."""
 import re
 from caddy_legacy_profile import legacy_mounts, legacy_network, legacy_restart_and_logging, validate_common_host
+from caddy_volume_guard import exact_capabilities
 
 
 def validate_tmpfs(host):
@@ -19,7 +20,7 @@ def validate_isolation(config, host):
     validate_common_host(host)
     if config.get('User') != '1001:1001' or host.get('ReadonlyRootfs') is not True or host.get('Privileged') is not False:
         raise ValueError('Caddy user or root filesystem is not qualified')
-    if set(host.get('CapDrop') or []) != {'ALL'} or set(host.get('CapAdd') or []) != {'NET_BIND_SERVICE'}:
+    if not exact_capabilities(host, {'NET_BIND_SERVICE'}):
         raise ValueError('Caddy capabilities are not qualified')
     if host.get('SecurityOpt') != ['no-new-privileges:true']:
         raise ValueError('Caddy privilege setting is not qualified')

@@ -26,6 +26,15 @@ from image_scan_intake import unique_object
 
 NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z')
 INSTANCE = re.compile(r'[a-z0-9][a-z0-9_-]{0,62}\Z')
+STOP_FENCE = '.caddy-offline-stop-issued'
+
+
+def refuse_stop_fence(root):
+    try:
+        (root / STOP_FENCE).lstat()
+    except FileNotFoundError:
+        return
+    raise ValueError('an earlier Caddy stop has an unknown outcome; operator reconciliation is required')
 
 
 def docker_run(command, timeout, maximum):
@@ -69,6 +78,7 @@ def acquire_lock(root):
             raise ValueError('inherited deployment lock is unsafe')
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            refuse_stop_fence(root)
         except BaseException:
             os.close(fd)
             raise
@@ -81,6 +91,7 @@ def acquire_lock(root):
         raise ValueError('deployment lock is unsafe')
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        refuse_stop_fence(root)
     except BaseException:
         os.close(fd)
         raise
@@ -99,12 +110,12 @@ def prepare_recovery_directory(root):
     return path
 
 
-def capture_profile(run, root, instance, admit=qualify):
+def capture_profile(run, root, instance, admit=qualify, expected_running=False):
     selected = unique_proxy(run, instance)
     container = inspect_one(run, 'container', selected)
     state = container.get('State')
-    if not isinstance(state, dict) or state.get('Running') is not False:
-        raise ValueError('stop the existing Caddy proxy before cloning')
+    if not isinstance(state, dict) or state.get('Running') is not expected_running:
+        raise ValueError('Caddy proxy state differs from the required profile')
     image = inspect_one(run, 'image', container.get('Image'))
     config = container.get('Config')
     if isinstance(config, dict) and config.get('User') == '1001:1001':

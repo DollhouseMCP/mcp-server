@@ -127,6 +127,24 @@ class VolumeMigrationTests(unittest.TestCase):
         migration.verify_original_volumes(self.run_docker, result, self.helper)
         self.assertIn('--verify-source', [call for call in self.calls if call[1] == 'create'][-1])
 
+    def test_helper_capability_spellings_and_malformed_refusal(self):
+        host = {'Privileged': False, 'AutoRemove': False, 'RestartPolicy': {'Name': 'no'},
+                'PidMode': '', 'IpcMode': '', 'SecurityOpt': ['no-new-privileges:true'], 'CapDrop': ['ALL']}
+        for added in (['CHOWN', 'FOWNER', 'DAC_READ_SEARCH'],
+                      ['CAP_CHOWN', 'CAP_FOWNER', 'CAP_DAC_READ_SEARCH'],
+                      ['CHOWN', 'CAP_FOWNER', 'DAC_READ_SEARCH']):
+            migration.validate_helper_host(dict(host, CapAdd=added))
+        for added, dropped in ((['CHOWN', 'CAP_CHOWN', 'FOWNER', 'DAC_READ_SEARCH'], ['ALL']),
+                               (['CAP_CHOWN', 'CAP_FOWNER', 'CAP_DAC_READ_SEARCH', 'SYS_ADMIN'], ['ALL']),
+                               (['cap_chown', 'FOWNER', 'DAC_READ_SEARCH'], ['ALL']),
+                               (['CAP_CAP_CHOWN', 'FOWNER', 'DAC_READ_SEARCH'], ['ALL']),
+                               (['CAP_ALL'], ['ALL']), ('CHOWN', ['ALL']), (None, ['ALL']), ({'CHOWN': True}, ['ALL']), ([1], ['ALL']),
+                               (['CHOWN', 'FOWNER', 'DAC_READ_SEARCH'], ['CAP_ALL']),
+                               (['CHOWN', 'FOWNER', 'DAC_READ_SEARCH'], ['ALL', 'ALL']),
+                               (['CHOWN', 'FOWNER', 'DAC_READ_SEARCH'], 'ALL')):
+            with self.subTest(added=added, dropped=dropped), self.assertRaises(ValueError):
+                migration.validate_helper_host(dict(host, CapAdd=added, CapDrop=dropped))
+
     def test_writer_and_destination_mismatch_refuse_before_copy(self):
         self.writer = True
         with self.assertRaises(ValueError):

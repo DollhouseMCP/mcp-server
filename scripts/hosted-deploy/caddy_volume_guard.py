@@ -3,6 +3,18 @@ import os
 from pathlib import Path
 
 
+def exact_capabilities(host, expected):
+    """Accept only exact capabilities, including Docker's observed CAP_ spelling."""
+    added = host.get('CapAdd')
+    if not isinstance(added, list) or host.get('CapDrop') != ['ALL']:
+        return False
+    aliases = {spelling: name for name in expected for spelling in (name, 'CAP_' + name)}
+    if any(not isinstance(value, str) or value not in aliases for value in added):
+        return False
+    canonical = [aliases[value] for value in added]
+    return len(canonical) == len(expected) and set(canonical) == expected
+
+
 def require_local_endpoint(endpoint, docker_host=None):
     """Only local Unix sockets support host mountpoint checks."""
     for value in (endpoint, docker_host):

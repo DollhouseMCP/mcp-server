@@ -64,7 +64,10 @@ if [[ "${1:-}" == --case ]]; then
   caddy_recovery_request_json() { printf '{}\n'; }
   python3() {
     local command_path="$1"
-    if [[ "${command_path}" == */registry_image_admission.py ]]; then
+    if [[ "${command_path}" == */caddy_clone_action.py || "${command_path}" == */caddy_offline_prepare.py ]]; then
+      printf 'unexpected-offline-stop\n' >> "${EVENTS}"
+      return 1
+    elif [[ "${command_path}" == */registry_image_admission.py ]]; then
       local registry_operation="${2:-}"
       printf 'registry-%s\n' "${registry_operation}" >> "${EVENTS}"
       [[ "${MODE}" != registry-pull-failure || "${registry_operation}" != prepare ]] || return 1
@@ -75,7 +78,7 @@ if [[ "${1:-}" == --case ]]; then
       fi
     elif [[ "${command_path}" == */caddy_unchanged_action.py ]]; then
       cat >/dev/null
-      printf 'prepared-clone\n' >> "${EVENTS}"
+      printf 'unchanged-proxy-receipt\n' >> "${EVENTS}"
       printf '%s\n' "${DEPLOY_DIR}/server.prev-fixture"
     elif [[ "${command_path}" == */caddy_verify_noop_action.py ]]; then
       cat >/dev/null
@@ -243,9 +246,11 @@ check_fixture() {
       assert_order "${fixture}/events" transition-pending render
     fi
     if [[ "${mode}" == hardened ]]; then
-      assert_order "${fixture}/events" prepared-clone graceful-stop
+      assert_order "${fixture}/events" unchanged-proxy-receipt graceful-stop
       assert_order "${fixture}/events" hardened-recheck graceful-stop
-      if grep -q '^compose:pull caddy$' "${fixture}/events"; then fail "unchanged proxy was pulled"; fi
+      if grep -Eq '^(unexpected-clone|unexpected-offline-stop|compose:(pull|stop|up).*caddy)' "${fixture}/events"; then
+        fail "unchanged proxy was stopped, cloned, pulled, or recreated"
+      fi
     elif [[ "${action}" == rollback ]]; then
       assert_order "${fixture}/events" proxy-recovery graceful-stop
     else
@@ -366,3 +371,40 @@ done
 
 check_fixture update stopped-existing app
 check_fixture update stopped-missing-pg app
+
+# A previous uncertain stop must block an otherwise ordinary hardened update
+# before it can inspect a transition, stage source, or preserve the live proxy.
+root="${TMP_ROOT}/unknown-stop"
+mkdir -m 700 "${root}" "${root}/server"
+printf 'unknown\n' > "${root}/.caddy-offline-stop-issued"
+if bash -c '
+  source "$1"
+  DEPLOY_DIR="$2"; SERVER_DIR="$2/server"
+  ensure_prerequisites() { :; }; validate_git_url_for_clone() { :; }
+  resolve_public_base_url() { :; }; resolve_hostname() { :; }
+  resolve_allowed_hosts() { :; }; validate_render_inputs() { :; }
+  need_command() { :; }; flock() { :; }; die() { exit 1; }
+  caddy_transition() { touch "$DEPLOY_DIR/transition-reached"; }
+  start_or_update
+' _ "${REPO_ROOT}/scripts/hosted-deploy/runtime.sh" "${root}"; then
+  fail "unknown stop allowed an ordinary update"
+fi
+[[ ! -e "${root}/transition-reached" ]] || fail "unknown stop reached transition"
+printf 'preparation-order PASS unknown-stop-fence\n'
+
+for action in render migrate bootstrap-admin; do
+  if bash -c '
+    source "$1"; source "$2"
+    DEPLOY_DIR="$3"; SERVER_DIR="$3/server"; ACTION="$4"
+    need_command() { :; }; flock() { :; }; die() { exit 1; }
+    ensure_runtime_prerequisites() { :; }; ensure_server_source() { :; }
+    resolve_public_base_url() { :; }; resolve_hostname() { :; }; resolve_allowed_hosts() { :; }
+    validate_render_inputs() { :; }; ensure_supported_python() { :; }
+    render_files() { touch "$DEPLOY_DIR/render-reached"; }
+    run_action
+  ' _ "${REPO_ROOT}/scripts/hosted-deploy/runtime.sh" "${REPO_ROOT}/scripts/hosted-deploy/actions.sh" "${root}" "${action}"; then
+    fail "unknown stop allowed ${action}"
+  fi
+  [[ ! -e "${root}/render-reached" ]] || fail "unknown stop reached ${action} rendering"
+  printf 'preparation-order PASS unknown-stop/%s\n' "${action}"
+done

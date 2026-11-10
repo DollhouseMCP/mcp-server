@@ -9,7 +9,7 @@ import re
 import secrets
 from pathlib import Path
 
-from caddy_volume_guard import refuse_writers, require_local_endpoint, validate_volume_pair, volume_identity
+from caddy_volume_guard import exact_capabilities, refuse_writers, require_local_endpoint, validate_volume_pair, volume_identity
 from caddy_legacy_profile import validate_legacy_profile
 from caddy_image_admission import native_architecture, qualify
 from caddy_hardened_profile import validate_hardened_profile
@@ -124,7 +124,7 @@ def validate_helper_host(host):
         raise ValueError('owned helper restart policy changed')
     if host.get('PidMode') not in ('', None) or host.get('IpcMode') not in ('', 'private', None):
         raise ValueError('owned helper namespace changed')
-    if set(host.get('CapAdd') or []) != {'CHOWN', 'FOWNER', 'DAC_READ_SEARCH'} or set(host.get('CapDrop') or []) != {'ALL'}:
+    if not exact_capabilities(host, {'CHOWN', 'FOWNER', 'DAC_READ_SEARCH'}):
         raise ValueError('owned helper capabilities changed')
     if host.get('SecurityOpt') != ['no-new-privileges:true']:
         raise ValueError('owned helper privilege setting changed')
