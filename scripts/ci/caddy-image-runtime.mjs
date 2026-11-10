@@ -41,6 +41,7 @@ let processProfile;
 let negativeWithoutCapability;
 let legacyVolumeRefusal;
 let nativeCopy;
+let servingCapabilities;
 let streamOutcomes;
 let upstreamDiagnosticId;
 let proxyDiagnosticId;
@@ -182,6 +183,10 @@ try {
     '--sysctl', 'net.ipv4.ip_unprivileged_port_start=1024',
     '--tmpfs', '/tmp:rw,noexec,nosuid,nodev,size=32m', image]);
   proxyDiagnosticId = proxy;
+  const proxyHost = inspect(proxy).HostConfig;
+  const boundedCapabilities = value => Array.isArray(value) && value.length <= 32 &&
+    value.every(cap => typeof cap === 'string' && /^[A-Z0-9_]{1,48}$/.test(cap)) ? value : null;
+  servingCapabilities = {capAdd:boundedCapabilities(proxyHost.CapAdd), capDrop:boundedCapabilities(proxyHost.CapDrop)};
   const installConfig = (mode, trusted) => {
     const text = fs.readFileSync(render(mode, trusted), 'utf8');
     // Model the deployment's read-only Caddyfile mount. Only a separate
@@ -327,7 +332,7 @@ try {
     const copiedData = volume('copy-data');
     const copiedConfig = volume('copy-config');
     const copyScript = path.join(root, 'scripts/ci/caddy-volume-copy-native.py');
-    nativeCopy = JSON.parse(execFileSync('python3', [copyScript, ownedVolumes[0], ownedVolumes[1], copiedData, copiedConfig],
+    nativeCopy = JSON.parse(execFileSync('/usr/bin/python3', [copyScript, ownedVolumes[0], ownedVolumes[1], copiedData, copiedConfig],
       {encoding:'utf8', timeout:240_000, maxBuffer:65536, env:{...process.env, PYTHONDONTWRITEBYTECODE:'1'}}));
     nativeCopy.fixtureSha256 = createHash('sha256').update(fs.readFileSync(copyScript)).digest('hex');
     nativeCopy.copyHelperSha256 = createHash('sha256').update(fs.readFileSync(path.join(root, 'scripts/hosted-deploy/caddy_volume_copy.mjs'))).digest('hex');
@@ -357,7 +362,7 @@ try {
   }
   console.log(JSON.stringify({ imageId:imageInfo.Id, architecture:imageInfo.Architecture,
     nativeDaemonArchitecture:native, rendererSha256:rendererSha, harnessSha256:harnessSha, guardSha256:guardSha, clientSha256:clientSha, upstreamSha256:upstreamSha, upstreamSourceSha256:upstreamSourceSha, configSources, observations,
-    quietStreams:quietStreams.map(({body,...metrics})=>metrics), streamOutcomes, processProfile, negativeWithoutCapability, legacyVolumeRefusal, normalStop, nativeCopy,
+    quietStreams:quietStreams.map(({body,...metrics})=>metrics), streamOutcomes, processProfile, negativeWithoutCapability, legacyVolumeRefusal, normalStop, nativeCopy, servingCapabilities,
     productionActions:false }, null, 2));
 } catch (error) {
   primaryError = error;
@@ -367,7 +372,7 @@ try {
     containerDiagnostics = collectOwnedDiagnostics(ids, ownedContainers, args => spawnSync(
       engineExecutable, [...engineArgs, ...args], { encoding:'utf8', timeout:3000, maxBuffer:65536 }));
   } catch { containerDiagnostics = { error:'unavailable' }; }
-  console.error(JSON.stringify({ containerDiagnostics, qualificationFailure:true, rendererSha256:rendererSha, harnessSha256:harnessSha, guardSha256:guardSha, clientSha256:clientSha, upstreamSha256:upstreamSha, upstreamSourceSha256:upstreamSourceSha, configSources, observations, streamOutcomes, processProfile, negativeWithoutCapability, legacyVolumeRefusal, normalStop }));
+  console.error(JSON.stringify({ containerDiagnostics, qualificationFailure:true, rendererSha256:rendererSha, harnessSha256:harnessSha, guardSha256:guardSha, clientSha256:clientSha, upstreamSha256:upstreamSha, upstreamSourceSha256:upstreamSourceSha, configSources, observations, streamOutcomes, processProfile, negativeWithoutCapability, legacyVolumeRefusal, normalStop, servingCapabilities }));
 } finally {
   // Every identity here was created by this invocation; no broad pruning.
   const errors = primaryError ? [primaryError] : [];
