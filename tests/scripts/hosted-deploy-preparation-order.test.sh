@@ -46,6 +46,10 @@ if [[ "${1:-}" == --case ]]; then
       touch "${DEPLOY_DIR}/stopped"
     fi
   }
+  legacy_recovery_boundary() {
+    printf 'recovery-%s\n' "$1" >> "${EVENTS}"
+    [[ "${MODE}" != "registry-recovery-$1-refusal" ]]
+  }
   IMAGE_MODE=build
   if [[ "${MODE}" == registry-* ]]; then IMAGE_MODE=registry; fi
   RUNTIME_IMAGE=fixture-runtime MIGRATION_IMAGE=fixture-migration
@@ -289,6 +293,9 @@ check_fixture() {
     fi
     if [[ "${action}" == legacy-offline-update ]]; then
       assert_order "${fixture}/events" legacy-preflight transition-pending
+      assert_order "${fixture}/events" recovery-arm render
+      assert_order "${fixture}/events" legacy-stop recovery-write-intent
+      assert_order "${fixture}/events" recovery-write-intent migration
       assert_order "${fixture}/events" registry-prepare legacy-stop
       assert_order "${fixture}/events" release-probe-fence legacy-stop
       assert_order "${fixture}/events" legacy-stop migration
@@ -340,6 +347,18 @@ for action in update rollback; do
   for mode in build-failure readiness-failure drain-refusal missing-pg stopped-pg identity-change inspect-failure success; do
     check_fixture "${action}" "${mode}" app
   done
+done
+for phase in arm write-intent; do
+  fixture="$(mktemp -d "${TMP_ROOT}/recovery-${phase}.XXXXXX")"
+  mkdir -p "${fixture}/server" "${fixture}/source"
+  printf 'current\n' > "${fixture}/server/version"
+  printf 'SELECT 1;\n' > "${fixture}/grants.sql"
+  printf 'old-revision\n' > "${fixture}/DEPLOYED_REVISION"
+  if bash "$0" --case legacy-offline-update "registry-recovery-${phase}-refusal" "${fixture}" app > "${fixture}/stdout" 2> "${fixture}/stderr"; then
+    fail "recovery ${phase} refusal advanced"
+  fi
+  if grep -Eq '^(migration|bootstrap|replacement)$' "${fixture}/events"; then fail "recovery refusal reached forward writes"; fi
+  printf 'preparation-order PASS recovery-%s-refusal\n' "${phase}"
 done
 for mode in release-prepare-failure release-confirm-failure release-probe-fence-failure release-accept-failure release-release-failure; do
   check_fixture update "${mode}" app
