@@ -365,14 +365,6 @@ recheck_caddy_image() {
   [[ "${current}" == "${CADDY_ADMISSION_RECEIPT}" ]] || die "Caddy image changed after admission"
 }
 
-restart_caddy_proxy() {
-  log "refreshing caddy proxy"
-  recheck_caddy_image
-  compose up -d --pull never --no-deps --force-recreate caddy
-
-  return 0
-}
-
 start_prepared_caddy_proxy() {
   local route
   route="$(caddy_transition start-proxy)" || die "prepared Caddy replacement refused; preserve its receipts"

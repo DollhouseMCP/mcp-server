@@ -230,6 +230,26 @@ TMP_ROOT="$(mktemp -d)"
 TMP_ROOT="$(cd "${TMP_ROOT}" && pwd -P)"
 trap 'rm -rf -- "${TMP_ROOT}"' EXIT
 fail() { printf 'preparation-order test: %s\n' "$*" >&2; exit 1; }
+check_prepared_proxy_route() (
+  local mode="$1"
+  source "${REPO_ROOT}/scripts/hosted-deploy/runtime.sh"
+  caddy_transition() {
+    [[ "$1" == start-proxy ]] || fail 'wrong transition request'
+    if [[ "${mode}" == refused ]]; then return 1; fi
+    printf '%s\n' "${mode}"
+  }
+  die() { printf '%s\n' "$*" >&2; exit 1; }
+  compose() { fail 'native or refused replacement reached Compose'; }
+  start_prepared_caddy_proxy
+)
+check_prepared_proxy_route native || fail 'qualified native replacement was refused'
+for refused_route in refused unknown; do
+  route_output="${TMP_ROOT}/route-${refused_route}.log"
+  if check_prepared_proxy_route "${refused_route}" > "${route_output}" 2>&1; then
+    fail 'refused or unknown replacement fell through'
+  fi
+  if grep -q 'reached Compose' "${route_output}"; then fail 'failed native replacement reached Compose'; fi
+done
 assert_order() {
   local events="$1"
   local first="$2"
