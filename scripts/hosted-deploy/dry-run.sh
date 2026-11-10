@@ -158,6 +158,13 @@ run_dry_action() {
     install)
       dry_run_start_or_update all
       ;;
+    legacy-offline-update)
+      [[ -n "${LEGACY_CHECKPOINT}" ]] || die "legacy handoff requires DOLLHOUSE_HOSTED_LEGACY_CHECKPOINT"
+      dry_run_start_or_update app
+      [[ "${IMAGE_MODE}" == registry ]] || die "legacy handoff requires registry mode"
+      log "dry-run: would validate the hash-bound checkpoint, off-server dump and ledger/row-count restore proof before preparation"
+      log "dry-run: only after the Caddy fence is verified, would record one stop intent and require exact legacy boot clean exit; UNKNOWN forbids retry"
+      ;;
     update)
       dry_run_start_or_update app
       ;;

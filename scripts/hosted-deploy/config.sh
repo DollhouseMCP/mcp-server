@@ -109,6 +109,7 @@ hosted_deploy_init_config() {
   # App trusted proxies describe the direct hop into the app container
   # (usually Caddy on Docker). Caddy trusted proxies describe the public edge
   # hop, such as Cloudflare, that Caddy may trust for real client IP headers.
+  LEGACY_CHECKPOINT="${DOLLHOUSE_HOSTED_LEGACY_CHECKPOINT:-}"
   IMAGE_MODE="${DOLLHOUSE_HOSTED_IMAGE_MODE:-}"
   RUNTIME_IMAGE="${DOLLHOUSE_HOSTED_RUNTIME_IMAGE:-}"
   MIGRATION_IMAGE="${DOLLHOUSE_HOSTED_MIGRATION_IMAGE:-}"
@@ -167,6 +168,7 @@ Usage:
   scripts/hosted-deploy.sh [--mode MODE] [--dry-run] [--quiet|--debug|--log-level LEVEL] render
   scripts/hosted-deploy.sh [--dry-run] [--quiet|--debug|--log-level LEVEL] install
   scripts/hosted-deploy.sh [--dry-run] [--quiet|--debug|--log-level LEVEL] update
+  scripts/hosted-deploy.sh [--dry-run] legacy-offline-update
   scripts/hosted-deploy.sh [--dry-run] [--quiet|--debug|--log-level LEVEL] migrate
   scripts/hosted-deploy.sh [--dry-run] [--quiet|--debug|--log-level LEVEL] bootstrap-admin
   scripts/hosted-deploy.sh [--dry-run] [--quiet|--debug|--log-level LEVEL] prepare-caddy-offline
@@ -209,6 +211,7 @@ Common environment:
   DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_FILE=5
   DOLLHOUSE_HOSTED_SOURCE_DIR=/path/to/local/repo
   DOLLHOUSE_HOSTED_GIT_REF=codex/hosted-http-integration
+  DOLLHOUSE_HOSTED_LEGACY_CHECKPOINT=/protected/window-checkpoint-directory
   DOLLHOUSE_HOSTED_IMAGE_MODE=build|registry
   DOLLHOUSE_HOSTED_RUNTIME_IMAGE=registry/repository@sha256:<64 lowercase hex>
   DOLLHOUSE_HOSTED_MIGRATION_IMAGE=registry/repository@sha256:<64 lowercase hex>
