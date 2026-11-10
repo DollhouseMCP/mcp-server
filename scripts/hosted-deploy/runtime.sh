@@ -519,12 +519,7 @@ curl_status() {
   local url="$1"
   local body_file="$2"
   local status
-  local -a verification_args=()
-  if [[ "${CADDY_VERIFICATION_ACTIVE:-false}" == true ]]; then
-    verification_args=(--http1.1 --header 'Content-Length: 0')
-  fi
-
-  if ! status="$(curl -sS "${verification_args[@]}" -o "${body_file}" -w '%{http_code}' "${url}" 2>/dev/null)"; then
+  if ! status="$(curl -sS -o "${body_file}" -w '%{http_code}' "${url}" 2>/dev/null)"; then
     status="000"
   fi
   printf '%s\n' "${status}"

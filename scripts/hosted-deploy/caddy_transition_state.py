@@ -96,11 +96,7 @@ def validate_control_origin(control):
         raise ValueError('invalid Caddy verification public origin')
 
 
-def validate_bound_control(control):
-    for key in ('normal_config_sha256', 'verification_config_sha256'):
-        if not isinstance(control[key], str) or not SHA256.fullmatch(control[key]):
-            raise ValueError('invalid Caddy active configuration hash')
-    proxy = control['proxy']
+def validate_control_proxy(proxy):
     fields = {'id', 'pid', 'started_at', 'restart_count', 'net_device', 'net_inode', 'profile_sha256', 'volumes_sha256'}
     if not isinstance(proxy, dict) or set(proxy) != fields or not isinstance(proxy['id'], str) or not SHA256.fullmatch(proxy['id']):
         raise ValueError('invalid Caddy verification proxy identity')
@@ -112,6 +108,13 @@ def validate_bound_control(control):
     for key in ('profile_sha256', 'volumes_sha256'):
         if not isinstance(proxy[key], str) or not SHA256.fullmatch(proxy[key]):
             raise ValueError('invalid Caddy verification profile hash')
+
+
+def validate_bound_control(control):
+    for key in ('normal_config_sha256', 'verification_config_sha256'):
+        if not isinstance(control[key], str) or not SHA256.fullmatch(control[key]):
+            raise ValueError('invalid Caddy active configuration hash')
+    validate_control_proxy(control['proxy'])
 
 
 def validate_control(control):

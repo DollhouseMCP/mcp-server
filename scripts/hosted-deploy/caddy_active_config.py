@@ -85,13 +85,7 @@ def canonical(data):
     return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False, allow_nan=False).encode('utf-8')
 
 
-def write_bound_contents(fd, directory, expected, replacement, identity, bound_pid):
-    if bound_pid is not None:
-        if type(bound_pid) is not int or bound_pid <= 0:
-            raise ValueError('invalid Caddy PID')
-        mounted = os.stat(PROC + str(bound_pid) + '/root/etc/caddy/Caddyfile')
-        if identity != (mounted.st_dev, mounted.st_ino):
-            raise ValueError('Caddy startup file is not the bound inode')
+def replace_file_contents(fd, expected, replacement):
     current = bytearray()
     while len(current) <= LIMIT:
         chunk = os.read(fd, min(65536, LIMIT + 1 - len(current)))
@@ -112,6 +106,16 @@ def write_bound_contents(fd, directory, expected, replacement, identity, bound_p
     os.lseek(fd, 0, os.SEEK_SET)
     if os.read(fd, LIMIT + 1) != replacement:
         raise ValueError('Caddy startup file readback differs')
+
+
+def write_bound_contents(fd, directory, expected, replacement, identity, bound_pid):
+    if bound_pid is not None:
+        if type(bound_pid) is not int or bound_pid <= 0:
+            raise ValueError('invalid Caddy PID')
+        mounted = os.stat(PROC + str(bound_pid) + '/root/etc/caddy/Caddyfile')
+        if identity != (mounted.st_dev, mounted.st_ino):
+            raise ValueError('Caddy startup file is not the bound inode')
+    replace_file_contents(fd, expected, replacement)
     linked = os.stat('Caddyfile', dir_fd=directory, follow_symlinks=False)
     if (linked.st_dev, linked.st_ino) != identity:
         raise ValueError('Caddy startup file was replaced')

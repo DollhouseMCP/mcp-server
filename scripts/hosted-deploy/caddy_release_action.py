@@ -32,6 +32,16 @@ def object_digest(value):
     return digest(json.dumps(value, sort_keys=True, separators=(',', ':')).encode('utf-8'))
 
 
+def validate_renderer_networks(renderer):
+    if not re.fullmatch(r'[0-9A-Fa-f:.,/]*', renderer['CADDY_TRUSTED_PROXIES']):
+        raise ValueError('invalid fixed Caddy trusted proxy list')
+    if renderer['CADDY_TRUSTED_PROXIES']:
+        for network in renderer['CADDY_TRUSTED_PROXIES'].split(','):
+            if '/' not in network:
+                raise ValueError('invalid fixed Caddy trusted proxy list')
+            ipaddress.ip_network(network, strict=False)
+
+
 def validate_renderer(renderer):
     keys = {'PROXY_MODE', 'HOSTNAME', 'HTTP_BIND_PORT', 'MCP_PORT', 'CADDY_TRUSTED_PROXIES', 'CADDY_ACCESS_LOG'}
     if not isinstance(renderer, dict) or set(renderer) != keys or any(
@@ -46,13 +56,7 @@ def validate_renderer(renderer):
         value = renderer[key]
         if not re.fullmatch(r'[1-9]\d{0,4}', value, flags=re.ASCII) or int(value) > 65535:
             raise ValueError('invalid fixed Caddy renderer port')
-    if not re.fullmatch(r'[0-9A-Fa-f:.,/]*', renderer['CADDY_TRUSTED_PROXIES']):
-        raise ValueError('invalid fixed Caddy trusted proxy list')
-    if renderer['CADDY_TRUSTED_PROXIES']:
-        for network in renderer['CADDY_TRUSTED_PROXIES'].split(','):
-            if '/' not in network:
-                raise ValueError('invalid fixed Caddy trusted proxy list')
-            ipaddress.ip_network(network, strict=False)
+    validate_renderer_networks(renderer)
 
 
 def render_profiles(renderer, token):
@@ -228,8 +232,12 @@ def public_probe(base, path, expected, allow_bootstrap, timeout, token):
             body, code, markers = public_response(output)
         except (ValueError, OSError):
             body, code, markers = b'', b'000', []
-        if markers == [token.encode('ascii')] and (code == expected or (allow_bootstrap and code == b'503' and b'bootstrap_required' in body)):
-            return
+        if markers == [token.encode('ascii')]:
+            if code == expected:
+                return
+            if allow_bootstrap and code == b'503' and b'bootstrap_required' in body:
+                print('[hosted-deploy] warning: /readyz reports bootstrap_required; run bootstrap-admin after setting DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME or DOLLHOUSE_BOOTSTRAP_GITHUB_ID', file=sys.stderr)
+                return
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise ValueError('public acceptance probe did not meet its required status')

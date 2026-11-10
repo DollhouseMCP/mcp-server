@@ -1,5 +1,7 @@
 """Inert release-order and failure controls; no network or Docker."""
 from pathlib import Path
+from contextlib import redirect_stderr
+from io import StringIO
 import sys
 import unittest
 from unittest.mock import Mock, patch
@@ -84,6 +86,16 @@ class ReleaseActionTests(unittest.TestCase):
             with self.subTest(response=response), patch.object(release, 'bounded_input', return_value=response):
                 with self.assertRaisesRegex(ValueError, 'unsafe probe'):
                     release.confirm_denials('https://fixture.example', 'a' * 32)
+
+    def test_bootstrap_warning_requires_the_current_fence_marker(self):
+        response = b'HTTP/1.1 503 Unavailable\r\nX-Dollhouse-Verification: ' + b'a' * 32 + b'\r\n\r\nbootstrap_required\n503'
+        warning = StringIO()
+        with patch.object(release, 'bounded_input', return_value=response), redirect_stderr(warning):
+            release.public_probe('https://fixture.example', '/readyz', b'200', True, 0, 'a' * 32)
+        self.assertIn('/readyz reports bootstrap_required', warning.getvalue())
+        with patch.object(release, 'bounded_input', return_value=response.replace(b'a' * 32, b'b' * 32)):
+            with self.assertRaisesRegex(ValueError, 'required status'):
+                release.public_probe('https://fixture.example', '/readyz', b'200', True, 0, 'a' * 32)
 
     def test_public_origin_hostname_is_bound_but_edge_tls_may_front_http(self):
         renderer = {'PROXY_MODE': 'caddy-http', 'HOSTNAME': 'fixture.example', 'HTTP_BIND_PORT': '80',
