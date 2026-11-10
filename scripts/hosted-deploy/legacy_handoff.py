@@ -7,6 +7,7 @@ import re
 import socket
 import stat
 import sys
+import time
 
 from caddy_active_config import system_docker, validate_system
 from caddy_clone_action import acquire_lock, validate_request
@@ -341,7 +342,20 @@ def handoff(root, value, run=system_docker, verify_fence=fence):
             os.close(parent)
         # Infinite daemon grace prevents Docker's default SIGKILL escalation.
         # A bounded client failure is UNKNOWN; neither retry nor restart is allowed.
-        run(['docker', 'stop', '--signal', 'SIGTERM', '--timeout', '-1', before['id']], 60, 65536)
+        started = time.monotonic()
+        output = run(['docker', 'stop', '--signal', 'SIGTERM', '--timeout', '-1', before['id']], 60, 65536)
+        if output not in (before['id'].encode('ascii'), (before['id'] + '\n').encode('ascii')):
+            raise ValueError('legacy stop command acknowledgement is UNKNOWN')
+        # A later private Caddy probe can fail after the known stop. Keep the
+        # command acknowledgement separately; it is NOT a completed handoff and
+        # cannot authorize SQL. Independent recovery must recheck clean state,
+        # original identities, checkpoint and the pre-migration boundary.
+        write_exclusive(directory, 'stop-acknowledged.json', encoded({
+            'schema': 1, 'kind': 'legacy-offline-stop-acknowledged',
+            'issued_sha256': digest(encoded(issued)), 'app_id': before['id'],
+            'exit_code': 0, 'stdout_sha256': digest(output),
+            'elapsed_seconds': time.monotonic() - started}))
+        os.fsync(directory)
         after = app_profile(run, value['instance'], before['id'], False, root)
         if before != after or verify_fence(root, value) != bound or checkpoint(value['checkpoint_dir'])[:2] != (request, receipt_sha):
             raise ValueError('legacy handoff changed after stop; recovery required')
