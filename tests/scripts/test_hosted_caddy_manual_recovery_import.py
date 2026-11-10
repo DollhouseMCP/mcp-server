@@ -1,0 +1,69 @@
+"""Safe allowlisted reading of a disposable historical filesystem archive."""
+import io
+import os
+from pathlib import Path
+import sys
+import tarfile
+import unittest
+
+SCRIPTS = Path(__file__).resolve().parents[2] / 'scripts'
+sys.path.insert(0, str(SCRIPTS / 'hosted-deploy'))
+sys.path.insert(0, str(SCRIPTS))
+from legacy_manual_recovery_import import OVERLAYS, fixed_members
+
+
+class ManualArchiveTests(unittest.TestCase):
+    ROOT = Path('/opt/fixture')
+    REQUIRED = ('.env', '.env.production', 'compose.yml', 'Caddyfile')
+
+    def archive(self, mutate=None, extra=()):
+        output = io.BytesIO()
+        with tarfile.open(fileobj=output, mode='w') as archive:
+            for name in (*self.REQUIRED, *OVERLAYS.values(), 'portfolio/unrelated', *extra):
+                item = tarfile.TarInfo('opt/fixture/' + name)
+                item.uid = os.geteuid()
+                item.mode = 0o600
+                data = ('fixture-' + name).encode()
+                item.size = len(data)
+                if mutate:
+                    mutate(name, item)
+                archive.addfile(item, io.BytesIO(data))
+        return output.getvalue()
+
+    def test_only_fixed_original_controls_and_both_overlays_are_read(self):
+        selected = fixed_members(self.ROOT, self.archive(extra=('../unrelated',)))
+        self.assertEqual(set(selected), set(self.REQUIRED) | set(OVERLAYS))
+        self.assertEqual(selected['.env'], (b'fixture-.env', 0o600))
+        self.assertNotIn('portfolio/unrelated', selected)
+
+    def test_duplicate_or_nonprivate_original_environment_is_refused(self):
+        with self.assertRaisesRegex(ValueError, 'archive member is unsafe'):
+            fixed_members(self.ROOT, self.archive(extra=('.env',)))
+
+        def public(name, item):
+            if name == '.env':
+                item.mode = 0o644
+
+        with self.assertRaisesRegex(ValueError, 'environment was not private'):
+            fixed_members(self.ROOT, self.archive(public))
+
+    def test_archive_links_and_wrong_owner_never_become_controls(self):
+        for kind in (tarfile.SYMTYPE, tarfile.LNKTYPE):
+            def link(name, item):
+                if name == '.env.production':
+                    item.type = kind
+                    item.linkname = '/fixture/unknown'
+                    item.size = 0
+            with self.subTest(kind=kind), self.assertRaisesRegex(ValueError, 'archive member is unsafe'):
+                fixed_members(self.ROOT, self.archive(link))
+
+        def owner(name, item):
+            if name == 'compose.yml':
+                item.uid = os.geteuid() + 1
+
+        with self.assertRaisesRegex(ValueError, 'archive member is unsafe'):
+            fixed_members(self.ROOT, self.archive(owner))
+
+
+if __name__ == '__main__':
+    unittest.main()
