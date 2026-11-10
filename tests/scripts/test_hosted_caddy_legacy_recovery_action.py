@@ -219,6 +219,15 @@ class LegacyRecoveryTests(unittest.TestCase):
         self.assertFalse(self.fx.p.recovered['State']['Running'])
         self.assertEqual(json.dumps(self.fx.state, sort_keys=True), before)
 
+    def test_public_acceptance_requires_the_legacy_version_as_well_as_status(self):
+        good = b'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{"version":"2.1.0-beta.2"}\n200'
+        denied = b'HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\n\r\n{}\n401'
+        with patch.object(recovery, 'bounded_input', side_effect=[good, good, denied]):
+            self.assertEqual([r['status'] for r in recovery.public_acceptance('https://fixture.example')], [200, 200, 401])
+        with patch.object(recovery, 'bounded_input', return_value=good.replace(b'beta.2', b'beta.3')):
+            with self.assertRaisesRegex(ValueError, 'public legacy version differs'):
+                recovery.public_acceptance('https://fixture.example')
+
 
 if __name__ == '__main__':
     unittest.main()

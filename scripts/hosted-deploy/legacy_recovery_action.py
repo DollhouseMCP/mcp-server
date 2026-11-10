@@ -140,7 +140,13 @@ def public_acceptance(origin):
         body, code, markers = public_response(raw)
         if code != expected or markers:
             raise ValueError('legacy public acceptance refused; ingress must be fenced')
-        results.append({'path': path, 'status': int(code), 'body_sha256': handoff.digest(body)})
+        version = None
+        if path != '/mcp':
+            payload = json.loads(body, object_pairs_hook=unique_object)
+            if not isinstance(payload, dict) or payload.get('version') != '2.1.0-beta.2':
+                raise ValueError('public legacy version differs; ingress must be fenced')
+            version = payload['version']
+        results.append({'path': path, 'status': int(code), 'version': version, 'body_sha256': handoff.digest(body)})
     return results
 
 
