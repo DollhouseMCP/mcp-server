@@ -147,7 +147,7 @@ def check_compose(path, root, instance, data):
     argv = [DOCKER, 'compose', '--project-name', instance, '--project-directory', str(root), '--env-file', '/dev/null',
             '-f', str(path), 'config', '--format', 'json']
     try:
-        raw = bounded_input(argv, timeout=25, env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'})
+        raw = bounded_input(argv, timeout=25, env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C', 'DOCKER_HOST': 'unix:///dev/null'})
         result = json.loads(raw, object_pairs_hook=unique_object)
     except (ValueError, OSError):
         # Compose config can contain credentials. Never emit its stdout or stderr.

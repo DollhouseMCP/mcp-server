@@ -3,12 +3,13 @@ import copy
 import json
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts' / 'hosted-deploy'))
 from legacy_control_compose import model
-from legacy_reconcile_action import check_compose
+from legacy_reconcile_action import DOCKER, check_compose
 
 
 def service(identifier, name, labels, mounts, ports=None):
@@ -60,6 +61,16 @@ class LegacyComposeTests(unittest.TestCase):
         with patch('legacy_reconcile_action.bounded_input', return_value=json.dumps(result).encode()):
             with self.assertRaisesRegex(ValueError, 'environment or service identity differs'):
                 check_compose('/fixture/compose.yml', Path('/fixture'), 'site', data)
+
+    @unittest.skipUnless(sys.platform == 'linux' and Path(DOCKER).is_file(), 'requires the Linux Compose CLI')
+    def test_real_compose_config_preserves_literal_values_without_a_daemon(self):
+        self.app['Config']['Env'] = ['DOLLAR=one$two', 'ESCAPED=one$$two', 'BRACED=${UNSET:?must stay literal}']
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / 'private-compose.json'
+            path.write_text(json.dumps(model('site', self.app, self.pg, self.proxy)), encoding='utf-8')
+            path.chmod(0o600)
+            check_compose(path, root, 'site', {'app': self.app, 'postgres': self.pg, 'proxy': self.proxy})
 
     def test_invalid_environment_duplicate_mount_or_changed_network_refuses(self):
         for field, changed in (('Config', {**self.app['Config'], 'Env': ['KEY=one', 'KEY=two']}),
