@@ -126,6 +126,14 @@ class RecoveryBoundaryTests(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             boundary.issue_forward_write(self.root, self.value, self.run_docker)
 
+    def test_admitted_hardened_proxy_path_can_arm_before_rendering(self):
+        # begin_update has already admitted an unchanged hardened proxy, but
+        # has not rendered/staged source or created any verification control.
+        self.pending['phase'] = 'admitted'
+        armed = self.arm()
+        self.assertEqual(armed['source'], self.pending['source'])
+        self.assertFalse(any(command[1] in ('start', 'stop') for command in self.fixture.calls))
+
     def test_rendered_staged_or_changed_source_refuses_to_arm(self):
         for change in ({'phase': 'staged'}, {'control': {'phase': 'probed'}}, {'token': '0' * 32}):
             with self.subTest(change=change), patch.dict(self.pending, change):

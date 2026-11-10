@@ -134,7 +134,7 @@ def verify_live_files(root, files):
 def prepared_transition(root, value):
     pending = read_state(root)['pending']
     if (not isinstance(pending, dict) or pending['kind'] != 'update' or pending['token'] != value['token']
-            or pending['phase'] != 'prepared' or pending.get('control') is not None
+            or pending['phase'] not in ('prepared', 'admitted') or pending.get('control') is not None
             or pending['source'] != bundle_identity(root / 'server')):
         raise ValueError('recovery must be armed before rendering or staging the legacy update')
     return pending
