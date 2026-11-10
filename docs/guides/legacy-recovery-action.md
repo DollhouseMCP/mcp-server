@@ -9,7 +9,7 @@ Before a new window, the normal legacy update must have successfully armed the
 private recovery baseline. The original source, proxy receipt, checkpoint,
 restore proof, full app/Postgres profiles, and current schema/globals/62-entry
 ledger must still match it. A forward-write intent, uncertain database boundary,
-missing clean-stop acknowledgement, changed helper, or unsupported profile is
+missing known stop acknowledgement, changed helper, or unsupported profile is
 an absolute refusal. A qualified fresh checkpoint restore is required if the
 database boundary is uncertain. This action does not infer safety from health.
 
@@ -33,7 +33,10 @@ The finite recovery sequence is:
    both its command acknowledgement and clean-stop proof. This establishes a
    separate **offline recovery fence**, even when a prior private Caddy call was
    refused or UNKNOWN. The forward control record is not promoted or changed.
-3. For a completed clean handoff, issue one original-app start, recording the
+3. Require either the completed clean handoff or the separate durable Docker
+   stop acknowledgement plus fresh clean-state/checkpoint/database proof. If a
+   private Caddy check failed after the acknowledged stop, the full handoff
+   stays incomplete and cannot authorize SQL. Issue one original-app start, recording the
    intent first and known acknowledgement/boot separately. Observe configured
    Docker health for at most 120 seconds, then require direct 200/200/401 and
    beta.2 package identity. A never-stopped app keeps its original boot.

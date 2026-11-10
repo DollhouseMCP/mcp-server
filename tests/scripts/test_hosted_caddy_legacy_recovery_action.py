@@ -115,10 +115,15 @@ class LegacyRecoveryTests(unittest.TestCase):
         receipt = self.fx.root / '.legacy-handoff' / 'receipt.json'
         raw = receipt.read_bytes()
         receipt.unlink()
+        ack = self.fx.root / '.legacy-handoff' / 'stop-acknowledged.json'
+        ack_raw = ack.read_bytes()
+        ack.unlink()
         with self.assertRaises(FileNotFoundError):
             self.recover()
         receipt.write_bytes(raw)
         receipt.chmod(0o600)
+        ack.write_bytes(ack_raw)
+        ack.chmod(0o600)
         window = boundary.window_path(self.fx.root, self.fx.value['token'])
         (window / 'forward-write-issued.json').write_text('even malformed intent is an absolute refusal')
         with self.assertRaisesRegex(ValueError, 'restoration is required'):
@@ -131,6 +136,26 @@ class LegacyRecoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'qualified checkpoint restoration'):
             self.recover()
         self.assertFalse(any(argv[1] == 'stop' and self.fx.current['Id'] in argv for argv in self.fx.calls))
+
+    def test_failed_private_call_after_known_stop_recovers_without_inventing_handoff_completion(self):
+        calls = 0
+
+        def fails_after_stop(*_):
+            nonlocal calls
+            calls += 1
+            if calls > 1:
+                raise ValueError('UNKNOWN private Caddy read after known stop')
+            return self.fx.fence
+
+        with self.assertRaisesRegex(ValueError, 'UNKNOWN private Caddy read'):
+            handoff.handoff(self.fx.root, self.fx.value, self.fx.run, verify_fence=fails_after_stop)
+        receipt = self.fx.root / '.legacy-handoff' / 'receipt.json'
+        self.assertFalse(receipt.exists())
+        before = json.dumps(self.fx.state, sort_keys=True)
+        self.recover()
+        self.assertFalse(receipt.exists())
+        self.assertEqual(json.dumps(self.fx.state, sort_keys=True), before)
+        self.assertEqual(sum(argv[1] == 'start' and self.fx.app['Id'] in argv for argv in self.fx.calls), 1)
 
     def test_public_acceptance_failure_stops_only_owned_recovery_proxy_once(self):
         self.fx.complete_handoff()

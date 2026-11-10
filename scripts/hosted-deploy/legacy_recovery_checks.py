@@ -50,10 +50,19 @@ def handoff_state(root, value, armed, pending, run):
         return {'mode': 'never-stopped', 'app_boot': {k: app[k] for k in ('started_at', 'restart_count')}}
     try:
         issued, _ = handoff.read_json(directory, 'issued.json')
-        receipt, receipt_sha = handoff.read_json(directory, 'receipt.json')
+        try:
+            receipt, receipt_sha = handoff.read_json(directory, 'receipt.json')
+        except FileNotFoundError:
+            receipt, receipt_sha = None, None
     finally:
         os.close(directory)
     declared_fence = {'token': value['token'], 'proxy': pending['control']['proxy'], 'source': pending['source']}
+    if receipt is None:
+        known, ack_sha = handoff.verify_stop_acknowledgement(root, value, declared_fence, run)
+        if known['app'] != armed['app']:
+            raise ValueError('acknowledged stop is not bound to the armed app')
+        return {'mode': 'stop-acknowledged', 'stop_ack_sha256': ack_sha,
+                'app_boot': {k: armed['app'][k] for k in ('started_at', 'restart_count')}}
     # A completed clean stop is mandatory. The declared forward fence is NOT
     # promoted: recovery establishes a separate, acknowledged offline fence.
     handoff.verify_completed(root, value, run, verify_fence=lambda *_: declared_fence)

@@ -95,9 +95,9 @@ def restore_app(root, value, armed, baseline, journal, run):
     journal.read('offline-fence-confirmed')
     checks.behind_offline_fence(root, value, armed, baseline, run)
     status = baseline['app']
-    if status['mode'] == 'stopped':
-        # Revalidate the completed handoff after the independently confirmed
-        # proxy stop. A missing receipt is never filled in from a later inspect.
+    if status['mode'] in ('stopped', 'stop-acknowledged'):
+        # Revalidate the full handoff or separate known command ACK after the
+        # independently confirmed proxy stop. Never synthesize a completion.
         pending = baseline['forward_state']['pending']
         if checks.handoff_state(root, value, armed, pending, run) != status:
             raise ValueError('clean-stop handoff changed before legacy restart')
