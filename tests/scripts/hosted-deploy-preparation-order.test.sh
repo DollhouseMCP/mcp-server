@@ -83,20 +83,24 @@ if [[ "${1:-}" == --case ]]; then
     elif [[ "${command_path}" == */caddy_verify_noop_action.py ]]; then
       cat >/dev/null
       printf 'hardened-recheck\n' >> "${EVENTS}"
+    elif [[ "${command_path}" == */caddy_rollback_guard.py ]]; then
+      cat >/dev/null
+      printf 'rollback-guard\n' >> "${EVENTS}"
     else
       command python3 "$@"
     fi
-  }
-  recover_selected_caddy() {
-    printf 'proxy-recovery\n' >> "${EVENTS}"
-    [[ "${MODE}" != recovery-failure ]] || return 1
-    printf '{"restored_id":"%064d","preserved_replacement_id":"%064d"}\n' 1 2
   }
   refresh_caddy_image() { compose pull caddy; }
   prepare_fresh_caddy_volumes() { printf 'fresh-volumes\n' >> "${EVENTS}"; }
   recheck_caddy_image() { printf 'caddy-rechecked\n' >> "${EVENTS}"; }
   recheck_caddy_transition() { printf 'caddy-transition-rechecked\n' >> "${EVENTS}"; }
   render_files() { printf 'render\n' >> "${EVENTS}"; }
+  caddy_release() {
+    local action="$1"
+    printf 'release-%s\n' "${action}" >> "${EVENTS}"
+    [[ "${MODE}" != "release-${action}-failure" ]]
+  }
+  finish_caddy_transition() { printf 'transition-finished\n' >> "${EVENTS}"; }
   sleep() { :; }
   stage_from_source_dir() {
     local incoming="$1"
@@ -199,10 +203,10 @@ DOCKER
     }
   fi
   case "${ACTION}" in
-    rollback) rollback_server ;;
+    rollback) rollback_server; caddy_release accept; caddy_release release; finish_caddy_transition; write_deployed_markers ;;
     migrate) run_migrations ;;
     bootstrap) bootstrap_admin ;;
-    *) start_or_update "${SERVICE}" ;;
+    *) start_or_update "${SERVICE}"; caddy_release accept; caddy_release release; finish_caddy_transition; write_deployed_markers ;;
   esac
   exit 0
 fi
@@ -252,7 +256,7 @@ check_fixture() {
         fail "unchanged proxy was stopped, cloned, pulled, or recreated"
       fi
     elif [[ "${action}" == rollback ]]; then
-      assert_order "${fixture}/events" proxy-recovery graceful-stop
+      assert_order "${fixture}/events" rollback-guard graceful-stop
     else
       assert_order "${fixture}/events" 'compose:pull caddy' graceful-stop
     fi
@@ -263,6 +267,10 @@ check_fixture() {
       if grep -q "^compose:build " "${fixture}/events"; then fail "registry mode built an image"; fi
     fi
     assert_order "${fixture}/events" graceful-stop replacement
+    assert_order "${fixture}/events" release-probe-fence graceful-stop
+    assert_order "${fixture}/events" replacement release-accept
+    assert_order "${fixture}/events" release-accept release-release
+    assert_order "${fixture}/events" release-release transition-finished
     if [[ "${action}" == update ]]; then
       grep -q '^compose:run --rm --pull never --no-deps dollhousemcp-migrate$' "${fixture}/events" || fail "migration omitted no-pull/no-deps flags"
       grep -q '^compose:run --rm --pull never --no-deps dollhousemcp-migrate node dist/cli/admin-bootstrap.js' "${fixture}/events" || fail "bootstrap omitted no-pull/no-deps flags"
@@ -276,7 +284,7 @@ check_fixture() {
     [[ "$(cat "${fixture}/DEPLOYED_REVISION")" == old-revision ]] || fail "failed operation changed deployed revision"
     [[ "$(cat "${fixture}/DEPLOYED_AT")" == '2000-01-01T00:00:00Z' ]] || fail "failed operation changed deployed time"
     case "${mode}" in
-      migration-failure|bootstrap-failure|replacement-failure|registry-drift) [[ -f "${fixture}/stopped" ]] || fail "missing strict drain" ;;
+      migration-failure|bootstrap-failure|replacement-failure|registry-drift|release-accept-failure|release-release-failure) [[ -f "${fixture}/stopped" ]] || fail "missing strict drain" ;;
       drain-refusal) grep -q '^graceful-stop$' "${fixture}/events" || fail "missing refusal" ;;
       stopped-missing-pg)
         grep -q '^compose:ps --all -q dollhousemcp$' "${fixture}/events" || fail "stopped app was not selected before database preparation"
@@ -291,7 +299,7 @@ check_fixture() {
         ;;
       *) if grep -q '^graceful-stop$' "${fixture}/events"; then fail "healthy app stopped on preparation failure"; fi ;;
     esac
-    if [[ "${mode}" != replacement-failure ]] && grep -q '^replacement$' "${fixture}/events"; then fail "replacement after failure"; fi
+    if [[ "${mode}" != replacement-failure && "${mode}" != release-accept-failure && "${mode}" != release-release-failure ]] && grep -q '^replacement$' "${fixture}/events"; then fail "replacement after failure"; fi
   fi
   if [[ "${mode}" != fresh-install && "${mode}" != fresh-retry ]] && grep -q '^compose:up -d --pull never postgres$' "${fixture}/events"; then fail "existing database recreated"; fi
   # Stage/move real bundles: the prior running source is recoverable even when
@@ -317,6 +325,9 @@ for action in update rollback; do
     check_fixture "${action}" "${mode}" app
   done
 done
+for mode in release-prepare-failure release-confirm-failure release-probe-fence-failure release-accept-failure release-release-failure; do
+  check_fixture update "${mode}" app
+done
 check_fixture update pull-failure app
 check_fixture update hardened app
 check_fixture update fresh-retry app
@@ -334,7 +345,7 @@ for mode in fresh-000 fresh-002 existing-unsafe; do
   [[ "${mode}" != existing-unsafe ]] || mask=077
   if (umask "${mask}"; bash -c '
     source "$1"
-    DEPLOY_DIR="$2"; SERVER_DIR="$2/server"
+    DEPLOY_DIR="$2"; SERVER_DIR="$2/server"; HOSTED_DEPLOY_LIB_DIR="$(dirname "$1")"
     ensure_prerequisites() { :; }; validate_git_url_for_clone() { :; }
     resolve_public_base_url() { :; }; resolve_hostname() { :; }
     resolve_allowed_hosts() { :; }; validate_render_inputs() { :; }

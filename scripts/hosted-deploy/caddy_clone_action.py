@@ -64,7 +64,7 @@ def validate_request(value):
     return path
 
 
-def acquire_lock(root):
+def acquire_lock(root, allow_control=False):
     inherited = os.environ.get('HOSTED_CADDY_LOCK_FD')
     if inherited:
         if not inherited.isdigit():
@@ -79,6 +79,9 @@ def acquire_lock(root):
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             refuse_stop_fence(root)
+            if not allow_control:
+                from caddy_transition_state import refuse_control
+                refuse_control(root)
         except BaseException:
             os.close(fd)
             raise
@@ -92,6 +95,9 @@ def acquire_lock(root):
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         refuse_stop_fence(root)
+        if not allow_control:
+            from caddy_transition_state import refuse_control
+            refuse_control(root)
     except BaseException:
         os.close(fd)
         raise

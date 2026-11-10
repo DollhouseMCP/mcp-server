@@ -49,7 +49,7 @@ def pending_base(value, kind):
     return {'kind': kind, 'token': secrets.token_hex(16), 'image': value['image'],
             'volumes': [value['data_volume'], value['config_volume']], 'previous': None,
             'receipt': None, 'receipt_sha256': None, 'source': None, 'staged_source': None,
-            'phase': 'prepared', 'admission': None}
+            'phase': 'prepared', 'admission': None, 'control': None}
 
 
 def begin_update(value, root):
@@ -144,7 +144,7 @@ def retain_unstarted(root, token):
     return destination
 
 
-def complete(root, token):
+def complete(root, token, instance):
     state = read_state(root)
     pending = state['pending']
     if not isinstance(pending, dict) or pending['token'] != token or pending['staged_source'] is None:
@@ -162,6 +162,8 @@ def complete(root, token):
         kind, _, path = recovery_kind(root, previous)
         if str(path) != pending['receipt'] or kind not in ('legacy', 'hardened'):
             raise ValueError('transition receipt is no longer uniquely selected')
+    from caddy_release_action import verify_released
+    verify_released(root, instance, pending)
     return finish(root, token)
 
 
@@ -169,6 +171,8 @@ def selected(root, allow_pending=False):
     state = read_state(root)
     pending = state['pending']
     if pending is not None:
+        if pending.get('control') is not None:
+            raise ValueError('verification or release is pending; automatic proxy recovery is refused')
         if not allow_pending or pending['kind'] not in ('update', 'rollback'):
             raise ValueError('a Caddy transition is pending; automatic rollback is refused')
         chosen = {key: pending[key] for key in ('previous', 'receipt', 'receipt_sha256', 'source')}
@@ -202,6 +206,8 @@ def validate_unmoved_proxy_source(root, pending):
 def selected_proxy(root):
     state = read_state(root)
     pending = state['pending']
+    if isinstance(pending, dict) and pending.get('control') is not None:
+        raise ValueError('verification or release is pending; automatic proxy recovery is refused')
     if isinstance(pending, dict) and pending['kind'] in ('update', 'rollback'):
         previous = Path(pending['previous'])
         if pending['phase'] == 'staged':
@@ -261,7 +267,7 @@ def dispatch(action, value, run=docker_run, admit=None):
         mark_staged(root, value['token'], bundle_identity(root / 'server'))
         return 'staged'
     if action == 'finish':
-        complete(root, value['token'])
+        complete(root, value['token'], value['instance'])
         return 'complete'
     if action == 'select-rollback':
         return str(selected(root))
@@ -286,7 +292,7 @@ def main():
     if action in ('status', 'select-rollback', 'select-proxy'):
         print(dispatch(action, value))
         return
-    lock = acquire_lock(validate_values(value))
+    lock = acquire_lock(validate_values(value), allow_control=(action == 'finish'))
     try:
         print(dispatch(action, value))
     finally:

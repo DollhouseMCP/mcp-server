@@ -21,13 +21,17 @@ run_action() {
       ;;
     install)
       start_or_update all
-      verify_deploy allow-bootstrap-required
+      caddy_release accept
+      caddy_release release
       finish_caddy_transition
+      write_deployed_markers
       ;;
     update)
       start_or_update app
-      verify_deploy allow-bootstrap-required
+      caddy_release accept
+      caddy_release release
       finish_caddy_transition
+      write_deployed_markers
       ;;
     migrate)
       run_migrations
@@ -46,8 +50,10 @@ run_action() {
       ;;
     rollback)
       rollback_server
-      verify_deploy allow-bootstrap-required
+      caddy_release accept
+      caddy_release release
       finish_caddy_transition
+      write_deployed_markers
       ;;
     verify)
       verify_deploy

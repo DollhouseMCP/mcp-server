@@ -349,6 +349,10 @@ def recover(value, run=docker_run, admit=qualify):
         raise ValueError('invalid replacement image reference')
     lock = acquire_lock(root)
     try:
+        from caddy_transition_state import read_state
+        pending = read_state(root)['pending']
+        if isinstance(pending, dict) and pending.get('control') is not None:
+            raise ValueError('verification or release is pending; automatic proxy recovery is refused')
         kind, record, _ = recovery_kind(root, previous)
         if kind == 'hardened':
             profile = record['profile']

@@ -63,15 +63,15 @@ def validate_observation(reference, image, graph, approved, daemon):
             'workflow_run':approved['workflow_run'], 'workflow_attempt':approved['attempt']}
 
 
-def qualify(reference):
+def qualify(reference, docker='docker'):
     if not REFERENCE.fullmatch(reference): raise ValueError('Invalid Caddy reference')
     approved_path = Path(__file__).with_name('caddy-qualified-native-graphs.json')
     approved = json.loads(approved_path.read_bytes(), object_pairs_hook=unique_object)
-    status, raw, _, error = scanner.bounded_process(['docker', 'info', '--format', '{{json .}}'], 10, 1024 * 1024, stderr_maximum=65536)
+    status, raw, _, error = scanner.bounded_process([docker, 'info', '--format', '{{json .}}'], 10, 1024 * 1024, stderr_maximum=65536)
     if status != 0 or error: raise ValueError('Docker daemon identity unavailable')
     daemon = json.loads(raw, object_pairs_hook=unique_object)
     native_architecture(daemon)
-    status, raw, _, error = scanner.bounded_process(['docker', 'image', 'inspect', reference], 10, 1024 * 1024, stderr_maximum=65536)
+    status, raw, _, error = scanner.bounded_process([docker, 'image', 'inspect', reference], 10, 1024 * 1024, stderr_maximum=65536)
     if status != 0 or error: raise ValueError('Caddy image inspection unavailable')
     values = json.loads(raw, object_pairs_hook=unique_object)
     if not isinstance(values, list) or len(values) != 1 or not isinstance(values[0], dict):
@@ -80,7 +80,7 @@ def qualify(reference):
     if arch not in ('amd64', 'arm64') or image.get('Os') != 'linux': raise ValueError('Unqualified Caddy platform')
     with tempfile.TemporaryDirectory(prefix='hosted-caddy-archive-') as directory:
         path = Path(directory) / 'image.tar'
-        status, _, _, error = scanner.bounded_process(['docker', 'image', 'save', reference], 180, ARCHIVE_LIMIT, path, stderr_maximum=65536)
+        status, _, _, error = scanner.bounded_process([docker, 'image', 'save', reference], 180, ARCHIVE_LIMIT, path, stderr_maximum=65536)
         if status != 0 or error: raise ValueError('Bounded Caddy image export failed')
         with path.open('rb') as stream:
             graph = verify_saved_image_file(stream, image.get('Id'), GRAPH_LIMIT, image.get('Descriptor'),

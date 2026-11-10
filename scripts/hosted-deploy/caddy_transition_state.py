@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 import secrets
 import stat
+from urllib.parse import urlsplit
 
 from caddy_image_admission import REFERENCE
 from caddy_recovery_receipt import MAX_RECORD, SHA256, VOLUME, read_private, unique_object, write_exclusive
@@ -87,12 +88,59 @@ def validate_transition_phase(value):
             raise ValueError('transition source phase is inconsistent')
 
 
+def validate_control_origin(control):
+    if not isinstance(control['public_origin'], str) or not re.fullmatch(r'https?://[a-z0-9][a-z0-9.-]*(?::[1-9]\d{0,4})?', control['public_origin'], flags=re.ASCII):
+        raise ValueError('invalid Caddy verification public origin')
+    origin = urlsplit(control['public_origin'])
+    if '..' in origin.hostname or origin.hostname.endswith('.') or (origin.port is not None and origin.port > 65535):
+        raise ValueError('invalid Caddy verification public origin')
+
+
+def validate_control_proxy(proxy):
+    fields = {'id', 'pid', 'started_at', 'restart_count', 'net_device', 'net_inode', 'profile_sha256', 'volumes_sha256'}
+    if not isinstance(proxy, dict) or set(proxy) != fields or not isinstance(proxy['id'], str) or not SHA256.fullmatch(proxy['id']):
+        raise ValueError('invalid Caddy verification proxy identity')
+    if not isinstance(proxy['started_at'], str) or not proxy['started_at']:
+        raise ValueError('invalid Caddy verification boot identity')
+    for key in ('pid', 'restart_count', 'net_device', 'net_inode'):
+        if type(proxy[key]) is not int or proxy[key] < (1 if key in ('pid', 'net_inode') else 0):
+            raise ValueError('invalid Caddy verification namespace identity')
+    for key in ('profile_sha256', 'volumes_sha256'):
+        if not isinstance(proxy[key], str) or not SHA256.fullmatch(proxy[key]):
+            raise ValueError('invalid Caddy verification profile hash')
+
+
+def validate_bound_control(control):
+    for key in ('normal_config_sha256', 'verification_config_sha256'):
+        if not isinstance(control[key], str) or not SHA256.fullmatch(control[key]):
+            raise ValueError('invalid Caddy active configuration hash')
+    validate_control_proxy(control['proxy'])
+
+
+def validate_control(control):
+    if control is None:
+        return
+    fields = {'phase', 'normal_sha256', 'verification_sha256', 'normal_config_sha256', 'verification_config_sha256', 'proxy', 'public_origin'}
+    if not isinstance(control, dict) or set(control) != fields or control['phase'] not in ('prepared', 'fenced', 'probed', 'accepted', 'releasing', 'released'):
+        raise ValueError('invalid Caddy verification control')
+    for key in ('normal_sha256', 'verification_sha256'):
+        if not isinstance(control[key], str) or not SHA256.fullmatch(control[key]):
+            raise ValueError('invalid Caddy verification file hash')
+    validate_control_origin(control)
+    if control['phase'] == 'prepared':
+        if any(control[key] is not None for key in ('normal_config_sha256', 'verification_config_sha256', 'proxy')):
+            raise ValueError('unbound Caddy verification has unexpected evidence')
+        return
+    validate_bound_control(control)
+
+
 def validate_pending(value, root):
     if value is None:
         return
     fields = {'kind', 'token', 'image', 'volumes', 'previous', 'receipt', 'receipt_sha256', 'source', 'staged_source', 'phase', 'admission'}
-    if not isinstance(value, dict) or set(value) != fields or value['kind'] not in ('fresh', 'update', 'rollback'):
+    if not isinstance(value, dict) or set(value) not in (fields, fields | {'control'}) or value['kind'] not in ('fresh', 'update', 'rollback'):
         raise ValueError('invalid pending Caddy state')
+    validate_control(value.get('control'))
     if not isinstance(value['token'], str) or not re.fullmatch(r'[0-9a-f]{32}', value['token']):
         raise ValueError('invalid transition token')
     if not isinstance(value['image'], str) or not REFERENCE.fullmatch(value['image']):
@@ -159,6 +207,12 @@ def read_state(root):
         os.close(directory)
 
 
+def refuse_control(root):
+    pending = read_state(root)['pending']
+    if isinstance(pending, dict) and pending.get('control') is not None:
+        raise ValueError('Caddy verification or release is pending; operator reconciliation is required')
+
+
 def write_state(root, value):
     root = Path(root)
     validate_state(value, root)
@@ -222,6 +276,8 @@ def finish(root, token):
     pending = state['pending']
     if not isinstance(pending, dict) or pending['token'] != token or pending['phase'] != 'staged':
         raise ValueError('Caddy transition has no verified staged source')
+    if not isinstance(pending.get('control'), dict) or pending['control']['phase'] != 'released':
+        raise ValueError('Caddy verification and release have not completed')
     if pending['kind'] == 'rollback' and pending['staged_source'] != pending['source']:
         raise ValueError('rollback source differs from the selected bundle')
     if pending['kind'] == 'update':
@@ -231,3 +287,14 @@ def finish(root, token):
     state['pending'] = None
     write_state(root, state)
     return state
+
+
+if __name__ == '__main__':
+    import sys
+    try:
+        if len(sys.argv) != 2:
+            raise ValueError('one deployment directory is required')
+        refuse_control(Path(sys.argv[1]))
+    except Exception as error:
+        print('Caddy transition refused: ' + str(error), file=sys.stderr)
+        sys.exit(1)

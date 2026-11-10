@@ -30,6 +30,8 @@ def pending_record(root):
     pending = state['pending']
     if not isinstance(pending, dict) or pending['kind'] not in ('update', 'rollback'):
         raise ValueError('no prior proxy is bound to the pending transition')
+    if pending.get('control') is not None:
+        raise ValueError('verification or release is pending; automatic proxy recovery is refused')
     previous = Path(pending['previous'])
     if pending['phase'] == 'staged':
         if (bundle_identity(previous) != pending['source']

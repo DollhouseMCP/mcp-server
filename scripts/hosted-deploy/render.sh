@@ -190,17 +190,14 @@ caddy_trusted_proxies_args() {
 }
 
 caddy_global_options_block() {
-  [[ -n "${CADDY_TRUSTED_PROXIES}" ]] || return 0
-
-  cat <<EOF
-{
-	servers {
-		trusted_proxies static $(caddy_trusted_proxies_args)
-		trusted_proxies_strict
-	}
-}
-
-EOF
+  local verification="${1:-false}"
+  [[ -n "${CADDY_TRUSTED_PROXIES}" || "${verification}" == true ]] || return 0
+  printf '{\n\tservers {\n'
+  if [[ "${verification}" == true ]]; then printf '\t\tprotocols h1\n'; fi
+  if [[ -n "${CADDY_TRUSTED_PROXIES}" ]]; then
+    printf '\t\ttrusted_proxies static %s\n\t\ttrusted_proxies_strict\n' "$(caddy_trusted_proxies_args)"
+  fi
+  printf '\t}\n}\n\n'
 
   return 0
 }
@@ -237,7 +234,7 @@ EOF
 }
 
 caddyfile_content() {
-  local site_address forwarded_proto
+  local site_address forwarded_proto verification="${1:-false}" token="${2:-}"
   case "${PROXY_MODE}" in
     caddy-tls)
       site_address="${HOSTNAME}"
@@ -251,6 +248,44 @@ caddyfile_content() {
       die "unsupported DOLLHOUSE_HOSTED_PROXY_MODE: ${PROXY_MODE}"
       ;;
   esac
+
+  if [[ "${verification}" == true ]]; then
+    [[ "${token}" =~ ^[0-9a-f]{32}$ ]] || die 'invalid Caddy verification token'
+    cat <<EOF
+$(caddy_global_options_block true)
+${site_address} {
+	encode gzip
+
+$(caddy_access_log_block)
+	@verification {
+		protocol http/1.1
+		method GET
+		header Content-Length 0
+		header !Authorization
+		header !Cookie
+		header !Upgrade
+		header !Transfer-Encoding
+		expression \`{http.request.orig_uri} == "/healthz" || {http.request.orig_uri} == "/readyz" || {http.request.orig_uri} == "/mcp"\`
+	}
+	route {
+		header >X-Dollhouse-Verification ${token}
+		reverse_proxy @verification dollhousemcp:${MCP_PORT} {
+			header_up Host {host}
+			header_up X-Forwarded-Proto ${forwarded_proto}
+			header_up X-Forwarded-For {client_ip}
+			header_up X-Real-IP {client_ip}
+			transport http {
+				read_timeout 1h
+				write_timeout 1h
+				dial_timeout 30s
+			}
+		}
+		respond 503
+	}
+}
+EOF
+    return 0
+  fi
 
   cat <<EOF
 $(caddy_global_options_block)

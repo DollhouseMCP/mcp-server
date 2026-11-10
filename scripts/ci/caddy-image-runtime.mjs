@@ -240,6 +240,44 @@ try {
   const trusted = JSON.parse(request({ path:'/trusted', headers:forwarded }).body);
   assert.equal(trusted.headers['x-forwarded-for'], '203.0.113.7');
   observations.push('current-renderer reload/trusted forwarding');
+  if (!connection && process.platform === 'linux') {
+    const volumeRoot = JSON.parse(engine(['volume', 'inspect', ownedVolumes[2]]))[0].Mountpoint;
+    assert.match(volumeRoot, /^\/var\/lib\/docker\/volumes\//);
+    const token = randomUUID().replaceAll('-', '');
+    const nativeScript = path.join(root, 'scripts/ci/caddy-release-native.py');
+    const runControl = action => JSON.parse(execFileSync('/usr/bin/sudo', ['-n', '/usr/bin/python3', nativeScript,
+      action, proxy, volumeRoot, volumeRoot, token, `${addresses[0]}/32`],
+    {encoding:'utf8',timeout:120_000,maxBuffer:65536}));
+    const begin = runControl('begin');
+    const probeSource = String.raw`
+const http=require('node:http'); const http2=require('node:http2'); const net=require('node:net');
+const mode=process.argv[1], token=process.argv[2];
+let settled=false; const finish=ok=>{if(!settled){settled=true;process.exit(ok?0:2);}};
+process.on('beforeExit',()=>{if(!settled)process.exitCode=2;}); setTimeout(()=>finish(false),2000);
+if(mode==='h2') { const s=http2.connect('http://proxy:80'); s.on('error',()=>finish(true)); const q=s.request({':method':'GET',':path':'/healthz',':authority':'fixture.local'},{endStream:false}); q.on('error',()=>finish(true)); q.on('close',()=>finish(true)); q.on('response',()=>finish(false)); q.end('unexpected'); }
+else if(mode==='conflict'||mode==='cl-conflict'||mode==='aborted') { const s=net.connect(80,'proxy',()=>{s.end(mode==='conflict'?'GET /healthz HTTP/1.1\r\nHost: fixture.local\r\nContent-Length: 0\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n':mode==='cl-conflict'?'GET /healthz HTTP/1.1\r\nHost: fixture.local\r\nContent-Length: 0\r\nContent-Length: 4\r\n\r\nx':'GET /healthz HTTP/1.1\r\nHost: fixture.local\r\nContent-Length: 4\r\n\r\nx')});let data='';s.on('data',x=>data+=x);s.on('error',()=>finish(true));s.on('close',()=>finish(!/200 OK/i.test(data))); }
+else { const allowed=mode.startsWith('allowed'); const headers={'host':'fixture.local','content-length':'0'}; if(mode==='auth')headers.authorization='Bearer fixture'; if(mode==='cookie')headers.cookie='x=y'; const path=mode==='query'?'/healthz?x=1':mode==='allowed-ready'?'/readyz':mode==='allowed-mcp'?'/mcp':'/healthz'; const r=http.request({host:'proxy',port:80,path,method:mode==='post'?'POST':'GET',headers},res=>{res.on('aborted',()=>finish(false));res.on('error',()=>finish(false));res.resume();res.on('end',()=>finish(res.complete&&(allowed ? res.statusCode===(mode==='allowed-mcp'?401:200) : res.statusCode===503)&&res.headers['x-dollhouse-verification']===token));});r.on('error',()=>finish(false));r.end(); }
+`;
+    const probe = mode => engine(['exec', upstream, 'node', '-e', probeSource, mode, token]);
+    const probeCount = () => engine(['logs', upstream]).split('\n').filter(line => line.includes('"fixture":"probe"')).length;
+    const countBefore = probeCount();
+    for (const mode of ['allowed','allowed-ready','allowed-mcp']) probe(mode);
+    for (const mode of ['query','auth','cookie','post','conflict','cl-conflict','aborted','h2']) probe(mode);
+    assert.equal(probeCount(), countBefore + 3, 'unsafe framing or request reached the upstream');
+    engine(['stop', '--signal', 'SIGTERM', '--timeout', '-1', proxy]);
+    assert.equal(inspect(proxy).State.ExitCode, 0);
+    engine(['start', proxy]);
+    await waitForReady(request, {path:'/healthz',headers:{'content-length':'0'}}, {attempts:10});
+    const restarted = runControl('check');
+    for (const mode of ['allowed','allowed-ready','allowed-mcp']) probe(mode);
+    const restored = runControl('finish');
+    assert.equal(request({path:'/ready'}).status, 200);
+    observations.push('real private admin load/readback, restart-persistent fence, marker and framing denials, then normal-profile restoration');
+    const hashSource = source => createHash('sha256').update(fs.readFileSync(path.join(root, source))).digest('hex');
+    configSources.push({releaseWitness:{begin,restarted,restored, scriptSha256:hashSource('scripts/ci/caddy-release-native.py'),
+      activeConfigSha256:hashSource('scripts/hosted-deploy/caddy_active_config.py'),
+      releaseActionSha256:hashSource('scripts/hosted-deploy/caddy_release_action.py')}});
+  }
   assert.equal(request({ path:`/redaction?access_token=${marker}&code=${marker}`, headers:{ authorization:`Bearer ${marker}`, cookie:`session=${marker}`, 'x-onboarding-csrf':marker } }).status, 200);
   const logs = accessLogs(proxy);
   assert.ok(logs.some(entry => entry.request.uri.includes('/redaction')), 'redaction request missing from access logs');

@@ -202,11 +202,47 @@ case "${1:-}" in
       status) printf 'none\n' ;;
       begin-fresh|begin-update|begin-rollback) printf 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' ;;
       select-rollback|select-proxy) printf '%s/server.prev-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' "${DOLLHOUSE_HOSTED_DEPLOY_DIR:?}" ;;
-      stage|finish|bind-admission) printf 'ok\n' ;;
+      stage|bind-admission) printf 'ok\n' ;;
+      finish)
+        [[ "$(cat "${DOLLHOUSE_HOSTED_DEPLOY_DIR:?}/.fixture-caddy-phase")" == released ]] || exit 1
+        printf 'release:finish\n' >> "${DOLLHOUSE_FAKE_DOCKER_LOG:?}"
+        printf 'ok\n' ;;
       *) exit 1 ;;
     esac
     ;;
   */caddy_recover_action.py) cat >/dev/null; printf '{"restored_id":"%064d","preserved_replacement_id":"%064d"}\n' 1 2 ;;
+  */caddy_rollback_guard.py) cat >/dev/null ;;
+  */caddy_release_action.py)
+    payload="$(cat)"
+    action="${2:-}"
+    phase_file="${DOLLHOUSE_HOSTED_DEPLOY_DIR:?}/.fixture-caddy-phase"
+    printf 'release:%s\n' "${action}" >> "${DOLLHOUSE_FAKE_DOCKER_LOG:?}"
+    case "${action}" in
+      prepare) next=prepared ;;
+      confirm) [[ "$(cat "${phase_file}")" == prepared ]] || exit 1; next=fenced ;;
+      probe-fence) [[ "$(cat "${phase_file}")" == fenced ]] || exit 1; next=probed ;;
+      accept)
+        [[ "$(cat "${phase_file}")" == probed ]] || exit 1
+        base="$(printf '%s' "${payload}" | "${DOLLHOUSE_FAKE_PYTHON:?}" -c 'import json,sys; print(json.load(sys.stdin)["public_base_url"])')"
+        allow_bootstrap="$(printf '%s' "${payload}" | "${DOLLHOUSE_FAKE_PYTHON:?}" -c 'import json,sys; print(json.load(sys.stdin)["allow_bootstrap"])')"
+        for probe in healthz readyz mcp; do
+          body_file="${phase_file}.body"
+          status="$(curl -o "${body_file}" -w '%{http_code}' "${base}/${probe}")"
+          case "${probe}:${status}" in
+            healthz:200|readyz:200|mcp:401) ;;
+            readyz:503)
+              [[ "${allow_bootstrap}" == True ]] && grep -Fq bootstrap_required "${body_file}" || exit 1
+              printf '[hosted-deploy] warning: /readyz reports bootstrap_required\n' >&2 ;;
+            *) exit 1 ;;
+          esac
+        done
+        rm -f "${body_file}"
+        next=accepted ;;
+      release) [[ "$(cat "${phase_file}")" == accepted ]] || exit 1; next=released ;;
+      *) exit 1 ;;
+    esac
+    printf '%s\n' "${next}" > "${phase_file}"
+    ;;
   */caddy_fresh_action.py|*/caddy_fresh_recheck.py|*/caddy_prestart_action.py|*/caddy_verify_noop_action.py) cat >/dev/null; printf '{}\n' ;;
   */caddy_unchanged_action.py)
     cat >/dev/null
@@ -411,6 +447,26 @@ DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=dummy-secret \
   bash "${HOSTED_DEPLOY}" install > "${BOOTSTRAP_OUTPUT}" 2>&1 || { cat "${BOOTSTRAP_OUTPUT}" >&2; fail "bootstrap-required install failed"; }
 assert_contains "${BOOTSTRAP_OUTPUT}" "/readyz reports bootstrap_required"
 
+log "checking each acceptance failure retains the fence"
+for probe in HEALTHZ READYZ MCP; do
+  failure_dir="${TMP_ROOT}/acceptance-${probe}"
+  failure_log="${TMP_ROOT}/acceptance-${probe}.docker.log"
+  if env PATH="${FAKE_BIN}:${PATH}" DOLLHOUSE_FAKE_PYTHON="${DOLLHOUSE_FAKE_PYTHON}" \
+    DOLLHOUSE_FAKE_DOCKER_LOG="${failure_log}" DOLLHOUSE_FAKE_CURL_LOG="${CURL_LOG}" \
+    DOLLHOUSE_FAKE_CURL_STATE_DIR="${TMP_ROOT}/acceptance-${probe}-curl" \
+    "DOLLHOUSE_FAKE_${probe}_STATUS_SEQUENCE=500" \
+    DOLLHOUSE_HOSTED_DEPLOY_DIR="${failure_dir}" DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+    DOLLHOUSE_HOSTED_SOURCE_DIR="${SOURCE_REPO}" DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=dummy-client \
+    DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=dummy-secret \
+      bash "${HOSTED_DEPLOY}" install > "${TMP_ROOT}/acceptance-${probe}.out" 2>&1; then
+    fail "${probe} acceptance failure unexpectedly passed"
+  fi
+  assert_file_equals "${failure_dir}/.fixture-caddy-phase" probed
+  if grep -Fxq 'release:release' "${failure_log}" || [[ -e "${failure_dir}/DEPLOYED_REVISION" ]]; then
+    fail "${probe} acceptance failure released ingress or wrote the deployment marker"
+  fi
+done
+
 log "running install workflow"
 DOCKER_LOG="${TMP_ROOT}/docker-install.log"
 run_hosted install
@@ -421,6 +477,8 @@ assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} exec -T postgres /usr/local/bin/
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} pull caddy"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d"
 assert_contains "${CURL_LOG}" "https://mcp.example.com/healthz"
+expected_phases=$'release:prepare\nrelease:confirm\nrelease:probe-fence\nrelease:accept\nrelease:release\nrelease:finish'
+[[ "$(grep '^release:' "${DOCKER_LOG}")" == "${expected_phases}" ]] || fail "release phases are out of order"
 
 log "running update workflow"
 DOCKER_LOG="${TMP_ROOT}/docker-update.log"
