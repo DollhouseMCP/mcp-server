@@ -17,6 +17,7 @@ from caddy_volume_migration import inspect_one
 from image_scan_intake import unique_object
 import legacy_handoff as handoff
 from legacy_control_resolution import raw_state
+from legacy_recovery_action import LEGACY_VERSION
 from legacy_recovery_boundary import FILES, REQUIRED, checkpoint_database, database_fingerprint, read_configuration, window_path
 from legacy_recovery_guards import lifecycle
 from legacy_recovery_profile import profile, profile_hash
@@ -94,11 +95,11 @@ def archive_inputs(root, evidence_dir, pending):
 
 def check_acceptance(final, origin):
     recovered = final.get('recovered', {})
-    if (final.get('status') != 'RECOVERED LEGACY; FORWARD ABORTED' or recovered.get('version') != '2.1.0-beta.2'
+    if (final.get('status') != 'RECOVERED LEGACY; FORWARD ABORTED' or recovered.get('version') != LEGACY_VERSION
             or recovered.get('markers_preserved') is not True or final.get('no_app_restart_in_this_continuation') is not True):
         raise ValueError('accepted manual recovery verdict differs')
     public = final.get('public_acceptance')
-    expected = [(origin + '/healthz', '200', '2.1.0-beta.2'), (origin + '/readyz', '200', '2.1.0-beta.2'),
+    expected = [(origin + '/healthz', '200', LEGACY_VERSION), (origin + '/readyz', '200', LEGACY_VERSION),
                 (origin + '/mcp', '401', None)]
     if not isinstance(public, list) or len(public) != 3 or any(
             (row['path'], row['status'], row['body_version']) != want or row['verification_marker_absent'] is not True
@@ -117,13 +118,18 @@ def verify_boot(final, actual, running):
     return lifecycle(actual, running, {key: row[key] for key in ('started_at', 'restart_count')})
 
 
+def validate_failed_state(root, value, state, pending):
+    if (state['completed'] is not None or handoff.digest(raw_state(root)) != ACCEPTED['state']
+            or pending['volumes'] != [value['data_volume'], value['config_volume']]):
+        raise ValueError('current failed controls differ from the accepted manual recovery')
+
+
 def import_accepted(root, value, evidence_dir, run):
     window = window_path(root, value['token'])
     if window.exists() or window.is_symlink():
         raise ValueError('manual adoption cannot replace an armed recovery window')
     state, pending, control = pending_control(root, value['token'], 'probed')
-    if state['completed'] is not None or handoff.digest(raw_state(root)) != ACCEPTED['state']:
-        raise ValueError('current failed controls differ from the accepted manual recovery')
+    validate_failed_state(root, value, state, pending)
     final, manifest, originals, files = archive_inputs(root, evidence_dir, pending)
     recovered = check_acceptance(final, control['public_origin'])
     if recovered['app'] != value['app_id'] or recovered['postgres'] != value['postgres_id']:

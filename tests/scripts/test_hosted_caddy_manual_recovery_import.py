@@ -5,11 +5,13 @@ from pathlib import Path
 import sys
 import tarfile
 import unittest
+from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parents[2] / 'scripts'
 sys.path.insert(0, str(SCRIPTS / 'hosted-deploy'))
 sys.path.insert(0, str(SCRIPTS))
-from legacy_manual_recovery_import import OVERLAYS, fixed_members
+from legacy_manual_recovery_import import OVERLAYS, fixed_members, validate_failed_state
+from legacy_handoff import digest
 
 
 class ManualArchiveTests(unittest.TestCase):
@@ -46,6 +48,17 @@ class ManualArchiveTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, 'environment was not private'):
             fixed_members(self.ROOT, self.archive(public))
+
+    def test_historical_destination_names_are_not_operator_overrides(self):
+        raw = b'exact accepted failed state'
+        state = {'completed': None}
+        pending = {'volumes': ['old-data', 'old-config']}
+        value = {'data_volume': 'old-data', 'config_volume': 'old-config'}
+        with patch('legacy_manual_recovery_import.raw_state', return_value=raw), patch.dict(
+                'legacy_manual_recovery_import.ACCEPTED', {'state': digest(raw)}):
+            validate_failed_state(self.ROOT, value, state, pending)
+            with self.assertRaisesRegex(ValueError, 'failed controls differ'):
+                validate_failed_state(self.ROOT, {**value, 'data_volume': 'new-data'}, state, pending)
 
     def test_archive_links_and_wrong_owner_never_become_controls(self):
         for kind in (tarfile.SYMTYPE, tarfile.LNKTYPE):
