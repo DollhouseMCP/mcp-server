@@ -44,7 +44,8 @@ if [[ "${1:-}" == "--case" ]]; then
   }
   caddy_recovery_request_json() { printf '{}\n'; }
   python3() {
-    [[ "$1" == */caddy_rollback_guard.py ]] || return 1
+    local script_path="$1"
+    [[ "${script_path}" == */caddy_rollback_guard.py ]] || return 1
     cat >/dev/null
     printf 'proxy-guard:server.prev-20000101\n' >> "${EVENTS}"
     [[ "${MODE}" != guard-failure ]]
