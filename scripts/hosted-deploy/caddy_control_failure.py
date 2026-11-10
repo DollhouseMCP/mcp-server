@@ -13,8 +13,10 @@ class ControlFailure(ValueError):
             'reason': reason, 'context': context or {}, 'cleanup_confirmed': None,
             'outcome': 'REFUSED' if reason is None and type(exit_code) is int and exit_code > 0 else 'UNKNOWN',
         }
-        # A failed POST can have taken effect even when curl exits nonzero.
-        if self.diagnostic['context'].get('operation') == 'POST /load':
+        operation = self.diagnostic['context'].get('operation')
+        # Curl 22 proves an HTTP refusal. A timeout/transfer failure does not
+        # prove a response, and a failed POST may still have taken effect.
+        if operation == 'POST /load' or (operation == 'GET /config/' and exit_code != 22):
             self.diagnostic['outcome'] = 'UNKNOWN'
         super().__init__('private Caddy control refused')
 

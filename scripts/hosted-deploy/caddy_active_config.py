@@ -60,6 +60,14 @@ def cleanup_failed_control(child, issue, deadline, started):
         issue.add_note('private Caddy control child cleanup is UNKNOWN')
 
 
+def capture_failure_reason(child, error):
+    if error:
+        return error
+    if child.poll() is None:
+        return 'child exit is unsettled'
+    return None
+
+
 def bounded_input(command, payload=b'', pass_fds=(), timeout=15, env=None, context=None):
     if not isinstance(payload, bytes) or len(payload) > LIMIT:
         raise ValueError('control input exceeds its limit')
@@ -84,11 +92,11 @@ def bounded_input(command, payload=b'', pass_fds=(), timeout=15, env=None, conte
         error = None
         try:
             error = scanner.capture_process(child, work_deadline, LIMIT, 65536, None, buffers)
-            if error or child.returncode != 0 or child.poll() is None:
+            reason = capture_failure_reason(child, error)
+            if reason or child.returncode != 0:
                 raise ControlFailure(exit_code=child.returncode, stderr=bytes(buffers[1]),
                                      elapsed=time.monotonic() - started, timeout=timeout,
-                                     reason=error or ('child exit is unsettled' if child.poll() is None else None),
-                                     context=context)
+                                     reason=reason, context=context)
             return bytes(buffers[0])
         except BaseException as issue:
             if isinstance(issue, Exception) and not isinstance(issue, ControlFailure):

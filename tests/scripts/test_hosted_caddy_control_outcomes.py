@@ -58,6 +58,41 @@ class ControlOutcomesTests(unittest.TestCase):
         self.assertIn('503', caught.exception.diagnostic['stderr'])
         self.assertEqual(caught.exception.diagnostic['outcome'], 'REFUSED')
 
+    def test_actual_curl_native_timeout_is_unknown_before_capture_deadline(self):
+        release = threading.Event()
+
+        class WithholdResponse(BaseHTTPRequestHandler):
+            def do_GET(self):
+                release.wait(timeout=2)
+
+            def log_message(self, *_args):
+                pass
+
+        with HTTPServer(('127.0.0.1', 0), WithholdResponse) as server:
+            thread = threading.Thread(target=server.serve_forever)
+            thread.start()
+            try:
+                with self.assertRaises(control.ControlFailure) as caught:
+                    control.bounded_input([control.CURL, '--disable', '--noproxy', '*',
+                                           '--silent', '--show-error', '--fail', '--max-time', '0.1',
+                                           'http://127.0.0.1:' + str(server.server_port) + '/config/'],
+                                          context={'operation': 'GET /config/'})
+            finally:
+                release.set()
+                server.shutdown()
+                thread.join(timeout=2)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(caught.exception.diagnostic['exit_code'], 28)
+        self.assertTrue(caught.exception.diagnostic['stderr'])
+        self.assertEqual(caught.exception.diagnostic['outcome'], 'UNKNOWN')
+
+    def test_other_curl_transfer_failures_are_also_unknown(self):
+        for status in (5, 6, 7, 28, 52, 56):
+            with self.subTest(status=status):
+                failure = self.fail_child(status=status, context={'operation': 'GET /config/'})
+                self.assertEqual(failure.diagnostic['exit_code'], status)
+                self.assertEqual(failure.diagnostic['outcome'], 'UNKNOWN')
+
     def fail_child(self, *, status=22, error=None, cleaned=True, context=None, settled=True):
         child = Mock(returncode=status)
         child.poll.return_value = status if settled else None
