@@ -20,7 +20,7 @@ COMMANDS = (
     (('caddy',), ('run', '--config', CADDYFILE_MOUNT, '--adapter', 'caddyfile')),
     ((), ('caddy', 'run', '--config', CADDYFILE_MOUNT, '--adapter', 'caddyfile')),
 )
-MASKED_PATHS = ['/proc/asound', '/proc/acpi', '/proc/kcore', '/proc/keys', '/proc/latency_stats',
+MASKED_PATHS = ['/proc/asound', '/proc/acpi', '/proc/interrupts', '/proc/kcore', '/proc/keys', '/proc/latency_stats',
                 '/proc/timer_list', '/proc/timer_stats', '/proc/sched_debug', '/proc/scsi',
                 '/sys/firmware', '/sys/devices/virtual/powercap']
 READONLY_PATHS = ['/proc/bus', '/proc/fs', '/proc/irq', '/proc/sys', '/proc/sysrq-trigger']
@@ -135,7 +135,10 @@ def validate_common_namespaces(host):
         raise ValueError('unsupported legacy runtime')
     if host.get('CgroupnsMode') not in ('private', '', None):
         raise ValueError('unsupported legacy cgroup namespace')
-    if host.get('MaskedPaths') != MASKED_PATHS or host.get('ReadonlyPaths') != READONLY_PATHS:
+    masked = host.get('MaskedPaths')
+    if (not isinstance(masked, list) or any(not isinstance(path, str) for path in masked)
+            or len(masked) != len(MASKED_PATHS) or set(masked) != set(MASKED_PATHS)
+            or host.get('ReadonlyPaths') != READONLY_PATHS):
         raise ValueError('unsupported legacy proc filesystem restrictions')
 
 
