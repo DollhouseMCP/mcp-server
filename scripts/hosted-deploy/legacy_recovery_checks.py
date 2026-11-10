@@ -14,7 +14,7 @@ from legacy_recovery_guards import exact_container, ingress_available, lifecycle
 from legacy_recovery_profile import profile
 
 
-def database(root, value, armed, run):
+def database(value, armed, run):
     request, checkpoint_sha, manifest = handoff.checkpoint(value['checkpoint_dir'])
     if checkpoint_sha != armed['checkpoint_sha256']:
         raise ValueError('qualified checkpoint differs from the armed recovery baseline')
@@ -85,7 +85,7 @@ def original_proxy(root, armed, run, admit):
 
 def preconditions(root, value, armed, run, admit):
     state, pending, control = forward_state(root, value, armed)
-    database(root, value, armed, run)
+    database(value, armed, run)
     app_status = handoff_state(root, value, armed, pending, run)
     plan = preflight(root, value['instance'], Path(armed['previous']), pending['image'], run, admit)
     current = inspect_one(run, 'container', plan['current_id'])
@@ -115,7 +115,7 @@ def behind_offline_fence(root, value, armed, baseline, run):
     forward_state(root, value, armed, baseline['forward_state'])
     exact_container(run, baseline['current_id'], baseline['proxy_profile'], value['instance'] + '-caddy',
                     False, baseline['proxy_boot'])
-    database(root, value, armed, run)
+    database(value, armed, run)
 
 
 def serving_config(identifier, receipt_path, record, boot):

@@ -7,6 +7,8 @@ from caddy_recovery_receipt import private_directory, write_exclusive
 import legacy_handoff as handoff
 from legacy_recovery_boundary import window_path
 
+RECORD_SUFFIX = '.json'
+
 
 class Journal:
     def __init__(self, root, token, armed_sha, create=False):
@@ -37,19 +39,19 @@ class Journal:
         os.close(self.directory)
 
     def write(self, name, value):
-        write_exclusive(self.directory, name + '.json', handoff.encoded(
+        write_exclusive(self.directory, name + RECORD_SUFFIX, handoff.encoded(
             {'issued_sha256': self.issued_sha, 'value': value}))
         os.fsync(self.directory)
 
     def read(self, name):
-        record, _ = handoff.read_json(self.directory, name + '.json')
+        record, _ = handoff.read_json(self.directory, name + RECORD_SUFFIX)
         if set(record) != {'issued_sha256', 'value'} or record['issued_sha256'] != self.issued_sha:
             raise ValueError('legacy recovery acknowledgement binding differs')
         return record['value']
 
     def absent(self, name):
         try:
-            os.stat(name + '.json', dir_fd=self.directory, follow_symlinks=False)
+            os.stat(name + RECORD_SUFFIX, dir_fd=self.directory, follow_symlinks=False)
         except FileNotFoundError:
             return
         raise ValueError('recovery action was already issued; no retry or inferred completion')

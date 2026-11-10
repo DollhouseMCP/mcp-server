@@ -25,6 +25,8 @@ import legacy_recovery_checks as checks
 from legacy_recovery_guards import exact_container, ingress_available, lifecycle, serving_dns
 from legacy_recovery_journal import Journal
 
+LEGACY_VERSION = "2.1.0-beta.2"
+
 
 def command(journal, name, run, argv, timeout, maximum=65536):
     journal.absent(name + '-issued')
@@ -50,7 +52,7 @@ def stop_forward_proxy(root, value, armed, baseline, journal, run):
     checks.forward_state(root, value, armed, baseline['forward_state'])
     exact_container(run, baseline['current_id'], baseline['proxy_profile'], value['instance'] + '-caddy',
                     True, baseline['proxy_boot'])
-    checks.database(root, value, armed, run)
+    checks.database(value, armed, run)
     raw = command(journal, 'offline-fence', run,
                   ['docker', 'stop', '--signal', 'SIGTERM', '--timeout', '-1', baseline['current_id']], 60)
     same_id(raw, baseline['current_id'])
@@ -85,9 +87,9 @@ def app_acceptance(value, run):
       const r=await fetch('http://127.0.0.1:'+(process.env.DOLLHOUSE_HTTP_PORT||3000)+p,
         {signal:AbortSignal.timeout(5000)});
       await r.arrayBuffer(); if(r.status!==(p==='/mcp'?401:200))throw Error('legacy status '+p);
-    })).then(()=>{if(require('/app/package.json').version!=='2.1.0-beta.2')throw Error('legacy version');
+    })).then(()=>{if(require('/app/package.json').version!==process.argv[1])throw Error('legacy version');
       console.log('legacy-200-200-401-beta2')}).catch(e=>{console.error(e.message);process.exit(1)})"""
-    if run(['docker', 'exec', value['app_id'], 'node', '-e', script], 20, 65536) != b'legacy-200-200-401-beta2\n':
+    if run(['docker', 'exec', value['app_id'], 'node', '-e', script, LEGACY_VERSION], 20, 65536) != b'legacy-200-200-401-beta2\n':
         raise ValueError('legacy application acceptance did not acknowledge all required checks')
 
 
@@ -116,12 +118,12 @@ def restore_app(root, value, armed, baseline, journal, run):
     wait_healthy(root, value, armed, baseline, boot, run)
     app_acceptance(value, run)
     serving_dns(run, value['instance'], value['app_id'])
-    journal.write('app-ready', {'boot': boot, 'version': '2.1.0-beta.2'})
+    journal.write('app-ready', {'boot': boot, 'version': LEGACY_VERSION})
 
 
 def ready(root, value, armed, baseline, journal, run):
     started, accepted = journal.read('app-started'), journal.read('app-ready')
-    if started['boot'] != accepted['boot'] or accepted['version'] != '2.1.0-beta.2':
+    if started['boot'] != accepted['boot'] or accepted['version'] != LEGACY_VERSION:
         raise ValueError('legacy readiness is not bound to the acknowledged boot')
     checks.behind_offline_fence(root, value, armed, baseline, run)
     exact_container(run, value['app_id'], armed['profiles']['app'], value['instance'], True, started['boot'])
@@ -143,7 +145,7 @@ def public_acceptance(origin):
         version = None
         if path != '/mcp':
             payload = json.loads(body, object_pairs_hook=unique_object)
-            if not isinstance(payload, dict) or payload.get('version') != '2.1.0-beta.2':
+            if not isinstance(payload, dict) or payload.get('version') != LEGACY_VERSION:
                 raise ValueError('public legacy version differs; ingress must be fenced')
             version = payload['version']
         results.append({'path': path, 'status': int(code), 'version': version, 'body_sha256': handoff.digest(body)})
@@ -185,7 +187,7 @@ def expose(root, value, armed, journal, run, admit, public=public_acceptance):
     if named_containers(run, value['instance']):
         raise ValueError('original proxy name is not free after retention')
     checks.forward_state(root, value, armed, baseline['forward_state'])
-    checks.database(root, value, armed, run)
+    checks.database(value, armed, run)
     app_acceptance(value, run)
     serving_dns(run, value['instance'], value['app_id'])
     ingress_available(run, record['profile']['ports'])
@@ -196,7 +198,7 @@ def expose(root, value, armed, journal, run, admit, public=public_acceptance):
         raise ValueError('created recovery proxy identity is UNKNOWN')
     verify_recovered(run, identifier, plan, value['instance'], journal.operation, False, caddyfile, admit)
     journal.write('proxy-created', {'id': identifier})
-    checks.database(root, value, armed, run)
+    checks.database(value, armed, run)
     exact_container(run, value['app_id'], armed['profiles']['app'], value['instance'], True, boot)
     app_acceptance(value, run)
     serving_dns(run, value['instance'], value['app_id'])
@@ -208,13 +210,13 @@ def expose(root, value, armed, journal, run, admit, public=public_acceptance):
         checks.serving_config(identifier, receipt_path, record, proxy_boot)
         results = public(baseline['forward_state']['pending']['control']['public_origin'])
         checks.forward_state(root, value, armed, baseline['forward_state'])
-        checks.database(root, value, armed, run)
+        checks.database(value, armed, run)
         exact_container(run, value['app_id'], armed['profiles']['app'], value['instance'], True, boot)
         app_acceptance(value, run)
         serving_dns(run, value['instance'], value['app_id'])
         verify_recovered(run, identifier, plan, value['instance'], journal.operation, True, caddyfile, admit)
         checks.serving_config(identifier, receipt_path, record, proxy_boot)
-        journal.write('RECOVERED', {'version': '2.1.0-beta.2', 'app_id': value['app_id'], 'app_boot': boot,
+        journal.write('RECOVERED', {'version': LEGACY_VERSION, 'app_id': value['app_id'], 'app_boot': boot,
                                    'proxy_id': identifier, 'proxy_boot': proxy_boot, 'retained_id': baseline['current_id'],
                                    'retained_name': retained, 'public': results, 'forward_state_unchanged': True})
     except BaseException:
