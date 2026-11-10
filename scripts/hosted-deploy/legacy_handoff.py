@@ -10,7 +10,7 @@ import sys
 
 from caddy_active_config import system_docker, validate_system
 from caddy_clone_action import acquire_lock, validate_request
-from caddy_recovery_receipt import MAX_RECORD, private_directory, read_private, stable, write_exclusive
+from caddy_recovery_receipt import MAX_RECORD, private_directory, read_private, stable, write_exclusive, VOLUME
 from caddy_release_action import confirm_denials, pending_control, verified_session
 from caddy_volume_guard import overlapping
 from caddy_volume_migration import inspect_one, running_containers
@@ -22,6 +22,7 @@ LEGACY_CONFIG = 'sha256:2ba0fe4a3d0192990d2cf6ad0d4a4dc0f8d60022bcc0ec8278edc6d0
 MISSING_SNAPSHOT = 'snapshot: not taken (no credential)'
 BOUNDARY = 'persisted checkpoint; in-memory settlement not established'
 STATE = '.legacy-handoff'
+MANIFEST_FILE = 'manifest.json'
 IMAGE_FIELDS = ('Cmd', 'Entrypoint', 'User', 'WorkingDir', 'Env', 'Labels', 'Healthcheck', 'Volumes', 'ExposedPorts', 'StopSignal', 'StopTimeout')
 IMAGE_CONFIG_SHA = '12c309e424a81fb8d685e591f1c0222b21e0eee9e88b4cd543b75a1391cabc0a'
 IMAGE_LAYERS_SHA = 'c2713c4852d40ce6fa4c563fafc280c740baaec2e9ebbcba83c5ff16a0bc8b72'
@@ -103,7 +104,7 @@ def snapshot(value):
     if value == MISSING_SNAPSHOT:
         return
     if (not isinstance(value, dict) or set(value) != {'id', 'status'} or value['status'] != 'taken'
-            or not isinstance(value['id'], str) or not re.fullmatch(r'[1-9][0-9]*', value['id'])):
+            or not isinstance(value['id'], str) or not re.fullmatch(r'[1-9]\d*', value['id'], flags=re.ASCII)):
         raise ValueError('snapshot ID or explicit no-credential record required')
 
 
@@ -125,7 +126,7 @@ def validate_checkpoint_header(request):
 
 
 def validate_vm(vm, request, artifacts, directory, manifest):
-    expected = {**artifacts, 'manifest.json': file_hash(directory, 'manifest.json')}
+    expected = {**artifacts, MANIFEST_FILE: file_hash(directory, MANIFEST_FILE)}
     if (type(vm.get('schema')) is not int or vm['schema'] != 1 or vm.get('kind') != 'vm-offhost-copy'
             or vm.get('source_manifest_sha256') != request['manifest_sha256'] or vm.get('artifacts') != expected
             or not isinstance(vm.get('machine_id_sha256'), str) or not SHA.fullmatch(vm['machine_id_sha256'])
@@ -134,7 +135,19 @@ def validate_vm(vm, request, artifacts, directory, manifest):
         raise ValueError('off-server copy receipt differs')
 
 
-def validate_proof(proof, request, directory):
+def validate_restore_target(proof, database, app_id):
+    if not isinstance(database, dict) or not isinstance(database.get('mounts'), list):
+        raise ValueError('restore source storage identity unavailable')
+    identifier, volume = proof.get('container_id'), proof.get('volume')
+    names = [mount.get('Name') for mount in database['mounts'] if isinstance(mount, dict)]
+    if (proof.get('network') != 'none' or not isinstance(identifier, str) or not SHA.fullmatch(identifier)
+            or identifier in (database.get('id'), app_id) or not isinstance(volume, str)
+            or not VOLUME.fullmatch(volume) or volume in names):
+        raise ValueError('restore proof must describe a separate isolated disposable target')
+
+
+def validate_proof(proof, request, directory, manifest):
+    validate_restore_target(proof, manifest.get('source_database'), request['app']['id'])
     source_raw = read_private(directory, 'observation.jsonl', MAX_RECORD)
     restored_raw = read_private(directory, 'restored-observation.jsonl', MAX_RECORD)
     source, restored = observation(source_raw), observation(restored_raw)
@@ -156,7 +169,7 @@ def checkpoint(path):
     try:
         request, request_sha = read_json(directory, 'checkpoint.json')
         validate_checkpoint_header(request)
-        manifest, _ = read_json(directory, 'manifest.json', request['manifest_sha256'])
+        manifest, _ = read_json(directory, MANIFEST_FILE, request['manifest_sha256'])
         vm, _ = read_json(directory, 'vm-receipt.json', request['vm_receipt_sha256'])
         proof, _ = read_json(directory, 'restore-proof.json', request['restore_proof_sha256'])
         if (manifest.get('kind') != 'exported-snapshot-database-backup' or type(manifest.get('schema')) is not int or manifest['schema'] != 1
@@ -173,7 +186,7 @@ def checkpoint(path):
         if artifacts['database.dump']['sha256'] != request['dump_sha256']:
             raise ValueError('dump identity differs')
         validate_vm(vm, request, artifacts, directory, manifest)
-        validate_proof(proof, request, directory)
+        validate_proof(proof, request, directory, manifest)
         return request, request_sha, manifest
     finally:
         os.close(directory)
@@ -198,7 +211,7 @@ def validate_app_config(app, instance):
             or labels.get('org.dollhousemcp.memory-upgrade-drain') == 'v2'
             or config.get('StopSignal') not in (None, '', 'SIGTERM', 'TERM', '15')
             or host.get('Privileged') is not False or host.get('NetworkMode') != instance + '_default'
-            or any(value for value in (host.get('PortBindings') or {}).values())
+            or any((host.get('PortBindings') or {}).values())
             or host.get('PidMode') not in (None, '', 'private') or host.get('UTSMode') not in (None, '', 'private')):
         raise ValueError('unsupported legacy app configuration')
     return config, host

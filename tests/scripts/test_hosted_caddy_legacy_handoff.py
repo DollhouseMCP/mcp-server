@@ -72,7 +72,7 @@ class HandoffTests(unittest.TestCase):
               'machine_id_sha256': '9' * 64, 'destination': '/fixture-backup', 'artifacts': {**artifacts, 'manifest.json': manifest_meta}}
         vm_meta = self.write('vm-receipt.json', vm)
         restored_meta = self.write('restored-observation.jsonl', restored_raw)
-        proof = {'schema': 1, 'kind': 'database-restore-proof', 'status': 'passed', 'row_counts_equal': True, 'migration_hashes_equal': True,
+        proof = {'container_id': '4' * 64, 'volume': 'disposable-pgdata', 'network': 'none', 'schema': 1, 'kind': 'database-restore-proof', 'status': 'passed', 'row_counts_equal': True, 'migration_hashes_equal': True,
                  'source_host': HOST, 'source_dump_sha256': artifacts['database.dump']['sha256'], 'source_manifest_sha256': manifest_meta['sha256'],
                  'vm_receipt_sha256': vm_meta['sha256'], 'source_observation_sha256': artifacts['observation.jsonl']['sha256'],
                  'restored_observation_sha256': restored_meta['sha256'], 'ledger_count': 62, 'table_count': 1}
@@ -193,6 +193,32 @@ class HandoffTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.stop()
         self.other = []; self.app['Mounts'][0]['Destination'] = '/wrong'
         with self.assertRaises(ValueError): self.stop()
+
+    def test_contradictory_restore_target_is_refused_before_signal(self):
+        for field, value in [('network', 'host'), ('network', 'bridge'), ('network', None),
+                             ('container_id', PG), ('container_id', APP), ('container_id', 'bad'),
+                             ('volume', None), ('volume', '/source/pgdata')]:
+            with self.subTest(field=field, value=value):
+                self.rebuild()
+                proof = json.loads((self.check / 'restore-proof.json').read_text())
+                proof[field] = value
+                self.request['restore_proof_sha256'] = self.write('restore-proof.json', proof)['sha256']
+                self.write('checkpoint.json', self.request)
+                with self.assertRaisesRegex(ValueError, 'disposable target'): self.stop()
+        self.assertFalse(any(c[1] == 'stop' for c in self.calls))
+        proof['network'] = 'none'; proof['container_id'] = '4' * 64; proof['volume'] = 'source-data'
+        with self.assertRaises(ValueError):
+            handoff.validate_restore_target(proof, {'id': PG, 'mounts': [{'Name': 'source-data'}]}, APP)
+
+    def test_changed_boot_during_stop_leaves_only_issued(self):
+        self.mutate_boot = True
+        with self.assertRaises(ValueError): self.stop()
+        self.assertFalse((self.root / handoff.STATE / 'receipt.json').exists())
+
+    def test_changed_qualified_image_fields_refuses(self):
+        self.image['RootFS']['Layers'] = ['sha256:' + '0' * 64]
+        with self.assertRaises(ValueError): self.stop()
+        self.assertFalse(any(c[1] == 'stop' for c in self.calls))
 
     def test_post_stop_revival_or_proof_drift_refuses_forward_verification(self):
         self.stop()
