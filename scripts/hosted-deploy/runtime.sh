@@ -426,8 +426,33 @@ bootstrap_admin() {
 gracefully_stop_existing_app() {
   local immutable_id
   immutable_id="$(existing_app_id)" || die "cannot resolve existing application"
-  [[ -n "${immutable_id}" ]] || return 0
-  bash "${HOSTED_DEPLOY_SCRIPT_DIR}/hosted-graceful-stop.sh" "${immutable_id}" 60
+  if [[ "${ACTION:-}" == legacy-offline-update ]]; then
+    [[ -n "${immutable_id}" ]] || die "legacy handoff requires the original app"
+    legacy_handoff stop
+  else
+    [[ -n "${immutable_id}" ]] || return 0
+    bash "${HOSTED_DEPLOY_SCRIPT_DIR}/hosted-graceful-stop.sh" "${immutable_id}" 60
+  fi
+}
+
+# The explicit legacy action alone may consume a checkpoint, never an env bypass.
+legacy_handoff() {
+  local action="$1" app_id postgres_id
+  app_id="$(existing_app_id)" || die "legacy app selection failed"
+  postgres_id="$(running_service_id postgres)" || die "legacy database selection failed"
+  [[ -n "${app_id}" && -n "${postgres_id}" ]] || die "legacy services must already exist"
+  HOSTED_LEGACY_ROOT="${DEPLOY_DIR}" HOSTED_LEGACY_INSTANCE="${INSTANCE_NAME}" \
+    HOSTED_LEGACY_DATA="${CADDY_DATA_VOLUME}" HOSTED_LEGACY_CONFIG="${CADDY_CONFIG_VOLUME}" \
+    HOSTED_LEGACY_TOKEN="${CADDY_TRANSITION_TOKEN:-}" HOSTED_LEGACY_CHECKPOINT="${LEGACY_CHECKPOINT:-}" \
+    HOSTED_LEGACY_APP="${app_id}" HOSTED_LEGACY_POSTGRES="${postgres_id}" \
+    python3 -c 'import json,os; e=os.environ; print(json.dumps(dict(zip(("deploy_dir","instance","data_volume","config_volume","token","checkpoint_dir","app_id","postgres_id"),(e["HOSTED_LEGACY_"+k] for k in ("ROOT","INSTANCE","DATA","CONFIG","TOKEN","CHECKPOINT","APP","POSTGRES"))))))' | \
+    HOSTED_CADDY_LOCK_FD="${HOSTED_CADDY_LOCK_FD}" python3 "${HOSTED_DEPLOY_LIB_DIR}/legacy_handoff.py" "${action}" >/dev/null || \
+    die "legacy handoff refused; keep the fence closed and inspect checkpoint/recovery receipts"
+}
+
+verify_legacy_handoff() {
+  if [[ "${ACTION:-}" == legacy-offline-update ]]; then legacy_handoff verify; fi
+  return 0
 }
 
 start_or_update() {
@@ -444,6 +469,10 @@ start_or_update() {
   fi
   acquire_caddy_deployment_lock
   transition_status="$(caddy_transition status)" || die "Caddy transition state is unavailable"
+  if [[ "${ACTION:-}" == legacy-offline-update ]]; then
+    [[ "${IMAGE_MODE}" == registry && -d "${SERVER_DIR}" ]] || die "legacy handoff requires an existing registry-mode deployment"
+    legacy_handoff preflight
+  fi
   if [[ -d "${SERVER_DIR}" ]]; then
     if [[ "${transition_status}" == fresh ]]; then
       CADDY_TRANSITION_TOKEN="$(caddy_transition retry-fresh)" || die "pending first install cannot be retried safely"
@@ -493,9 +522,12 @@ start_or_update() {
   gracefully_stop_existing_app
   # Schema and identity writes require the successful drain fence. Failure here
   # leaves the app stopped; old-image restart needs a compatible recovery plan.
+  verify_legacy_handoff
   run_database_migrations
+  verify_legacy_handoff
   run_bootstrap_admin optional
   recheck_registry_images
+  verify_legacy_handoff
   compose up -d --pull never --no-build --no-deps --force-recreate dollhousemcp
   return 0
 }

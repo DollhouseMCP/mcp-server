@@ -37,6 +37,15 @@ if [[ "${1:-}" == --case ]]; then
   validate_caddy_selection() { :; }
   validate_registry_selection() { :; }
   acquire_caddy_deployment_lock() { :; }
+  legacy_handoff() {
+    local action="$1"
+    printf 'legacy-%s\n' "${action}" >> "${EVENTS}"
+    [[ "${MODE}" != "registry-legacy-${action}-refusal" ]] || return 1
+    if [[ "${action}" == stop ]]; then
+      printf 'graceful-stop\n' >> "${EVENTS}"
+      touch "${DEPLOY_DIR}/stopped"
+    fi
+  }
   IMAGE_MODE=build
   if [[ "${MODE}" == registry-* ]]; then IMAGE_MODE=registry; fi
   RUNTIME_IMAGE=fixture-runtime MIGRATION_IMAGE=fixture-migration
@@ -195,7 +204,7 @@ printf '{"id":"%s","running":false,"exitCode":0,"oomKilled":false,"startedAt":"2
 DOCKER
     chmod 0755 "${DEPLOY_DIR}/fake-bin/docker"
     export PATH="${DEPLOY_DIR}/fake-bin:${PATH}"
-  else
+  elif [[ "${ACTION}" != legacy-offline-update ]]; then
     gracefully_stop_existing_app() {
       printf 'graceful-stop\n' >> "${EVENTS}"
       [[ "${MODE}" != drain-refusal ]] || return 1
@@ -277,6 +286,13 @@ check_fixture() {
     fi
     if [[ "${action}" == rollback ]]; then expected_revision='rollback:server.prev-20000101'
     else expected_revision=new-revision; assert_order "${fixture}/events" graceful-stop migration
+    fi
+    if [[ "${action}" == legacy-offline-update ]]; then
+      assert_order "${fixture}/events" legacy-preflight transition-pending
+      assert_order "${fixture}/events" registry-prepare legacy-stop
+      assert_order "${fixture}/events" release-probe-fence legacy-stop
+      assert_order "${fixture}/events" legacy-stop migration
+      [[ "$(grep -c '^legacy-verify$' "${fixture}/events")" == 3 ]] || fail "legacy forward phases skipped stopped/fence verification"
     fi
     [[ "$(cat "${fixture}/DEPLOYED_REVISION")" == "${expected_revision}" ]] || fail "successful marker missing"
   else
@@ -418,4 +434,21 @@ for action in render migrate bootstrap-admin; do
   fi
   [[ ! -e "${root}/render-reached" ]] || fail "unknown stop reached ${action} rendering"
   printf 'preparation-order PASS unknown-stop/%s\n' "${action}"
+done
+
+# The explicit one-time action alone uses the receipt bridge; ordinary update
+# above still requires the unchanged v2 drain and rejects a stopped legacy app.
+check_fixture legacy-offline-update registry-success app
+for phase in preflight stop verify; do
+  fixture="$(mktemp -d "${TMP_ROOT}/legacy-${phase}.XXXXXX")"
+  mkdir -p "${fixture}/server" "${fixture}/source"
+  printf 'current\n' > "${fixture}/server/version"
+  printf 'SELECT 1;\n' > "${fixture}/grants.sql"
+  printf 'old-revision\n' > "${fixture}/DEPLOYED_REVISION"
+  if bash "$0" --case legacy-offline-update "registry-legacy-${phase}-refusal" "${fixture}" app > "${fixture}/stdout" 2> "${fixture}/stderr"; then
+    fail "legacy ${phase} refusal advanced"
+  fi
+  if grep -Eq '^(migration|bootstrap|replacement)$' "${fixture}/events"; then fail "legacy ${phase} refusal reached forward writes"; fi
+  [[ "$(cat "${fixture}/DEPLOYED_REVISION")" == old-revision ]] || fail "legacy failure changed revision"
+  printf 'preparation-order PASS legacy-%s-refusal\n' "${phase}"
 done

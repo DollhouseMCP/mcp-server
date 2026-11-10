@@ -26,7 +26,7 @@ run_action() {
       finish_caddy_transition
       write_deployed_markers
       ;;
-    update)
+    legacy-offline-update|update)
       start_or_update app
       caddy_release accept
       caddy_release release
