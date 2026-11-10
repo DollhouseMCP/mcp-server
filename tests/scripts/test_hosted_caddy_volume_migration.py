@@ -43,6 +43,8 @@ class VolumeMigrationTests(unittest.TestCase):
         self.create_error = None
         self.stop_error = False
         self.mode = None
+        self.helper_names = self.names
+        self.preflight_error = None
 
     def run_docker(self, argv, timeout, limit):
         self.calls.append(argv)
@@ -61,7 +63,7 @@ class VolumeMigrationTests(unittest.TestCase):
                     {'Type': 'volume', 'Name': 'site_data', 'RW': True}]}]
             else:
                 mounts = [{'Type': 'volume', 'Name': name, 'Destination': target, 'RW': index >= 2 and not self.mode}
-                          for index, (name, target) in enumerate(zip(self.names, ('/source/data', '/source/config', '/target/data', '/target/config')))]
+                          for index, (name, target) in enumerate(zip(self.helper_names, ('/source/data', '/source/config', '/target/data', '/target/config')))]
                 mounts.append({'Type': 'bind', 'Source': str(self.helper), 'Destination': '/caddy-volume-copy.mjs', 'RW': False})
                 value = [{'Id': self.helper_id, 'Name': '/dollhouse-caddy-copy-' + self.token,
                           'Image': self.helper_image_id, 'State': self.helper_state,
@@ -83,10 +85,13 @@ class VolumeMigrationTests(unittest.TestCase):
             if self.create_error:
                 raise self.create_error
             self.token = argv[argv.index('--name') + 1].removeprefix('dollhouse-caddy-copy-')
+            self.helper_names = [item.split('src=', 1)[1].split(',', 1)[0] for item in argv if item.startswith('type=volume,src=')]
             self.mode = next((value for value in ('--verify', '--verify-source', '--verify-fresh') if value in argv), None)
             return (self.helper_id + '\n').encode()
         elif argv[1:2] == ['start']:
-            if self.start_error:
+            if self.preflight_error and len(self.helper_names) == 2:
+                raise self.preflight_error
+            if self.start_error and len(self.helper_names) == 4:
                 self.helper_state = {'Running': True, 'ExitCode': 0}
                 raise self.start_error
             if self.mode == '--verify-fresh':
@@ -126,6 +131,27 @@ class VolumeMigrationTests(unittest.TestCase):
         self.assertEqual(sum(',readonly' in item for item in verify_command), 5)
         migration.verify_original_volumes(self.run_docker, result, self.helper)
         self.assertIn('--verify-source', [call for call in self.calls if call[1] == 'create'][-1])
+
+    def test_source_only_args_refuse_other_modes_or_extra_mounts(self):
+        names = self.names[:2]
+        for mode in (None, '--verify', '--verify-fresh'):
+            with self.subTest(mode=mode), self.assertRaises(ValueError):
+                migration.helper_args(names, self.helper, self.token, mode)
+        args = migration.helper_args(names, self.helper, self.token, '--verify-source')
+        mounts = [item for item in args if item.startswith('type=')]
+        self.assertEqual(len(mounts), 3)
+        self.assertTrue(all(',readonly' in item for item in mounts))
+        self.assertFalse(any('/target/' in item for item in mounts))
+        with self.assertRaisesRegex(ValueError, 'mounts changed'):
+            migration.validate_helper_mounts([], names, self.helper, '--verify-source')
+
+    def test_legacy_raw_modes_receipt_is_bounded_and_exact(self):
+        result = self.migrate()['copy']
+        valid = dict(result, legacy_directory_modes={'data/caddy': 0o1777, 'config/caddy': 0o1777})
+        self.assertEqual(migration.validate_copy_receipt(valid), valid)
+        for value in ({}, {'data/caddy': 0o777}, {'data/nested/caddy': 0o1777}, {'data/caddy': True}):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'legacy'):
+                migration.validate_copy_receipt(dict(result, legacy_directory_modes=value))
 
     def test_helper_capability_spellings_and_malformed_refusal(self):
         host = {'Privileged': False, 'AutoRemove': False, 'RestartPolicy': {'Name': 'no'},

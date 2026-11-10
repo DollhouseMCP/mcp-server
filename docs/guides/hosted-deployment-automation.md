@@ -522,6 +522,24 @@ DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME='new-caddy-config' \
   npm run hosted:deploy -- prepare-caddy-offline
 ```
 
+Before stopping ingress, preparation runs that same copier's full source
+validation in a source-only, read-only helper. It mounts only the two original
+volumes and its script; no destination volume is mounted or created. Source
+refusal or unconfirmed helper cleanup leaves the original proxy serving. Live
+content can change after this preliminary check, so the later stopped clone
+and verification still take their own authoritative inventory.
+
+Only root-owned (`0:0`), immediate `data/caddy` and `config/caddy` source
+directories with exact mode `01777` receive legacy compatibility treatment.
+Their originals stay unchanged; their destination copies become `0750`, owned
+by `1001:1001`. The receipt retains the raw source modes and inventory hash.
+Other unsafe paths, owners, modes, links and file types remain refused.
+Bounded Docker failures emit exit/UNKNOWN status, stderr, elapsed time and the
+time budget before owned helper cleanup; keep the operator log private.
+After any failed attempt, retain its partial volumes and receipts and select
+new, absent destination names for a separately approved window. Never reuse
+partial destinations or clear an unknown-outcome fence to retry.
+
 The clone uses the separately approved, locally available pinned Node helper,
 checks the full tree and certificate hashes, and writes a protected receipt
 binding the proxy, source bundle, config, and volume identities. No other

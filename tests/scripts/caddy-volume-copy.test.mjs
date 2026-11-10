@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -87,5 +87,75 @@ test('refuses directories without owner read, write and search permission', () =
       assert.throws(()=>copyVolumes(f.source,f.target,process.getuid(),process.getgid()),/directory/);
       fs.chmodSync(dir,0o700);
     } finally { fs.rmSync(f.root,{recursive:true,force:true}); }
+  }
+});
+
+// Synthetic ownership for portable unit tests; rootful native CI creates the
+// actual root-owned legacy layout and runs the unmocked helper on both arches.
+function legacyFixture() {
+  const f = fixture();
+  const sticky = ['sd', 'sc'].map(key => path.join(f.dirs[key], 'caddy'));
+  for (const dir of sticky) {
+    fs.mkdirSync(dir, { mode: 0o700 });
+    fs.chmodSync(dir, 0o1777);
+    fs.writeFileSync(path.join(dir, 'site.crt'), 'disposable certificate', { mode: 0o600 });
+  }
+  const lstat = fs.lstatSync;
+  const patch = mock.method(fs, 'lstatSync', (location, ...args) => {
+    const st = lstat(location, ...args);
+    if (sticky.includes(location)) Object.defineProperties(st, { uid: { value: 0 }, gid: { value: 0 } });
+    return st;
+  });
+  return { ...f, sticky, restore: () => patch.mock.restore() };
+}
+
+test('legacy exact sticky dirs retain raw evidence and copy only to hardened modes', () => {
+  const f = legacyFixture();
+  try {
+    const source = inventorySource(f.source);
+    assert.deepEqual(source.legacy_directory_modes, { 'data/caddy': 0o1777, 'config/caddy': 0o1777 });
+    const copied = copyVolumes(f.source, f.target, process.getuid(), process.getgid());
+    assert.deepEqual(copied, source);
+    assert.deepEqual(verifyVolumes(f.source, f.target, process.getuid(), process.getgid()), source);
+    for (const key of ['sd', 'sc']) assert.equal(fs.statSync(path.join(f.dirs[key], 'caddy')).mode & 0o7777, 0o1777);
+    for (const key of ['td', 'tc']) assert.equal(fs.statSync(path.join(f.dirs[key], 'caddy')).mode & 0o7777, 0o750);
+    fs.chmodSync(path.join(f.dirs.td, 'caddy'), 0o1777);
+    assert.throws(() => verifyVolumes(f.source, f.target, process.getuid(), process.getgid()), /directory/);
+  } finally { f.restore(); fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test('legacy compatibility refuses every other unsafe mode and nested sticky directory', () => {
+  for (const mode of [0o777, 0o1775, 0o3777, 0o1770, 0o775]) {
+    const f = legacyFixture();
+    try {
+      fs.chmodSync(f.sticky[0], mode);
+      assert.throws(() => inventorySource(f.source), /directory/);
+      assert.throws(() => copyVolumes(f.source, f.target, process.getuid(), process.getgid()), /directory/);
+    } finally { f.restore(); fs.rmSync(f.root, { recursive: true, force: true }); }
+  }
+  const f = legacyFixture();
+  try {
+    fs.mkdirSync(path.join(f.sticky[0], 'nested'), { mode: 0o700 });
+    fs.chmodSync(path.join(f.sticky[0], 'nested'), 0o1777);
+    assert.throws(() => inventorySource(f.source), /directory/);
+  } finally { f.restore(); fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test('sticky exception rejects non-root ownership, volume roots and alternate paths', () => {
+  for (const location of ['owner', 'group', 'root', 'other']) {
+    const f = fixture();
+    const dir = location === 'root' ? f.dirs.sd : path.join(f.dirs.sd, location === 'other' ? 'other' : 'caddy');
+    if (location !== 'root') fs.mkdirSync(dir, { mode: 0o700 });
+    fs.chmodSync(dir, 0o1777);
+    const lstat = fs.lstatSync;
+    const patch = mock.method(fs, 'lstatSync', (file, ...args) => {
+      const st = lstat(file, ...args);
+      if (file === dir) Object.defineProperties(st, {
+        uid: { value: location === 'owner' ? 1 : 0 }, gid: { value: location === 'group' ? 1 : 0 },
+      });
+      return st;
+    });
+    try { assert.throws(() => inventorySource(f.source), /directory/); }
+    finally { patch.mock.restore(); fs.rmSync(f.root, { recursive: true, force: true }); }
   }
 });
