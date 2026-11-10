@@ -502,17 +502,47 @@ then uses `--pull never` for the admitted proxy. A registry digest alone is
 not qualification of an arbitrary image. A first install creates only new,
 transaction-labeled volumes and checks the image's UID 1001 data/config layout;
 existing names require the matching protected creation receipt.
+Mutating `render`, migration, and bootstrap preparation also acquire the
+deployment lock before writing files; dry-run does not acquire it or mutate files.
 
-For a legacy proxy or a changed hardened proxy, stop the selected Caddy
-container normally and run `clone-caddy-volumes` with two **new**, explicit
-destination volume names. The old data and config volumes remain untouched.
+For a legacy proxy or a changed hardened proxy, select two **new**, explicit
+destination volume names and run `prepare-caddy-offline` in an approved offline
+window using the host-local helper; the remote wrapper does not accept this
+action. It checks the original running proxy, image, source, volume identities,
+other writers and selected replacement before issuing SIGTERM with an infinite
+daemon grace period. It then verifies the exact clean stop before cloning.
+The Docker client has a bounded wait: a timeout means the stop outcome is
+**unknown**, not that ingress is closed. See the [Docker stop reference](https://docs.docker.com/reference/cli/docker/container/stop/).
+The old proxy container, source, and data and config volumes remain in place.
+
+```bash
+DOLLHOUSE_HOSTED_CADDY_IMAGE='registry.example/caddy@sha256:<qualified-digest>' \
+DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME='new-caddy-data' \
+DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME='new-caddy-config' \
+  npm run hosted:deploy -- prepare-caddy-offline
+```
+
 The clone uses the separately approved, locally available pinned Node helper,
 checks the full tree and certificate hashes, and writes a protected receipt
 binding the proxy, source bundle, config, and volume identities. No other
 container or host process may write either source or destination during this
 procedure. The deployment lock coordinates this helper only; Docker does not
-provide an atomic lease against other administrators. Keep those writers
-stopped through the update, which rechecks the clone before use. Unsupported
+provide an atomic lease against other administrators. A protected stop-issued
+fence blocks subsequent deployment operations if the stop times out or the
+process crashes; it is not automatically cleared from a later stopped state.
+An operator must reconcile that uncertain operation before further mutation.
+Partial destination volumes remain for inspection and must not be reused.
+
+Successful preparation deliberately leaves ingress closed; it does not run
+the app handoff or an update. The receipt reserves a future previous-bundle
+path, but the bundle is not staged yet, so `recover-caddy-proxy` is not ready
+on that receipt alone. Complete the separately qualified legacy handoff first;
+the later guarded update stages that bundle, rechecks the clone, starts and
+verifies the normal serving profile, and completes its transition. Select the
+same qualified image and destination volume names for that update; preparation
+does not persist these inputs. Subsequent
+ordinary updates preserve an unchanged qualified proxy without another offline
+clone. Keep other writers stopped through the update. Unsupported
 container profiles, ambiguous receipts, unexpected files, and changed source
 or volume identities refuse the operation. Actual host and Docker-profile
 qualification remains a separate predeployment gate.

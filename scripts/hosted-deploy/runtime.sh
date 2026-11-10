@@ -198,6 +198,14 @@ clone_caddy_volumes() {
   caddy_request_json | python3 "${HOSTED_DEPLOY_LIB_DIR}/caddy_clone_action.py"
 }
 
+prepare_caddy_offline() {
+  ensure_runtime_prerequisites
+  validate_persisted_caddy_fields
+  resolve_mode_defaults
+  validate_caddy_selection "${CADDY_IMAGE}" "${CADDY_DATA_VOLUME}" "${CADDY_CONFIG_VOLUME}"
+  caddy_fresh_request_json | python3 "${HOSTED_DEPLOY_LIB_DIR}/caddy_offline_prepare.py"
+}
+
 acquire_caddy_deployment_lock() {
   need_command flock
   python3 -c 'import os, stat, sys; p=sys.argv[1]; s=os.lstat(p); sys.exit(0 if stat.S_ISDIR(s.st_mode) and s.st_uid == os.geteuid() and not s.st_mode & 0o022 and os.path.realpath(p) == p else 1)' "${DEPLOY_DIR}" || \
@@ -212,6 +220,8 @@ acquire_caddy_deployment_lock() {
   python3 -c 'import os, stat, sys; f=os.fstat(int(sys.argv[1])); p=os.lstat(sys.argv[2]); sys.exit(0 if stat.S_ISREG(f.st_mode) and f.st_uid == os.geteuid() and f.st_nlink == 1 and not f.st_mode & 0o077 and (f.st_dev, f.st_ino) == (p.st_dev, p.st_ino) else 1)' \
     "${HOSTED_CADDY_LOCK_FD}" "${DEPLOY_DIR}/.caddy-deploy.lock" || die "deployment lock is unsafe"
   flock --nonblock "${HOSTED_CADDY_LOCK_FD}" || die "another Caddy deployment operation holds the lock"
+  [[ ! -e "${DEPLOY_DIR}/.caddy-offline-stop-issued" && ! -L "${DEPLOY_DIR}/.caddy-offline-stop-issued" ]] || \
+    die "an earlier Caddy stop has an unknown outcome; operator reconciliation is required"
 }
 
 verify_prepared_caddy() {
@@ -341,6 +351,7 @@ restart_caddy_proxy() {
 prepare_existing_stack() {
   ensure_runtime_prerequisites
   ensure_server_source
+  acquire_caddy_deployment_lock
   resolve_mode_defaults
   if [[ "${IMAGE_MODE}" == build ]]; then require_slim_maintenance_source; fi
   render_files

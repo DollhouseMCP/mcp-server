@@ -40,6 +40,7 @@ let normalStop;
 let processProfile;
 let negativeWithoutCapability;
 let legacyVolumeRefusal;
+let nativeCopy;
 let streamOutcomes;
 let upstreamDiagnosticId;
 let proxyDiagnosticId;
@@ -306,9 +307,57 @@ try {
   assert.equal(createHash('sha256').update(fs.readFileSync(caFile)).digest('hex'), caSha);
   assert.equal((await waitForReady(request, { h2:true, path:'/after-restart' })).status, 200);
   observations.push('same private volumes preserve internal PKI across normal restart');
+  if (!connection) {
+    // Disposable rootful-CI copier witness only; it does not qualify a live
+    // legacy profile or manufacture an operation receipt.
+    engine(['stop', '--signal', 'SIGTERM', '--time', '-1', proxy]);
+    const stoppedForCopy = inspect(proxy).State;
+    assert.equal(stoppedForCopy.Running, false);
+    assert.equal(stoppedForCopy.ExitCode, 0);
+    assert.equal(stoppedForCopy.OOMKilled, false);
+    const seed = container(['--network', 'none', '--read-only', '--user', '0:0',
+      '--cap-drop', 'ALL', '--cap-add', 'CHOWN', '--cap-add', 'FOWNER', '--cap-add', 'DAC_OVERRIDE',
+      '--security-opt', 'no-new-privileges:true',
+      '--mount', `type=volume,source=${ownedVolumes[0]},target=/data,volume-nocopy`,
+      '--mount', `type=volume,source=${ownedVolumes[1]},target=/config,volume-nocopy`,
+      '--entrypoint', 'node', fixtureImage, '-e',
+      'const f=require("node:fs"),p=require("node:path");function own(x){const s=f.lstatSync(x);if(s.isSymbolicLink())throw Error("unexpected symlink");if(s.isDirectory())for(const n of f.readdirSync(x))own(p.join(x,n));else if(!s.isFile())throw Error("unexpected type");f.chownSync(x,0,0)}own("/data");own("/config");']);
+    engine(['start', '--attach', seed]);
+    assert.equal(inspect(seed).State.ExitCode, 0);
+    const copiedData = volume('copy-data');
+    const copiedConfig = volume('copy-config');
+    const copyScript = path.join(root, 'scripts/ci/caddy-volume-copy-native.py');
+    nativeCopy = JSON.parse(execFileSync('python3', [copyScript, ownedVolumes[0], ownedVolumes[1], copiedData, copiedConfig],
+      {encoding:'utf8', timeout:240_000, maxBuffer:65536, env:{...process.env, PYTHONDONTWRITEBYTECODE:'1'}}));
+    nativeCopy.fixtureSha256 = createHash('sha256').update(fs.readFileSync(copyScript)).digest('hex');
+    nativeCopy.copyHelperSha256 = createHash('sha256').update(fs.readFileSync(path.join(root, 'scripts/hosted-deploy/caddy_volume_copy.mjs'))).digest('hex');
+    assert.equal(nativeCopy.sourceUnchanged, true);
+    assert.equal(nativeCopy.copiedVerified, true);
+    assert.equal(nativeCopy.nonemptyReuseRefused, true);
+    assert.equal(nativeCopy.helperImageId, inspect(fixtureImage).Id);
+    assert.ok(nativeCopy.inventory.certificate_sha256.includes(caSha));
+    const copiedProxy = container(['--name', `${prefix}-copied-proxy`, '--network', network,
+      '--network-alias', 'proxy', '--mount', `type=volume,source=${diagnosticVolume},target=/qualification,readonly`,
+      '--mount', `type=volume,source=${copiedData},target=/data,volume-nocopy`,
+      '--mount', `type=volume,source=${copiedConfig},target=/config,volume-nocopy`,
+      '--volume', `${ownedVolumes[2]}:/etc/caddy:ro`, '--read-only', '--cap-drop', 'ALL',
+      '--cap-add', 'NET_BIND_SERVICE', '--security-opt', 'no-new-privileges',
+      '--sysctl', 'net.ipv4.ip_unprivileged_port_start=1024',
+      '--tmpfs', '/tmp:rw,noexec,nosuid,nodev,size=32m', image]);
+    engine(['start', copiedProxy]);
+    assert.equal((await waitForReady(request, {h2:true, path:'/after-copy'})).status, 200);
+    engine(['cp', `${copiedProxy}:/data/caddy/pki/authorities/local/root.crt`, caFile]);
+    assert.equal(createHash('sha256').update(fs.readFileSync(caFile)).digest('hex'), caSha);
+    const copiedProfile = JSON.parse(engine(['exec', copiedProxy, '/qualification/inspect-runtime']));
+    for (const directory of ['/data','/data/caddy','/config','/config/caddy']) {
+      assert.equal(copiedProfile.paths[directory].UID, 1001);
+      assert.equal(copiedProfile.paths[directory].GID, 1001);
+    }
+    observations.push('owned rootful fixture copy preserves PKI and UID 1001 access; nonempty reuse refused');
+  }
   console.log(JSON.stringify({ imageId:imageInfo.Id, architecture:imageInfo.Architecture,
     nativeDaemonArchitecture:native, rendererSha256:rendererSha, harnessSha256:harnessSha, guardSha256:guardSha, clientSha256:clientSha, upstreamSha256:upstreamSha, upstreamSourceSha256:upstreamSourceSha, configSources, observations,
-    quietStreams:quietStreams.map(({body,...metrics})=>metrics), streamOutcomes, processProfile, negativeWithoutCapability, legacyVolumeRefusal, normalStop,
+    quietStreams:quietStreams.map(({body,...metrics})=>metrics), streamOutcomes, processProfile, negativeWithoutCapability, legacyVolumeRefusal, normalStop, nativeCopy,
     productionActions:false }, null, 2));
 } catch (error) {
   primaryError = error;

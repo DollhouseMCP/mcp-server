@@ -164,6 +164,12 @@ run_dry_action() {
     bootstrap-admin)
       dry_run_bootstrap_admin
       ;;
+    prepare-caddy-offline)
+      validate_persisted_caddy_fields
+      resolve_mode_defaults
+      validate_caddy_selection "${CADDY_IMAGE}" "${CADDY_DATA_VOLUME}" "${CADDY_CONFIG_VOLUME}"
+      log "dry-run: would preflight the selected proxy, stop it without forced escalation, and prepare new Caddy volume clones; ingress would remain closed"
+      ;;
     clone-caddy-volumes)
       validate_persisted_caddy_fields
       resolve_mode_defaults

@@ -81,6 +81,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/scripts/test_hosted_registry_image_admission.py
           bash tests/scripts/hosted-maintenance-source.test.sh
           bash tests/scripts/hosted-deploy-preparation-order.test.sh
+          bash tests/scripts/hosted-caddy-lock-native.test.sh
           bash tests/scripts/hosted-deploy-rollback-order.test.sh
           bash tests/scripts/hosted-deploy-transition-order.test.sh
 

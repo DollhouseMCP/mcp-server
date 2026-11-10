@@ -8,6 +8,15 @@ run_action() {
       ;;
     render)
       need_command openssl
+      resolve_public_base_url
+      resolve_hostname
+      resolve_allowed_hosts
+      validate_render_inputs
+      ensure_supported_python
+      if [[ ! -d "${DEPLOY_DIR}" ]]; then
+        (umask 077; mkdir -p "${DEPLOY_DIR}")
+      fi
+      acquire_caddy_deployment_lock
       render_files
       ;;
     install)
@@ -25,6 +34,9 @@ run_action() {
       ;;
     bootstrap-admin)
       bootstrap_admin
+      ;;
+    prepare-caddy-offline)
+      prepare_caddy_offline
       ;;
     clone-caddy-volumes)
       clone_caddy_volumes

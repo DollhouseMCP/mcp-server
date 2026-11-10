@@ -169,6 +169,7 @@ Usage:
   scripts/hosted-deploy.sh [--dry-run] [--quiet|--debug|--log-level LEVEL] update
   scripts/hosted-deploy.sh [--dry-run] [--quiet|--debug|--log-level LEVEL] migrate
   scripts/hosted-deploy.sh [--dry-run] [--quiet|--debug|--log-level LEVEL] bootstrap-admin
+  scripts/hosted-deploy.sh [--dry-run] [--quiet|--debug|--log-level LEVEL] prepare-caddy-offline
   scripts/hosted-deploy.sh [--dry-run] [--quiet|--debug|--log-level LEVEL] clone-caddy-volumes
   scripts/hosted-deploy.sh [--dry-run] [--quiet|--debug|--log-level LEVEL] recover-caddy-proxy
   scripts/hosted-deploy.sh [--dry-run] [--quiet|--debug|--log-level LEVEL] rollback
@@ -180,6 +181,7 @@ Actions:
   scripts/hosted-deploy.sh update
   scripts/hosted-deploy.sh migrate
   scripts/hosted-deploy.sh bootstrap-admin
+  scripts/hosted-deploy.sh prepare-caddy-offline
   scripts/hosted-deploy.sh clone-caddy-volumes
   scripts/hosted-deploy.sh recover-caddy-proxy
   scripts/hosted-deploy.sh rollback
