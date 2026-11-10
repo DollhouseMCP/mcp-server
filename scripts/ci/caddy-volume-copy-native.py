@@ -21,6 +21,10 @@ ID = re.compile(r'[a-f0-9]{64}\Z')
 CAPABILITY = re.compile(r'[A-Z0-9_]{1,48}\Z')
 
 
+def name_filter(name):
+    return 'name=^/' + name + '$'
+
+
 class FixtureRunner:
     def __init__(self, image, names, started=None):
         self.image, self.names = image, names
@@ -76,7 +80,7 @@ class FixtureRunner:
 
     def cleanup(self, name):
         item = self.active[name]
-        raw = self.call(['docker', 'ps', '--all', '--quiet', '--no-trunc', '--filter', 'name=^/' + name + '$'], 15, 65536)
+        raw = self.call(['docker', 'ps', '--all', '--quiet', '--no-trunc', '--filter', name_filter(name)], 15, 65536)
         ids = raw.decode('ascii').splitlines()
         if not ids:
             del self.active[name]
@@ -96,7 +100,7 @@ class FixtureRunner:
             raise ValueError('refusing to remove an unverified helper')
         validate_helper_mounts(obj.get('Mounts'), self.names, ROOT / 'scripts/hosted-deploy/caddy_volume_copy.mjs', item['mode'])
         self.call(['docker', 'rm', '--force', ids[0]], 15, 65536)
-        remaining = self.call(['docker', 'ps', '--all', '--quiet', '--no-trunc', '--filter', 'name=^/' + name + '$'], 15, 65536)
+        remaining = self.call(['docker', 'ps', '--all', '--quiet', '--no-trunc', '--filter', name_filter(name)], 15, 65536)
         if remaining.strip():
             raise ValueError('owned helper removal is not confirmed')
         del self.active[name]
@@ -109,6 +113,50 @@ def require_nonempty_refusal(error, runner):
         raise error
 
 
+def invoke(runner, helper, mode=None):
+    runner.start_stderr = ''
+    token = secrets.token_hex(16)
+    name = 'dollhouse-caddy-copy-' + token
+    existing = runner.call(['docker', 'ps', '--all', '--quiet', '--no-trunc', '--filter', name_filter(name)],
+                           15, 65536, work=True)
+    if existing.strip():
+        raise ValueError('fixture helper name is already in use')
+    runner.active[name] = {'token': token, 'id': None, 'mode': mode}
+    try:
+        raw = run_owned_helper(runner.run, runner.names, helper, token, runner.image, mode)
+        result = validate_copy_receipt(json.loads(raw))
+    except BaseException as original:
+        if name in runner.active:
+            try:
+                runner.cleanup(name)
+            except Exception as cleanup:
+                original.add_note('Owned fixture helper cleanup is UNKNOWN: ' + str(cleanup))
+        raise
+    if name in runner.active:
+        runner.cleanup(name)
+    return result
+
+
+def exercise_copy(runner, helper):
+    before = invoke(runner, helper, '--verify-source')
+    copied = invoke(runner, helper)
+    after = invoke(runner, helper, '--verify-source')
+    verified = invoke(runner, helper, '--verify')
+    if before != copied or after != copied or verified != copied:
+        raise ValueError('native source or copied inventory changed')
+    try:
+        invoke(runner, helper)
+    except ValueError as error:
+        require_nonempty_refusal(error, runner)
+    else:
+        raise ValueError('nonempty destination unexpectedly accepted a second copy')
+    if invoke(runner, helper, '--verify') != copied:
+        raise ValueError('refused reuse changed copied content')
+    if runner.active:
+        raise RuntimeError('owned helper cleanup remains UNKNOWN')
+    return copied
+
+
 def main():
     started = time.monotonic()
     names = sys.argv[1:]
@@ -118,46 +166,8 @@ def main():
     image = require_helper_image(docker_run)
     runner = FixtureRunner(image, names, started)
 
-    def invoke(mode=None):
-        runner.start_stderr = ''
-        token = secrets.token_hex(16)
-        name = 'dollhouse-caddy-copy-' + token
-        existing = runner.call(['docker', 'ps', '--all', '--quiet', '--no-trunc', '--filter', 'name=^/' + name + '$'],
-                               15, 65536, work=True)
-        if existing.strip():
-            raise ValueError('fixture helper name is already in use')
-        runner.active[name] = {'token': token, 'id': None, 'mode': mode}
-        try:
-            raw = run_owned_helper(runner.run, names, helper, token, image, mode)
-            result = validate_copy_receipt(json.loads(raw))
-        except BaseException as original:
-            if name in runner.active:
-                try:
-                    runner.cleanup(name)
-                except Exception as cleanup:
-                    original.add_note('Owned fixture helper cleanup is UNKNOWN: ' + str(cleanup))
-            raise
-        if name in runner.active:
-            runner.cleanup(name)
-        return result
-
     try:
-        before = invoke('--verify-source')
-        copied = invoke()
-        after = invoke('--verify-source')
-        verified = invoke('--verify')
-        if before != copied or after != copied or verified != copied:
-            raise ValueError('native source or copied inventory changed')
-        try:
-            invoke()
-        except ValueError as error:
-            require_nonempty_refusal(error, runner)
-        else:
-            raise ValueError('nonempty destination unexpectedly accepted a second copy')
-        if invoke('--verify') != copied:
-            raise ValueError('refused reuse changed copied content')
-        if runner.active:
-            raise RuntimeError('owned helper cleanup remains UNKNOWN')
+        copied = exercise_copy(runner, helper)
         print(json.dumps({'helperImageId': image, 'inventory': copied, 'sourceUnchanged': True,
                           'copiedVerified': True, 'nonemptyReuseRefused': True}, sort_keys=True))
     finally:

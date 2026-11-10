@@ -66,6 +66,7 @@ class UnchangedActionTests(unittest.TestCase):
         return json.dumps(value).encode()
 
     def test_unchanged_proxy_kept_and_receipt_binds_rollback(self):
+        self.container['HostConfig']['CapAdd'] = ['CAP_NET_BIND_SERVICE']
         with patch.dict('os.environ', {'DOCKER_HOST': ''}):
             previous = caddy_unchanged_action.prepare(self.request, self.run_docker, self.qualify)
             (self.root / 'server').rename(previous)

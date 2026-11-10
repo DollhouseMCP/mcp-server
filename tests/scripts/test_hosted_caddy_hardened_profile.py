@@ -56,6 +56,23 @@ class HardenedProfileTests(unittest.TestCase):
         self.assertEqual(result['container_id'], container['Id'])
         self.assertEqual(result['kind'], 'hardened')
 
+    def test_observed_capability_spelling_and_malformed_refusal(self):
+        for added in (['NET_BIND_SERVICE'], ['CAP_NET_BIND_SERVICE']):
+            container, image, admission, ports = hardened()
+            container['HostConfig']['CapAdd'] = added
+            self.assertEqual(self.validate(container, image, admission, ports)['kind'], 'hardened')
+        for added, dropped in ((['CAP_NET_BIND_SERVICE', 'NET_BIND_SERVICE'], ['ALL']),
+                               (['CAP_NET_BIND_SERVICE', 'SYS_ADMIN'], ['ALL']),
+                               (['cap_net_bind_service'], ['ALL']), (['CAP_CAP_NET_BIND_SERVICE'], ['ALL']),
+                               (['CAP_ALL'], ['ALL']), ('CAP_NET_BIND_SERVICE', ['ALL']), (None, ['ALL']),
+                               ({'NET_BIND_SERVICE': True}, ['ALL']), ([1], ['ALL']),
+                               (['CAP_NET_BIND_SERVICE'], ['CAP_ALL']), (['CAP_NET_BIND_SERVICE'], ['ALL', 'ALL']),
+                               (['CAP_NET_BIND_SERVICE'], 'ALL')):
+            container, image, admission, ports = hardened()
+            container['HostConfig'].update(CapAdd=added, CapDrop=dropped)
+            with self.subTest(added=added, dropped=dropped), self.assertRaises(ValueError):
+                self.validate(container, image, admission, ports)
+
     def test_runtime_or_identity_drift_refuses(self):
         for key in ('image', 'user', 'readonly', 'capabilities', 'security', 'sysctl', 'tmpfs', 'volume', 'port', 'environment'):
             container, image, admission, ports = hardened()
