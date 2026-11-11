@@ -3,8 +3,10 @@
 The witness itself runs against real Caddy binaries in the native CI job.
 """
 import importlib.util
+import io
 from pathlib import Path
 import unittest
+import unittest.mock
 from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parents[2] / 'scripts/ci/caddy-adapt-native.py'
@@ -69,23 +71,34 @@ class NativeAdaptWitnessTests(unittest.TestCase):
         self.assertEqual(result['dash_form'], 'accepted')
 
     def test_serving_difference_fails_the_witness(self):
+        session = Session(serving=b'{"apps":{"other":1}}')
         with self.assertRaisesRegex(ValueError, 'differs from the serving configuration'):
-            self.run_witness(Session(serving=b'{"apps":{"other":1}}'), [ADAPTED])
+            self.run_witness(session, [ADAPTED])
 
     def test_an_unrelated_dash_failure_is_not_counted_as_the_legacy_refusal(self):
+        missing = b'Error: reading input file: open -: no such file or directory\n'
         for failure in (refusal(b'Error: adapting config: unrecognized directive\n'),
-                        refusal(b'Error: reading input file: open -: no such file or directory\n', exit_code=137),
-                        refusal(b'Error: reading input file: open -: no such file or directory\n', reason='deadline')):
+                        refusal(missing, exit_code=137), refusal(missing, reason='deadline')):
+            session = Session()
             with self.subTest(failure=failure.diagnostic), self.assertRaises(native.ControlFailure):
-                self.run_witness(Session(), [failure])
+                self.run_witness(session, [failure])
 
     def test_path_dependent_fixture_must_be_refused_for_the_right_reason(self):
-        with self.assertRaisesRegex(ValueError, 'without refusal'):
-            self.run_witness(Session(dependent=None), [ADAPTED])
-        with self.assertRaisesRegex(ValueError, 'other refusal'):
-            self.run_witness(Session(dependent=ValueError('other refusal')), [ADAPTED])
-        with self.assertRaises(native.ControlFailure):
-            self.run_witness(Session(dependent=refusal(b'depends on its input path')), [ADAPTED])
+        cases = ((None, ValueError, 'without refusal'), (ValueError('other refusal'), ValueError, 'other refusal'),
+                 (refusal(b'depends on its input path'), native.ControlFailure, 'private Caddy control'))
+        for dependent, expected, message in cases:
+            session = Session(dependent=dependent)
+            with self.subTest(message=message), self.assertRaisesRegex(expected, message):
+                self.run_witness(session, [ADAPTED])
+
+    def test_fixture_arrives_on_standard_input_and_is_bounded(self):
+        for payload in (b'', b'x' * (native.LIMIT + 1)):
+            stream = unittest.mock.Mock(buffer=io.BytesIO(payload))
+            with self.subTest(size=len(payload)), patch.object(native.sys, 'argv', ['witness', IDENTIFIER]), \
+                    patch.object(native.sys, 'stdin', stream), patch.object(native, 'validate_system') as validate, \
+                    self.assertRaisesRegex(ValueError, 'missing or exceeds'):
+                native.main()
+            validate.assert_not_called()
 
 
 if __name__ == '__main__':

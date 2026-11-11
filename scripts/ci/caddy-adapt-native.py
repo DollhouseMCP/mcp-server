@@ -13,7 +13,7 @@ import sys
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'hosted-deploy'))
-from caddy_active_config import ADAPT_INPUT, DOCKER, ActiveConfig, bounded_input, system_docker, validate_system
+from caddy_active_config import ADAPT_INPUT, DOCKER, LIMIT, ActiveConfig, bounded_input, system_docker, validate_system
 from caddy_control_failure import ControlFailure
 
 MISSING_DASH_FILE = 'reading input file: open -: no such file or directory'
@@ -65,9 +65,13 @@ def witness(identifier, caddyfile):
 
 
 def main():
-    identifier, caddyfile = sys.argv[1:]
+    (identifier,) = sys.argv[1:]
+    # The public fixture Caddyfile arrives on standard input; no path is taken from the caller.
+    caddyfile = sys.stdin.buffer.read(LIMIT + 1)
+    if not caddyfile or len(caddyfile) > LIMIT:
+        raise ValueError('fixture Caddyfile is missing or exceeds its limit')
     validate_system()
-    print(json.dumps(witness(identifier, Path(caddyfile).read_bytes())))
+    print(json.dumps(witness(identifier, caddyfile)))
 
 
 if __name__ == '__main__':

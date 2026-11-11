@@ -294,18 +294,21 @@ else { const allowed=mode.startsWith('allowed'); const headers={'host':'fixture.
     engine(['cp', legacyFile, `${legacyProxy}:/etc/caddy/Caddyfile`]);
     engine(['start', legacyProxy]);
     await waitForReady(() => {
-      engine(['exec', legacyProxy, 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:2019/config/']);
+      // Loopback admin API inside the fixture's own network namespace.
+      engine(['exec', legacyProxy, 'wget', '-q', '-O', '/dev/null', '127.0.0.1:2019/config/']);
       return {status:200};
     }, {}, {attempts:15});
     const adaptScript = 'scripts/ci/caddy-adapt-native.py';
     const adaptWitness = (id, file) => JSON.parse(execFileSync('/usr/bin/sudo', ['-n', '/usr/bin/python3',
-      path.join(root, adaptScript), id, file], {encoding:'utf8', timeout:120_000, maxBuffer:65536}));
+      path.join(root, adaptScript), id], {input:fs.readFileSync(file), encoding:'utf8', timeout:120_000, maxBuffer:65536}));
     const legacyAdapt = adaptWitness(legacyProxy, legacyFile);
     assert.equal(legacyAdapt.container, legacyProxy);
     assert.equal(legacyAdapt.serving_configuration_matches, true);
     // Without this refusal the fixture would not be the generation that failed.
     assert.equal(legacyAdapt.dash_form, 'refused');
-    const candidateAdapt = adaptWitness(proxy, path.join(volumeRoot, 'Caddyfile'));
+    const candidateFile = path.join(work, 'candidate.Caddyfile');
+    engine(['cp', `${proxy}:/etc/caddy/Caddyfile`, candidateFile]);
+    const candidateAdapt = adaptWitness(proxy, candidateFile);
     assert.equal(candidateAdapt.container, proxy);
     assert.equal(candidateAdapt.serving_configuration_matches, true);
     assert.equal(candidateAdapt.dash_form, 'accepted');
