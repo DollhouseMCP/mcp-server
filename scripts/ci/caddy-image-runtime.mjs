@@ -316,6 +316,21 @@ else { const allowed=mode.startsWith('allowed'); const headers={'host':'fixture.
     assert.equal(legacyAdapt.path_dependent_refused, true);
     assert.equal(candidateAdapt.path_dependent_refused, true);
     observations.push('real adapt control equals the serving configuration on stock Caddy 2.8.4 and on the candidate');
+    // The production serving check, stop and start that recovery issues to a
+    // legacy proxy, on the real legacy binary. Run last: it restarts the fixture.
+    const legacyScript = 'scripts/ci/caddy-legacy-native.py';
+    const legacyControl = JSON.parse(execFileSync('/usr/bin/sudo', ['-n', '/usr/bin/python3',
+      path.join(root, legacyScript), legacyProxy], {input:fs.readFileSync(legacyFile), encoding:'utf8', timeout:180_000, maxBuffer:65536}));
+    assert.equal(legacyControl.container, legacyProxy);
+    assert.equal(legacyControl.serving_checks, 2);
+    assert.equal(legacyControl.clean_stop, true);
+    assert.equal(legacyControl.different_snapshot_refused, true);
+    assert.notEqual(legacyControl.second_boot.started_at, legacyControl.first_boot.started_at);
+    assert.equal(legacyControl.bounded_stop, true);
+    assert.equal(inspect(legacyProxy).State.Running, false);
+    observations.push('real serving check, clean stop, restart and bounded stop on stock Caddy 2.8.4; a different receipt snapshot refuses');
+    configSources.push({legacyControlWitness:{...legacyControl, scriptSha256:hashSource(legacyScript),
+      checksSha256:hashSource('scripts/hosted-deploy/legacy_recovery_checks.py')}});
     configSources.push({adaptWitness:{legacy:{...legacyAdapt, imageId:legacyInfo.Id, caddyVersion:'v2.8.4'},
       candidate:candidateAdapt, scriptSha256:hashSource(adaptScript),
       activeConfigSha256:hashSource('scripts/hosted-deploy/caddy_active_config.py')}});

@@ -1,5 +1,6 @@
 """Inert Docker/backup records shared by recovery sequence tests, never live proof."""
 import copy
+import hashlib
 import json
 from pathlib import Path
 from unittest.mock import patch
@@ -14,6 +15,42 @@ import legacy_recovery_checks as checks
 import test_hosted_caddy_recovery_boundary as boundary_fixture
 import test_hosted_caddy_recover_action as proxy_fixture
 import test_hosted_caddy_legacy_handoff as legacy_fixture
+
+
+def adapted(caddyfile):
+    """Inert adaptation: canonical JSON that changes exactly when the Caddyfile bytes change."""
+    return json.dumps({'fixture_adapted_sha256': hashlib.sha256(caddyfile).hexdigest()}).encode()
+
+
+class ServingSession:
+    """Stand-in for the two external Caddy commands, adapt and the admin read, and nothing else."""
+
+    def __init__(self, fixture, identifier):
+        rows = [fixture.current, fixture.p.recovered, *fixture.other]
+        self.container = next(item for item in rows if item and item['Id'] == identifier)
+        if self.container['State']['Running'] is not True:
+            raise ValueError('Caddy container is not uniquely running')
+        self.identity = {'id': identifier, 'pid': 123, 'started_at': self.container['State']['StartedAt'],
+                         'restart_count': self.container['RestartCount']}
+        self.fixture, self.closed = fixture, False
+        fixture.sessions.append(self)
+
+    def adapt(self, caddyfile):
+        return adapted(caddyfile)
+
+    def read(self):
+        if self.fixture.active_config is not None:
+            return self.fixture.active_config
+        startup = next(mount['Source'] for mount in self.container['Mounts']
+                       if mount['Destination'] == '/etc/caddy/Caddyfile')
+        return adapted(Path(startup).read_bytes())
+
+    def recheck(self):
+        if self.container['State']['Running'] is not True:
+            raise ValueError('Caddy boot changed during private control')
+
+    def close(self):
+        self.closed = True
 
 
 class Fixture:
@@ -89,8 +126,12 @@ class Fixture:
         namespace = patch.object(checks, 'namespace_identity', return_value=(9, 10))
         namespace.start()
         owner.addCleanup(namespace.stop)
-        serving = patch.object(checks, 'serving_config')
-        self.serving_config = serving.start()
+        # Only the private Caddy control boundary is inert. The real serving_config
+        # runs above it; scripts/ci/caddy-legacy-native.py runs it on real Caddy 2.8.4.
+        self.active_config = None
+        self.sessions = []
+        serving = patch.object(checks, 'ActiveConfig', side_effect=lambda identifier: ServingSession(self, identifier))
+        serving.start()
         owner.addCleanup(serving.stop)
         plan = preflight(self.root, 'site', self.previous, self.p.fx.reference, self.run, self.p.fx.qualify)
         self.control['proxy'].update(net_device=9, net_inode=10,
