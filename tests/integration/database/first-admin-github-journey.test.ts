@@ -129,6 +129,9 @@ required('first admin by designated GitHub account', () => {
   });
 
   it('settles on one admin when two replicas claim at the same moment', async () => {
+    // Clears the claim made earlier so the two can race for an unclaimed
+    // server. From here on the admin is whichever won, so the cases above must
+    // stay above; the audit case below looks only at the earlier claim's entry.
     await db().execute(sql`DELETE FROM auth_kv WHERE model = 'AuthBootstrap' AND id = 'state'`);
     const [a, b] = [consoles[0].storage, consoles.at(-1)!.storage];
     const outcomes = await Promise.allSettled([
