@@ -1,6 +1,6 @@
 /** Access tokens stay bound to the grant that issued them. */
 
-import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import type { RequestHandler } from 'express';
 import { decodeJwt } from 'jose';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -130,7 +130,24 @@ describe('Access-token grant binding', () => {
     expect(await harness.as.validate(accessToken)).toEqual({ ok: false, reason: 'token grant is no longer active' });
     const rejected = await callProtected(accessToken);
     expect(rejected.status).toBe(401);
-    expect(rejected.headers.get('www-authenticate')).toContain('Bearer');
+    expect(await rejected.json()).toEqual({ error: 'Authentication failed: token grant is no longer active' });
+    expect(rejected.headers.get('www-authenticate'))
+      .toBe(`Bearer resource_metadata="${harness.as.getProtectedResourceMetadataUrl()}", scope="mcp"`);
+  }, 30_000);
+
+  it('answers 503, not acceptance, when the grant cannot be read', async () => {
+    const { accessToken } = await authorize();
+    const readGrant = storage.genericGet.bind(storage);
+    const read = jest.spyOn(storage, 'genericGet').mockImplementation((model, id) =>
+      model === 'Grant' ? Promise.reject(new Error('storage unavailable')) : readGrant(model, id));
+    try {
+      const unavailable = await callProtected(accessToken);
+      expect(unavailable.status).toBe(503);
+      expect(await unavailable.json()).toEqual({ error: 'Account validation is temporarily unavailable' });
+    } finally {
+      read.mockRestore();
+    }
+    expect((await callProtected(accessToken)).status).toBe(200);
   }, 30_000);
 
   it('keeps another grant for the same account working when one is revoked', async () => {
