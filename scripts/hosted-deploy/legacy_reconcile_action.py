@@ -115,31 +115,59 @@ def census(root, instance, data, run):
         raise ValueError('Caddy label census includes an unknown or missing identity')
 
 
-def prove_serving(root, value, data, record, receipt, run, admit, public):
+SERVING_PROOFS = ('checkpoint', 'database', 'containers', 'app_profile', 'app_acceptance', 'serving_dns',
+                  'proxy_contract', 'caddy_volumes', 'volume_writers', 'ingress', 'serving_config', 'proxy_census')
+
+
+def serving_proofs(root, value, data, record, receipt, run, admit):
+    """The read-only proofs of a serving legacy stack, named and in their required order.
+
+    Reconciliation stops at the first refusal. The read-only preflight runs
+    each one and reports every outcome, so both use exactly these controls.
+    """
     instance = value['instance']
-    request, checkpoint_sha, manifest = handoff.checkpoint(value['checkpoint_dir'])
-    if checkpoint_sha != data['checkpoint_sha256'] or request['app']['id'] != value['app_id']:
-        raise ValueError('reconciliation checkpoint changed')
-    handoff.verify_database(value, manifest, run)
-    if boundary.database_fingerprint(run, value['postgres_id']) != data['database']:
-        raise ValueError('reconciliation database schema, globals or ledger changed')
-    for key, name in (('app', instance), ('postgres', instance + '-postgres'), ('proxy', instance + '-caddy')):
-        item = data[key]
-        exact_container(run, item['Id'], profile(item), name, True, lifecycle(item, True))
-    retired = data['retained']
-    exact_container(run, retired['Id'], profile(retired), retired['Name'][1:], False, lifecycle(retired, False))
-    handoff.app_profile(run, instance, value['app_id'], True, root)
-    recovery.app_acceptance(value, run)
-    serving_dns(run, instance, value['app_id'])
-    verify_recovered(run, data['proxy']['Id'], {'record': record}, instance, data['proxy_token'], True,
-                     receipt / STARTUP_NAME, admit)
-    expected = record['clone']['volumes']
-    if inspect_volumes(run, [item['name'] for item in expected]) != expected:
-        raise ValueError('original or partial Caddy volume identity changed')
-    no_other_writers(run, data['proxy']['Id'], expected[:2])
-    ingress_available(run, record['profile']['ports'], excluded=(data['proxy']['Id'],))
-    checks.serving_config(data['proxy']['Id'], receipt, record, lifecycle(data['proxy'], True))
-    census(root, instance, data, run)
+
+    def checkpoint():
+        request, checkpoint_sha, manifest = handoff.checkpoint(value['checkpoint_dir'])
+        if checkpoint_sha != data['checkpoint_sha256'] or request['app']['id'] != value['app_id']:
+            raise ValueError('reconciliation checkpoint changed')
+        handoff.verify_database(value, manifest, run)
+
+    def database():
+        if boundary.database_fingerprint(run, value['postgres_id']) != data['database']:
+            raise ValueError('reconciliation database schema, globals or ledger changed')
+
+    def containers():
+        for key, name in (('app', instance), ('postgres', instance + '-postgres'), ('proxy', instance + '-caddy')):
+            item = data[key]
+            exact_container(run, item['Id'], profile(item), name, True, lifecycle(item, True))
+        retired = data['retained']
+        exact_container(run, retired['Id'], profile(retired), retired['Name'][1:], False, lifecycle(retired, False))
+
+    def caddy_volumes():
+        expected = record['clone']['volumes']
+        if inspect_volumes(run, [item['name'] for item in expected]) != expected:
+            raise ValueError('original or partial Caddy volume identity changed')
+
+    proofs = (
+        checkpoint, database, containers,
+        lambda: handoff.app_profile(run, instance, value['app_id'], True, root),
+        lambda: recovery.app_acceptance(value, run),
+        lambda: serving_dns(run, instance, value['app_id']),
+        lambda: verify_recovered(run, data['proxy']['Id'], {'record': record}, instance, data['proxy_token'], True,
+                                 receipt / STARTUP_NAME, admit),
+        caddy_volumes,
+        lambda: no_other_writers(run, data['proxy']['Id'], record['clone']['volumes'][:2]),
+        lambda: ingress_available(run, record['profile']['ports'], excluded=(data['proxy']['Id'],)),
+        lambda: checks.serving_config(data['proxy']['Id'], receipt, record, lifecycle(data['proxy'], True)),
+        lambda: census(root, instance, data, run),
+    )
+    return tuple(zip(SERVING_PROOFS, proofs, strict=True))
+
+
+def prove_serving(root, value, data, record, receipt, run, admit, public):
+    for _, proof in serving_proofs(root, value, data, record, receipt, run, admit):
+        proof()
     return public(data['pending']['control']['public_origin'])
 
 
@@ -182,6 +210,23 @@ def retire(root, instance, operation, data, receipt, run):
     return authority['sha256']
 
 
+def original_receipt(root, data):
+    pending = data['pending']
+    kind, original, receipt = recovery_kind(root, Path(pending['previous']))
+    if (kind != 'legacy' or str(receipt) != pending['receipt']
+            or data.get('original_proxy_id', original['profile']['container_id']) != original['profile']['container_id']
+            or read_caddy_snapshot(receipt, original['caddyfile_sha256']) != data['files'][STARTUP_NAME][0]):
+        raise ValueError('reconciliation original source/Caddy receipt differs')
+    return original, receipt
+
+
+def failed_state(root, data):
+    failed = resolution.raw_state(root)
+    if json.loads(failed, object_pairs_hook=unique_object) != data['state']:
+        raise ValueError('failed control bytes changed before reconciliation')
+    return failed
+
+
 def recovery_data(root, value, manual, run, receipt_identities):
     if manual is not None and receipt_identities is None:
         raise ValueError('manual reconciliation requires generated receipt identities')
@@ -196,14 +241,8 @@ def reconcile(root, value, manual, run=system_docker, admit=qualify, public=reco
         raise ValueError('reconciliation requires a pinned helper outside the replaced source cache')
     data = recovery_data(root, value, manual, run, receipt_identities)
     pending, instance = data['pending'], value['instance']
-    kind, original, receipt = recovery_kind(root, Path(pending['previous']))
-    if (kind != 'legacy' or str(receipt) != pending['receipt']
-            or data.get('original_proxy_id', original['profile']['container_id']) != original['profile']['container_id']
-            or read_caddy_snapshot(receipt, original['caddyfile_sha256']) != data['files'][STARTUP_NAME][0]):
-        raise ValueError('reconciliation original source/Caddy receipt differs')
-    failed = resolution.raw_state(root)
-    if json.loads(failed, object_pairs_hook=unique_object) != data['state']:
-        raise ValueError('failed control bytes changed before reconciliation')
+    original, receipt = original_receipt(root, data)
+    failed = failed_state(root, data)
     handoff_directory, handoff_hashes = marker_inventory(root, value, data)
     prove_serving(root, value, data, original, receipt, run, admit, public)
     operation = resolution.operation_path(root, value['token'])
