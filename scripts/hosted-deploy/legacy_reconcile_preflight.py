@@ -40,6 +40,7 @@ from image_scan_intake import unique_object
 import legacy_control_compose as compose
 import legacy_control_resolution as resolution
 import legacy_handoff as handoff
+import legacy_manual_recovery_import as manual
 import legacy_reconcile_action as action
 import legacy_reconcile_files as files
 import legacy_recovery_action as recovery
@@ -82,11 +83,13 @@ class Report:
         self.controls = []
         self.values = {}
 
+    def skip(self, name, missing):
+        self.controls.append({'control': name, 'outcome': NOT_RUN, 'needs': list(missing)})
+
     def control(self, name, check, needs=()):
         missing = [need for need in needs if need not in self.values]
         if missing:
-            self.controls.append({'control': name, 'outcome': NOT_RUN, 'needs': missing})
-            return None
+            return self.skip(name, missing)
         started = time.monotonic()
         try:
             self.values[name] = check()
@@ -127,11 +130,12 @@ def generated_request(root, value, run):
     identities = request.pop('receipt_identities')
     if set(request) != boundary.KEYS | {'manual_evidence_dir'}:
         raise ValueError('invalid reconciliation request')
-    manual = request.pop('manual_evidence_dir')
+    evidence = request.pop('manual_evidence_dir')
     if (any(not isinstance(item, str) for item in request.values()) or not boundary.TOKEN.fullmatch(request['token'])
-            or any(not handoff.SHA.fullmatch(request[key]) for key in ('app_id', 'postgres_id'))):
+            or any(not handoff.SHA.fullmatch(request[key]) for key in ('app_id', 'postgres_id'))
+            or not isinstance(evidence, str) or identities is None):
         raise ValueError('invalid reconciliation identity')
-    return request, manual, identities
+    return request, evidence, identities
 
 
 def operation_absent(root, token):
@@ -159,17 +163,33 @@ def observed(root, value, data):
             'markers': action.marker_inventory(root, value, data)}
 
 
+def recovery_data(report, root, run):
+    """Every adoption step as its own control, then the data reconciliation derives from them.
+
+    A step stores its observation before it validates it. So a refused step
+    still lets the later controls run, and only a missing observation stops them.
+    """
+    value, evidence, identities = report.values['request']
+    found = {}
+    for name, needs, step in manual.adoption_steps(root, value, evidence, run, identities, found):
+        missing = [need for need in needs if need not in found]
+        if missing:
+            report.skip(name, ['observation: ' + need for need in missing])
+        else:
+            report.control(name, step)
+    return report.control('recovery_data', lambda: manual.adopted(found))
+
+
 def dependent_controls(report, root, run, admit, public, verify_compose):
     """Controls that need the generated request and the accepted recovery data."""
-    value, manual, identities = report.values['request']
+    value = report.values['request'][0]
     instance = value['instance']
-    data = report.control('receipt_identities',
-                          lambda: action.recovery_data(root, value, manual, run, identities))
-    report.control('recovery_receipt', lambda: action.original_receipt(root, data), needs=('receipt_identities',))
-    report.control('failed_state', lambda: action.failed_state(root, data), needs=('receipt_identities',))
-    report.control('handoff_markers', lambda: observed(root, value, data), needs=('receipt_identities',))
+    data = recovery_data(report, root, run)
+    report.control('recovery_receipt', lambda: action.original_receipt(root, data), needs=('recovery_data',))
+    report.control('failed_state', lambda: action.failed_state(root, data), needs=('recovery_data',))
+    report.control('handoff_markers', lambda: observed(root, value, data), needs=('recovery_data',))
     report.control('operation_absent', lambda: operation_absent(root, value['token']))
-    needs = ('receipt_identities', 'recovery_receipt')
+    needs = ('recovery_data', 'recovery_receipt')
     if all(need in report.values for need in needs):
         original, receipt = report.values['recovery_receipt']
         for name, proof in action.serving_proofs(root, value, data, original, receipt, run, admit):
@@ -178,9 +198,9 @@ def dependent_controls(report, root, run, admit, public, verify_compose):
         for name in action.SERVING_PROOFS:
             report.control(name, None, needs=needs)
     report.control('public_acceptance', lambda: public(data['pending']['control']['public_origin']),
-                   needs=('receipt_identities',))
+                   needs=('recovery_data',))
     report.control('compose_model', lambda: compose_model(root, instance, data, verify_compose),
-                   needs=('receipt_identities',))
+                   needs=('recovery_data',))
 
     def unchanged():
         if observed(root, value, data) != report.values['handoff_markers']:
@@ -210,8 +230,8 @@ def preflight(value, run=system_docker, admit=qualify, public=recovery.public_ac
         if 'request' in report.values:
             dependent_controls(report, root, run, admit, public, verify_compose)
         else:
-            for name in ('receipt_identities', 'recovery_receipt', 'failed_state', 'handoff_markers', 'operation_absent',
-                         *action.SERVING_PROOFS, 'public_acceptance', 'compose_model', 'unchanged'):
+            for name in (*manual.ADOPTION, 'recovery_data', 'recovery_receipt', 'failed_state', 'handoff_markers',
+                         'operation_absent', *action.SERVING_PROOFS, 'public_acceptance', 'compose_model', 'unchanged'):
                 report.control(name, None, needs=('request',))
     finally:
         if lock is not None:

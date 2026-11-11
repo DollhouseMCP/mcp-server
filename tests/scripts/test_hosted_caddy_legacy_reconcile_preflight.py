@@ -17,13 +17,14 @@ sys.path.insert(0, str(SCRIPTS / 'hosted-deploy'))
 sys.path.insert(0, str(SCRIPTS))
 import legacy_control_resolution as resolution
 import legacy_handoff as handoff
+import legacy_manual_recovery_import as manual
 import legacy_reconcile_action as reconcile
 import legacy_reconcile_preflight as preflight
 from hosted_manual_reconciliation_fixture import ManualPacket
 import test_hosted_caddy_legacy_reconciliation as base
 
 BEFORE_REQUEST = ['pinned_helper', 'native_host', 'retained_transition', 'deployment_lock', 'request']
-AFTER_REQUEST = ['receipt_identities', 'recovery_receipt', 'failed_state', 'handoff_markers', 'operation_absent',
+AFTER_REQUEST = [*manual.ADOPTION, 'recovery_data', 'recovery_receipt', 'failed_state', 'handoff_markers', 'operation_absent',
                  *reconcile.SERVING_PROOFS, 'public_acceptance', 'compose_model', 'unchanged']
 CHANGING = {'create', 'run', 'start', 'stop', 'restart', 'kill', 'rm', 'rename', 'pull', 'push', 'cp', 'update',
             'network', 'compose', 'build', 'commit', 'load', 'tag'}
@@ -144,6 +145,35 @@ class PreflightTests(unittest.TestCase):
         self.assertIn('label census', reasons['proxy_census'])
         self.assertEqual((result['complete'], result['refused']), (False, 3))
         self.assertEqual(tree(self.fx.root), before)
+
+    def test_a_refused_adoption_step_does_not_hide_a_later_serving_defect(self):
+        self.packet()
+        self.fx.app['Config']['Env'] = ['FIXTURE_PRIVATE=drifted']
+        self.fx.active_config = b'{"fixture":"another active configuration"}'
+        result = self.run_preflight()
+        outcomes = self.outcomes(result)
+        self.assertEqual(outcomes['service_profiles'], 'REFUSED')
+        self.assertEqual(outcomes['recovery_data'], 'PASS')
+        self.assertEqual(outcomes['serving_config'], 'REFUSED')
+        self.assertEqual({name for name, outcome in outcomes.items() if outcome == 'NOT_RUN'}, set())
+        self.assertGreaterEqual(result['refused'], 2)
+
+    def test_a_missing_observation_stops_only_the_controls_that_need_it(self):
+        self.packet()
+        original = manual.archive_inputs
+        with patch.object(manual, 'archive_inputs', side_effect=[original(self.fx.root, self.value['manual_evidence_dir'],
+                                                                          self.fx.state['pending']),
+                                                                 ValueError('fixture archive unreadable')]):
+            result = self.run_preflight()
+        outcomes = self.outcomes(result)
+        self.assertEqual((outcomes['request'], outcomes['accepted_state'], outcomes['accepted_archive']),
+                         ('PASS', 'PASS', 'REFUSED'))
+        skipped = {item['control']: item['needs'] for item in result['controls'] if item['outcome'] == 'NOT_RUN'}
+        self.assertEqual(skipped['accepted_services'], ['observation: final'])
+        self.assertEqual(skipped['serving_config'], ['recovery_data', 'recovery_receipt'])
+        self.assertEqual((outcomes['database_boundary'], outcomes['accepted_app_profile'], outcomes['operation_absent']),
+                         ('PASS', 'PASS', 'PASS'))
+        self.assertEqual(outcomes['recovery_data'], 'REFUSED')
 
     def test_a_refused_request_names_what_could_not_run(self):
         self.packet()

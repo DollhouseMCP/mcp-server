@@ -138,47 +138,107 @@ def preserve_unarchived_files(root, files):
     return unarchived
 
 
-def import_accepted(root, value, evidence_dir, run, receipt_identities):
-    window = window_path(root, value['token'])
-    if window.exists() or window.is_symlink():
-        raise ValueError('manual adoption cannot replace an armed recovery window')
-    state, pending, control = pending_control(root, value['token'], 'probed')
-    validate_failed_state(root, value, state, pending)
-    final, manifest, originals, files = archive_inputs(root, evidence_dir, pending)
-    recovered = check_acceptance(final, control['public_origin'])
-    if recovered['app'] != value['app_id'] or recovered['postgres'] != value['postgres_id']:
-        raise ValueError('manual recovery services differ from the request')
-    request, checkpoint_sha, db_manifest = handoff.checkpoint(value['checkpoint_dir'])
-    if (checkpoint_sha != ACCEPTED['checkpoint'] or manifest['app']['id'] != request['app']['id']
-            or manifest['database_container']['id'] != db_manifest['source_database']['id']
-            or manifest['original_proxy_id'] not in originals):
-        raise ValueError('accepted checkpoint or original filesystem service binding differs')
-    handoff.verify_database(value, db_manifest, run)
-    handoff.app_profile(run, value['instance'], value['app_id'], True, root)
-    app = inspect_one(run, 'container', value['app_id'])
-    postgres = inspect_one(run, 'container', value['postgres_id'])
-    for actual in (app, postgres):
-        if profile(actual) != profile(originals[actual['Id']]):
-            raise ValueError('manual recovery app or database full profile changed')
-        verify_boot(final, actual, True)
-    database = database_fingerprint(run, value['postgres_id'])
-    checkpoint_database(value, database)
-    if database['schema_sha256'] != ACCEPTED['schema'] or database['globals_sha256'] != ACCEPTED['globals']:
-        raise ValueError('accepted pre-migration schema/globals boundary changed')
-    retained = inspect_one(run, 'container', recovered['retained_aborted_proxy'])
-    if retained['Id'] != control['proxy']['id'] or profile_hash(retained) != ACCEPTED['retained_proxy_profile']:
-        raise ValueError('accepted retained proxy full profile changed')
-    verify_boot(final, retained, False)
-    proxy = inspect_one(run, 'container', recovered['restored_old_profile_proxy'])
-    verify_boot(final, proxy, True)
-    from legacy_reconciliation_request import identities
-    bound = identities(root, pending, proxy)
-    if receipt_identities != bound:
-        raise ValueError('manual reconciliation receipt identities differ; regenerate the request')
-    unarchived = preserve_unarchived_files(root, files)
-    return {'state': state, 'pending': pending, 'files': files, 'database': database, 'app': app,
-            'postgres': postgres, 'proxy': proxy, 'retained': retained,
+ADOPTION = ('adoption_window', 'accepted_state', 'accepted_archive', 'accepted_services', 'accepted_checkpoint',
+            'database_identity', 'accepted_app_profile', 'service_profiles', 'database_boundary',
+            'retained_proxy', 'serving_proxy', 'receipt_identities', 'unarchived_files')
+
+
+def adoption_steps(root, value, evidence_dir, run, receipt_identities, found):
+    """The checks of the accepted manual recovery, named and in their required order.
+
+    Each step stores what it observed in `found` before validating it, and names
+    the earlier observations it needs. Adoption stops at the first refusal. The
+    read-only preflight runs every step whose observations exist, so one refusal
+    does not hide the next.
+    """
+    def adoption_window():
+        window = window_path(root, value['token'])
+        if window.exists() or window.is_symlink():
+            raise ValueError('manual adoption cannot replace an armed recovery window')
+
+    def accepted_state():
+        found['state'], found['pending'], found['control'] = pending_control(root, value['token'], 'probed')
+        validate_failed_state(root, value, found['state'], found['pending'])
+
+    def accepted_archive():
+        found['final'], found['manifest'], found['originals'], found['files'] = archive_inputs(
+            root, evidence_dir, found['pending'])
+
+    def accepted_services():
+        recovered = found['recovered'] = check_acceptance(found['final'], found['control']['public_origin'])
+        if recovered['app'] != value['app_id'] or recovered['postgres'] != value['postgres_id']:
+            raise ValueError('manual recovery services differ from the request')
+
+    def accepted_checkpoint():
+        request, found['checkpoint_sha256'], found['db_manifest'] = handoff.checkpoint(value['checkpoint_dir'])
+        manifest = found['manifest']
+        if (found['checkpoint_sha256'] != ACCEPTED['checkpoint'] or manifest['app']['id'] != request['app']['id']
+                or manifest['database_container']['id'] != found['db_manifest']['source_database']['id']
+                or manifest['original_proxy_id'] not in found['originals']):
+            raise ValueError('accepted checkpoint or original filesystem service binding differs')
+
+    def service_profiles():
+        found['app'] = inspect_one(run, 'container', value['app_id'])
+        found['postgres'] = inspect_one(run, 'container', value['postgres_id'])
+        for actual in (found['app'], found['postgres']):
+            if profile(actual) != profile(found['originals'][actual['Id']]):
+                raise ValueError('manual recovery app or database full profile changed')
+            verify_boot(found['final'], actual, True)
+
+    def database_boundary():
+        database = found['database'] = database_fingerprint(run, value['postgres_id'])
+        checkpoint_database(value, database)
+        if database['schema_sha256'] != ACCEPTED['schema'] or database['globals_sha256'] != ACCEPTED['globals']:
+            raise ValueError('accepted pre-migration schema/globals boundary changed')
+
+    def retained_proxy():
+        retained = found['retained'] = inspect_one(run, 'container', found['recovered']['retained_aborted_proxy'])
+        if (retained['Id'] != found['control']['proxy']['id']
+                or profile_hash(retained) != ACCEPTED['retained_proxy_profile']):
+            raise ValueError('accepted retained proxy full profile changed')
+        verify_boot(found['final'], retained, False)
+
+    def serving_proxy():
+        found['proxy'] = inspect_one(run, 'container', found['recovered']['restored_old_profile_proxy'])
+        verify_boot(found['final'], found['proxy'], True)
+
+    def bound_identities():
+        from legacy_reconciliation_request import identities
+        found['bound'] = identities(root, found['pending'], found['proxy'])
+        if receipt_identities != found['bound']:
+            raise ValueError('manual reconciliation receipt identities differ; regenerate the request')
+
+    def unarchived_files():
+        found['unarchived'] = preserve_unarchived_files(root, found['files'])
+
+    steps = (
+        ((), adoption_window), ((), accepted_state), (('pending',), accepted_archive),
+        (('final', 'control'), accepted_services), (('manifest', 'originals'), accepted_checkpoint),
+        (('db_manifest',), lambda: handoff.verify_database(value, found['db_manifest'], run)),
+        ((), lambda: handoff.app_profile(run, value['instance'], value['app_id'], True, root)),
+        (('originals', 'final'), service_profiles), ((), database_boundary),
+        (('recovered', 'control', 'final'), retained_proxy), (('recovered', 'final'), serving_proxy),
+        (('pending', 'proxy'), bound_identities), (('files',), unarchived_files),
+    )
+    return tuple((name, needs, step) for name, (needs, step) in zip(ADOPTION, steps, strict=True))
+
+
+def adopted(found):
+    """The reconciliation data, from the observations of every adoption step."""
+    bound = found['bound']
+    return {'state': found['state'], 'pending': found['pending'], 'files': found['files'],
+            'database': found['database'], 'app': found['app'], 'postgres': found['postgres'],
+            'proxy': found['proxy'], 'retained': found['retained'],
             'proxy_token': bound['serving_proxy']['recovery_token'], 'receipt_identities': bound,
-            'source': pending['source'], 'checkpoint_sha256': checkpoint_sha, 'manual_receipt_sha256': ACCEPTED['manual_receipt'],
-            'original_proxy_id': manifest['original_proxy_id'], 'marker_hashes': final['markers_unchanged'],
-            'unchanged_unarchived_files': unarchived}
+            'source': found['pending']['source'], 'checkpoint_sha256': found['checkpoint_sha256'],
+            'manual_receipt_sha256': ACCEPTED['manual_receipt'],
+            'original_proxy_id': found['manifest']['original_proxy_id'],
+            'marker_hashes': found['final']['markers_unchanged'],
+            'unchanged_unarchived_files': found['unarchived']}
+
+
+def import_accepted(root, value, evidence_dir, run, receipt_identities):
+    found = {}
+    for _, _, step in adoption_steps(root, value, evidence_dir, run, receipt_identities, found):
+        step()
+    return adopted(found)
