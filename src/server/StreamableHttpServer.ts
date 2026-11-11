@@ -1214,6 +1214,48 @@ export async function createStreamableHttpRuntime(
     }
   };
 
+  /** Detaches a closed stream from its session, unless a newer stream has already replaced it. */
+  const detachStream = (sessionId: string, session: ActiveSessionRecord, res: Response): void => {
+    session.observers.delete(res);
+    if (sessions.get(sessionId) !== session || session.stream !== res) return;
+    session.stream = undefined;
+    session.stopStallWatcher?.();
+    session.stopStallWatcher = undefined;
+    if (session.idle.close(res)) session.presence?.close();
+  };
+
+  /** Makes an accepted stream the session's current one, and resyncs the client if payloads were dropped. */
+  const attachStream = (sessionId: string, session: ActiveSessionRecord, res: Response, claims: AuthClaims | undefined): void => {
+    if (claims && streamTokenExpiry(claims) === undefined && (options.streamMaxLifetimeMs ?? env.DOLLHOUSE_HTTP_STREAM_MAX_LIFETIME_MS) === 0) {
+      logger.warn('[StreamableHTTP] Stream credential has no expiry and no lifetime cap; connected stream is unbounded', { sessionId });
+    }
+    session.stream = res;
+    session.idle.open(res);
+    recordRuntimeActivity(sessionId);
+    session.presence?.open();
+    session.stopStallWatcher = options.sseStallWatcher?.attach(res);
+    if (session.credentialResyncPending) {
+      session.credentialResyncPending = false;
+      void session.transport.send({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' })
+        .catch(error => logger.debug('[StreamableHTTP] Stream reconnect resync failed', { sessionId, error: errorMessage(error) }));
+    }
+  };
+
+  /** Credential recheck wiring for one stream. No recheck without verified claims or a provider that can answer. */
+  const streamRecheckOptions = (sessionId: string, claims: AuthClaims | undefined) => {
+    const isActive = options.isStreamCredentialActive;
+    return {
+      recheckCredential: claims && isActive ? () => isActive(claims) : undefined,
+      credentialRecheckMs: streamCredentialRecheckMs,
+      onCredentialRevoked: () => logger.info(
+        '[StreamableHTTP] Stream credential is no longer active; closing the stream', { sessionId },
+      ),
+      onCredentialRecheckFailed: (error: unknown) => logger.warn(
+        '[StreamableHTTP] Stream credential recheck failed; retrying at the next interval', { sessionId, error: errorMessage(error) },
+      ),
+    };
+  };
+
   const handleStreamRequest = async (req: Request, res: Response, sessionId: string, session: ActiveSessionRecord): Promise<void> => {
     // Seed Node's public header table so SDK writeHead headers remain readable
     // through getHeader. No header-method wrappers or SDK internals are needed.
@@ -1234,14 +1276,7 @@ export async function createStreamableHttpRuntime(
     let complete!: () => void;
     const pending = { response: res, done: new Promise<void>(resolve => { complete = resolve; }) };
     if (candidate) session.pendingStream = pending;
-    const onClose = (): void => {
-      session.observers.delete(res);
-      if (sessions.get(sessionId) !== session || session.stream !== res) return;
-      session.stream = undefined;
-      session.stopStallWatcher?.();
-      session.stopStallWatcher = undefined;
-      if (session.idle.close(res)) session.presence?.close();
-    };
+    const onClose = (): void => detachStream(sessionId, session, res);
     const claims = res.locals.authClaims as AuthClaims | undefined;
     const observer = observeStream(res, {
       isCurrent: () => sessions.get(sessionId) === session,
@@ -1254,16 +1289,7 @@ export async function createStreamableHttpRuntime(
       // Presence-lapse drops do not initiate resync: a lapsed session closes rather than recovering.
       suppressPayloads: () => session.presence?.hasExpired() ?? false,
       binding: streamCredentialBinding(claims),
-      recheckCredential: claims && options.isStreamCredentialActive
-        ? () => options.isStreamCredentialActive!(claims)
-        : undefined,
-      credentialRecheckMs: streamCredentialRecheckMs,
-      onCredentialRevoked: () => logger.info(
-        '[StreamableHTTP] Stream credential is no longer active; closing the stream', { sessionId },
-      ),
-      onCredentialRecheckFailed: error => logger.warn(
-        '[StreamableHTTP] Stream credential recheck failed; retrying at the next interval', { sessionId, error: errorMessage(error) },
-      ),
+      ...streamRecheckOptions(sessionId, claims),
       onCredentialPayloadDropped: () => { session.credentialResyncPending = true; },
       onCredentialRenewed: () => logger.debug(
         '[StreamableHTTP] Stream credential renewed; resuming MCP payloads', { sessionId },
@@ -1271,21 +1297,7 @@ export async function createStreamableHttpRuntime(
       onCredentialExpired: () => logger.debug(
         '[StreamableHTTP] Stream credential expired; suppressing MCP payloads, keeping heartbeats', { sessionId },
       ),
-      onOpen: () => {
-        if (claims && streamTokenExpiry(claims) === undefined && (options.streamMaxLifetimeMs ?? env.DOLLHOUSE_HTTP_STREAM_MAX_LIFETIME_MS) === 0) {
-          logger.warn('[StreamableHTTP] Stream credential has no expiry and no lifetime cap; connected stream is unbounded', { sessionId });
-        }
-        session.stream = res;
-        session.idle.open(res);
-        recordRuntimeActivity(sessionId);
-        session.presence?.open();
-        session.stopStallWatcher = options.sseStallWatcher?.attach(res);
-        if (session.credentialResyncPending) {
-          session.credentialResyncPending = false;
-          void session.transport.send({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' })
-            .catch(error => logger.debug('[StreamableHTTP] Stream reconnect resync failed', { sessionId, error: errorMessage(error) }));
-        }
-      },
+      onOpen: () => attachStream(sessionId, session, res, claims),
       onClose,
     });
     session.observers.set(res, observer);
