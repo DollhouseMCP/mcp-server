@@ -10,7 +10,12 @@ issues a Docker command that changes a container, volume or image: every Docker
 command passed to a control goes through an allowlist of observations. It holds
 the deployment lock while it runs, and refuses if the lock file does not already
 exist. Its only write is one private temporary directory for the Compose model,
-outside the deployment, removed before exit.
+outside the deployment and memory-backed where /run exists, removed before exit.
+
+The lock is an flock on a descriptor that no child process inherits, so it is
+released on every exit path: return, refusal, a handled termination signal, and
+a kill, where the kernel closes the descriptor. Only a kill can leave the
+temporary directory behind; it stays private to root.
 
 A complete PASS is not a reconciliation and authorizes nothing.
 """
@@ -18,6 +23,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import stat
 import sys
 import tempfile
@@ -47,6 +53,17 @@ PASS, REFUSED, NOT_RUN = 'PASS', 'REFUSED', 'NOT_RUN'
 # read-only query and the application's own loopback health requests.
 OBSERVATIONS = {('ps',), ('inspect',), ('exec',), ('info',), ('container', 'inspect'), ('image', 'inspect'),
                 ('volume', 'inspect'), ('volume', 'ls'), ('context', 'inspect')}
+
+
+MEMORY = Path('/run')
+
+
+def exit_on_signal():
+    """Turn a termination signal into an ordinary exit, so every finally block still runs."""
+    def stop(number, _frame):
+        raise SystemExit(128 + number)
+    for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(number, stop)
 
 
 def observing(run):
@@ -126,7 +143,9 @@ def operation_absent(root, token):
 def compose_model(root, instance, data, verify_compose):
     """Resolve the same private Compose model that reconciliation stages, from a temporary copy."""
     model = handoff.encoded(compose.model(instance, data['app'], data['postgres'], data['proxy'])) + b'\n'
-    directory = Path(tempfile.mkdtemp(prefix='legacy-reconcile-preflight-'))
+    # The model carries the services' literal environment, so keep it off persistent storage.
+    memory = MEMORY if MEMORY.is_dir() and os.access(MEMORY, os.W_OK) else None
+    directory = Path(tempfile.mkdtemp(prefix='legacy-reconcile-preflight-', dir=memory))
     try:
         files.save(directory, 'compose.yml', model)
         verify_compose(directory / 'compose.yml', root, instance, data)
@@ -213,6 +232,7 @@ def main():
     if (not isinstance(value, dict) or set(value) != INPUT_KEYS
             or any(not isinstance(item, str) for item in value.values())):
         raise ValueError('preflight accepts paths and instance only, never tokens')
+    exit_on_signal()
     result = preflight(value)
     print(json.dumps(result, indent=1))
     return 0 if result['complete'] else 3

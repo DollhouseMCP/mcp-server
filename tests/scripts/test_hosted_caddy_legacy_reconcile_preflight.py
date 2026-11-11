@@ -5,6 +5,8 @@ import io
 import json
 import os
 from pathlib import Path
+import signal
+import subprocess
 import sys
 import unittest
 import unittest.mock
@@ -77,6 +79,7 @@ class PreflightTests(unittest.TestCase):
         self.assertFalse(any(argv[1:3] == ['volume', 'create'] for argv in commands))
         self.assertFalse(resolution.operation_path(self.fx.root, packet.value['token']).exists())
         self.assertFalse(list(Path(preflight.tempfile.gettempdir()).glob('legacy-reconcile-preflight-*')))
+        self.assertEqual(preflight.MEMORY, Path('/run'))
 
     def test_only_docker_observations_reach_the_daemon(self):
         seen = []
@@ -176,11 +179,48 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual([item['control'] for item in refused], ['request'], refused)
         self.assertIn('source or receipt changed', refused[0]['reason'])
 
+    def test_lock_and_temporary_model_are_released_on_a_termination_signal_and_on_a_kill(self):
+        lock = self.fx.root / '.caddy-deploy.lock'
+        lock.write_bytes(b'')
+        lock.chmod(0o600)
+        memory = self.fx.root / 'memory'
+        memory.mkdir(mode=0o700)
+        held = preflight.existing_lock(self.fx.root)
+        self.assertIs(os.get_inheritable(held), False)
+        os.close(held)
+        child = (
+            'import sys, time; from pathlib import Path\n'
+            'sys.path.insert(0, sys.argv[1]); sys.path.insert(0, sys.argv[2])\n'
+            'import legacy_reconcile_preflight as p\n'
+            'p.MEMORY = Path(sys.argv[4]); p.exit_on_signal()\n'
+            'lock = p.existing_lock(Path(sys.argv[3]))\n'
+            'def hold(path, *_):\n'
+            '    print(path.parent, flush=True); time.sleep(60)\n'
+            'p.compose_model(Path(sys.argv[3]), "site", {"app": 1, "postgres": 2, "proxy": 3}, hold)\n')
+        for number, cleaned in ((signal.SIGTERM, True), (signal.SIGKILL, False)):
+            with self.subTest(signal=number):
+                process = subprocess.Popen(
+                    [sys.executable, '-c', 'import legacy_control_compose as c; c.model = lambda *a: {}\n' + child,
+                     str(SCRIPTS / 'hosted-deploy'), str(SCRIPTS), str(self.fx.root), str(memory)],
+                    stdout=subprocess.PIPE, env={**os.environ, 'PYTHONPATH': str(SCRIPTS / 'hosted-deploy'),
+                                                 'PYTHONDONTWRITEBYTECODE': '1'})
+                directory = Path(process.stdout.readline().decode().strip())
+                self.assertTrue((directory / 'compose.yml').exists())
+                with self.assertRaises(BlockingIOError):
+                    preflight.existing_lock(self.fx.root)
+                process.send_signal(number)
+                self.assertEqual(process.wait(timeout=20), 128 + number if cleaned else -number)
+                process.stdout.close()
+                os.close(preflight.existing_lock(self.fx.root))
+                self.assertEqual(directory.exists(), not cleaned)
+                self.assertEqual(directory.stat().st_mode & 0o777 if directory.exists() else 0o700, 0o700)
+
     def test_command_line_accepts_paths_only_and_reports_incomplete_as_status_three(self):
         def invoke(payload, result=None):
             stream = unittest.mock.Mock(buffer=io.BytesIO(json.dumps(payload).encode()))
             with patch.object(preflight.sys, 'argv', ['preflight', 'preflight-legacy-reconciliation']), \
                     patch.object(preflight.sys, 'stdin', stream), patch('builtins.print'), \
+                    patch.object(preflight, 'exit_on_signal'), \
                     patch.object(preflight, 'preflight', return_value=result) as called:
                 return preflight.main(), called
         paths = {'deploy_dir': '/fixture', 'instance': 'site', 'checkpoint_dir': '/c', 'manual_evidence_dir': '/m'}
