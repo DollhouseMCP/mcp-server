@@ -74,6 +74,7 @@ class LegacyComposeTests(unittest.TestCase):
 
     def test_invalid_environment_duplicate_mount_or_changed_network_refuses(self):
         for field, changed in (('Config', {**self.app['Config'], 'Env': ['KEY=one', 'KEY=two']}),
+                               ('Config', {**self.app['Config'], 'Env': ['KÉY=one']}),
                                ('Mounts', self.app['Mounts'] * 2),
                                ('NetworkSettings', {'Networks': {'unknown': {}}})):
             with self.subTest(field=field):

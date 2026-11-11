@@ -124,6 +124,20 @@ def validate_failed_state(root, value, state, pending):
         raise ValueError('current failed controls differ from the accepted manual recovery')
 
 
+def preserve_unarchived_files(root, files):
+    # The historical archive did not promise that unlisted optional files were
+    # absent. Preserve any such current metadata rather than inventing deletion.
+    unarchived = []
+    for name in FILES:
+        if name not in files:
+            try:
+                files[name] = read_configuration(root, name)
+            except FileNotFoundError:
+                continue
+            unarchived.append(name)
+    return unarchived
+
+
 def import_accepted(root, value, evidence_dir, run):
     window = window_path(root, value['token'])
     if window.exists() or window.is_symlink():
@@ -157,16 +171,7 @@ def import_accepted(root, value, evidence_dir, run):
     verify_boot(final, retained, False)
     proxy = inspect_one(run, 'container', recovered['restored_old_profile_proxy'])
     verify_boot(final, proxy, True)
-    # The historical archive did not promise that unlisted optional files were
-    # absent. Preserve any such current metadata rather than inventing deletion.
-    unarchived = []
-    for name in FILES:
-        if name not in files:
-            try:
-                files[name] = read_configuration(root, name)
-            except FileNotFoundError:
-                continue
-            unarchived.append(name)
+    unarchived = preserve_unarchived_files(root, files)
     return {'state': state, 'pending': pending, 'files': files, 'database': database, 'app': app,
             'postgres': postgres, 'proxy': proxy, 'retained': retained, 'proxy_token': value['token'],
             'source': pending['source'], 'checkpoint_sha256': checkpoint_sha, 'manual_receipt_sha256': ACCEPTED['manual_receipt'],

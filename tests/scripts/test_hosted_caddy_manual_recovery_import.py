@@ -39,15 +39,17 @@ class ManualArchiveTests(unittest.TestCase):
         self.assertNotIn('portfolio/unrelated', selected)
 
     def test_duplicate_or_nonprivate_original_environment_is_refused(self):
+        duplicate = self.archive(extra=('.env',))
         with self.assertRaisesRegex(ValueError, 'archive member is unsafe'):
-            fixed_members(self.ROOT, self.archive(extra=('.env',)))
+            fixed_members(self.ROOT, duplicate)
 
         def public(name, item):
             if name == '.env':
                 item.mode = 0o644
 
+        public_environment = self.archive(public)
         with self.assertRaisesRegex(ValueError, 'environment was not private'):
-            fixed_members(self.ROOT, self.archive(public))
+            fixed_members(self.ROOT, public_environment)
 
     def test_historical_destination_names_are_not_operator_overrides(self):
         raw = b'exact accepted failed state'
@@ -67,15 +69,17 @@ class ManualArchiveTests(unittest.TestCase):
                     item.type = kind
                     item.linkname = '/fixture/unknown'
                     item.size = 0
+            linked = self.archive(link)
             with self.subTest(kind=kind), self.assertRaisesRegex(ValueError, 'archive member is unsafe'):
-                fixed_members(self.ROOT, self.archive(link))
+                fixed_members(self.ROOT, linked)
 
         def owner(name, item):
             if name == 'compose.yml':
                 item.uid = os.geteuid() + 1
 
+        wrong_owner = self.archive(owner)
         with self.assertRaisesRegex(ValueError, 'archive member is unsafe'):
-            fixed_members(self.ROOT, self.archive(owner))
+            fixed_members(self.ROOT, wrong_owner)
 
 
 if __name__ == '__main__':

@@ -18,7 +18,7 @@ def environment(values):
         if not isinstance(value, str) or '=' not in value or '\x00' in value:
             raise ValueError('legacy environment record is invalid')
         key, text = value.split('=', 1)
-        if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key) or key in result:
+        if not re.fullmatch(r'[A-Za-z_]\w*', key, flags=re.ASCII) or key in result:
             raise ValueError('legacy environment names are invalid or duplicated')
         result[key] = text
     return result
@@ -85,6 +85,19 @@ def ports(bindings):
     return result
 
 
+def runtime_overrides(config, host):
+    result = {}
+    for old, new in (('Cmd', 'command'), ('Entrypoint', 'entrypoint'), ('User', 'user'), ('WorkingDir', 'working_dir'),
+                     ('StopSignal', 'stop_signal')):
+        if config.get(old) is not None and config[old] != '':
+            result[new] = config[old]
+    for old, new in (('ReadonlyRootfs', 'read_only'), ('Privileged', 'privileged'), ('Init', 'init'),
+                     ('CapAdd', 'cap_add'), ('CapDrop', 'cap_drop'), ('SecurityOpt', 'security_opt'), ('Sysctls', 'sysctls')):
+        if host.get(old) is not None:
+            result[new] = host[old]
+    return result
+
+
 def service(container, network, volumes):
     config, host = container['Config'], container['HostConfig']
     connection = container.get('NetworkSettings', {}).get('Networks', {})
@@ -100,14 +113,7 @@ def service(container, network, volumes):
               'environment': environment(config.get('Env')), 'restart': restart['Name'],
               'volumes': mounts(container, volumes), 'networks': {'serving': {'aliases': [
                   item for item in aliases if item != container['Id'][:12]]}}}
-    for old, new in (('Cmd', 'command'), ('Entrypoint', 'entrypoint'), ('User', 'user'), ('WorkingDir', 'working_dir'),
-                     ('StopSignal', 'stop_signal')):
-        if config.get(old) is not None and config[old] != '':
-            result[new] = config[old]
-    for old, new in (('ReadonlyRootfs', 'read_only'), ('Privileged', 'privileged'), ('Init', 'init'),
-                     ('CapAdd', 'cap_add'), ('CapDrop', 'cap_drop'), ('SecurityOpt', 'security_opt'), ('Sysctls', 'sysctls')):
-        if host.get(old) is not None:
-            result[new] = host[old]
+    result.update(runtime_overrides(config, host))
     check = healthcheck(config.get('Healthcheck'))
     if check is not None:
         result['healthcheck'] = check
