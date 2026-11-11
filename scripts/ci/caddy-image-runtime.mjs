@@ -289,7 +289,7 @@ else { const allowed=mode.startsWith('allowed'); const headers={'host':'fixture.
     assert.equal(legacyInfo.Architecture, native, 'legacy fixture must run on matching native daemon');
     assert.ok(legacyInfo.Config.Env.includes('CADDY_VERSION=v2.8.4'), 'legacy fixture must be Caddy 2.8.4');
     const legacyFile = path.join(work, 'legacy.Caddyfile');
-    fs.writeFileSync(legacyFile, 'http://fixture.local {\n\treverse_proxy dollhousemcp:8081\n}\n', {flag:'wx', mode:0o644});
+    fs.writeFileSync(legacyFile, 'fixture.local:80 {\n\treverse_proxy dollhousemcp:8081\n}\n', {flag:'wx', mode:0o644});
     const legacyProxy = container(['--name', `${prefix}-legacy-adapt`, '--network', network, legacyImage]);
     engine(['cp', legacyFile, `${legacyProxy}:/etc/caddy/Caddyfile`]);
     engine(['start', legacyProxy]);

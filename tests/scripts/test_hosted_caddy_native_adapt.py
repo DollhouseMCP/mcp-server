@@ -15,7 +15,7 @@ native = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(native)
 
 IDENTIFIER = 'a' * 64
-CADDYFILE = b'http://fixture.local {\n\treverse_proxy dollhousemcp:8081\n}\n'
+CADDYFILE = b'fixture.local:80 {\n\treverse_proxy dollhousemcp:8081\n}\n'
 ADAPTED = b'{"apps":{}}'
 
 
