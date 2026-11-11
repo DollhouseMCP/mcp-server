@@ -15,6 +15,7 @@ sys.dont_write_bytecode = True
 from caddy_active_config import ActiveConfig, CURL, DOCKER, bounded_input, executable, read_snapshots, snapshot_files, validate_system, write_startup_file
 from caddy_bundle_identity import bundle_identity
 from caddy_clone_action import acquire_lock, capture_profile, validate_request
+from caddy_control_failure import ControlFailure
 from caddy_image_admission import qualify
 from caddy_recovery_receipt import read_current_caddyfile
 from caddy_service_guard import unique_proxy
@@ -257,14 +258,33 @@ def public_origin(base):
     return parts.scheme + '://' + parts.hostname.lower() + (':' + str(port) if port is not None else '')
 
 
+def certificate_ready_probe(command, deadline):
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 3:
+            raise ValueError('Caddy certificate readiness could not complete within the 120-second budget')
+        # Include the child's three-second cleanup reserve in the shared deadline.
+        budget = min(15, remaining)
+        attempt = [*command, '--max-time', str(min(10, budget - 3))]
+        try:
+            return bounded_input(attempt, timeout=budget)
+        except ControlFailure as failure:
+            diagnostic = failure.diagnostic
+            if (diagnostic['exit_code'] not in (7, 35) or diagnostic['reason'] is not None
+                    or diagnostic['outcome'] != 'REFUSED' or diagnostic['cleanup_confirmed'] is not True):
+                raise
+        time.sleep(min(1, max(0, deadline - time.monotonic() - 3)))
+
+
 def confirm_denials(base, token):
     base = public_origin(base)
+    deadline = time.monotonic() + 120
     for method, path, headers in (('POST', '/mcp', []),
                                   ('GET', '/healthz', ['--header', 'Authorization: Bearer verification-probe'])):
         command = [CURL, '--disable', '--noproxy', '*', '--proto', '=http,https', '--http1.1', '--request', method,
-                   '--header', 'Content-Length: 0', *headers, '--silent', '--show-error', '--max-time', '10',
+                   '--header', 'Content-Length: 0', *headers, '--silent', '--show-error',
                    '--include', '--write-out', '\n%{http_code}', base + path]
-        output = bounded_input(command, timeout=15)
+        output = certificate_ready_probe(command, deadline)
         _body, code, markers = public_response(output)
         if code != b'503' or markers != [token.encode('ascii')]:
             raise ValueError('public verification fence refused neither unsafe probe')
