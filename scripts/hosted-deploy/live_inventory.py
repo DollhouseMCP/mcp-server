@@ -524,7 +524,14 @@ def directory_facts(path, walk):
     return record
 
 
-def volumes(get):
+def caddy_storage(containers):
+    """Volumes that a Caddy container mounts, whatever they are named."""
+    return {mount.get('Name') for container in containers
+            if 'CADDY_VERSION' in ((container.get('config') or {}).get('env') or {}).get('names', ())
+            for mount in container.get('mounts') or [] if mount.get('Type') == 'volume'}
+
+
+def volumes(get, storage=()):
     listed, result = capped(get('/volumes').get('Volumes'))
     for item in listed:
         record = selected(item, ('Name', 'Driver', 'Scope', 'Mountpoint', 'CreatedAt'))
@@ -532,7 +539,8 @@ def volumes(get):
         record['options'] = public_json(item.get('Options') or {})
         mountpoint = item.get('Mountpoint')
         if isinstance(mountpoint, str) and os.path.isabs(mountpoint):
-            record.update(directory_facts(mountpoint, 'caddy' in str(item.get('Name'))))
+            # Mounted Caddy storage, plus retained copies that no container mounts any more.
+            record.update(directory_facts(mountpoint, item.get('Name') in storage or 'caddy' in str(item.get('Name'))))
         result.append(record)
     return sorted(result, key=lambda record: str(record.get('Name')))
 
@@ -837,7 +845,7 @@ def collect(deploy_dir=DEPLOY_DIR, get=None, root='/'):
         get, get('/containers/json?all=true'), '/containers/%s/json', public_container, 'name'))
     section('images', lambda: inspected(get, get('/images/json'), '/images/%s/json', public_image, 'id'))
     section('networks', lambda: inspected(get, get('/networks'), '/networks/%s', public_network, 'name'))
-    section('volumes', volumes, get)
+    section('volumes', volumes, get, caddy_storage(containers or []))
     section('referenced_files', referenced_files, containers or [])
     section('deployment', deployment, deploy_dir, root)
     section('neighbours', lambda: {**neighbours(root, '/opt', 'dollhousemcp', deploy_dir),

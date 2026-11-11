@@ -116,6 +116,7 @@ def fake_engine(volume, bind, missing=()):
         'HostConfig': {'NetworkMode': 'dollhousemcp_default', 'MaskedPaths': ['/proc/kcore'],
                        'PortBindings': {'443/tcp': [{'HostIp': '0.0.0.0', 'HostPort': '443'}]}},
         'Mounts': [{'Type': 'volume', 'Name': 'dollhousemcp_caddy_data', 'Source': str(volume), 'Destination': '/data'},
+                   {'Type': 'volume', 'Name': 'proxy-config', 'Source': str(volume / 'caddy'), 'Destination': '/config'},
                    {'Type': 'bind', 'Source': str(bind / 'Caddyfile'), 'Destination': '/etc/caddy/Caddyfile'}],
         'NetworkSettings': {'Networks': {'dollhousemcp_default': {'Aliases': ['caddy'], 'IPAddress': '172.18.0.2'}},
                             'Ports': {'443/tcp': [{'HostIp': '0.0.0.0', 'HostPort': '443'}]}},
@@ -135,7 +136,8 @@ def fake_engine(volume, bind, missing=()):
                                  'Containers': {CONTAINER: {'Name': 'dollhousemcp-caddy', 'IPv4Address': '172.18.0.2/16'}}},
         '/volumes': {'Volumes': [{'Name': 'dollhousemcp_caddy_data', 'Driver': 'local', 'Mountpoint': str(volume),
                                   'Options': {'o': 'username=x,password=' + PLAIN}},
-                                 {'Name': 'dollhousemcp_pgdata', 'Driver': 'local', 'Mountpoint': str(bind / 'pgdata')}]},
+                                 {'Name': 'dollhousemcp_pgdata', 'Driver': 'local', 'Mountpoint': str(bind / 'pgdata')},
+                                 {'Name': 'proxy-config', 'Driver': 'local', 'Mountpoint': str(volume / 'caddy')}]},
     }
 
     def get(path):
@@ -236,6 +238,10 @@ class InventoryTests(unittest.TestCase):
         database = self.result['volumes'][1]
         self.assertEqual(database['postgres_version'], '17')
         self.assertNotIn('tree', database)
+        # Storage is found by what a Caddy container mounts, so an operator-chosen name is walked too.
+        renamed = self.result['volumes'][2]
+        self.assertEqual(renamed['Name'], 'proxy-config')
+        self.assertEqual(renamed['tree']['entries'][0]['path'], 'certificates')
         self.assertEqual(self.entry('pgdata')['postgres_version'], '17')
         self.assertNotIn('personas', self.text)
 
@@ -258,7 +264,7 @@ class InventoryTests(unittest.TestCase):
         self.assertIsInstance(container['config']['labels']['vendor.note'], dict)
         self.assertEqual(container['health'], 'healthy')
         self.assertEqual(container['host_config']['MaskedPaths'], ['/proc/kcore'])
-        self.assertEqual(container['mounts'][1]['Destination'], '/etc/caddy/Caddyfile')
+        self.assertEqual(container['mounts'][2]['Destination'], '/etc/caddy/Caddyfile')
         self.assertEqual(missing['id'], 'f' * 64)
         self.assertIn('HTTP 404', missing['inventory_error'])
         self.assertIn({'at': '/containers/1', 'error': missing['inventory_error']}, self.result['partial'])
