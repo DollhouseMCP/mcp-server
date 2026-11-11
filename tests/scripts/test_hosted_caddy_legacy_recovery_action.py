@@ -10,6 +10,7 @@ sys.path.insert(0, str(SCRIPTS / 'hosted-deploy'))
 sys.path.insert(0, str(SCRIPTS))
 import legacy_recovery_action as recovery
 import legacy_recovery_boundary as boundary
+import legacy_recovery_checks as checks
 import legacy_handoff as handoff
 from caddy_control_failure import ControlFailure
 from hosted_legacy_recovery_fixture import Fixture
@@ -213,11 +214,36 @@ class LegacyRecoveryTests(unittest.TestCase):
     def test_active_config_failure_refences_recovered_proxy_and_never_updates_forward_control(self):
         self.fx.complete_handoff()
         before = json.dumps(self.fx.state, sort_keys=True)
-        self.fx.serving_config.side_effect = ValueError('fixture active configuration mismatch')
-        with self.assertRaisesRegex(ValueError, 'active configuration mismatch'):
+        self.fx.active_config = b'{"fixture":"another active configuration"}'
+        with self.assertRaisesRegex(ValueError, 'serving configuration differs from the original receipt'):
             self.recover()
         self.assertFalse(self.fx.p.recovered['State']['Running'])
         self.assertEqual(json.dumps(self.fx.state, sort_keys=True), before)
+        self.assertEqual([session.closed for session in self.fx.sessions], [True])
+
+    def test_recovery_proves_the_serving_configuration_against_the_receipt_twice(self):
+        self.fx.complete_handoff()
+        self.recover()
+        proxy = self.fx.p.recovered
+        self.assertEqual([(session.identity['id'], session.closed) for session in self.fx.sessions],
+                         [(proxy['Id'], True), (proxy['Id'], True)])
+
+    def test_serving_configuration_refuses_a_changed_boot_or_a_changed_receipt(self):
+        self.fx.complete_handoff()
+        self.recover()
+        proxy, receipt = self.fx.p.recovered, self.fx.p.fx.receipt
+        record = json.loads((receipt / 'receipt.json').read_bytes())
+        boot = {'started_at': proxy['State']['StartedAt'], 'restart_count': proxy['RestartCount']}
+        checks.serving_config(proxy['Id'], receipt, record, boot)
+        for changed in ({**boot, 'started_at': '2026-01-01T00:09:00Z'}, {**boot, 'restart_count': 1}):
+            with self.subTest(boot=changed), self.assertRaisesRegex(ValueError, 'serving proxy boot changed'):
+                checks.serving_config(proxy['Id'], receipt, record, changed)
+        self.assertTrue(all(session.closed for session in self.fx.sessions))
+        opened = len(self.fx.sessions)
+        wrong = {**record, 'caddyfile_sha256': '0' * 64}
+        with self.assertRaisesRegex(ValueError, 'recorded Caddyfile does not match receipt'):
+            checks.serving_config(proxy['Id'], receipt, wrong, boot)
+        self.assertEqual(len(self.fx.sessions), opened)
 
     def test_public_acceptance_requires_the_legacy_version_as_well_as_status(self):
         good = b'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{"version":"2.1.0-beta.2"}\n200'
