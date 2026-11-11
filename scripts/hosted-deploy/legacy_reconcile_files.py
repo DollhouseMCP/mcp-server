@@ -8,6 +8,8 @@ from caddy_recovery_receipt import private_directory, write_exclusive
 import legacy_handoff as handoff
 from legacy_recovery_boundary import FILES, read_configuration, verify_live_files
 
+CURRENT_SOURCE = 'server'
+
 
 def absent(path):
     try:
@@ -116,14 +118,14 @@ def move(source, destination, operation, name):
 
 
 def install(root, operation, candidate, staged, before_source, after_source, before_files, after_files):
-    if bundle_identity(root / 'server') != before_source or bundle_identity(candidate) != after_source:
+    if bundle_identity(root / CURRENT_SOURCE) != before_source or bundle_identity(candidate) != after_source:
         raise ValueError('reconciliation source changed before installation')
     verify_live_files(root, before_files)
     verify_live_files(staged, after_files)
     failed = operation / 'failed-files'
     failed.mkdir(mode=0o700)
-    move(root / 'server', operation / 'failed-server', operation, 'retain-failed-source')
-    move(candidate, root / 'server', operation, 'install-original-source')
+    move(root / CURRENT_SOURCE, operation / 'failed-server', operation, 'retain-failed-source')
+    move(candidate, root / CURRENT_SOURCE, operation, 'install-original-source')
     for index, name in enumerate(FILES):
         verify_live_files(root, {name: before_files[name]})
         if before_files[name] == after_files[name]:
@@ -133,7 +135,7 @@ def install(root, operation, candidate, staged, before_source, after_source, bef
         if after_files[name] is not None:
             verify_live_files(staged, {name: after_files[name]})
             move(staged / name, root / name, operation, 'install-file-' + str(index))
-    if bundle_identity(root / 'server') != after_source or bundle_identity(operation / 'failed-server') != before_source:
+    if bundle_identity(root / CURRENT_SOURCE) != after_source or bundle_identity(operation / 'failed-server') != before_source:
         raise ValueError('reconciled source read-back differs')
     verify_live_files(root, after_files)
     verify_live_files(failed, {name: expected if expected != after_files[name] else None

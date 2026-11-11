@@ -11,7 +11,7 @@ from caddy_clone_action import acquire_lock, validate_request
 from caddy_image_admission import qualify
 from caddy_recover_action import recovery_kind, verify_recovered
 from caddy_recovery_receipt import MAX_RECORD, private_directory, read_caddy_snapshot, read_private
-from caddy_retired_proxy import DIRECTORY, inventory, register
+from caddy_retired_proxy import DIRECTORY, STARTUP_NAME, inventory, register
 from caddy_service_guard import proxy_startup_path, unique_proxy
 from caddy_unchanged_action import no_other_writers
 from caddy_volume_migration import inspect_one, inspect_volumes
@@ -132,7 +132,7 @@ def prove_serving(root, value, data, record, receipt, run, admit, public):
     recovery.app_acceptance(value, run)
     serving_dns(run, instance, value['app_id'])
     verify_recovered(run, data['proxy']['Id'], {'record': record}, instance, data['proxy_token'], True,
-                     receipt / 'Caddyfile', admit)
+                     receipt / STARTUP_NAME, admit)
     expected = record['clone']['volumes']
     if inspect_volumes(run, [item['name'] for item in expected]) != expected:
         raise ValueError('original or partial Caddy volume identity changed')
@@ -167,8 +167,8 @@ def check_compose(path, root, instance, data):
 def retire(root, instance, operation, data, receipt, run):
     current, old = data['proxy'], data['retained']
     serving = {'id': current['Id'], 'profile': profile(current), 'boot': lifecycle(current, True),
-               'caddyfile': str(receipt / 'Caddyfile'),
-               'caddyfile_sha256': handoff.digest(data['files']['Caddyfile'][0])}
+               'caddyfile': str(receipt / STARTUP_NAME),
+               'caddyfile_sha256': handoff.digest(data['files'][STARTUP_NAME][0])}
     record = {'schema': 'qualified-proxy-retirement-v1', 'host': handoff.host_identity(), 'instance': instance,
               'serving': serving, 'retired': {'id': old['Id'], 'name': old['Name'][1:], 'profile': profile(old),
                                               'boot': lifecycle(old, False)}}
@@ -177,7 +177,7 @@ def retire(root, instance, operation, data, receipt, run):
     register(root, instance, old['Id'], old['Name'][1:], authority_path, run)
     authority = {'path': str(authority_path), 'sha256': handoff.digest(handoff.encoded(record))}
     files.record(root / DIRECTORY, 'serving-' + current['Id'], {'authority': authority, 'serving': serving})
-    if unique_proxy(run, instance, root=root) != current['Id'] or proxy_startup_path(root, instance, current['Id'], run) != receipt / 'Caddyfile':
+    if unique_proxy(run, instance, root=root) != current['Id'] or proxy_startup_path(root, instance, current['Id'], run) != receipt / STARTUP_NAME:
         raise ValueError('qualified proxy selection read-back differs')
     return authority['sha256']
 
@@ -191,7 +191,7 @@ def reconcile(root, value, manual, run=system_docker, admit=qualify, public=reco
     kind, original, receipt = recovery_kind(root, Path(pending['previous']))
     if (kind != 'legacy' or str(receipt) != pending['receipt']
             or data.get('original_proxy_id', original['profile']['container_id']) != original['profile']['container_id']
-            or read_caddy_snapshot(receipt, original['caddyfile_sha256']) != data['files']['Caddyfile'][0]):
+            or read_caddy_snapshot(receipt, original['caddyfile_sha256']) != data['files'][STARTUP_NAME][0]):
         raise ValueError('reconciliation original source/Caddy receipt differs')
     failed = resolution.raw_state(root)
     if json.loads(failed, object_pairs_hook=unique_object) != data['state']:

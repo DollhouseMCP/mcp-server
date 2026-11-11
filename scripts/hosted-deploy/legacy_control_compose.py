@@ -75,7 +75,7 @@ def ports(bindings):
         raise ValueError('legacy port bindings are unavailable')
     result = []
     for key, entries in bindings.items():
-        if not re.fullmatch(r'[1-9][0-9]{0,4}/tcp', key) or not isinstance(entries, list):
+        if not re.fullmatch(r'[1-9]\d{0,4}/tcp', key, flags=re.ASCII) or not isinstance(entries, list):
             raise ValueError('unsupported legacy control port')
         for item in entries:
             if not isinstance(item, dict) or set(item) != {'HostIp', 'HostPort'}:
