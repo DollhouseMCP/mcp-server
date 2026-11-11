@@ -10,6 +10,14 @@ SCRIPTS = Path(__file__).resolve().parents[2] / 'scripts'
 sys.path.insert(0, str(SCRIPTS / 'hosted-deploy'))
 sys.path.insert(0, str(SCRIPTS))
 import caddy_release_action as release
+from caddy_control_failure import ControlFailure
+
+
+def curl_failure(status=35, cleaned=True):
+    failure = ControlFailure(exit_code=status, stderr=b'curl: TLS alert 80: internal error\n',
+                             elapsed=0.05, timeout=15, reason=None)
+    failure.diagnostic.update(cleanup_confirmed=cleaned, cleanup_exit_code=status)
+    return failure
 
 
 class ReleaseActionTests(unittest.TestCase):
@@ -82,10 +90,64 @@ class ReleaseActionTests(unittest.TestCase):
         with patch.object(release, 'bounded_input', return_value=valid) as call:
             release.confirm_denials('https://fixture.example', 'a' * 32)
         self.assertEqual(call.call_count, 2)
-        for response in (valid.replace(b'a' * 32, b'b' * 32), valid.replace(b'X-Dollhouse-Verification:', b'X-Unrelated:')):
-            with self.subTest(response=response), patch.object(release, 'bounded_input', return_value=response):
+        for response in (valid.replace(b'a' * 32, b'b' * 32),
+                         valid.replace(b'X-Dollhouse-Verification:', b'X-Unrelated:'),
+                         valid.replace(b'503', b'200')):
+            with self.subTest(response=response), patch.object(release, 'bounded_input', return_value=response) as call:
                 with self.assertRaisesRegex(ValueError, 'unsafe probe'):
                     release.confirm_denials('https://fixture.example', 'a' * 32)
+                call.assert_called_once()
+
+    def test_denial_probe_waits_for_late_certificate(self):
+        valid = b'HTTP/1.1 503 Unavailable\r\nX-Dollhouse-Verification: ' + b'a' * 32 + b'\r\n\r\nno\n503'
+        clock = [0.0]
+
+        def advance(seconds):
+            clock[0] += seconds
+
+        with patch.object(release.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(release.time, 'sleep', side_effect=advance) as sleep, \
+                patch.object(release, 'bounded_input', side_effect=[curl_failure(), curl_failure(), valid, valid]) as call:
+            release.confirm_denials('https://fixture.example', 'a' * 32)
+        self.assertEqual(call.call_count, 4)
+        self.assertEqual(sleep.call_count, 2)
+        self.assertGreater(clock[0], 0)
+        self.assertLess(clock[0], 120)
+        for attempt in call.call_args_list:
+            self.assertNotIn('--insecure', attempt.args[0])
+            self.assertLessEqual(attempt.kwargs['timeout'], 15)
+
+    def test_denial_probe_without_certificate_fails_within_one_total_window(self):
+        clock = [0.0]
+
+        def advance(seconds):
+            clock[0] += seconds
+
+        def unavailable(_command, *, timeout):
+            self.assertLessEqual(timeout, 120 - clock[0])
+            advance(timeout - 3)  # Simulate the full child work budget, retaining cleanup reserve.
+            raise curl_failure()
+
+        with patch.object(release.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(release.time, 'sleep', side_effect=advance), \
+                patch.object(release, 'bounded_input', side_effect=unavailable) as call:
+            with self.assertRaisesRegex(ValueError, 'certificate readiness'):
+                release.confirm_denials('https://fixture.example', 'a' * 32)
+        self.assertGreater(call.call_count, 1)
+        self.assertLessEqual(clock[0], 120)
+
+    def test_denial_probe_does_not_retry_certificate_or_unconfirmed_failures(self):
+        for failure in (curl_failure(60), curl_failure(51), curl_failure(58),
+                        curl_failure(77), curl_failure(83), curl_failure(28),
+                        curl_failure(35, cleaned=False)):
+            with self.subTest(status=failure.diagnostic['exit_code']), \
+                    patch.object(release.time, 'sleep') as sleep, \
+                    patch.object(release, 'bounded_input', side_effect=failure) as call:
+                with self.assertRaises(ControlFailure) as caught:
+                    release.confirm_denials('https://fixture.example', 'a' * 32)
+                self.assertIs(caught.exception, failure)
+                call.assert_called_once()
+                sleep.assert_not_called()
 
     def test_bootstrap_warning_requires_the_current_fence_marker(self):
         response = b'HTTP/1.1 503 Unavailable\r\nX-Dollhouse-Verification: ' + b'a' * 32 + b'\r\n\r\nbootstrap_required\n503'
