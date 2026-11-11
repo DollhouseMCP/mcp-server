@@ -477,8 +477,9 @@ const envSchema = z.object({
   DOLLHOUSE_WEB_CONSOLE_PROTECTED_CORRELATION_HMAC_KEY: z.string().trim().optional()
     .transform(v => (v && v.length > 0) ? v : undefined),
   /**
-   * JSON evidence file consumed by the replacement-readiness gate before the
-   * production `/api/v1/*` router is exposed.
+   * Retired and ignored. The console used to require an operator-written
+   * readiness evidence file at this path before it would start. It is still
+   * parsed so a deployment that sets it keeps starting, with a warning.
    */
   DOLLHOUSE_WEB_CONSOLE_REPLACEMENT_READINESS_EVIDENCE: z.string().trim().optional()
     .transform(v => (v && v.length > 0) ? v : undefined),
