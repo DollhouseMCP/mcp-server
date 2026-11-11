@@ -59,6 +59,7 @@ TOOL_VERSIONS = {
     'compose': ('/usr/bin/docker', 'compose', 'version', '--short'),
 }
 TOOLS = ('caddy', 'curl', 'docker', 'flock', 'jq', 'node', 'python3', 'sha256sum', 'tar')
+COMPOSE_FILE_LABELS = ('com.docker.compose.project.config_files', 'com.docker.compose.project.environment_file')
 COMPOSE_PLUGINS = ('/usr/libexec/docker/cli-plugins/docker-compose', '/usr/local/lib/docker/cli-plugins/docker-compose',
                    '/usr/lib/docker/cli-plugins/docker-compose', '/root/.docker/cli-plugins/docker-compose')
 
@@ -73,6 +74,8 @@ SENSITIVE = re.compile(r'pass|secret|credential|authori[sz]ation|cookie|private|
 SENSITIVE_KEY = re.compile(r'pass|secret|credential|authori[sz]ation|cookie|private|bearer|dsn|database_url'
                            r'|(^|[_-])key($|[_-])', flags=re.IGNORECASE)
 USERINFO = re.compile(r'://[^/\s@]+@')
+# Short options that commonly carry a credential, as in curl -u, mysql -p and redis-cli -a.
+CREDENTIAL_FLAG = re.compile(r'(?:^|\s)(?:-[upaP]|--user)')
 PUBLIC_VALUES = tuple(re.compile(pattern, flags=re.ASCII) for pattern in (
     r'[0-9a-f]{8,64}',
     r'sha256:[0-9a-f]{64}',
@@ -91,7 +94,7 @@ PUBLIC_LABELS = ('com.docker.compose.', 'org.opencontainers.image.')
 KEY_NAME = re.compile(r'[A-Za-z0-9_.:/@ -]{1,200}\Z', flags=re.ASCII)
 TOOL_OUTPUT = re.compile(r'[A-Za-z0-9 ._,:+()/-]{1,200}\Z', flags=re.ASCII)
 ENV_FILE = re.compile(r'\.env(\..+)?\Z')
-ENV_LINE = re.compile(r'\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)\Z')
+ENV_LINE = re.compile(r'\s*(?:export\s+)?([A-Za-z_]\w*)\s*=(.*)\Z', flags=re.ASCII)
 MARKER = re.compile(r'\.(caddy|legacy)-')
 BUNDLE = re.compile(r'server([.-].*)?\Z')
 DEPLOY_PROCESS = re.compile(rb'hosted-(?:remote-)?deploy\.sh|hosted-maintenance[a-z-]*\.sh|(?:caddy|legacy)_[a-z_]+\.py')
@@ -105,6 +108,24 @@ def redacted(value):
     return record
 
 
+def key_name(name):
+    return name if KEY_NAME.fullmatch(name) else '<key:%d>' % len(name)
+
+
+def capped(items, limit=None):
+    """The first items, and a failure record whenever any were left out, so no limit is silent."""
+    items = list(items) if isinstance(items, (list, tuple)) else []
+    limit = MAX_ITEMS if limit is None else limit
+    omitted = len(items) - limit
+    return items[:limit], [{FAILED: '%d entries beyond the limit were omitted' % omitted}] * (omitted > 0)
+
+
+def noted(result, note):
+    for record in note:
+        result.update(record)
+    return result
+
+
 def public_text(value):
     """Return a string only when it is recognisably an identifier, path, time or name."""
     if isinstance(value, str) and any(pattern.fullmatch(value) for pattern in PUBLIC_VALUES):
@@ -113,16 +134,18 @@ def public_text(value):
 
 
 def public_json(value, key='', depth=12):
-    if value is None or isinstance(value, (bool, int, float)):
-        return value
+    if value is None:
+        return None
     if SENSITIVE_KEY.search(key) or depth <= 0:
         return redacted(value)
+    if isinstance(value, (bool, int, float)):
+        return value
     if isinstance(value, dict):
-        items = list(value.items())[:MAX_ITEMS]
-        return {name if KEY_NAME.fullmatch(name) else '<key:%d>' % len(name): public_json(item, name, depth - 1)
-                for name, item in items}
+        kept, note = capped(list(value.items()))
+        return noted({key_name(name): public_json(item, name, depth - 1) for name, item in kept}, note)
     if isinstance(value, list):
-        return [public_json(item, key, depth - 1) for item in value[:MAX_ITEMS]]
+        kept, note = capped(value)
+        return [public_json(item, key, depth - 1) for item in kept] + note
     if isinstance(value, str) and '=' in value:
         return public_assignment(value)
     return public_text(value)
@@ -139,15 +162,20 @@ def public_argv(values):
     """Keep command words; drop anything that names or carries a credential."""
     if not isinstance(values, list):
         return None if values is None else redacted(values)
+    kept, note = capped(values, 64)
     result = []
     follows_sensitive_flag = False
-    for value in values[:64]:
-        sensitive = (not isinstance(value, str) or len(value) > 400
-                     or SENSITIVE.search(value) or USERINFO.search(value))
+    for value in kept:
+        sensitive = not isinstance(value, str) or carries_credential(value)
         result.append(redacted(value) if sensitive or follows_sensitive_flag else value)
         follows_sensitive_flag = bool(sensitive and isinstance(value, str)
                                       and value.startswith('-') and '=' not in value)
-    return result
+    return result + note
+
+
+def carries_credential(value):
+    return bool(len(value) > 400 or SENSITIVE.search(value) or USERINFO.search(value)
+                or CREDENTIAL_FLAG.search(value))
 
 
 def environment(values):
@@ -158,7 +186,7 @@ def environment(values):
         if not isinstance(value, str):
             continue
         name, _, content = value.partition('=')
-        names.append(name if KEY_NAME.fullmatch(name) else '<key:%d>' % len(name))
+        names.append(key_name(name))
         if PUBLIC_ENV.fullmatch(name) and PUBLIC_ENV_VALUE.fullmatch(content):
             public[name] = content
     return {'names': sorted(names), 'public': public}
@@ -167,7 +195,7 @@ def environment(values):
 def labels(values):
     result = {}
     for name, value in sorted(values.items()) if isinstance(values, dict) else []:
-        name = name if KEY_NAME.fullmatch(name) else '<key:%d>' % len(name)
+        name = key_name(name)
         # Compose and OCI image labels are generated metadata: project, service, paths and revisions.
         public = name.startswith(PUBLIC_LABELS) and isinstance(value, str) and len(value) <= 2000 \
             and not USERINFO.search(value)
@@ -295,55 +323,62 @@ def described(name, dir_fd, detail):
 def listing(directory, detail=None):
     """Sorted metadata of the direct children of an open directory."""
     rows = []
-    names = sorted(os.listdir(directory))
-    for name in names[:MAX_ITEMS]:
+    names, note = capped(sorted(os.listdir(directory)))
+    for name in names:
         try:
             _, record = described(name, directory, detail)
         except OSError as error:
             record = {FAILED: failure(error)}
         record['name'] = name
         rows.append(record)
-    return {'entries': rows, 'truncated': len(names) > MAX_ITEMS}
+    return noted({'entries': rows, 'truncated': bool(note)}, note)
+
+
+def walk(directory, prefix, depth, rows, detail):
+    """Append metadata rows below one open directory. False means the entry limit cut it short."""
+    for name in sorted(os.listdir(directory)):
+        if len(rows) >= MAX_ENTRIES:
+            return False
+        try:
+            info, record = described(name, directory, detail)
+        except OSError as error:
+            rows.append({'path': prefix + name, FAILED: failure(error)})
+            continue
+        record['path'] = prefix + name
+        rows.append(record)
+        if stat.S_ISDIR(info.st_mode) and not descend(name, directory, record, (prefix, depth, rows, detail)):
+            return False
+    return True
+
+
+def descend(name, directory, record, context):
+    prefix, depth, rows, detail = context
+    if depth <= 0:
+        record[FAILED] = 'depth limit reached; contents were not listed'
+        return True
+    try:
+        child = open_read(name, os.O_DIRECTORY, directory)
+    except OSError as error:
+        record[FAILED] = failure(error)
+        return True
+    try:
+        return walk(child, prefix + name + '/', depth - 1, rows, detail)
+    finally:
+        os.close(child)
 
 
 def tree(path, detail=None, dir_fd=None):
     """Bounded recursive metadata below a directory, with relative paths."""
     rows = []
-    state = {'truncated': False}
-
-    def visit(directory, prefix, depth):
-        for name in sorted(os.listdir(directory)):
-            if len(rows) >= MAX_ENTRIES:
-                state['truncated'] = True
-                return
-            try:
-                info, record = described(name, directory, detail)
-            except OSError as error:
-                rows.append({'path': prefix + name, FAILED: failure(error)})
-                continue
-            record['path'] = prefix + name
-            rows.append(record)
-            if not stat.S_ISDIR(info.st_mode):
-                continue
-            if depth <= 0:
-                record['truncated'] = state['truncated'] = True
-                continue
-            try:
-                child = open_read(name, os.O_DIRECTORY, directory)
-            except OSError as error:
-                record[FAILED] = failure(error)
-                continue
-            try:
-                visit(child, prefix + name + '/', depth - 1)
-            finally:
-                os.close(child)
-
     directory = open_read(path, os.O_DIRECTORY, dir_fd)
     try:
-        visit(directory, '', MAX_DEPTH)
+        complete = walk(directory, '', MAX_DEPTH, rows, detail)
     finally:
         os.close(directory)
-    return {'entries': rows, 'truncated': state['truncated']}
+    result = {'entries': rows, 'truncated': not complete}
+    if not complete:
+        result[FAILED] = 'entry limit reached; later entries were omitted'
+    return result
 
 
 def failure(error):
@@ -382,16 +417,9 @@ def engine(socket_path):
     return get
 
 
-def bounded(listed):
-    """At most MAX_ITEMS objects, and a visible record whenever any were left out."""
-    listed = listed if isinstance(listed, list) else []
-    omitted = len(listed) - MAX_ITEMS
-    return listed[:MAX_ITEMS], [{'id': None, FAILED: '%d objects beyond the limit were omitted' % omitted}] * (omitted > 0)
-
-
 def inspected(get, listed, path, public, name):
     """Inspect every listed object. One that fails or disappears is recorded and skipped."""
-    listed, result = bounded(listed)
+    listed, result = capped(listed)
     for item in listed:
         identifier = item.get('Id') if isinstance(item, dict) else None
         try:
@@ -497,7 +525,7 @@ def directory_facts(path, walk):
 
 
 def volumes(get):
-    listed, result = bounded(get('/volumes').get('Volumes'))
+    listed, result = capped(get('/volumes').get('Volumes'))
     for item in listed:
         record = selected(item, ('Name', 'Driver', 'Scope', 'Mountpoint', 'CreatedAt'))
         record['labels'] = labels(item.get('Labels'))
@@ -509,19 +537,25 @@ def volumes(get):
     return sorted(result, key=lambda record: str(record.get('Name')))
 
 
+def referenced_paths(container):
+    """Bind sources and Compose files that one container names."""
+    paths = {mount['Source'] for mount in container.get('mounts') or []
+             if mount.get('Type') == 'bind' and isinstance(mount.get('Source'), str)}
+    compose = (container.get('config') or {}).get('labels') or {}
+    for key in COMPOSE_FILE_LABELS:
+        if isinstance(compose.get(key), str):
+            paths.update(part for part in compose[key].split(',') if os.path.isabs(part))
+    return paths
+
+
 def referenced_files(containers):
     """Identity of every bind source and Compose file that a container names."""
     paths = set()
     for container in containers:
-        for mount in container.get('mounts') or []:
-            if mount.get('Type') == 'bind' and isinstance(mount.get('Source'), str):
-                paths.add(mount['Source'])
-        compose = ((container.get('config') or {}).get('labels') or {})
-        for key in ('com.docker.compose.project.config_files', 'com.docker.compose.project.environment_file'):
-            if isinstance(compose.get(key), str):
-                paths.update(part for part in compose[key].split(',') if os.path.isabs(part))
+        paths.update(referenced_paths(container))
+    kept, note = capped(sorted(paths))
     result = {}
-    for path in sorted(paths)[:MAX_ITEMS]:
+    for path in kept:
         try:
             info, record = described(path, None, config_detail)
             if stat.S_ISDIR(info.st_mode):
@@ -529,7 +563,7 @@ def referenced_files(containers):
         except OSError as error:
             record = {FAILED: failure(error)}
         result[path] = record
-    return result
+    return noted(result, note)
 
 
 def tool_version(argv):
@@ -656,7 +690,8 @@ def listeners(root):
             address, port = socket_address(fields[1])
             result.append({'protocol': protocol, 'address': address, 'port': port, 'uid': int(fields[7])})
     unique = {json.dumps(item, sort_keys=True): item for item in result}
-    return sorted(unique.values(), key=lambda item: (item['protocol'], item['port'], item['address']))[:MAX_ITEMS]
+    kept, note = capped(sorted(unique.values(), key=lambda item: (item['protocol'], item['port'], item['address'])))
+    return kept + note
 
 
 def lock_holders(root, info):
@@ -746,8 +781,9 @@ def neighbours(root, parent, prefix, skip):
     except OSError as error:
         return {parent: {FAILED: failure(error)}}
     try:
-        for name in sorted(os.listdir(directory))[:MAX_ITEMS]:
-            if not name.startswith(prefix) or os.path.join(parent, name) == skip:
+        names, note = capped(sorted(name for name in os.listdir(directory) if name.startswith(prefix)))
+        for name in names:
+            if os.path.join(parent, name) == skip:
                 continue
             try:
                 info, record = entry(name, directory)
@@ -762,7 +798,7 @@ def neighbours(root, parent, prefix, skip):
             result[os.path.join(parent, name)] = record
     finally:
         os.close(directory)
-    return result
+    return noted(result, note)
 
 
 def partial_failures(value, path=''):

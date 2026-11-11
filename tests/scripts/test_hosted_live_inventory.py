@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parents[2] / 'scripts'
 sys.path.insert(0, str(SCRIPTS / 'hosted-deploy'))
@@ -85,7 +86,8 @@ class SourceContractTests(unittest.TestCase):
         get = inventory.engine('/nonexistent/docker.sock')
         for path in ('/containers/%s/logs' % CONTAINER, '/containers/%s/export' % CONTAINER,
                      '/containers/%s/archive?path=/' % CONTAINER, '/containers/%s/json?size=true' % CONTAINER,
-                     '/events', '/images/%s/get' % IMAGE, '/containers/json', '/v1.44/info', '/info/../events'):
+                     '/events', '/images/%s/get' % IMAGE, '/containers/json', '/containers/json?all=true&size=1',
+                     '/v1.44/info', '/info/../events', '/info\n'):
             with self.subTest(path=path), self.assertRaisesRegex(ValueError, 'allowlist'):
                 get(path)
 
@@ -325,10 +327,48 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(result['listeners'][0]['port'], 80)
 
     def test_objects_beyond_the_limit_are_reported_and_never_silently_dropped(self):
-        listed, omitted = inventory.bounded([{'Id': 'a'}] * (inventory.MAX_ITEMS + 2))
+        listed, omitted = inventory.capped([{'Id': 'a'}] * (inventory.MAX_ITEMS + 2))
         self.assertEqual(len(listed), inventory.MAX_ITEMS)
-        self.assertEqual(omitted, [{'id': None, 'inventory_error': '2 objects beyond the limit were omitted'}])
-        self.assertEqual(inventory.bounded(None), ([], []))
+        self.assertEqual(omitted, [{'inventory_error': '2 entries beyond the limit were omitted'}])
+        self.assertEqual(inventory.capped(None), ([], []))
+        self.assertEqual(inventory.public_argv(['x'] * 66)[-1], {'inventory_error': '2 entries beyond the limit were omitted'})
+        self.assertEqual(inventory.public_json(list(range(inventory.MAX_ITEMS + 1)))[-1],
+                         {'inventory_error': '1 entries beyond the limit were omitted'})
+
+    def test_a_truncated_listing_or_tree_makes_the_inventory_partial(self):
+        with patch.object(inventory, 'MAX_ENTRIES', 2):
+            result = inventory.collect(str(self.deploy), fake_engine(self.volume, self.deploy), str(self.root))
+        tree = result['volumes'][0]['tree']
+        self.assertEqual((len(tree['entries']), tree['truncated']), (2, True))
+        self.assertIn('/volumes/0/tree', {item['at'] for item in result['partial']})
+        with patch.object(inventory, 'MAX_DEPTH', 1):
+            result = inventory.collect(str(self.deploy), fake_engine(self.volume, self.deploy), str(self.root))
+        self.assertIn('/volumes/0/tree/entries/1', {item['at'] for item in result['partial']})
+        with patch.object(inventory, 'MAX_ITEMS', 3):
+            result = inventory.collect(str(self.deploy), fake_engine(self.volume, self.deploy), str(self.root))
+        self.assertIs(result['deployment']['truncated'], True)
+        self.assertIn('/deployment', {item['at'] for item in result['partial']})
+
+    def test_exit_status_reports_an_incomplete_inventory(self):
+        complete = {'errors': [], 'partial': []}
+        for result, status in ((complete, 0), ({'errors': [{}], 'partial': []}, 3), ({'errors': [], 'partial': [{}]}, 3)):
+            with patch.object(inventory, 'collect', return_value=result), patch('builtins.print'):
+                self.assertEqual(inventory.main(['--deploy-dir', '/fixture']), status)
+
+    def test_credentials_behind_short_flags_and_numeric_secrets_are_withheld(self):
+        self.assertEqual(inventory.public_argv(['curl', '-u', 'alice:' + PLAIN, 'http://localhost/health']),
+                         ['curl', {'redacted': 'str', 'length': 2}, {'redacted': 'str', 'length': 6 + len(PLAIN)},
+                          'http://localhost/health'])
+        for argv in (['mysql', '-p' + PLAIN], ['redis-cli', '-a', PLAIN], ['CMD-SHELL', 'curl -u a:%s http://x' % PLAIN],
+                     ['curl', '--user', 'a:' + PLAIN], ['tool', '-P', PLAIN]):
+            with self.subTest(argv=argv):
+                self.assertNotIn(PLAIN, json.dumps(inventory.public_argv(argv)))
+        self.assertEqual(inventory.public_argv(['caddy', 'run', '--config', '/etc/caddy/Caddyfile', '--adapter', 'caddyfile']),
+                         ['caddy', 'run', '--config', '/etc/caddy/Caddyfile', '--adapter', 'caddyfile'])
+        self.assertEqual(inventory.public_argv(['CMD-SHELL', 'pg_isready -U fixture -d fixture']),
+                         ['CMD-SHELL', 'pg_isready -U fixture -d fixture'])
+        self.assertEqual(inventory.public_json({'api_key': 42, 'secret': True, 'password': None, 'pid': 7}),
+                         {'api_key': {'redacted': 'int'}, 'secret': {'redacted': 'bool'}, 'password': None, 'pid': 7})
 
     def test_one_unreadable_fact_never_hides_the_others(self):
         (self.root / 'etc/machine-id').unlink()
