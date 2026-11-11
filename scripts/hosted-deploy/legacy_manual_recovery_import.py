@@ -138,107 +138,121 @@ def preserve_unarchived_files(root, files):
     return unarchived
 
 
-ADOPTION = ('adoption_window', 'accepted_state', 'accepted_archive', 'accepted_services', 'accepted_checkpoint',
-            'database_identity', 'accepted_app_profile', 'service_profiles', 'database_boundary',
-            'retained_proxy', 'serving_proxy', 'receipt_identities', 'unarchived_files')
+# Each adoption step and the earlier observations it needs, in the required order.
+STEPS = (('adoption_window', ()), ('accepted_state', ()), ('accepted_archive', ('pending',)),
+         ('accepted_services', ('final', 'control')), ('accepted_checkpoint', ('manifest', 'originals')),
+         ('database_identity', ('db_manifest',)), ('accepted_app_profile', ()),
+         ('service_profiles', ('originals', 'final')), ('database_boundary', ()),
+         ('retained_proxy', ('recovered', 'control', 'final')), ('serving_proxy', ('recovered', 'final')),
+         ('receipt_identities', ('pending', 'proxy')), ('unarchived_files', ('files',)))
+ADOPTION = tuple(name for name, _ in STEPS)
 
 
-def adoption_steps(root, value, evidence_dir, run, receipt_identities, found):
-    """The checks of the accepted manual recovery, named and in their required order.
+class Adoption:
+    """The checks of the accepted manual recovery, one method for each named step.
 
-    Each step stores what it observed in `found` before validating it, and names
-    the earlier observations it needs. Adoption stops at the first refusal. The
-    read-only preflight runs every step whose observations exist, so one refusal
-    does not hide the next.
+    A step stores what it observed in `found` before validating it. Adoption
+    stops at the first refusal. The read-only preflight runs every step whose
+    observations exist, so one refusal does not hide the next.
     """
-    def adoption_window():
-        window = window_path(root, value['token'])
+
+    def __init__(self, root, value, evidence_dir, run, receipt_identities):
+        self.root, self.value, self.evidence_dir, self.run = root, value, evidence_dir, run
+        self.expected_identities = receipt_identities
+        self.found = {}
+
+    def steps(self):
+        return tuple((name, needs, getattr(self, name)) for name, needs in STEPS)
+
+    def adoption_window(self):
+        window = window_path(self.root, self.value['token'])
         if window.exists() or window.is_symlink():
             raise ValueError('manual adoption cannot replace an armed recovery window')
 
-    def accepted_state():
-        found['state'], found['pending'], found['control'] = pending_control(root, value['token'], 'probed')
-        validate_failed_state(root, value, found['state'], found['pending'])
+    def accepted_state(self):
+        found = self.found
+        found['state'], found['pending'], found['control'] = pending_control(self.root, self.value['token'], 'probed')
+        validate_failed_state(self.root, self.value, found['state'], found['pending'])
 
-    def accepted_archive():
+    def accepted_archive(self):
+        found = self.found
         found['final'], found['manifest'], found['originals'], found['files'] = archive_inputs(
-            root, evidence_dir, found['pending'])
+            self.root, self.evidence_dir, found['pending'])
 
-    def accepted_services():
-        recovered = found['recovered'] = check_acceptance(found['final'], found['control']['public_origin'])
-        if recovered['app'] != value['app_id'] or recovered['postgres'] != value['postgres_id']:
+    def accepted_services(self):
+        recovered = self.found['recovered'] = check_acceptance(self.found['final'], self.found['control']['public_origin'])
+        if recovered['app'] != self.value['app_id'] or recovered['postgres'] != self.value['postgres_id']:
             raise ValueError('manual recovery services differ from the request')
 
-    def accepted_checkpoint():
-        request, found['checkpoint_sha256'], found['db_manifest'] = handoff.checkpoint(value['checkpoint_dir'])
+    def accepted_checkpoint(self):
+        found = self.found
+        request, found['checkpoint_sha256'], found['db_manifest'] = handoff.checkpoint(self.value['checkpoint_dir'])
         manifest = found['manifest']
         if (found['checkpoint_sha256'] != ACCEPTED['checkpoint'] or manifest['app']['id'] != request['app']['id']
                 or manifest['database_container']['id'] != found['db_manifest']['source_database']['id']
                 or manifest['original_proxy_id'] not in found['originals']):
             raise ValueError('accepted checkpoint or original filesystem service binding differs')
 
-    def service_profiles():
-        found['app'] = inspect_one(run, 'container', value['app_id'])
-        found['postgres'] = inspect_one(run, 'container', value['postgres_id'])
+    def database_identity(self):
+        handoff.verify_database(self.value, self.found['db_manifest'], self.run)
+
+    def accepted_app_profile(self):
+        handoff.app_profile(self.run, self.value['instance'], self.value['app_id'], True, self.root)
+
+    def service_profiles(self):
+        found = self.found
+        found['app'] = inspect_one(self.run, 'container', self.value['app_id'])
+        found['postgres'] = inspect_one(self.run, 'container', self.value['postgres_id'])
         for actual in (found['app'], found['postgres']):
             if profile(actual) != profile(found['originals'][actual['Id']]):
                 raise ValueError('manual recovery app or database full profile changed')
             verify_boot(found['final'], actual, True)
 
-    def database_boundary():
-        database = found['database'] = database_fingerprint(run, value['postgres_id'])
-        checkpoint_database(value, database)
+    def database_boundary(self):
+        database = self.found['database'] = database_fingerprint(self.run, self.value['postgres_id'])
+        checkpoint_database(self.value, database)
         if database['schema_sha256'] != ACCEPTED['schema'] or database['globals_sha256'] != ACCEPTED['globals']:
             raise ValueError('accepted pre-migration schema/globals boundary changed')
 
-    def retained_proxy():
-        retained = found['retained'] = inspect_one(run, 'container', found['recovered']['retained_aborted_proxy'])
+    def retained_proxy(self):
+        found = self.found
+        retained = found['retained'] = inspect_one(self.run, 'container', found['recovered']['retained_aborted_proxy'])
         if (retained['Id'] != found['control']['proxy']['id']
                 or profile_hash(retained) != ACCEPTED['retained_proxy_profile']):
             raise ValueError('accepted retained proxy full profile changed')
         verify_boot(found['final'], retained, False)
 
-    def serving_proxy():
-        found['proxy'] = inspect_one(run, 'container', found['recovered']['restored_old_profile_proxy'])
+    def serving_proxy(self):
+        found = self.found
+        found['proxy'] = inspect_one(self.run, 'container', found['recovered']['restored_old_profile_proxy'])
         verify_boot(found['final'], found['proxy'], True)
 
-    def bound_identities():
+    def receipt_identities(self):
         from legacy_reconciliation_request import identities
-        found['bound'] = identities(root, found['pending'], found['proxy'])
-        if receipt_identities != found['bound']:
+        bound = self.found['bound'] = identities(self.root, self.found['pending'], self.found['proxy'])
+        if self.expected_identities != bound:
             raise ValueError('manual reconciliation receipt identities differ; regenerate the request')
 
-    def unarchived_files():
-        found['unarchived'] = preserve_unarchived_files(root, found['files'])
+    def unarchived_files(self):
+        self.found['unarchived'] = preserve_unarchived_files(self.root, self.found['files'])
 
-    steps = (
-        ((), adoption_window), ((), accepted_state), (('pending',), accepted_archive),
-        (('final', 'control'), accepted_services), (('manifest', 'originals'), accepted_checkpoint),
-        (('db_manifest',), lambda: handoff.verify_database(value, found['db_manifest'], run)),
-        ((), lambda: handoff.app_profile(run, value['instance'], value['app_id'], True, root)),
-        (('originals', 'final'), service_profiles), ((), database_boundary),
-        (('recovered', 'control', 'final'), retained_proxy), (('recovered', 'final'), serving_proxy),
-        (('pending', 'proxy'), bound_identities), (('files',), unarchived_files),
-    )
-    return tuple((name, needs, step) for name, (needs, step) in zip(ADOPTION, steps, strict=True))
-
-
-def adopted(found):
-    """The reconciliation data, from the observations of every adoption step."""
-    bound = found['bound']
-    return {'state': found['state'], 'pending': found['pending'], 'files': found['files'],
-            'database': found['database'], 'app': found['app'], 'postgres': found['postgres'],
-            'proxy': found['proxy'], 'retained': found['retained'],
-            'proxy_token': bound['serving_proxy']['recovery_token'], 'receipt_identities': bound,
-            'source': found['pending']['source'], 'checkpoint_sha256': found['checkpoint_sha256'],
-            'manual_receipt_sha256': ACCEPTED['manual_receipt'],
-            'original_proxy_id': found['manifest']['original_proxy_id'],
-            'marker_hashes': found['final']['markers_unchanged'],
-            'unchanged_unarchived_files': found['unarchived']}
+    def data(self):
+        """The reconciliation data, from the observations of every step."""
+        found = self.found
+        bound = found['bound']
+        return {'state': found['state'], 'pending': found['pending'], 'files': found['files'],
+                'database': found['database'], 'app': found['app'], 'postgres': found['postgres'],
+                'proxy': found['proxy'], 'retained': found['retained'],
+                'proxy_token': bound['serving_proxy']['recovery_token'], 'receipt_identities': bound,
+                'source': found['pending']['source'], 'checkpoint_sha256': found['checkpoint_sha256'],
+                'manual_receipt_sha256': ACCEPTED['manual_receipt'],
+                'original_proxy_id': found['manifest']['original_proxy_id'],
+                'marker_hashes': found['final']['markers_unchanged'],
+                'unchanged_unarchived_files': found['unarchived']}
 
 
 def import_accepted(root, value, evidence_dir, run, receipt_identities):
-    found = {}
-    for _, _, step in adoption_steps(root, value, evidence_dir, run, receipt_identities, found):
+    adoption = Adoption(root, value, evidence_dir, run, receipt_identities)
+    for _, _, step in adoption.steps():
         step()
-    return adopted(found)
+    return adoption.data()

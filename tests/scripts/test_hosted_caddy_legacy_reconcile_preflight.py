@@ -23,7 +23,7 @@ import legacy_reconcile_preflight as preflight
 from hosted_manual_reconciliation_fixture import ManualPacket
 import test_hosted_caddy_legacy_reconciliation as base
 
-BEFORE_REQUEST = ['pinned_helper', 'native_host', 'retained_transition', 'deployment_lock', 'request']
+BEFORE_REQUEST = ['pinned_helper', 'native_host', 'retained_transition', 'deployment_lock', 'request_observations', 'request']
 AFTER_REQUEST = [*manual.ADOPTION, 'recovery_data', 'recovery_receipt', 'failed_state', 'handoff_markers', 'operation_absent',
                  *reconcile.SERVING_PROOFS, 'public_acceptance', 'compose_model', 'unchanged']
 CHANGING = {'create', 'run', 'start', 'stop', 'restart', 'kill', 'rm', 'rename', 'pull', 'push', 'cp', 'update',
@@ -158,16 +158,44 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual({name for name, outcome in outcomes.items() if outcome == 'NOT_RUN'}, set())
         self.assertGreaterEqual(result['refused'], 2)
 
+    def test_each_container_and_the_checkpoint_database_are_separate_controls(self):
+        self.packet()
+        self.fx.pg['State']['Health'] = {'Status': 'unhealthy'}
+        self.fx.current['RestartCount'] += 1
+        outcomes = self.outcomes(self.run_preflight())
+        self.assertEqual((outcomes['checkpoint'], outcomes['checkpoint_database']), ('PASS', 'REFUSED'))
+        # The accepted-recovery step sees the changed boot; the later container proofs compare
+        # each container with the profile just observed, so they report only a change since then.
+        self.assertEqual((outcomes['retained_proxy'], outcomes['serving_proxy']), ('REFUSED', 'PASS'))
+        self.assertEqual([outcomes[name] for name in ('app_container', 'postgres_container', 'proxy_container',
+                                                      'retained_container')], ['PASS'] * 4)
+        self.assertEqual(outcomes['serving_config'], 'PASS')
+
+    def test_a_refused_request_validation_does_not_hide_the_adoption_and_serving_controls(self):
+        self.packet()
+        self.fx.p.recovered['RestartCount'] += 1
+        self.fx.active_config = b'{"fixture":"another active configuration"}'
+        result = self.run_preflight()
+        outcomes = self.outcomes(result)
+        self.assertEqual((outcomes['request_observations'], outcomes['request']), ('PASS', 'REFUSED'))
+        self.assertEqual((outcomes['serving_proxy'], outcomes['serving_config']), ('REFUSED', 'REFUSED'))
+        self.assertEqual((outcomes['database_boundary'], outcomes['public_acceptance'], outcomes['compose_model']),
+                         ('PASS', 'PASS', 'PASS'))
+        self.assertEqual({name for name, outcome in outcomes.items() if outcome == 'NOT_RUN'}, set())
+        self.assertIs(result['complete'], False)
+
     def test_a_missing_observation_stops_only_the_controls_that_need_it(self):
         self.packet()
         original = manual.archive_inputs
-        with patch.object(manual, 'archive_inputs', side_effect=[original(self.fx.root, self.value['manual_evidence_dir'],
-                                                                          self.fx.state['pending']),
-                                                                 ValueError('fixture archive unreadable')]):
+        archive = original(self.fx.root, self.value['manual_evidence_dir'], self.fx.state['pending'])
+        # Read by the request observations, by request generation, then by the adoption step.
+        with patch.object(manual, 'archive_inputs', side_effect=[archive, archive, ValueError('fixture archive unreadable')]):
             result = self.run_preflight()
         outcomes = self.outcomes(result)
         self.assertEqual((outcomes['request'], outcomes['accepted_state'], outcomes['accepted_archive']),
                          ('PASS', 'PASS', 'REFUSED'))
+        reasons = {item['control']: item.get('reason') for item in result['controls']}
+        self.assertIn('an adoption observation is missing', reasons['recovery_data'])
         skipped = {item['control']: item['needs'] for item in result['controls'] if item['outcome'] == 'NOT_RUN'}
         self.assertEqual(skipped['accepted_services'], ['observation: final'])
         self.assertEqual(skipped['serving_config'], ['recovery_data', 'recovery_receipt'])
@@ -180,10 +208,11 @@ class PreflightTests(unittest.TestCase):
         value = {**self.value, 'manual_evidence_dir': str(self.fx.root / 'absent-evidence')}
         result = self.run_preflight(value=value)
         outcomes = self.outcomes(result)
-        self.assertEqual(outcomes['request'], 'REFUSED')
-        self.assertEqual({outcomes[name] for name in AFTER_REQUEST}, {'NOT_RUN'})
-        self.assertTrue(all(item['needs'] == ['request'] for item in result['controls'] if item['outcome'] == 'NOT_RUN'))
-        self.assertEqual((result['complete'], result['not_run']), (False, len(AFTER_REQUEST)))
+        self.assertEqual(outcomes['request_observations'], 'REFUSED')
+        self.assertEqual({outcomes[name] for name in ['request', *AFTER_REQUEST]}, {'NOT_RUN'})
+        self.assertTrue(all(item['needs'] == ['request_observations'] for item in result['controls']
+                            if item['outcome'] == 'NOT_RUN'))
+        self.assertEqual((result['complete'], result['not_run']), (False, len(AFTER_REQUEST) + 1))
         # The lock was released: a second run can take it again.
         self.assertEqual(self.outcomes(self.run_preflight(value=value))['deployment_lock'], 'PASS')
 
@@ -192,7 +221,8 @@ class PreflightTests(unittest.TestCase):
         lock = self.fx.root / '.caddy-deploy.lock'
         lock.unlink()
         outcomes = self.outcomes(self.run_preflight())
-        self.assertEqual((outcomes['deployment_lock'], outcomes['request']), ('REFUSED', 'NOT_RUN'))
+        self.assertEqual((outcomes['deployment_lock'], outcomes['request_observations'], outcomes['request']),
+                         ('REFUSED', 'NOT_RUN', 'NOT_RUN'))
         self.assertFalse(lock.exists())
 
     def test_an_existing_operation_and_a_changed_marker_are_each_refused(self):
@@ -206,7 +236,7 @@ class PreflightTests(unittest.TestCase):
         (self.state_dir / 'state.json').write_bytes(handoff.encoded(state))
         result = self.run_preflight()
         refused = [item for item in result['controls'] if item['outcome'] == 'REFUSED']
-        self.assertEqual([item['control'] for item in refused], ['request'], refused)
+        self.assertEqual([item['control'] for item in refused], ['request_observations'], refused)
         self.assertIn('source or receipt changed', refused[0]['reason'])
 
     def test_lock_and_temporary_model_are_released_on_a_termination_signal_and_on_a_kill(self):

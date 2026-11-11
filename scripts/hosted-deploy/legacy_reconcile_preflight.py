@@ -35,7 +35,9 @@ from caddy_active_config import system_docker, validate_system
 from caddy_clone_action import acquire_lock, validate_request
 from caddy_image_admission import qualify
 from caddy_recovery_receipt import MAX_RECORD
+from caddy_release_action import pending_control
 from caddy_transition_state import read_state
+from caddy_volume_migration import inspect_one
 from image_scan_intake import unique_object
 import legacy_control_compose as compose
 import legacy_control_resolution as resolution
@@ -45,7 +47,7 @@ import legacy_reconcile_action as action
 import legacy_reconcile_files as files
 import legacy_recovery_action as recovery
 import legacy_recovery_boundary as boundary
-from legacy_reconciliation_request import generate
+from legacy_reconciliation_request import generate, identities
 
 SCHEMA = 'legacy-reconciliation-preflight-v1'
 INPUT_KEYS = {'deploy_dir', 'instance', 'checkpoint_dir', 'manual_evidence_dir'}
@@ -123,19 +125,48 @@ def existing_lock(root):
     return acquire_lock(root, allow_control=True)
 
 
-def generated_request(root, value, run):
-    """The request exactly as prepare-legacy-reconciliation generates it, then split as reconcile-legacy does."""
-    request = generate(root, value['instance'], value['checkpoint_dir'], value['manual_evidence_dir'], run)
+def observed_request(root, value, run):
+    """What request generation observes, without its validations.
+
+    Each validation has its own control among the adoption steps. Building the
+    request from observations alone means a refused validation is reported there
+    and cannot hide the controls that follow.
+    """
+    pending = read_state(root).get('pending')
+    if not isinstance(pending, dict):
+        raise ValueError('request generation requires a retained staged transition')
+    _, pending, control = pending_control(root, pending['token'], 'probed')
+    final, _, _, _ = manual.archive_inputs(root, value['manual_evidence_dir'], pending)
+    recovered = manual.check_acceptance(final, control['public_origin'])
+    proxy = inspect_one(run, 'container', recovered['restored_old_profile_proxy'])
+    return split_request({
+        'deploy_dir': str(root), 'instance': value['instance'], 'checkpoint_dir': value['checkpoint_dir'],
+        'data_volume': pending['volumes'][0], 'config_volume': pending['volumes'][1], 'token': pending['token'],
+        'app_id': recovered['app'], 'postgres_id': recovered['postgres'],
+        'manual_evidence_dir': str(Path(value['manual_evidence_dir'])),
+        'receipt_identities': identities(root, pending, proxy)})
+
+
+def generated_request(root, value, run, expected):
+    """The request exactly as prepare-legacy-reconciliation generates it, with every validation."""
+    request = split_request(generate(root, value['instance'], value['checkpoint_dir'], value['manual_evidence_dir'], run))
+    if request != expected:
+        raise ValueError('generated request differs from its own observations')
+    return request
+
+
+def split_request(request):
+    """Validate a complete request and split it as reconcile-legacy does."""
     validate_request({key: request[key] for key in ('deploy_dir', 'instance', 'data_volume', 'config_volume')})
-    identities = request.pop('receipt_identities')
+    bound = request.pop('receipt_identities')
     if set(request) != boundary.KEYS | {'manual_evidence_dir'}:
         raise ValueError('invalid reconciliation request')
     evidence = request.pop('manual_evidence_dir')
     if (any(not isinstance(item, str) for item in request.values()) or not boundary.TOKEN.fullmatch(request['token'])
             or any(not handoff.SHA.fullmatch(request[key]) for key in ('app_id', 'postgres_id'))
-            or not isinstance(evidence, str) or identities is None):
+            or not isinstance(evidence, str) or bound is None):
         raise ValueError('invalid reconciliation identity')
-    return request, evidence, identities
+    return request, evidence, bound
 
 
 def operation_absent(root, token):
@@ -169,20 +200,26 @@ def recovery_data(report, root, run):
     A step stores its observation before it validates it. So a refused step
     still lets the later controls run, and only a missing observation stops them.
     """
-    value, evidence, identities = report.values['request']
-    found = {}
-    for name, needs, step in manual.adoption_steps(root, value, evidence, run, identities, found):
-        missing = [need for need in needs if need not in found]
+    value, evidence, bound = report.values['request_observations']
+    adoption = manual.Adoption(root, value, evidence, run, bound)
+    for name, needs, step in adoption.steps():
+        missing = [need for need in needs if need not in adoption.found]
         if missing:
             report.skip(name, ['observation: ' + need for need in missing])
         else:
             report.control(name, step)
-    return report.control('recovery_data', lambda: manual.adopted(found))
+
+    def collected():
+        try:
+            return adoption.data()
+        except KeyError as error:
+            raise ValueError('an adoption observation is missing: %s' % error) from None
+    return report.control('recovery_data', collected)
 
 
 def dependent_controls(report, root, run, admit, public, verify_compose):
     """Controls that need the generated request and the accepted recovery data."""
-    value = report.values['request'][0]
+    value = report.values['request_observations'][0]
     instance = value['instance']
     data = recovery_data(report, root, run)
     report.control('recovery_receipt', lambda: action.original_receipt(root, data), needs=('recovery_data',))
@@ -226,13 +263,16 @@ def preflight(value, run=system_docker, admit=qualify, public=recovery.public_ac
     root = report.control('retained_transition', bound_root) or root
     lock = report.control('deployment_lock', lambda: existing_lock(root), needs=('retained_transition',))
     try:
-        report.control('request', lambda: generated_request(root, value, run), needs=('deployment_lock',))
-        if 'request' in report.values:
+        expected = report.control('request_observations', lambda: observed_request(root, value, run),
+                                  needs=('deployment_lock',))
+        report.control('request', lambda: generated_request(root, value, run, expected),
+                       needs=('request_observations',))
+        if 'request_observations' in report.values:
             dependent_controls(report, root, run, admit, public, verify_compose)
         else:
             for name in (*manual.ADOPTION, 'recovery_data', 'recovery_receipt', 'failed_state', 'handoff_markers',
                          'operation_absent', *action.SERVING_PROOFS, 'public_acceptance', 'compose_model', 'unchanged'):
-                report.control(name, None, needs=('request',))
+                report.control(name, None, needs=('request_observations',))
     finally:
         if lock is not None:
             os.close(lock)

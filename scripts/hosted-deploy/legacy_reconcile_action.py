@@ -115,7 +115,8 @@ def census(root, instance, data, run):
         raise ValueError('Caddy label census includes an unknown or missing identity')
 
 
-SERVING_PROOFS = ('checkpoint', 'database', 'containers', 'app_profile', 'app_acceptance', 'serving_dns',
+SERVING_PROOFS = ('checkpoint', 'checkpoint_database', 'database', 'app_container', 'postgres_container',
+                  'proxy_container', 'retained_container', 'app_profile', 'app_acceptance', 'serving_dns',
                   'proxy_contract', 'caddy_volumes', 'volume_writers', 'ingress', 'serving_config', 'proxy_census')
 
 
@@ -125,22 +126,27 @@ def serving_proofs(root, value, data, record, receipt, run, admit):
     Reconciliation stops at the first refusal. The read-only preflight runs
     each one and reports every outcome, so both use exactly these controls.
     """
-    instance = value['instance']
+    instance, found = value['instance'], {}
 
     def checkpoint():
-        request, checkpoint_sha, manifest = handoff.checkpoint(value['checkpoint_dir'])
+        request, checkpoint_sha, found['manifest'] = handoff.checkpoint(value['checkpoint_dir'])
         if checkpoint_sha != data['checkpoint_sha256'] or request['app']['id'] != value['app_id']:
             raise ValueError('reconciliation checkpoint changed')
-        handoff.verify_database(value, manifest, run)
+
+    def checkpoint_database():
+        if 'manifest' not in found:
+            raise ValueError('reconciliation checkpoint is unavailable')
+        handoff.verify_database(value, found['manifest'], run)
 
     def database():
         if boundary.database_fingerprint(run, value['postgres_id']) != data['database']:
             raise ValueError('reconciliation database schema, globals or ledger changed')
 
-    def containers():
-        for key, name in (('app', instance), ('postgres', instance + '-postgres'), ('proxy', instance + '-caddy')):
-            item = data[key]
-            exact_container(run, item['Id'], profile(item), name, True, lifecycle(item, True))
+    def container(key, name):
+        item = data[key]
+        exact_container(run, item['Id'], profile(item), name, True, lifecycle(item, True))
+
+    def retained_container():
         retired = data['retained']
         exact_container(run, retired['Id'], profile(retired), retired['Name'][1:], False, lifecycle(retired, False))
 
@@ -150,7 +156,10 @@ def serving_proofs(root, value, data, record, receipt, run, admit):
             raise ValueError('original or partial Caddy volume identity changed')
 
     proofs = (
-        checkpoint, database, containers,
+        checkpoint, checkpoint_database, database,
+        lambda: container('app', instance), lambda: container('postgres', instance + '-postgres'),
+        lambda: container('proxy', instance + '-caddy'),
+        retained_container,
         lambda: handoff.app_profile(run, instance, value['app_id'], True, root),
         lambda: recovery.app_acceptance(value, run),
         lambda: serving_dns(run, instance, value['app_id']),
