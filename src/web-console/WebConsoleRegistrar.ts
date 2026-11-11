@@ -134,13 +134,10 @@ import { createAccountAdminModule } from './modules/account-admin/AccountAdminMo
 import { createActivationModule } from './modules/activations/index.js';
 import { createMeLogsModule, createMemoryConsoleLogSource, type IConsoleLogSource } from './modules/me-logs/index.js';
 import { sql } from 'drizzle-orm';
-import { loadReleaseMigrations, type ReleaseMigration } from '../database/releaseMigrations.js';
-import { MigrationLedgerMonitor } from './setup/MigrationLedgerMonitor.js';
-import {
-  MIGRATION_LEDGER_UNREADABLE,
-  probeMigrationLedger,
-  type MigrationLedgerResult,
-} from './setup/MigrationLedgerProbe.js';
+import { loadReleaseMigrations } from '../database/releaseMigrations.js';
+import type { MigrationLedgerMonitor } from './setup/MigrationLedgerMonitor.js';
+import type { MigrationLedgerResult } from './setup/MigrationLedgerProbe.js';
+import { createReleaseMigrationLedgerMonitor } from './setup/ReleaseMigrationLedgerMonitor.js';
 import { createHealthModule, type HealthReadinessChecks } from './modules/health/index.js';
 import { createConsoleMetaModule } from './modules/console-meta/ConsoleMetaModule.js';
 import {
@@ -1367,36 +1364,22 @@ function createConsoleHealthProbes(options: {
 }
 
 /**
- * The release's migration list is loaded on first use. If it cannot be loaded
- * the ledger is unverifiable, which is reported as pending and never as a fault.
+ * Builds the monitor and runs it once straight away, without waiting on it,
+ * so the outcome is in the start-up log even if nothing polls readiness. An
+ * unverifiable ledger fails nothing, and that log line is how it gets noticed.
  */
 function createMigrationLedgerMonitor(database: DatabaseInstance): MigrationLedgerMonitor {
-  let release: Promise<readonly ReleaseMigration[]> | null = null;
-  return new MigrationLedgerMonitor({
-    probe: async () => {
-      try {
-        release ??= loadReleaseMigrations();
-        return await probeMigrationLedger(database, await release, error => {
-          logger.warn('[WebConsole] Applied-migration ledger could not be read', {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
-      } catch (error) {
-        release = null;
-        logger.warn('[WebConsole] Release migration list could not be loaded', {
-          error: error instanceof Error ? error.message : String(error),
-        });
-        return MIGRATION_LEDGER_UNREADABLE;
-      }
-    },
-    onChange: result => {
-      if (result.state === 'failed') {
-        logger.error(`[WebConsole] Database is behind this release; reporting not ready. ${result.detail}`);
-      } else if (result.state === 'passed') {
-        logger.info(`[WebConsole] ${result.detail}`);
-      }
+  const monitor = createReleaseMigrationLedgerMonitor({
+    database,
+    loadRelease: loadReleaseMigrations,
+    log: {
+      info: message => logger.info(message),
+      warn: message => logger.warn(message),
+      error: message => logger.error(message),
     },
   });
+  void monitor.current();
+  return monitor;
 }
 
 /** True only if a trivial `SELECT 1` round-trips — not merely that a DB handle is wired. */
