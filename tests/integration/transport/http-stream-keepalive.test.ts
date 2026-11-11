@@ -14,6 +14,7 @@ import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import type { SessionContainerRegistry } from '../../../src/di/SessionContainerRegistry.js';
 import { logger } from '../../../src/utils/logger.js';
 import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
+import type { IConfirmationStore } from '../../../src/state/IConfirmationStore.js';
 import { InMemoryRuntimeSessionControlStore } from '../../../src/web-console/services/runtime/InMemoryRuntimeSessionControlStore.js';
 import { RuntimeMcpSessionControlService } from '../../../src/web-console/services/runtime/RuntimeMcpSessionControlService.js';
 import { createHttpTestEnvironment, type HttpTestEnvironment } from '../../helpers/httpTransportHelper.js';
@@ -102,7 +103,17 @@ beforeAll(async () => {
   const keys = await generateKeyPair('ES256', { extractable: true });
   signingKey = keys.privateKey;
   signedProvider = new OidcAuthProvider({ issuer: 'https://stream-test.example', audience: 'mcp', jwksGetter: createLocalJWKSet({ keys: [{ ...await exportJWK(keys.publicKey), kid: 'stream-key', alg: 'ES256' }] }) });
-  preConfirmAllOperations(env.container);
+  // Gatekeeper queues real confirmation writes without awaiting them.
+  // Finish those fixture writes before measuring the quiet stream's audit events.
+  const confirmationStore = env.container.resolve<IConfirmationStore>('ConfirmationStore');
+  const persist = jest.spyOn(confirmationStore, 'persist');
+  try {
+    preConfirmAllOperations(env.container);
+    expect(persist).toHaveBeenCalled();
+    await Promise.all(persist.mock.results.map(result => result.value));
+  } finally {
+    persist.mockRestore();
+  }
 }, 30_000);
 afterAll(async () => { await env?.cleanup(); });
 
@@ -124,11 +135,15 @@ describe('real SDK/Hono stream keepalive', () => {
       expect(before).not.toBeNull();
       expect(before!.requestCount).toBe(beforeOpen!.requestCount + 1);
       const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
-      // Prove quiet ticks do not dispose the session or count as activity past idle grace.
-      await wait(750);
-      const after = await store.findPresence(sid);
-      expect(after).toMatchObject({ requestCount: before!.requestCount, errorCount: before!.errorCount, lastActiveAt: before!.lastActiveAt });
-      expect(audit).not.toHaveBeenCalled(); audit.mockRestore();
+      try {
+        // Prove quiet ticks do not dispose the session or count as activity past idle grace.
+        await wait(750);
+        const after = await store.findPresence(sid);
+        expect(after).toMatchObject({ requestCount: before!.requestCount, errorCount: before!.errorCount, lastActiveAt: before!.lastActiveAt });
+        expect(audit).not.toHaveBeenCalled();
+      } finally {
+        audit.mockRestore();
+      }
       const active = await rpc('tools/call', { name: 'mcp_aql_read', arguments: { operation: 'get_active_elements', element_type: 'skill' } }, sid);
       expect(active.response.status).toBe(200); expect(active.text).toContain('keepalive-proof');
       await settledActivity();
