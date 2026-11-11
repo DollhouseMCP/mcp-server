@@ -141,7 +141,7 @@ def prepare(value, root):
                           'verification_config_sha256': None, 'proxy': None}
     write_state(root, state)
     if value['keep_proxy']:
-        identifier = unique_proxy(session_run(), value['instance'])
+        identifier = unique_proxy(session_run(), value['instance'], root=root)
         session = ActiveConfig(identifier)
         try:
             before = bind_proxy(session, root, value['instance'], pending)
@@ -157,7 +157,7 @@ def prepare(value, root):
         finally:
             session.close()
     else:
-        identifier = unique_proxy(session_run(), value['instance'], required=False)
+        identifier = unique_proxy(session_run(), value['instance'], required=False, root=root)
         if identifier is not None:
             observed = inspect_one(session_run(), 'container', identifier)
             if observed.get('Id') != identifier or observed.get('State', {}).get('Running') is not False:
@@ -175,7 +175,7 @@ def confirm(value, root):
     normal, verification = read_snapshots(root, value['token'], control)
     if read_current_caddyfile(root) != verification:
         raise ValueError('verification startup profile changed')
-    identifier = unique_proxy(session_run(), value['instance'])
+    identifier = unique_proxy(session_run(), value['instance'], root=root)
     session = ActiveConfig(identifier)
     try:
         binding = bind_proxy(session, root, value['instance'], pending)

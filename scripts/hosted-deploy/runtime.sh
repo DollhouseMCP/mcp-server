@@ -365,12 +365,14 @@ recheck_caddy_image() {
   [[ "${current}" == "${CADDY_ADMISSION_RECEIPT}" ]] || die "Caddy image changed after admission"
 }
 
-restart_caddy_proxy() {
-  log "refreshing caddy proxy"
-  recheck_caddy_image
-  compose up -d --pull never --no-deps --force-recreate caddy
-
-  return 0
+start_prepared_caddy_proxy() {
+  local route
+  route="$(caddy_transition start-proxy)" || die "prepared Caddy replacement refused; preserve its receipts"
+  case "${route}" in
+    compose) compose up -d --pull never --no-deps --force-recreate caddy ;;
+    native) ;;
+    *) die "prepared Caddy replacement returned an unknown route" ;;
+  esac
 }
 
 prepare_existing_stack() {
@@ -528,7 +530,7 @@ start_or_update() {
   caddy_release prepare
   if [[ "${CADDY_KEEP_PROXY:-false}" != true ]]; then
     recheck_caddy_image
-    compose up -d --pull never --no-deps --force-recreate caddy
+    start_prepared_caddy_proxy
   fi
   caddy_release confirm
   caddy_release probe-fence

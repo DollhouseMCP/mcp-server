@@ -71,3 +71,8 @@ including forced Caddy failure and recovery, unknown acknowledgements,
 exposure-only continuation, canonical mounts, isolated canary, duplicate DNS,
 and failed public/config acceptance. They do not establish native Docker,
 historical-image, off-host backup or live deployment qualification.
+
+If a native replacement start has an unknown outcome and its later inspection
+shows the candidate stopped, that observation is diagnostic only. Recovery
+requires a separately acknowledged offline fence; no stopped observation
+promotes the forward start or substitutes for the fence.

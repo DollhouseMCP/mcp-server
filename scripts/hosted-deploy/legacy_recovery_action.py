@@ -50,12 +50,16 @@ def same_id(raw, identifier):
 
 def stop_forward_proxy(root, value, armed, baseline, journal, run):
     checks.forward_state(root, value, armed, baseline['forward_state'])
-    exact_container(run, baseline['current_id'], baseline['proxy_profile'], value['instance'] + '-caddy',
-                    True, baseline['proxy_boot'])
+    current = exact_container(run, baseline['current_id'], baseline['proxy_profile'], value['instance'] + '-caddy',
+                              baseline['proxy_running'], baseline['proxy_boot'])
     checks.database(value, armed, run)
-    raw = command(journal, 'offline-fence', run,
-                  ['docker', 'stop', '--signal', 'SIGTERM', '--timeout', '-1', baseline['current_id']], 60)
-    same_id(raw, baseline['current_id'])
+    if baseline['proxy_running']:
+        raw = command(journal, 'offline-fence', run,
+                      ['docker', 'stop', '--signal', 'SIGTERM', '--timeout', '-1', baseline['current_id']], 60)
+        same_id(raw, baseline['current_id'])
+    else:
+        from caddy_native_replacement import verify_failed_start_fence
+        verify_failed_start_fence(root, value['token'], current)
     checks.behind_offline_fence(root, value, armed, baseline, run)
     journal.write('offline-fence-confirmed', {'id': baseline['current_id'], 'boot': baseline['proxy_boot']})
 

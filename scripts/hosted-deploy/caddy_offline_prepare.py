@@ -109,7 +109,8 @@ def prepare(value, run=docker_run, admit=qualify):
 
 def prepare_locked(value, request, root, run, admit):
     check_local_daemon(run, os.environ.get('DOCKER_HOST'))
-    if read_state(root)['pending'] is not None:
+    from legacy_control_resolution import unresolved_pending
+    if unresolved_pending(root, read_state(root)) is not None:
         raise ValueError('an existing Caddy transition requires recovery first')
     require_helper_image(run)
     admission = admit(value['image'])
@@ -129,7 +130,7 @@ def prepare_locked(value, request, root, run, admit):
     no_other_writers(run, identifier, volumes)
     destination_absent(run, new_names)
     require_normal_stop(run, identifier)
-    if (unique_proxy(run, value['instance']) != identifier
+    if (unique_proxy(run, value['instance'], root=root) != identifier
             or capture_profile(run, root, value['instance'], admit, expected_running=True) != profile
             or proxy_boot(run, identifier, True) != boot
             or inspect_volumes(run, old_names) != volumes
@@ -141,7 +142,7 @@ def prepare_locked(value, request, root, run, admit):
     from caddy_volume_migration import qualify_source_volumes
     qualify_source_volumes(run, volumes, Path(__file__).with_name('caddy_volume_copy.mjs'))
     # Source-only helper completion AND owned cleanup must precede any stop.
-    if (unique_proxy(run, value['instance']) != identifier
+    if (unique_proxy(run, value['instance'], root=root) != identifier
             or capture_profile(run, root, value['instance'], admit, expected_running=True) != profile
             or proxy_boot(run, identifier, True) != boot or inspect_volumes(run, old_names) != volumes
             or bundle_identity(root / 'server') != source or read_current_caddyfile(root) != caddyfile
@@ -153,7 +154,7 @@ def prepare_locked(value, request, root, run, admit):
     # Docker's infinite grace avoids its default SIGKILL fallback. A client
     # timeout is UNKNOWN; never retry or automatically restart the old proxy.
     run(['docker', 'stop', '--signal', 'SIGTERM', '--timeout', '-1', identifier], 60, 65536)
-    if (unique_proxy(run, value['instance']) != identifier
+    if (unique_proxy(run, value['instance'], root=root) != identifier
             or proxy_boot(run, identifier, False) != boot
             or capture_profile(run, root, value['instance'], admit) != profile
             or inspect_volumes(run, old_names) != volumes

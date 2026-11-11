@@ -66,7 +66,7 @@ def observe(run, admit, root, instance, image_reference, names, ports):
         raise ValueError('hardened proxy requires its existing public Caddyfile mode')
     admission = admit(image_reference)
     image = inspect_one(run, 'image', image_reference)
-    selected = unique_proxy(run, instance)
+    selected = unique_proxy(run, instance, root=root)
     container = inspect_one(run, 'container', selected)
     state = container.get('State')
     if not isinstance(state, dict) or state.get('Running') is not True:

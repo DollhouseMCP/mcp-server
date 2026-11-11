@@ -13,7 +13,7 @@ from caddy_bundle_identity import bundle_identity
 from caddy_clone_action import docker_run, validate_request
 from caddy_image_admission import qualify
 from caddy_recovery_receipt import MAX_RECORD, private_directory, read_current_caddyfile, read_private, read_receipt, unique_object
-from caddy_service_guard import unique_proxy
+from caddy_service_guard import proxy_startup_path, unique_proxy
 from caddy_volume_migration import check_local_daemon, verify_prepared
 
 PREVIOUS = re.compile(r'server\.prev-[0-9a-f]{32}\Z')
@@ -68,19 +68,20 @@ def find_prepared(root, current_identity, caddyfile, destination_names):
 def verify(value, run=docker_run, admit=qualify):
     root = validate_request(value)
     check_local_daemon(run, os.environ.get('DOCKER_HOST'))
-    selected = unique_proxy(run, value['instance'])
+    selected = unique_proxy(run, value['instance'], root=root)
     current = bundle_identity(root / 'server')
     caddyfile = read_current_caddyfile(root)
     destinations = [value['data_volume'], value['config_volume']]
     path, record = find_prepared(root, current, caddyfile, destinations)
-    if selected != record['profile']['container_id'] or unique_proxy(run, value['instance']) != selected:
+    if selected != record['profile']['container_id'] or unique_proxy(run, value['instance'], root=root) != selected:
         raise ValueError('selected proxy differs from the prepared clone receipt')
     previous = Path(record['bundle'])
     if previous.exists() or previous.is_symlink():
         raise ValueError('recorded previous bundle destination already exists')
     helper = Path(__file__).with_name('caddy_volume_copy.mjs')
-    verify_prepared(run, record['profile'], record['clone'], helper, str(root / 'Caddyfile'), os.environ.get('DOCKER_HOST'), admit)
-    if unique_proxy(run, value['instance']) != selected:
+    startup = proxy_startup_path(root, value['instance'], selected, run)
+    verify_prepared(run, record['profile'], record['clone'], helper, str(startup), os.environ.get('DOCKER_HOST'), admit)
+    if unique_proxy(run, value['instance'], root=root) != selected:
         raise ValueError('selected proxy changed during clone verification')
     if bundle_identity(root / 'server') != current or read_current_caddyfile(root) != caddyfile:
         raise ValueError('source or Caddyfile changed during verification')

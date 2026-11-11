@@ -321,15 +321,50 @@ def fence(root, value):
     return {'token': pending['token'], 'proxy': control['proxy'], 'source': pending['source']}
 
 
+def state_path(root, value):
+    original = root / STATE
+    if not re.fullmatch(r'[0-9a-f]{32}', value['token']):
+        return original
+    try:
+        (root / '.legacy-recovery' / ('lineage-' + value['token'] + '.json')).lstat()
+    except FileNotFoundError:
+        return original
+    from caddy_transition_state import read_state
+    from legacy_control_resolution import consumed
+    try:
+        disposition = consumed(root, read_state(root), value['token'])
+    except FileNotFoundError:
+        return original
+    if disposition['instance'] != value['instance']:
+        raise ValueError('historical handoff lineage belongs to another instance')
+    return original / ('window-' + value['token'])
+
+
+def require_unissued(root, value, preflight=False):
+    path = state_path(root, value)
+    if not path.exists() and not path.is_symlink():
+        return
+    if preflight and path == root / STATE:
+        from caddy_transition_state import read_state
+        from legacy_control_resolution import lookup
+        if lookup(root, read_state(root)) is not None:
+            return
+    raise ValueError('legacy handoff was already issued; no retry or inferred stopped success')
+
+
 def handoff(root, value, run=system_docker, verify_fence=fence):
-    if (root / STATE).exists() or (root / STATE).is_symlink():
-        raise ValueError('legacy handoff was already issued; no retry or inferred stopped success')
+    require_unissued(root, value)
     request, receipt_sha, before = verify_inputs(value, run)
     bound = verify_fence(root, value)
     if verify_inputs(value, run) != (request, receipt_sha, before):
         raise ValueError('legacy checkpoint changed before stop')
-    (root / STATE).mkdir(mode=0o700)
-    directory = private_directory(root / STATE)
+    path = state_path(root, value)
+    if path.parent == root / STATE:
+        path.parent.mkdir(mode=0o700, exist_ok=True)
+        parent_fd = private_directory(path.parent)
+        os.close(parent_fd)
+    path.mkdir(mode=0o700)
+    directory = private_directory(path)
     try:
         issued = {'schema': 1, 'kind': 'legacy-offline-stop-issued', 'checkpoint_sha256': receipt_sha,
                   'host': host_identity(), 'app': before, 'fence': bound, 'snapshot': request['snapshot'],
@@ -337,7 +372,7 @@ def handoff(root, value, run=system_docker, verify_fence=fence):
                   'accepted_boundary': BOUNDARY}
         write_exclusive(directory, ISSUED_FILE, encoded(issued))
         os.fsync(directory)
-        parent = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        parent = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
             os.fsync(parent)
         finally:
@@ -374,7 +409,7 @@ def verify_stop_acknowledgement(root, value, expected_fence, run=system_docker):
 
     This never writes a handoff completion and never authorizes forward SQL.
     """
-    directory = private_directory(root / STATE)
+    directory = private_directory(state_path(root, value))
     try:
         issued, issued_sha = read_json(directory, ISSUED_FILE)
         ack, ack_sha = read_json(directory, 'stop-acknowledged.json')
@@ -404,7 +439,7 @@ def verify_stop_acknowledgement(root, value, expected_fence, run=system_docker):
 
 
 def verify_completed(root, value, run=system_docker, verify_fence=fence):
-    directory = private_directory(root / STATE)
+    directory = private_directory(state_path(root, value))
     try:
         issued, _ = read_json(directory, ISSUED_FILE)
         receipt, _ = read_json(directory, 'receipt.json')
@@ -441,8 +476,8 @@ def main():
         raise ValueError('legacy handoff requires the qualified native AMD64 host')
     lock = acquire_lock(root, allow_control=sys.argv[1] != 'preflight')
     try:
-        if sys.argv[1] != 'verify' and ((root / STATE).exists() or (root / STATE).is_symlink()):
-            raise ValueError('legacy handoff already issued; reconcile before further action')
+        if sys.argv[1] != 'verify':
+            require_unissued(root, value, preflight=sys.argv[1] == 'preflight')
         if sys.argv[1] == 'verify':
             verify_completed(root, value)
         elif sys.argv[1] == 'preflight':

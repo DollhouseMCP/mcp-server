@@ -17,7 +17,7 @@ from caddy_recovery_preflight import validate_old_image
 from caddy_recover_action import (named_containers, old_proxy_args, public_snapshot, recover_locked,
                                   retain_candidate_evidence, stop_owned_recovery, verify_recovered,
                                   write_recovery_evidence)
-from caddy_service_guard import unique_proxy
+from caddy_service_guard import proxy_startup_path, unique_proxy
 from caddy_transition_action import receipt_hash
 from caddy_transition_state import read_state
 from caddy_unchanged_action import observe
@@ -66,10 +66,11 @@ def restore_current(root, instance, run=docker_run, admit=qualify):
             raise ValueError('live proxy differs from the protected pending record')
         return {'outcome': 'unchanged'}
     check_local_daemon(run, os.environ.get('DOCKER_HOST'))
-    if unique_proxy(run, instance) != profile['container_id']:
+    if unique_proxy(run, instance, root=root) != profile['container_id']:
         raise ValueError('original pending proxy identity changed')
     helper = Path(__file__).with_name('caddy_volume_copy.mjs')
-    verify_prepared(run, profile, record['clone'], helper, str(root / 'Caddyfile'), os.environ.get('DOCKER_HOST'), admit)
+    startup = proxy_startup_path(root, instance, profile['container_id'], run, require_root_copy=False)
+    verify_prepared(run, profile, record['clone'], helper, str(startup), os.environ.get('DOCKER_HOST'), admit)
     if current_caddyfile != snapshot:
         return recreate_original(root, instance, receipt, record, snapshot, current_caddyfile, run, admit)
     try:
@@ -80,7 +81,7 @@ def restore_current(root, instance, run=docker_run, admit=qualify):
     actual = inspect_one(run, 'container', profile['container_id'])
     if actual.get('Id') != profile['container_id'] or actual.get('State', {}).get('Running') is not True:
         raise ValueError('original proxy start is UNKNOWN')
-    if unique_proxy(run, instance) != profile['container_id']:
+    if unique_proxy(run, instance, root=root) != profile['container_id']:
         raise ValueError('original proxy selection changed after start')
     return {'outcome': 'started-original', 'container_id': profile['container_id']}
 
@@ -145,7 +146,7 @@ def recreate_original(root, instance, receipt, record, snapshot, current_caddyfi
 
 def recover_pending(root, instance, image, run=docker_run, admit=qualify):
     _, record = pending_record(root)
-    current = unique_proxy(run, instance)
+    current = unique_proxy(run, instance, root=root)
     if current == record['profile']['container_id']:
         return restore_current(root, instance, run, admit)
     pending = read_state(root)['pending']
