@@ -15,7 +15,7 @@ list. A fake cannot satisfy it: the record is written when the real process
 is started.
 
     command_forms.py scan                 print the forms found in the source
-    command_forms.py coverage LOG...      exit 0 when the logs exercise every form, 3 otherwise
+    cat LOG... | command_forms.py coverage    exit 0 when the logs exercise every form, 3 otherwise
 
 Limits. A form is a prefix: words that the source appends later, such as the
 POST body options of the private Caddy request, belong to the same form. Shell
@@ -38,8 +38,7 @@ MANY = []  # any number of arguments supplied at run time
 def program(node):
     if isinstance(node, ast.Constant) and node.value == 'docker':
         return 'docker'
-    name = node.id if isinstance(node, ast.Name) else node.attr if isinstance(node, ast.Attribute) else None
-    return PROGRAMS.get(name)
+    return PROGRAMS.get(getattr(node, 'id', None) or getattr(node, 'attr', None))
 
 
 def words(nodes):
@@ -107,15 +106,10 @@ def normalised(argv):
     return [name, *argv[1:]] if name in ('docker', 'nsenter', 'curl') else None
 
 
-def recorded(paths):
-    commands = []
-    for path in paths:
-        with open(path, encoding='utf-8') as stream:
-            for line in stream:
-                command = normalised(json.loads(line).get('argv'))
-                if command is not None:
-                    commands.append(command)
-    return commands
+def recorded(lines):
+    """The docker, nsenter and curl commands among the recorder's log lines."""
+    commands = (normalised(json.loads(line).get('argv')) for line in lines if line.strip())
+    return [command for command in commands if command is not None]
 
 
 def display(form):
@@ -149,11 +143,11 @@ def main(argv):
     if argv[1:] == ['scan']:
         print('[\n' + ',\n'.join(' ' + key for key in scan()) + '\n]')  # one form per line
         return 0
-    if len(argv) > 2 and argv[1] == 'coverage':
-        report = coverage(listed(), recorded(argv[2:]))
+    if argv[1:] == ['coverage']:
+        report = coverage(listed(), recorded(sys.stdin))
         print(json.dumps(report, indent=1))
         return 0 if report['complete'] else 3
-    raise ValueError('usage: command_forms.py scan | coverage LOG...')
+    raise ValueError('usage: command_forms.py scan | coverage < LOG')
 
 
 if __name__ == '__main__':

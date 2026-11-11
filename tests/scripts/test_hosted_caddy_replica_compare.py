@@ -7,7 +7,6 @@ import json
 from pathlib import Path
 import subprocess
 import sys
-import tempfile
 import unittest
 
 SCRIPTS = Path(__file__).resolve().parents[2] / 'scripts'
@@ -131,13 +130,9 @@ class CompareTests(unittest.TestCase):
         self.assertNotIn('SENTINEL', json.dumps(compare.compare(LIVE, other)))
 
     def run_script(self, *documents):
-        with tempfile.TemporaryDirectory() as directory:
-            names = []
-            for index, document in enumerate(documents):
-                names.append(str(Path(directory, '%d.json' % index)))
-                Path(names[-1]).write_text(json.dumps(document), encoding='utf-8')
-            return subprocess.run([sys.executable, str(SCRIPTS / 'hosted-replica' / 'compare_inventory.py'), *names],
-                                  capture_output=True, check=False)
+        return subprocess.run([sys.executable, str(SCRIPTS / 'hosted-replica' / 'compare_inventory.py')],
+                              input='\n'.join(json.dumps(document, indent=1) for document in documents).encode('utf-8'),
+                              capture_output=True, check=False)
 
     def test_exit_status_follows_the_verdict(self):
         different = replica()
@@ -147,6 +142,7 @@ class CompareTests(unittest.TestCase):
         allowed = [{'path': r'engine_info\.Driver', 'reason': 'declared'}]
         self.assertEqual(self.run_script(LIVE, different, allowed).returncode, 0)
         self.assertNotEqual(self.run_script(LIVE, different, [{'path': 'x'}]).returncode, 0)
+        self.assertNotEqual(self.run_script(LIVE).returncode, 0)
 
 
 if __name__ == '__main__':

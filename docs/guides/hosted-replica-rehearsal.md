@@ -51,11 +51,15 @@ into `docker image load` on the replica. They go to no registry.
 
 ## 2. Prepare the inputs, on the replica
 
-    python3 scripts/hosted-replica/prepare_inputs.py inventory.json control-files prepared [known.json]
+In a private working folder that holds `inventory.json`, the unpacked
+`control-files/` and, optionally, `known.json`:
+
+    python3 scripts/hosted-replica/prepare_inputs.py
 
 Each placeholder gets a fresh random value in the form the application requires.
 No production secret is needed, and none may be copied. Data that production
-encrypted with its own keys stays unreadable on the replica.
+encrypted with its own keys stays unreadable on the replica. Each service's
+environment is what Docker Compose resolves from the completed files.
 
 Add to `prepared/inputs.json` what only an operator can decide: the database
 dump to restore, settings the replica must not share with production such as
@@ -64,9 +68,11 @@ header of `build_replica.py` lists the keys.
 
 ## 3. Build and compare
 
-    python3 scripts/hosted-replica/build_replica.py build inventory.json prepared/inputs.json state.json > build-receipt.json
+    cat inventory.json prepared/inputs.json | python3 scripts/hosted-replica/build_replica.py build > build-result.json
     python3 -I scripts/hosted-deploy/live_inventory.py > replica-inventory.json
-    python3 scripts/hosted-replica/compare_inventory.py inventory.json replica-inventory.json allowed.json > compare-receipt.json
+    cat inventory.json replica-inventory.json allowed.json | python3 scripts/hosted-replica/compare_inventory.py > compare-receipt.json
+
+Each script reads its documents from standard input, one after another.
 
 The build replays the networks, the volumes with their folder layout, the
 deployment files and every container, in the order they were created on the
@@ -78,14 +84,18 @@ everything else to be equal. A difference that must remain needs an entry in
 the allowance file with a reason. An unexplained difference, or an allowance
 that matches nothing, fails the comparison.
 
-`build_replica.py destroy state.json` removes what the build created.
+The build result holds the receipt and, under `state`, what the build created.
+The state is printed even when a step fails. Keep the result:
+`build_replica.py destroy < build-result.json` removes what the build created,
+and a later build that is given the last result as a third document adds to
+the same replica.
 
 ## 4. Record the commands a rehearsal issues
 
     export PYTHONPATH=scripts/hosted-replica/recorder
     export DOLLHOUSE_REPLICA_COMMAND_LOG=/root/commands.jsonl
     # run the rehearsal with the real tooling
-    python3 scripts/hosted-replica/command_forms.py coverage /root/commands.jsonl
+    python3 scripts/hosted-replica/command_forms.py coverage < /root/commands.jsonl
 
 `command-forms.json` lists every docker, nsenter and curl command form that
 `scripts/hosted-deploy/*.py` builds. The recorder writes each child process the

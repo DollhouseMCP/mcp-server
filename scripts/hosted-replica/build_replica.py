@@ -34,10 +34,16 @@ supplies what it cannot:
 Every substitution is listed in the receipt on standard output. The inventory,
 the inputs and the receipt hold host detail and stay on the replica.
 
-    build_replica.py build INVENTORY.json INPUTS.json STATE.json
-    build_replica.py destroy STATE.json
+    cat INVENTORY.json INPUTS.json [LAST-RESULT.json] | build_replica.py build > RESULT.json
+    build_replica.py destroy < RESULT.json
 
-Exit status is 0 when every object reached its recorded state and 3 otherwise.
+The documents are read from standard input, one after another. The result holds
+the receipt and, under "state", what this build created. Give the last result
+back to a later build so that it adds to the same replica, and to `destroy` to
+remove it. The state is printed even when a step fails.
+
+Exit status is 0 when every object reached its recorded state, 3 when one did
+not or the build was refused, and 1 when a step failed.
 """
 import hashlib
 import http.client
@@ -56,6 +62,8 @@ DECLARATION = '/etc/dollhouse-replica-host'
 BUILTIN_NETWORKS = ('bridge', 'host', 'none')
 HEALTH_WAIT = 180
 EXIT_WAIT = 60
+JOINED = 'container:'  # a network mode that joins another container's network
+EMPTY = {'containers': {}, 'volumes': [], 'networks': [], 'files': []}
 HOST_KEYS = ('AutoRemove', 'Binds', 'CapAdd', 'CapDrop', 'CgroupnsMode', 'Dns', 'ExtraHosts', 'GroupAdd', 'Init',
              'IpcMode', 'Memory', 'NanoCpus', 'NetworkMode', 'PidMode', 'PidsLimit', 'PortBindings', 'Privileged',
              'ReadonlyRootfs', 'RestartPolicy', 'Runtime', 'SecurityOpt', 'Tmpfs', 'Ulimits', 'UsernsMode', 'VolumesFrom')
@@ -94,8 +102,8 @@ def machine_identity():
     return hashlib.sha256(Path('/etc/machine-id').read_bytes()).hexdigest()
 
 
-def guard(inventory, engine, state):
-    """Refuse every host that is not a declared, otherwise empty replica."""
+def declared_replica():
+    """This host's machine identity, once an operator's declaration names it."""
     identity = machine_identity()
     try:
         declared = Path(DECLARATION).read_text(encoding='ascii').split()
@@ -103,6 +111,12 @@ def guard(inventory, engine, state):
         raise Refused('this host is not declared as a replica') from None
     if declared[:1] != [identity]:
         raise Refused('the replica declaration names another host')
+    return identity
+
+
+def guard(inventory, engine, state):
+    """Refuse every host that is not a declared, otherwise empty replica."""
+    identity = declared_replica()
     host = inventory.get('host') or {}
     if host.get('machine_id_sha256') == identity or host.get('hostname') == socket.gethostname():
         raise Refused('the inventory describes this host; a replica is never built on its own source')
@@ -198,7 +212,7 @@ def build_volumes(inventory, inputs, engine, state, note):
 def environment(record, inputs, note, image):
     names = record['config']['env']['names']
     public = record['config']['env'].get('public') or {}
-    inherited = dict(item.split('=', 1) for item in image.get('Env') or [])
+    inherited = {name: value for name, value in (item.split('=', 1) for item in image.get('Env') or [])}
     own = inputs['container_environment'].get(record['name'], {})
     result = []
     for name in names:
@@ -237,8 +251,8 @@ def mounts(record):
     return result
 
 
-def creation(record, inputs, note, engine, created):
-    config, recorded = record['config'], record['host_config']
+def chosen_image(record, inputs, note, engine):
+    """The image to create from and its own defaults: a stand-in, the recorded name, or the recorded ID."""
     image = record['image_id']
     if image in inputs['images']:
         note('image', record['name'], inputs['images'][image]['reason'])
@@ -249,36 +263,58 @@ def creation(record, inputs, note, engine, created):
         named = engine.call('GET', '/images/%s/json' % urllib.parse.quote(reference, safe=''), expect=(200, 404))
         if named and named.get('Id') == image:
             image = reference  # create by the same name the live container was created by
+    return image, defaults
+
+
+def host_settings(record, created):
+    recorded = record['host_config']
+    host = {key: recorded[key] for key in HOST_KEYS if recorded.get(key) is not None}
+    host['LogConfig'] = {'Type': recorded.get('log_driver') or 'json-file'}
+    if host.get('NetworkMode', '').startswith(JOINED):
+        # The recorded mode names a live container ID. Join the replica's container of the same name.
+        host['NetworkMode'] = JOINED + created[host['NetworkMode'][len(JOINED):]]
+    host['Mounts'] = mounts(record)
+    return host
+
+
+def creation(record, inputs, note, engine, created):
+    config = record['config']
+    image, defaults = chosen_image(record, inputs, note, engine)
     command = config['cmd']
     if record['name'] in inputs['commands']:
         note('command', record['name'], inputs['commands'][record['name']]['reason'])
         command = inputs['commands'][record['name']]['cmd']
-    host = {key: recorded[key] for key in HOST_KEYS if recorded.get(key) is not None}
-    host['LogConfig'] = {'Type': recorded.get('log_driver') or 'json-file'}
-    if host.get('NetworkMode', '').startswith('container:'):
-        # The recorded mode names a live container ID. Join the replica's container of the same name.
-        host['NetworkMode'] = 'container:' + created[host['NetworkMode'].split(':', 1)[1]]
-    host['Mounts'] = mounts(record)
-    health = config.get('healthcheck')
+    host = host_settings(record, created)
     body = {'Image': image, 'Cmd': command, 'Entrypoint': config['entrypoint'],
             'Env': environment(record, inputs, note, defaults),
-            'ExposedPorts': {port: {} for port in config.get('exposed_ports') or []},
             'Labels': label_values(config.get('labels'), inputs, note, record['name'], defaults.get('Labels') or {}),
-            'User': config.get('user') or '',
-            'WorkingDir': config.get('working_dir') or '', 'Volumes': {path: {} for path in config.get('volumes') or []},
-            'HostConfig': host,
-            'NetworkingConfig': {'EndpointsConfig': {
-                name: {'Aliases': list(dict.fromkeys(endpoint['Aliases']))} if endpoint.get('Aliases') else {}
-                for name, endpoint in record['networks'].items()}}}
-    if host.get('NetworkMode', '').startswith('container:'):
+            'User': config.get('user') or '', 'WorkingDir': config.get('working_dir') or '',
+            'Volumes': {path: {} for path in config.get('volumes') or []}, 'HostConfig': host}
+    if not host.get('NetworkMode', '').startswith(JOINED):
         # A container that joins another's network has no ports or endpoints of its own.
-        del body['ExposedPorts'], body['NetworkingConfig']
+        body['ExposedPorts'] = {port: {} for port in config.get('exposed_ports') or []}
+        body['NetworkingConfig'] = {'EndpointsConfig': {
+            name: {'Aliases': list(dict.fromkeys(endpoint['Aliases']))} if endpoint.get('Aliases') else {}
+            for name, endpoint in record['networks'].items()}}
     if config.get('stop_signal'):
         body['StopSignal'] = config['stop_signal']
+    health = config.get('healthcheck')
     if health:
         body['Healthcheck'] = {'Test': health['test'], **{key: health[key] for key in (
             'Interval', 'Timeout', 'Retries', 'StartPeriod', 'StartInterval') if health.get(key) is not None}}
     return body
+
+
+def described(state):
+    """A container state as the receipt names it: the status, with the exit code once it has exited."""
+    return state['Status'] + (' %d' % state['ExitCode'] if state['Status'] == 'exited' else '')
+
+
+def arrived(wanted, health, state):
+    """Whether a container is as recorded: stopped, or running and as healthy as it was."""
+    if not wanted['Running']:
+        return not state['Running']
+    return state['Running'] and (health != 'healthy' or (state.get('Health') or {}).get('Status') == 'healthy')
 
 
 def settle(engine, identifier, record, note):
@@ -293,20 +329,19 @@ def settle(engine, identifier, record, note):
     engine.call('POST', '/containers/%s/start' % identifier, expect=(204, 304))
     health = record.get('health')
     health = health.get('Status') if isinstance(health, dict) else health
-    deadline = time.monotonic() + (HEALTH_WAIT if wanted['Running'] else EXIT_WAIT)
+    deadline, stopped = time.monotonic() + (HEALTH_WAIT if wanted['Running'] else EXIT_WAIT), False
     while True:
         state = engine.call('GET', '/containers/%s/json' % identifier)['State']
-        reached = state['Status'] + ('' if state['Running'] else ' %d' % state['ExitCode'])
-        if wanted['Running'] and state['Running'] and (health != 'healthy' or (state.get('Health') or {}).get('Status') == 'healthy'):
-            return reached
-        if not wanted['Running'] and not state['Running']:
-            return reached
-        if not wanted['Running'] and time.monotonic() > deadline:
+        if arrived(wanted, health, state):
+            return described(state)
+        late = time.monotonic() > deadline and not stopped
+        died = wanted['Running'] and not state['Running'] and not state.get('Restarting')
+        if late and not wanted['Running']:
             engine.call('POST', '/containers/%s/stop?t=20' % identifier, expect=(204, 304))
             note('container', record['name'], 'stopped by the builder after it kept running')
-            deadline = float('inf')
-        elif (wanted['Running'] and not state['Running'] and not state.get('Restarting')) or time.monotonic() > deadline:
-            return reached + ' (not the recorded state)'
+            stopped = True
+        elif late or died:
+            return described(state) + ' (not the recorded state)'
         time.sleep(1)
 
 
@@ -351,8 +386,7 @@ def build_containers(inventory, inputs, engine, state, note):
                                   creation(record, inputs, note, engine, {
                                       live: state['containers'].get(name) for live, name in names.items()}))
             state['containers'][name] = created['Id']
-        wanted = record['state']
-        expected = wanted['Status'] + ('' if wanted['Running'] else ' %d' % wanted['ExitCode'])
+        expected = described(record['state'])
         reached = settle(engine, state['containers'][name], record, note)
         results[name] = {'recorded': expected, 'reached': reached}
         database = inputs['database']
@@ -360,22 +394,6 @@ def build_containers(inventory, inputs, engine, state, note):
             state['database'] = restore_database(state['containers'][name], database)
             results[name]['database'] = state['database']
     return results
-
-
-def load(path, default=None):
-    try:
-        with open(path, encoding='utf-8') as stream:
-            return json.load(stream)
-    except FileNotFoundError:
-        if default is None:
-            raise
-        return default
-
-
-def save(path, value):
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
-    with os.fdopen(fd, 'w', encoding='utf-8') as stream:
-        json.dump(value, stream, indent=1)
 
 
 def claim(path, state):
@@ -436,14 +454,14 @@ def build_files(inventory, inputs, state, note):
         note('tree', target, 'copied from a supplied folder')
 
 
-def build(inventory_path, inputs_path, state_path):
-    inventory = load(inventory_path)
+def build(inventory, given, state=None):
+    """Build or extend the replica. The returned result always carries the state, also after a failed step."""
     inputs = {key: {} for key in ('environment', 'container_environment', 'labels', 'files', 'images', 'commands',
                                   'skip', 'database', 'trees', 'overrides')}
     inputs['package_name'] = None
-    inputs.update(load(inputs_path))
-    state = load(state_path, {'containers': {}, 'volumes': [], 'networks': [], 'files': []})
-    engine, substitutions = Engine(), []
+    inputs.update(given)
+    state = state or json.loads(json.dumps(EMPTY))
+    engine, substitutions, containers, failure = Engine(), [], {}, None
 
     def note(kind, subject, what):
         substitutions.append({'kind': kind, 'subject': subject, 'what': what})
@@ -453,18 +471,19 @@ def build(inventory_path, inputs_path, state_path):
         build_networks(inventory, inputs, engine, state, note)
         build_volumes(inventory, inputs, engine, state, note)
         build_files(inventory, inputs, state, note)
-        containers = build_containers(inventory, inputs, engine, state, note)
-    finally:
-        save(state_path, state)
+        containers.update(build_containers(inventory, inputs, engine, state, note))
+    except (Refused, RuntimeError, OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
+        failure = '%s: %s' % (type(error).__name__, error)  # the operator still needs the state below
     restored = state.get('database') or {}
-    complete = (all(item['recorded'] == item['reached'] for item in containers.values())
+    complete = (failure is None and all(item['recorded'] == item['reached'] for item in containers.values())
                 and not restored.get('drop') and not restored.get('restore') and not any(restored.get('passwords') or []))
     return {'schema': 1, 'kind': 'replica-build', 'host': socket.gethostname(), 'containers': containers,
-            'substitutions': substitutions, 'complete': complete}
+            'substitutions': substitutions, 'complete': complete, 'failed': failure, 'state': state}
 
 
-def destroy(state_path):
-    state, engine = load(state_path), Engine()
+def destroy(state):
+    declared_replica()
+    engine = Engine()
     for identifier in state['containers'].values():
         engine.call('DELETE', '/containers/%s?force=1&v=0' % identifier, expect=(204, 404))
     for name in state['volumes']:
@@ -473,25 +492,38 @@ def destroy(state_path):
         engine.call('DELETE', '/networks/' + urllib.parse.quote(name), expect=(204, 404))
     for path in state['files']:
         shutil.rmtree(path, ignore_errors=True)
-    save(state_path, {'containers': {}, 'volumes': [], 'networks': [], 'files': []})
-    return {'schema': 1, 'kind': 'replica-destroy', 'removed_folders': len(state['files'])}
+    return {'schema': 1, 'kind': 'replica-destroy', 'removed_folders': len(state['files']), 'complete': True,
+            'failed': None, 'state': json.loads(json.dumps(EMPTY))}
+
+
+def documents(text):
+    """The JSON documents written one after another on standard input."""
+    decoder, found, position = json.JSONDecoder(), [], 0
+    while position < len(text):
+        value, position = decoder.raw_decode(text, position)
+        found.append(value)
+        while position < len(text) and text[position].isspace():
+            position += 1
+    return found
 
 
 def main(argv):
+    found = documents(sys.stdin.read().lstrip()) if argv[1:] in (['build'], ['destroy']) else []
     try:
-        if len(argv) == 5 and argv[1] == 'build':
-            report = build(*argv[2:])
-        elif len(argv) == 3 and argv[1] == 'destroy':
-            if machine_identity() not in Path(DECLARATION).read_text(encoding='ascii').split()[:1]:
-                raise Refused('the replica declaration names another host')
-            report = destroy(argv[2])
+        if argv[1:] == ['build'] and len(found) in (2, 3):
+            report = build(found[0], found[1], found[2].get('state') if len(found) == 3 else None)
+        elif argv[1:] == ['destroy'] and len(found) == 1:
+            report = destroy(found[0].get('state', found[0]))
         else:
-            raise ValueError('usage: build_replica.py build INVENTORY INPUTS STATE | destroy STATE')
+            raise ValueError('usage: cat INVENTORY INPUTS [LAST-RESULT] | build_replica.py build, '
+                             'or build_replica.py destroy < RESULT')
     except Refused as error:
         print(json.dumps({'refused': str(error)}))
         return 3
     print(json.dumps(report, indent=1))
-    return 0 if report.get('complete', True) else 3
+    if report['failed']:
+        return 1
+    return 0 if report['complete'] else 3
 
 
 if __name__ == '__main__':

@@ -13,7 +13,8 @@ Read-only contract, enforced by tests/scripts/test_hosted_caddy_replica_export.p
   host is created, changed or removed. The archive is built in memory.
 - An environment value is a secret when its name says so (SECRET, PASSWORD,
   KEY, TOKEN, HMAC, CREDENTIAL, PRIVATE) or when it holds a long opaque word:
-  20 or more letters, digits and base64 signs, with at least one digit.
+  20 or more letters, digits and base64 signs, with at least one digit. A value
+  is searched for as written, without its quotes and without a trailing comment.
   Each is replaced with __DOLLHOUSE_REPLICA_<NAME>__ in the environment files
   and wherever the same value occurs in any other exported file. A password
   inside a URL is replaced too.
@@ -46,8 +47,9 @@ MAX_FILE = 1024 * 1024
 MAX_FILES = 400
 MAX_TOTAL = 16 * 1024 * 1024
 SECRET_NAME = re.compile(r'SECRET|PASSWORD|PASSWD|KEY|TOKEN|HMAC|CREDENTIAL|PRIVATE')
-OPAQUE = re.compile(r'(?=.*[0-9])(?=.*[A-Za-z])[A-Za-z0-9+/=_-]{20,}\Z')
-ASSIGNMENT = re.compile(r'(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)\Z')
+OPAQUE = re.compile(r'(?=.*\d)(?=.*[A-Za-z])[\w+/=-]{20,}\Z', re.ASCII)
+ASSIGNMENT = re.compile(r'(?:export\s+)?([A-Za-z_]\w*)=(.*)\Z', re.ASCII)
+QUOTED = re.compile(r'''(["'])(.*?)\1''')
 URL_PASSWORD = re.compile(rb'(://[^/\s:@"\']+:)([^@/\s"\']+)(@)')
 MINIMUM = 6  # shorter values cannot be searched for safely; they are replaced by name only
 
@@ -106,46 +108,62 @@ def overlays(directory):
     return found
 
 
-def unquoted(value):
-    value = value.strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in '"\'':
-        return value[1:-1]
-    return value
+def forms(text):
+    """Every form in which another file may hold the value of one assignment.
+
+    The text after `=` may be bare or quoted, and a comment may follow either.
+    A Compose file or a marker can hold the value without the quotes and without
+    the comment, so each reading is searched for: the quoted content, or the
+    text before a comment, and the first word without quotes.
+    """
+    text = text.strip()
+    quoted = QUOTED.match(text)
+    value = quoted.group(2) if quoted else text.split(' #', 1)[0].strip()
+    first = text.split()[0].strip('"\'') if text.split() else ''
+    # Quote marks are never part of a needle: replacing them would break the file that holds the value.
+    return value, [item for item in dict.fromkeys((value, first)) if item]
 
 
-def classify(name, value):
+def classify(name, value, candidates):
+    if not value:
+        return 'empty'
     if SECRET_NAME.search(name.upper()):
         return 'secret'
     # A comment or a second word after the value must not hide an opaque word.
-    return 'opaque' if any(OPAQUE.match(word) and not word.startswith('/') for word in value.split()) else 'kept'
+    return 'opaque' if any(OPAQUE.match(item) and not item.startswith('/') for item in candidates) else 'kept'
 
 
 def placeholder(name):
     return '__DOLLHOUSE_REPLICA_%s__' % name
 
 
+def judged(name, text):
+    """The class of one assignment and the strings to search every exported file for."""
+    value, candidates = forms(text)
+    candidates += [word.strip('"\'') for word in text.split()]
+    verdict = classify(name, value, candidates)
+    if verdict == 'secret':
+        return verdict, forms(text)[1]
+    return verdict, [item for item in candidates if OPAQUE.match(item)] if verdict == 'opaque' else []
+
+
 def environment(raw, secrets, names, short):
     """The file with secret values replaced, one line at a time. Values are never returned elsewhere."""
     lines = []
     for line in raw.decode('utf-8').split('\n'):
-        match = ASSIGNMENT.match(line.strip())
-        if not match or line.lstrip().startswith('#'):
+        match = None if line.lstrip().startswith('#') else ASSIGNMENT.match(line.strip())
+        verdict, needles = judged(match.group(1), match.group(2)) if match else ('kept', [])
+        if match:
+            name = match.group(1)
+            names[name] = verdict if names.get(name, verdict) == verdict else 'secret'
+        if verdict not in ('secret', 'opaque'):
             lines.append(line)
             continue
-        name, value = match.group(1), unquoted(match.group(2))
-        verdict = classify(name, value) if value else 'empty'
-        names[name] = verdict if names.get(name, verdict) == verdict else 'secret'
-        if verdict in ('secret', 'opaque'):
-            # A trailing comment is part of the line, not of the value other files hold.
-            words = value.split()[:1] if verdict == 'secret' else [word for word in value.split() if OPAQUE.match(word)]
-            found = [item for item in [value, *words] if len(item) >= MINIMUM]
-            for item in found:
-                secrets[item] = name
-            if not found:
-                short.add(name)
-            lines.append('%s=%s' % (name, placeholder(name)))
-        else:
-            lines.append(line)
+        searchable = [item for item in needles if len(item) >= MINIMUM]
+        secrets.update((item, name) for item in searchable)
+        if not searchable:
+            short.add(name)
+        lines.append('%s=%s' % (name, placeholder(name)))
     return '\n'.join(lines).encode('utf-8')
 
 
@@ -162,41 +180,44 @@ def scrubbed(raw, secrets):
     return raw, count + hits
 
 
-def export(root=DEPLOY_DIR):
+def collect(root):
+    """Read every listed file. The environment files come first, so a secret defined in one is found in all."""
     directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
-        secrets, names, short, members, skipped = {}, {}, set(), [], {}
-        sources = {}
-        for relative in ENVIRONMENTS:
-            result, reason = read(directory, relative)
-            if result is None:
-                skipped[relative] = reason
-            else:
-                sources[relative] = result
-        # Every environment file is read before any file is scrubbed, so a secret
-        # defined in one is found in all.
-        rendered = {relative: environment(raw, secrets, names, short) for relative, (raw, _) in sources.items()}
         listed = list(FILES) + overlays(directory)
         for tree in TREES:
             listed.extend(walk(directory, tree))
+        sources, skipped = {}, {}
         if len(listed) > MAX_FILES:
             skipped['(after %d files)' % MAX_FILES] = '%d more files not exported' % (len(listed) - MAX_FILES)
-        for relative in listed[:MAX_FILES]:
+        for relative in list(ENVIRONMENTS) + listed[:MAX_FILES]:
             result, reason = read(directory, relative)
             if result is None:
                 skipped[relative] = reason
             else:
                 sources[relative] = result
+        return sources, skipped
     finally:
         os.close(directory)
-    total = 0
-    for relative in sorted(sources):
+
+
+def is_text(raw):
+    try:
+        raw.decode('utf-8')
+    except UnicodeDecodeError:
+        return False
+    return True
+
+
+def export(root=None):
+    root = root or DEPLOY_DIR
+    sources, skipped = collect(root)
+    skipped.update({relative: 'not text' for relative, (raw, _) in sources.items() if not is_text(raw)})
+    secrets, names, short, members, total = {}, {}, set(), [], 0
+    rendered = {relative: environment(sources[relative][0], secrets, names, short)
+                for relative in ENVIRONMENTS if relative in sources and relative not in skipped}
+    for relative in sorted(set(sources) - set(skipped)):
         raw, info = sources[relative]
-        try:
-            raw.decode('utf-8')
-        except UnicodeDecodeError:
-            skipped[relative] = 'not text'
-            continue
         body, count = scrubbed(rendered.get(relative, raw), secrets)
         total += len(body)
         if total > MAX_TOTAL:
@@ -228,10 +249,10 @@ def archive(manifest, members):
 
 
 def main(argv):
-    if len(argv) > 2:
-        raise ValueError('usage: export_control_files.py [DEPLOY_DIR]')
+    if len(argv) != 1:
+        raise ValueError('usage: export_control_files.py (no arguments; the deployment folder is fixed)')
     try:
-        data = archive(*export(argv[1] if len(argv) == 2 else DEPLOY_DIR))
+        data = archive(*export())
     except Refused as error:
         print('export refused: %s' % error, file=sys.stderr)
         return 3

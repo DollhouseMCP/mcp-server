@@ -7,7 +7,9 @@ by content, and everything else must be equal. A difference that remains is
 accepted only when a private allowance file names its path and gives a reason.
 Anything else fails the comparison.
 
-    compare_inventory.py LIVE.json REPLICA.json [ALLOWED.json]
+    cat LIVE.json REPLICA.json [ALLOWED.json] | compare_inventory.py
+
+The documents are read from standard input, one after another.
 
 ALLOWED.json is a list of {"path": regular expression, "reason": text}. The
 report lists every allowed difference with its reason, every allowance that
@@ -29,6 +31,7 @@ EXACT = re.compile(r'(\.image_id|\.sha256|^images\[[^\]]*\]\.(id|rootfs\..*)|\.r
 MOMENT = re.compile(r'(^observed_utc|^elapsed_seconds|\.Pid|\.pid|\.available_bytes|\.restart_count|\.links'
                     r'|^engine_info\.(Containers|ContainersRunning|ContainersPaused|ContainersStopped|Images))\Z')
 KEYS = ('name', 'Name', 'id', 'Destination', 'path')
+MISSING, EXTRA = 'missing on the replica', 'only on the replica'
 # Lists whose order Docker does not promise. Their members are compared as a set.
 UNORDERED = re.compile(r'(\.names|\.Aliases|\.DNSNames|\.exposed_ports|\.volumes|\.CapAdd|\.CapDrop|\.SecurityOptions)\Z')
 
@@ -73,47 +76,49 @@ def by_name(mapping):
     return mapping
 
 
+def member(path, name):
+    return '%s[%s]' % (path, name)
+
+
+def dotted(path, key):
+    return path + '.' + key if path else key
+
+
+def paired(live, replica, path, join):
+    """Two mappings: what only one side has, then the differences inside what both have."""
+    for key in sorted(set(live) | set(replica)):
+        where = join(path, key)
+        if key not in replica:
+            yield where, MISSING
+        elif key not in live:
+            yield where, EXTRA
+        else:
+            yield from differences(live[key], replica[key], where)
+
+
+def listed(live, replica, path):
+    named = keyed(live), keyed(replica)
+    if None not in named:
+        yield from paired(named[0], named[1], path, member)
+    elif UNORDERED.search(path) and all(isinstance(item, str) for item in live + replica):
+        theirs, ours = ({kind(item) or item for item in side} for side in (live, replica))
+        yield from ((member(path, item), MISSING) for item in sorted(theirs - ours))
+        yield from ((member(path, item), EXTRA) for item in sorted(ours - theirs))
+    elif len(live) != len(replica):
+        yield path, 'list length %d on live, %d on the replica' % (len(live), len(replica))
+    else:
+        for index, pair in enumerate(zip(live, replica)):
+            yield from differences(pair[0], pair[1], '%s[%d]' % (path, index))
+
+
 def differences(live, replica, path=''):
     if MOMENT.search(path):
         return
     if isinstance(live, dict) and isinstance(replica, dict):
-        live, replica = by_name(live), by_name(replica)
-        for key in sorted(set(live) | set(replica)):
-            where = path + '.' + key if path else key
-            if key not in replica:
-                yield where, 'missing on the replica'
-            elif key not in live:
-                yield where, 'only on the replica'
-            else:
-                yield from differences(live[key], replica[key], where)
-        return
-    if isinstance(live, list) and isinstance(replica, list):
-        named = keyed(live), keyed(replica)
-        if None not in named:
-            for name in sorted(set(named[0]) | set(named[1])):
-                where = '%s[%s]' % (path, name)
-                if name not in named[1]:
-                    yield where, 'missing on the replica'
-                elif name not in named[0]:
-                    yield where, 'only on the replica'
-                else:
-                    yield from differences(named[0][name], named[1][name], where)
-            return
-        if UNORDERED.search(path) and all(isinstance(item, str) for item in live + replica):
-            ours = {kind(item) or item for item in replica}
-            theirs = {kind(item) or item for item in live}
-            for item in sorted(theirs - ours):
-                yield '%s[%s]' % (path, item), 'missing on the replica'
-            for item in sorted(ours - theirs):
-                yield '%s[%s]' % (path, item), 'only on the replica'
-            return
-        if len(live) != len(replica):
-            yield path, 'list length %d on live, %d on the replica' % (len(live), len(replica))
-            return
-        for index, pair in enumerate(zip(live, replica)):
-            yield from differences(pair[0], pair[1], '%s[%d]' % (path, index))
-        return
-    if type(live) is not type(replica):
+        yield from paired(by_name(live), by_name(replica), path, dotted)
+    elif isinstance(live, list) and isinstance(replica, list):
+        yield from listed(live, replica, path)
+    elif type(live) is not type(replica):
         yield path, 'type %s on live, %s on the replica' % (type(live).__name__, type(replica).__name__)
     elif live != replica and (EXACT.search(path) or kind(live) is None or kind(live) != kind(replica)):
         # Values are host detail. The report names the path and the kind of mismatch only.
@@ -135,19 +140,26 @@ def compare(live, replica, allowed=()):
             'equivalent': not unexplained and not unused}
 
 
-def load(path):
-    with open(path, encoding='utf-8') as stream:
-        return json.load(stream)
+def documents(text):
+    """The JSON documents written one after another on standard input."""
+    decoder, found, position = json.JSONDecoder(), [], 0
+    while position < len(text):
+        value, position = decoder.raw_decode(text, position)
+        found.append(value)
+        while position < len(text) and text[position].isspace():
+            position += 1
+    return found
 
 
 def main(argv):
-    if len(argv) not in (3, 4):
-        raise ValueError('usage: compare_inventory.py LIVE.json REPLICA.json [ALLOWED.json]')
-    allowed = load(argv[3]) if len(argv) == 4 else []
+    found = documents(sys.stdin.read().lstrip()) if len(argv) == 1 else []
+    if len(found) not in (2, 3):
+        raise ValueError('usage: cat LIVE.json REPLICA.json [ALLOWED.json] | compare_inventory.py')
+    allowed = found[2] if len(found) == 3 else []
     if not isinstance(allowed, list) or not all(
             isinstance(item, dict) and set(item) == {'path', 'reason'} and item['reason'] for item in allowed):
         raise ValueError('allowance file must list objects with a path and a reason')
-    report = compare(load(argv[1]), load(argv[2]), allowed)
+    report = compare(found[0], found[1], allowed)
     print(json.dumps(report, indent=1))
     return 0 if report['equivalent'] else 3
 

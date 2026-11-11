@@ -24,7 +24,9 @@ SIGNING = 'sentinelplainwordsigning'
 OPAQUE = 'Ov23SENTINELopaque0001'
 SHORT = 'abc'
 URL_ONLY = 'sentinelurlonly'
-SECRETS = (PASSWORD, SIGNING, OPAQUE, URL_ONLY)
+QUOTED = 'sentinelquotedcomment'
+SINGLE = 'quoted9words in a phrase'
+SECRETS = (PASSWORD, SIGNING, OPAQUE, URL_ONLY, QUOTED, SINGLE)
 
 
 class ExportTests(unittest.TestCase):
@@ -36,12 +38,15 @@ class ExportTests(unittest.TestCase):
         self.write('.env.production', '\n'.join([
             '# settings', 'POSTGRES_PASSWORD=' + PASSWORD, 'DOLLHOUSE_COOKIE_SIGNING_SECRET="%s"' % SIGNING,
             'DOLLHOUSE_GITHUB_CLIENT_ID=%s # note' % OPAQUE, 'DOLLHOUSE_PIN_TOKEN=' + SHORT,
+            'DOLLHOUSE_INVITE_TOKEN_SECRET="%s" # signing key' % QUOTED, "export SMTP_PASSWORD='%s'   # two words" % SINGLE,
+            'DOLLHOUSE_QUOTED_ID="%s" # an identifier in quotes' % OPAQUE,
             'DOLLHOUSE_DATABASE_URL=postgres://dollhouse:%s@postgres:5432/dollhousemcp' % PASSWORD,
             'DOLLHOUSE_OTHER_URL=https://user:%s@example.invalid/path' % URL_ONLY,
             'DOLLHOUSE_HTTP_PORT=3000', 'DOLLHOUSE_PUBLIC_BASE_URL=https://mcp.example.invalid',
             'DOLLHOUSE_LOG_DIR=/var/log/dollhouse/application/2026', 'EMPTY=', '']), 0o600)
         self.write('.env', 'POSTGRES_PASSWORD=%s\nDOLLHOUSE_HTTP_PORT=3000\n' % PASSWORD, 0o600)
-        self.write('compose.yml', 'services:\n  app:\n    environment:\n      A: "%s"\n      B: %s\n' % (SIGNING, OPAQUE), 0o600)
+        self.write('compose.yml', 'services:\n  app:\n    environment:\n      A: "%s"\n      B: %s\n      C: %s\n      D: %s\n' % (
+            SIGNING, OPAQUE, QUOTED, SINGLE), 0o600)
         self.write('Caddyfile', 'mcp.example.invalid {\n\treverse_proxy http://dollhousemcp:3000\n}\n', 0o644)
         self.write('.caddy-state/state.json', json.dumps({'token': 'a' * 32, 'note': PASSWORD}), 0o600)
         self.write('.legacy-handoff/receipt.json', '{"schema":1}', 0o600)
@@ -83,8 +88,9 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(manifest['environment_names'], {
             'DOLLHOUSE_COOKIE_SIGNING_SECRET': 'secret', 'DOLLHOUSE_DATABASE_URL': 'kept',
             'DOLLHOUSE_GITHUB_CLIENT_ID': 'opaque', 'DOLLHOUSE_HTTP_PORT': 'kept', 'DOLLHOUSE_LOG_DIR': 'kept',
-            'DOLLHOUSE_OTHER_URL': 'kept', 'DOLLHOUSE_PIN_TOKEN': 'secret', 'DOLLHOUSE_PUBLIC_BASE_URL': 'kept',
-            'EMPTY': 'empty', 'POSTGRES_PASSWORD': 'secret'})
+            'DOLLHOUSE_INVITE_TOKEN_SECRET': 'secret', 'DOLLHOUSE_OTHER_URL': 'kept', 'DOLLHOUSE_PIN_TOKEN': 'secret',
+            'DOLLHOUSE_PUBLIC_BASE_URL': 'kept', 'DOLLHOUSE_QUOTED_ID': 'opaque', 'EMPTY': 'empty',
+            'POSTGRES_PASSWORD': 'secret', 'SMTP_PASSWORD': 'secret'})
         self.assertEqual(manifest['secrets_too_short_to_search'], ['DOLLHOUSE_PIN_TOKEN'])
         self.assertNotIn(SHORT, json.dumps(manifest))
 
@@ -92,11 +98,13 @@ class ExportTests(unittest.TestCase):
         manifest, files, _ = self.exported()
         compose = files['control-files/compose.yml'][0].decode()
         self.assertIn('A: "__DOLLHOUSE_REPLICA_DOLLHOUSE_COOKIE_SIGNING_SECRET__"', compose)
-        self.assertIn('B: __DOLLHOUSE_REPLICA_DOLLHOUSE_GITHUB_CLIENT_ID__', compose)
+        self.assertRegex(compose, r'B: __DOLLHOUSE_REPLICA_DOLLHOUSE_(GITHUB_CLIENT|QUOTED)_ID__')
+        self.assertIn('C: __DOLLHOUSE_REPLICA_DOLLHOUSE_INVITE_TOKEN_SECRET__', compose)
+        self.assertIn('D: __DOLLHOUSE_REPLICA_SMTP_PASSWORD__', compose)
         state = json.loads(files['control-files/.caddy-state/state.json'][0])
         self.assertEqual(state, {'token': 'a' * 32, 'note': '__DOLLHOUSE_REPLICA_POSTGRES_PASSWORD__'})
         records = {record['path']: record for record in manifest['files']}
-        self.assertEqual((records['compose.yml']['replacements'], records['Caddyfile']['replacements']), (2, 0))
+        self.assertEqual((records['compose.yml']['replacements'], records['Caddyfile']['replacements']), (4, 0))
 
     def test_only_listed_regular_text_files_are_exported(self):
         manifest, files, _ = self.exported()
@@ -115,12 +123,16 @@ class ExportTests(unittest.TestCase):
                 export.export(str(self.root))
 
     def test_refusal_writes_nothing(self):
-        script = ('import sys; sys.argv = ["x", %r]; sys.path.insert(0, %r); import export_control_files as e; '
-                  'e.scrubbed = lambda raw, secrets: (raw, 0); sys.exit(e.main(sys.argv))') % (
-                      str(self.root), str(SOURCE.parent))
+        script = ('import sys; sys.path.insert(0, %r); import export_control_files as e; e.DEPLOY_DIR = %r; '
+                  'e.scrubbed = lambda raw, secrets: (raw, 0); sys.exit(e.main(["x"]))') % (
+                      str(SOURCE.parent), str(self.root))
         done = subprocess.run([sys.executable, '-c', script], capture_output=True, check=False)
         self.assertEqual((done.returncode, done.stdout), (3, b''))
         self.assertNotIn(SIGNING.encode(), done.stderr)
+
+    def test_command_takes_no_argument(self):
+        with self.assertRaises(ValueError):
+            export.main(['export_control_files.py', str(self.root)])
 
     def test_host_is_unchanged(self):
         def snapshot():

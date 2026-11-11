@@ -3,9 +3,11 @@
 A fake Engine and a temporary host tree stand in for Docker. Values are synthetic.
 """
 import base64
+import io
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -180,6 +182,9 @@ class SettleTests(unittest.TestCase):
     def test_exit_code_is_reported_for_a_finished_container(self):
         reached, _, _ = self.settle(record('/job', state=exited(0)), [running(), exited(2)])
         self.assertEqual(reached, 'exited 2')
+        self.assertEqual((build.described(exited(0)), build.described(running()),
+                          build.described({'Status': 'created', 'Running': False, 'ExitCode': 0})),
+                         ('exited 0', 'running', 'created'))
 
     def test_a_retained_server_is_stopped_and_the_stop_is_noted(self):
         with patch.object(build, 'EXIT_WAIT', -1):
@@ -258,7 +263,7 @@ class BuildTests(unittest.TestCase):
             'referenced_files': {str(self.root / 'deep' / 'er' / 'script.mjs'): {'type': 'file', 'mode': '0644', 'uid': 0, 'gid': 0, 'size': 5}},
             'containers': [record('/app', created='2026-01-02T00:00:00Z'), record('/database', health='healthy')]}
         self.inputs = {'files': {str(self.deploy / 'compose.yml'): str(self.root / 'supplied')}, 'package_name': 'example'}
-        self.paths = [str(self.root / name) for name in ('inventory.json', 'inputs.json', 'state.json')]
+        self.state = None
         self.engine = FakeEngine(self.root, {'id-app': [running()], 'id-database': [running('healthy')]})
         for target, value in ((build, 'DECLARATION'), ):
             patcher = patch.object(target, value, str(self.declaration))
@@ -273,15 +278,15 @@ class BuildTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def run_build(self):
-        for path, value in zip(self.paths, (self.inventory, self.inputs)):
-            Path(path).write_text(json.dumps(value), encoding='utf-8')
-        return build.build(*self.paths)
+        report = build.build(self.inventory, self.inputs, self.state)
+        self.state = report['state']
+        return report
 
     def test_inventory_is_replayed_and_every_filler_is_listed(self):
         report = self.run_build()
         self.assertEqual(report['containers'], {'/database': {'recorded': 'running', 'reached': 'running'},
                                                 '/app': {'recorded': 'running', 'reached': 'running'}})
-        self.assertTrue(report['complete'])
+        self.assertEqual((report['complete'], report['failed']), (True, None))
         network = next(body for method, path, body in self.engine.calls if path == '/networks/create')
         self.assertEqual((network['Name'], network['IPAM']['Config'], network['Labels']),
                          ('app_default', [{'Subnet': '172.30.0.0/16', 'Gateway': '172.30.0.1'}], {'project': 'app'}))
@@ -300,10 +305,10 @@ class BuildTests(unittest.TestCase):
         fillers = sorted(item['subject'] for item in report['substitutions'] if item['kind'] == 'file')
         self.assertNotIn(str(self.deploy / 'compose.yml'), fillers)
         self.assertIn(str(self.deploy / 'blob'), fillers)
-        state = json.loads(Path(self.paths[2]).read_text(encoding='utf-8'))
+        state = report['state']
         self.assertEqual((state['containers'], state['volumes'], state['networks']),
                          ({'/database': 'id-database', '/app': 'id-app'}, ['data'], ['app_default']))
-        self.assertEqual(Path(self.paths[2]).stat().st_mode & 0o777, 0o600)
+        self.assertEqual(sorted(state['files']), sorted(str(self.root / name) for name in ('deploy', 'next-door', 'deep')))
 
     def test_second_run_creates_nothing_again(self):
         self.run_build()
@@ -316,7 +321,8 @@ class BuildTests(unittest.TestCase):
         self.run_build()
         keep = self.root / 'unrelated'
         keep.mkdir()
-        build.destroy(self.paths[2])
+        emptied = build.destroy(self.state)
+        self.assertEqual(emptied['state'], build.EMPTY)
         deleted = sorted(path for method, path, _ in self.engine.calls if method == 'DELETE')
         self.assertEqual(deleted, ['/containers/id-app', '/containers/id-database', '/networks/app_default', '/volumes/data'])
         self.assertEqual((self.deploy.exists(), (self.root / 'next-door').exists(), (self.root / 'deep').exists(), keep.exists()),
@@ -355,30 +361,86 @@ class BuildTests(unittest.TestCase):
         self.engine.existing = ['/someone-elses']
         self.assertIn('did not create', self.refusal())
 
-    def test_refuses_a_folder_it_did_not_create(self):
+    def test_a_folder_it_did_not_create_stops_the_build_and_the_state_survives(self):
         self.deploy.mkdir()
-        with self.assertRaises(build.Refused):
-            self.run_build()
+        report = self.run_build()
         self.assertEqual(list(self.deploy.iterdir()), [])
+        self.assertEqual((report['failed'], report['complete'], report['containers']),
+                         ('Refused: a folder this build must create already exists', False, {}))
+        self.assertEqual((report['state']['networks'], report['state']['volumes'], report['state']['files']),
+                         (['app_default'], ['data'], []))
+
+    def test_a_failed_engine_call_is_reported_with_the_state(self):
+        original = self.engine.call
+
+        def call(method, path, body=None, expect=(200, 201, 204)):
+            if method == 'POST' and path.startswith('/containers/create'):
+                raise RuntimeError('Engine POST /containers/create answered 500: synthetic')
+            return original(method, path, body, expect)
+        self.engine.call = call
+        report = self.run_build()
+        self.assertEqual(report['failed'], 'RuntimeError: Engine POST /containers/create answered 500: synthetic')
+        self.assertEqual((report['state']['containers'], report['state']['volumes']), ({}, ['data']))
+
+    def test_destroy_is_refused_on_an_undeclared_host(self):
+        self.run_build()
+        self.declaration.unlink()
+        with self.assertRaises(build.Refused):
+            build.destroy(self.state)
+        self.assertEqual([call for call in self.engine.calls if call[0] == 'DELETE'], [])
+        self.assertTrue(self.deploy.exists())
+
+    def test_a_created_only_container_counts_as_built(self):
+        self.inventory['containers'][0]['state'] = {'Status': 'created', 'Running': False, 'ExitCode': 0}
+        report = self.run_build()
+        self.assertEqual(report['containers']['/app'], {'recorded': 'created', 'reached': 'created'})
+        self.assertTrue(report['complete'])
+
+    def main(self, action, *documents):
+        text = '\n'.join(json.dumps(document, indent=1) for document in documents)
+        with patch.object(build.sys, 'stdin', io.StringIO(text)), patch('builtins.print') as printed:
+            status = build.main(['build_replica.py', action])
+        return status, json.loads(printed.call_args[0][0])
+
+    def test_main_builds_from_documents_on_standard_input_and_destroys_from_the_result(self):
+        status, result = self.main('build', self.inventory, self.inputs)
+        self.assertEqual((status, result['complete'], sorted(result['state']['containers'])), (0, True, ['/app', '/database']))
+        self.engine.existing = ['/app', '/database']
+        again, second = self.main('build', self.inventory, self.inputs, result)
+        self.assertEqual((again, second['state']), (0, result['state']))
+        status, emptied = self.main('destroy', second)
+        self.assertEqual((status, emptied['state'], self.deploy.exists()), (0, build.EMPTY, False))
 
     def test_main_reports_a_refusal_with_exit_3(self):
         self.declaration.unlink()
-        for path, value in zip(self.paths, (self.inventory, self.inputs)):
-            Path(path).write_text(json.dumps(value), encoding='utf-8')
-        with patch('builtins.print') as printed:
-            self.assertEqual(build.main(['build_replica.py', 'build', *self.paths]), 3)
-        self.assertEqual(json.loads(printed.call_args[0][0]), {'refused': 'this host is not declared as a replica'})
+        self.assertEqual(self.main('build', self.inventory, self.inputs),
+                         (3, {'refused': 'this host is not declared as a replica'}))
+
+    def test_main_reports_an_incomplete_or_failed_build(self):
+        self.engine.states['id-database'] = [dict(exited(1), Restarting=False)]
+        self.assertEqual(self.main('build', self.inventory, self.inputs)[0], 3)
+
+    def test_main_reports_a_failed_step_with_exit_1(self):
+        self.deploy.mkdir()
+        status, result = self.main('build', self.inventory, self.inputs)
+        self.assertEqual((status, result['failed'][:8], result['state']['volumes']), (1, 'Refused:', ['data']))
+
+    def test_main_needs_its_documents(self):
+        with patch.object(build.sys, 'stdin', io.StringIO(json.dumps(self.inventory))):
+            with self.assertRaises(ValueError):
+                build.main(['build_replica.py', 'build'])
 
 
 class PrepareTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.control, self.output = Path(temporary.name) / 'control', Path(temporary.name) / 'output'
+        self.control, self.output = Path(temporary.name) / 'control-files', Path(temporary.name) / 'prepared'
         files = {
             '.env.production': ('0600', 'PORT=3000\nTOKEN_SECRET=__DOLLHOUSE_REPLICA_TOKEN_SECRET__\n'
                                         'MASTER_KEY="__DOLLHOUSE_REPLICA_MASTER_KEY__"\nVOLUME=__DOLLHOUSE_REPLICA_VOLUME__\n'
                                         'URL=postgres://app:__DOLLHOUSE_REPLICA_TOKEN_SECRET__@database/app\n# note\n'),
+            'compose.yml': ('0600', 'services: {}\n'),
             'staging/overlay.json': ('0600', json.dumps({'services': {'web': {'environment': {
                 'TOKEN_SECRET': '__DOLLHOUSE_REPLICA_TOKEN_SECRET__', 'COUNT': 2}}}})),
             'Caddyfile': ('0644', 'example.invalid {\n}\n')}
@@ -387,13 +449,23 @@ class PrepareTests(unittest.TestCase):
             (self.control / name).write_text(text, encoding='utf-8')
         (self.control / 'MANIFEST.json').write_text(json.dumps({'files': [
             {'path': name, 'mode': mode} for name, (mode, _) in files.items()]}), encoding='utf-8')
+        labels = {'com.docker.compose.project': 'app', 'com.docker.compose.service': 'web',
+                  'com.docker.compose.project.environment_file': '/opt/app/.env.production',
+                  'com.docker.compose.project.config_files': '/opt/app/compose.yml,/opt/app/staging/overlay.json'}
         self.inventory = {'deployment': {'path': '/opt/app'}, 'containers': [
-            {'name': '/web', 'config': {'labels': {'com.docker.compose.service': 'web',
-                                                   'com.docker.compose.project.config_files': '/opt/app/compose.yml,/opt/app/staging/overlay.json'}}},
+            {'name': '/web', 'config': {'labels': labels}},
+            {'name': '/old', 'config': {'labels': dict(labels, **{
+                'com.docker.compose.project.config_files': '/opt/app/gone.yml,/opt/app/staging/overlay.json'})}},
             {'name': '/other', 'config': {'labels': {}}}]}
+        self.commands = []
 
-    def prepared(self):
-        report = prepare.prepare(self.inventory, self.control, self.output, {'VOLUME': 'data_volume'})
+    def prepared(self, model=None):
+        def run(command, **options):
+            self.commands.append(command)
+            done = type('Done', (), {'returncode': 0 if model is not None else 1, 'stdout': json.dumps(model).encode()})
+            return done()
+        with patch.object(prepare.subprocess, 'run', side_effect=run):
+            report = prepare.prepare(self.inventory, self.control, self.output, {'VOLUME': 'data_volume'})
         return report, json.loads((self.output / 'inputs.json').read_text(encoding='utf-8'))
 
     def test_placeholders_become_known_values_or_fresh_keys_of_the_required_form(self):
@@ -403,10 +475,28 @@ class PrepareTests(unittest.TestCase):
         self.assertRegex(environment['TOKEN_SECRET'], r'\A[0-9a-f]{64}\Z')
         self.assertEqual(len(base64.b64decode(environment['MASTER_KEY'], validate=True)), 32)
         self.assertEqual(environment['URL'], 'postgres://app:%s@database/app' % environment['TOKEN_SECRET'])
-        self.assertEqual(inputs_file['container_environment'], {'/web': {'TOKEN_SECRET': environment['TOKEN_SECRET'], 'COUNT': '2'}})
         self.assertEqual(inputs_file['files']['/opt/app/Caddyfile'], str(self.output / 'files' / 'Caddyfile'))
+        self.assertNotIn('/opt/app/MANIFEST.json', inputs_file['files'])
         self.assertEqual((report['placeholders_known'], report['placeholders_random']), (['VOLUME'], 2))
         self.assertNotIn(environment['TOKEN_SECRET'], json.dumps(report))
+
+    def test_service_environment_is_what_compose_resolves_from_the_completed_files(self):
+        model = {'services': {'web': {'environment': {'FROM_BASE': 'postgres://resolved', 'COUNT': 2, 'UNSET': None}}}}
+        report, inputs_file = self.prepared(model)
+        self.assertEqual(inputs_file['container_environment']['/web'], {'FROM_BASE': 'postgres://resolved', 'COUNT': '2'})
+        files = self.output / 'files'
+        self.assertEqual(self.commands, [[
+            '/usr/bin/docker', 'compose', '--project-name', 'app', '--project-directory', str(files),
+            '--env-file', str(files / '.env.production'), '-f', str(files / 'compose.yml'),
+            '-f', str(files / 'staging' / 'overlay.json'), 'config', '--format', 'json']])
+        self.assertEqual(report['service_environments'], {'/old': 'overlay', '/web': 'compose'})
+
+    def test_overlays_alone_are_the_fallback_and_the_report_says_so(self):
+        report, inputs_file = self.prepared()
+        secret = inputs_file['environment']['TOKEN_SECRET']
+        self.assertEqual(inputs_file['container_environment'], {
+            '/web': {'TOKEN_SECRET': secret, 'COUNT': '2'}, '/old': {'TOKEN_SECRET': secret, 'COUNT': '2'}})
+        self.assertEqual(report['service_environments'], {'/old': 'overlay', '/web': 'overlay'})
 
     def test_second_run_keeps_the_same_secrets_and_everything_is_private(self):
         first = self.prepared()[1]
@@ -417,6 +507,16 @@ class PrepareTests(unittest.TestCase):
             self.output / 'files' / 'Caddyfile')}
         self.assertEqual(modes, {'secrets.json': 0o600, 'inputs.json': 0o600, '.env.production': 0o600, 'Caddyfile': 0o644})
         self.assertNotIn('__DOLLHOUSE_REPLICA_', (self.output / 'files' / '.env.production').read_text(encoding='utf-8'))
+
+    def test_command_works_in_the_current_folder_and_takes_no_argument(self):
+        with self.assertRaises(ValueError):
+            prepare.main(['prepare_inputs.py', 'somewhere'])
+        (self.control.parent / 'inventory.json').write_text(json.dumps(self.inventory), encoding='utf-8')
+        done = subprocess.run([sys.executable, str(SCRIPTS / 'hosted-replica' / 'prepare_inputs.py')],
+                              cwd=self.control.parent, capture_output=True, check=True,
+                              env=dict(os.environ, PATH='/nonexistent'))
+        self.assertEqual(json.loads(done.stdout)['files'], 4)
+        self.assertTrue((self.output / 'inputs.json').exists())
 
 
 if __name__ == '__main__':

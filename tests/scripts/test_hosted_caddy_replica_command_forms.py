@@ -92,7 +92,7 @@ class CommandFormTests(unittest.TestCase):
             lines = [json.loads(line) for line in log.read_text(encoding='utf-8').splitlines()]
             self.assertEqual([line['argv'] for line in lines], [[sys.executable, '-c', 'pass']] * 2)
             self.assertEqual(log.stat().st_mode & 0o777, 0o600)
-            self.assertEqual(forms.recorded([log]), [])
+            self.assertEqual(forms.recorded(log.read_text(encoding='utf-8').splitlines()), [])
 
     def test_recorder_does_nothing_without_a_log(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -100,11 +100,9 @@ class CommandFormTests(unittest.TestCase):
             self.assertEqual(os.listdir(directory), [])
 
     def test_coverage_command_reports_and_fails_on_a_gap(self):
-        with tempfile.TemporaryDirectory() as directory:
-            log = Path(directory, 'commands.jsonl')
-            log.write_text(json.dumps({'argv': ['/usr/bin/docker', 'ps', '--no-trunc', '--quiet']}) + '\n', encoding='utf-8')
-            done = subprocess.run([sys.executable, str(SCRIPTS / 'hosted-replica' / 'command_forms.py'), 'coverage', str(log)],
-                                  capture_output=True, check=False)
+        log = json.dumps({'argv': ['/usr/bin/docker', 'ps', '--no-trunc', '--quiet']}) + '\n\n'
+        done = subprocess.run([sys.executable, str(SCRIPTS / 'hosted-replica' / 'command_forms.py'), 'coverage'],
+                              input=log.encode('utf-8'), capture_output=True, check=False)
         report = json.loads(done.stdout)
         self.assertEqual(done.returncode, 3)
         self.assertEqual(report['exercised'], [{'form': 'docker ps --no-trunc --quiet', 'count': 1}])
