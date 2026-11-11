@@ -18,6 +18,7 @@ required('probeMigrationLedger on PostgreSQL', () => {
     expect(await probeMigrationLedger(getTestAdminDb(), release)).toEqual({
       id: 'production_database_migrations',
       state: 'passed',
+      code: 'migrations_applied',
       detail: `All ${release.length} migrations in this release are applied.`,
     });
   });
@@ -28,6 +29,7 @@ required('probeMigrationLedger on PostgreSQL', () => {
     expect(await probeMigrationLedger(getTestAdminDb(), [...release, next])).toEqual({
       id: 'production_database_migrations',
       state: 'failed',
+      code: 'migrations_incomplete',
       detail: `${release.length} of ${release.length + 1} migrations in this release are applied. First missing: 9999_not_applied_yet.`,
     });
   });
@@ -38,6 +40,7 @@ required('probeMigrationLedger on PostgreSQL', () => {
     expect(await probeMigrationLedger(getTestAdminDb(), release)).toEqual({
       id: 'production_database_migrations',
       state: 'failed',
+      code: 'migrations_mismatch',
       detail: `Applied migration 6 does not match ${release[5].tag} in this release.`,
     });
   });
@@ -48,6 +51,7 @@ required('probeMigrationLedger on PostgreSQL', () => {
     expect(await probeMigrationLedger(getTestAdminDb(), older)).toEqual({
       id: 'production_database_migrations',
       state: 'passed',
+      code: 'migrations_applied',
       detail: `All 10 migrations in this release are applied, with ${release.length - 10} newer applied by a later release.`,
     });
   });

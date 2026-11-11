@@ -304,6 +304,53 @@ describe('OperationsModule', () => {
     });
   });
 
+  it('leaves database migrations out of health when there is no ledger to check', async () => {
+    const route = findRoute(createModule().routes, 'GET', '/api/v1/admin/operate/health');
+    const result = await route.handler({ query: {}, params: {} } as unknown as ConsoleRouteRequest);
+    const summary = projectOperationHealthSummary(result.body);
+    expect(summary.components.map(component => component.component)).toEqual([
+      'database', 'auth_server', 'gatekeeper', 'runtime_control', 'security_invalidation', 'api_mount',
+    ]);
+  });
+
+  it.each([
+    ['ok', [], 'ok'],
+    ['not_ready', ['migrations_incomplete'], 'degraded'],
+    ['degraded', ['migration_ledger_unreadable'], 'degraded'],
+  ] as const)('reports database migrations as %s with its stable code', async (status, codes, overall) => {
+    const healthy = { ...HEALTH_CHECKS,
+      securityInvalidation: () => true,
+      apiMount: () => true,
+      databaseMigrations: () => ({
+        component: 'database_migrations' as const, status, checked_at: NOW.toISOString(), failure_codes: [...codes],
+      }),
+    };
+    const route = findRoute(createModule(healthy).routes, 'GET', '/api/v1/admin/operate/health');
+    const result = await route.handler({ query: {}, params: {} } as unknown as ConsoleRouteRequest);
+
+    // A database behind the release is a readiness fault, not an outage of this surface.
+    expect(result.status).toBe(200);
+    const summary = projectOperationHealthSummary(result.body);
+    expect(summary.status).toBe(overall);
+    expect(summary.components.map(component => component.component)).toEqual([
+      'database', 'auth_server', 'gatekeeper', 'runtime_control', 'security_invalidation', 'database_migrations', 'api_mount',
+    ]);
+    expect(summary.components.find(component => component.component === 'database_migrations')).toEqual({
+      component: 'database_migrations', status, checked_at: NOW.toISOString(), failure_codes: [...codes],
+    });
+  });
+
+  it('reports a migration check that throws as unavailable rather than failing the whole summary', async () => {
+    const checks = { ...HEALTH_CHECKS, databaseMigrations: () => { throw new Error('boom'); } };
+    const route = findRoute(createModule(checks).routes, 'GET', '/api/v1/admin/operate/health');
+    const result = await route.handler({ query: {}, params: {} } as unknown as ConsoleRouteRequest);
+    expect(projectOperationHealthSummary(result.body).components
+      .find(component => component.component === 'database_migrations')).toEqual({
+      component: 'database_migrations', status: 'unavailable', checked_at: NOW.toISOString(),
+      failure_codes: ['database_migrations_check_failed'],
+    });
+  });
+
   it('lists schema-registered operator config without disclosing write-only secrets', async () => {
     const store = new InMemoryOperatorConfigStore();
     await store.save({

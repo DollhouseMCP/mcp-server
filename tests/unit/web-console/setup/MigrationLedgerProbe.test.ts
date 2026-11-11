@@ -1,4 +1,5 @@
 import { describe, expect, it, jest } from '@jest/globals';
+import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 import type { DatabaseInstance } from '../../../../src/database/connection.js';
@@ -31,14 +32,14 @@ const databaseReturning = (rows: unknown): DatabaseInstance =>
 describe('compareMigrationLedger', () => {
   it('passes when the ledger is exactly this release', () => {
     expect(compareMigrationLedger(release, ledgerOf(release))).toEqual({
-      id: 'production_database_migrations', state: 'passed', detail: 'All 3 migrations in this release are applied.',
+      id: 'production_database_migrations', state: 'passed', code: 'migrations_applied', detail: 'All 3 migrations in this release are applied.',
     });
   });
 
   it('passes when a later release has already applied newer migrations', () => {
     const newer = [...ledgerOf(release), { hash: hash(4), createdAt: '4000' }, { hash: hash(5), createdAt: '5000' }];
     expect(compareMigrationLedger(release, newer)).toEqual({
-      id: 'production_database_migrations', state: 'passed',
+      id: 'production_database_migrations', state: 'passed', code: 'migrations_applied',
       detail: 'All 3 migrations in this release are applied, with 2 newer applied by a later release.',
     });
   });
@@ -49,7 +50,7 @@ describe('compareMigrationLedger', () => {
     [2, 'all but the last applied', '0002_third'],
   ])('fails with %i of 3 applied (%s) and names the first missing migration', (applied, _label, missing) => {
     expect(compareMigrationLedger(release, ledgerOf(release.slice(0, applied)))).toEqual({
-      id: 'production_database_migrations', state: 'failed',
+      id: 'production_database_migrations', state: 'failed', code: 'migrations_incomplete',
       detail: `${applied} of 3 migrations in this release are applied. First missing: ${missing}.`,
     });
   });
@@ -58,7 +59,7 @@ describe('compareMigrationLedger', () => {
     const ledger = ledgerOf(release);
     ledger[1] = { ...ledger[1], hash: hash(99) };
     expect(compareMigrationLedger(release, ledger)).toEqual({
-      id: 'production_database_migrations', state: 'failed',
+      id: 'production_database_migrations', state: 'failed', code: 'migrations_mismatch',
       detail: 'Applied migration 2 does not match 0001_second in this release.',
     });
   });
@@ -73,7 +74,7 @@ describe('compareMigrationLedger', () => {
   it('fails when the ledger has the right migrations in the wrong positions', () => {
     const [first, second, third] = ledgerOf(release);
     expect(compareMigrationLedger(release, [second, first, third])).toMatchObject({
-      state: 'failed', detail: 'Applied migration 1 does not match 0000_first in this release.',
+      state: 'failed', code: 'migrations_mismatch', detail: 'Applied migration 1 does not match 0000_first in this release.',
     });
   });
 });
@@ -96,7 +97,7 @@ describe('probeMigrationLedger', () => {
     const onUnreadable = jest.fn();
     const result = await probeMigrationLedger(database, release, onUnreadable);
     expect(result).toEqual({
-      id: 'production_database_migrations', state: 'pending',
+      id: 'production_database_migrations', state: 'pending', code: 'migration_ledger_unreadable',
       detail: 'The applied-migration ledger could not be read, so the schema is not verified. ' +
         'Grant the server\'s database role SELECT on the drizzle schema.',
     });
@@ -119,6 +120,11 @@ describe('release migration list', () => {
     expect(migrations.every(migration => /^[0-9a-f]{64}$/.test(migration.hash))).toBe(true);
     expect(migrations.map(migration => migration.when)).toEqual([...migrations.map(migration => migration.when)].sort((a, b) => a - b));
     expect(new Set(migrations.map(migration => migration.tag)).size).toBe(migrations.length);
+  });
+
+  it('is shipped in the npm package, which otherwise carries only compiled code from dist/database', async () => {
+    const manifest = JSON.parse(await readFile(new URL('../../../../package.json', import.meta.url), 'utf8')) as { files: string[] };
+    expect(manifest.files).toContain('dist/database/release-migrations.json');
   });
 
   it.each([
