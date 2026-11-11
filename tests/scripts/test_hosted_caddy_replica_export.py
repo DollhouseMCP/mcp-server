@@ -122,6 +122,26 @@ class ExportTests(unittest.TestCase):
             with self.assertRaisesRegex(export.Refused, 'a secret value survived in '):
                 export.export(str(self.root))
 
+    def test_export_is_refused_when_an_environment_file_cannot_be_read_as_text(self):
+        # One undecodable byte, even in a comment, would leave the file's secrets unknown to the search.
+        self.write('.env.production', b'# caf\xff\nTOKEN_SECRET=%s\n' % QUOTED.encode(), 0o600)
+        with self.assertRaisesRegex(export.Refused, r'environment file \.env\.production is not text'):
+            export.export(str(self.root))
+
+    def test_export_is_refused_when_an_environment_file_is_not_a_regular_file(self):
+        (self.root / '.env').unlink()
+        os.symlink(self.root / '.env.production', self.root / '.env')
+        with self.assertRaisesRegex(export.Refused, r'environment file \.env is unreadable'):
+            export.export(str(self.root))
+
+    def test_an_absent_environment_file_is_only_noted(self):
+        (self.root / '.env').unlink()
+        manifest, files, data = self.exported()
+        self.assertEqual(manifest['skipped']['.env'], 'absent')
+        self.assertNotIn('control-files/.env', files)
+        for value in SECRETS:
+            self.assertNotIn(value.encode(), data)
+
     def test_refusal_writes_nothing(self):
         script = ('import sys; sys.path.insert(0, %r); import export_control_files as e; e.DEPLOY_DIR = %r; '
                   'e.scrubbed = lambda raw, secrets: (raw, 0); sys.exit(e.main(["x"]))') % (

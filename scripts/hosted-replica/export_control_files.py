@@ -20,6 +20,8 @@ Read-only contract, enforced by tests/scripts/test_hosted_caddy_replica_export.p
   inside a URL is replaced too.
 - Before anything is written, every archive member is searched again for every
   secret value. One hit aborts the export with no output.
+- An environment file that exists but cannot be read as text aborts the export
+  too: its secrets would be unknown to the search.
 
     ssh HOST python3 -I - < export_control_files.py > control-files.tar
 
@@ -213,6 +215,10 @@ def export(root=None):
     root = root or DEPLOY_DIR
     sources, skipped = collect(root)
     skipped.update({relative: 'not text' for relative, (raw, _) in sources.items() if not is_text(raw)})
+    for relative in ENVIRONMENTS:
+        # Its secrets would never be searched for, so copies in other files would be exported.
+        if skipped.get(relative, 'absent') != 'absent':
+            raise Refused('environment file %s is %s' % (relative, skipped[relative]))
     secrets, names, short, members, total = {}, {}, set(), [], 0
     rendered = {relative: environment(sources[relative][0], secrets, names, short)
                 for relative in ENVIRONMENTS if relative in sources and relative not in skipped}

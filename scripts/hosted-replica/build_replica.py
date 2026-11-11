@@ -162,18 +162,24 @@ def build_networks(inventory, inputs, engine, state, note):
         state['networks'].append(name)
 
 
-def content(path, entry, inputs, note):
-    """A file's bytes: supplied content, or filler that a parser of that kind of file accepts."""
-    source = inputs['files'].get(str(path))
-    if source is not None:
-        return Path(source).read_bytes()
+def filler(path, entry, note):
+    """Bytes for a file without supplied content, in a form a parser of that kind of file accepts."""
     if isinstance(entry.get('env'), dict):
-        # An environment file without supplied content: the recorded names, with no real value.
+        # An environment file: the recorded names, with no real value.
         note('file', str(path), 'filler with the recorded names')
         return ''.join('%s=%s\n' % (name, '' if name in entry['env'].get('empty', ()) else 'replica')
                        for name in entry['env'].get('names', ())).encode('utf-8')
     note('file', str(path), 'filler')
     return b'{}' if path.suffix == '.json' else b'\0' * int(entry.get('size', 0))
+
+
+def write_file(path, entry, inputs, note):
+    """Give a file its supplied content, or filler."""
+    source = inputs['files'].get(str(path))
+    if source is None:
+        path.write_bytes(filler(path, entry, note))
+    else:
+        shutil.copyfile(source, path)
 
 
 def write_tree(root, entries, inputs, note):
@@ -183,7 +189,7 @@ def write_tree(root, entries, inputs, note):
         if entry['type'] == 'dir':
             path.mkdir(exist_ok=True)
         elif entry['type'] == 'file':
-            path.write_bytes(content(path, entry, inputs, note))
+            write_file(path, entry, inputs, note)
         else:
             note('file', str(path), 'not created: ' + entry['type'])
             continue
@@ -212,7 +218,7 @@ def build_volumes(inventory, inputs, engine, state, note):
 def environment(record, inputs, note, image):
     names = record['config']['env']['names']
     public = record['config']['env'].get('public') or {}
-    inherited = {name: value for name, value in (item.split('=', 1) for item in image.get('Env') or [])}
+    inherited = dict(item.split('=', 1) for item in image.get('Env') or [])
     own = inputs['container_environment'].get(record['name'], {})
     result = []
     for name in names:
