@@ -17,7 +17,7 @@ import test_hosted_caddy_legacy_handoff as legacy_fixture
 
 
 class Fixture:
-    def __init__(self, owner):
+    def __init__(self, owner, control_model=False):
         for name, value in (('APP', '6' * 64), ('PG', '7' * 64)):
             binding = patch.object(legacy_fixture, name, value)
             binding.start()
@@ -40,6 +40,10 @@ class Fixture:
             item['Name'] = '/' + name
             item['HostConfig'].update(NetworkMode='site_default', PortBindings={})
             item['NetworkSettings'] = {'Ports': {}, 'Networks': {'site_default': {'Aliases': aliases}}}
+            if control_model:
+                item['Config']['Env'] = ['FIXTURE_PRIVATE=literal$fixture']
+                item['HostConfig'].update(RestartPolicy={'Name': 'unless-stopped'},
+                                          LogConfig={'Type': 'json-file', 'Config': {'max-size': '10m'}})
         self.current = self.p.current
         self.current.update(RestartCount=0)
         self.current['State'] = {'Running': True, 'Restarting': False, 'OOMKilled': False,
