@@ -280,6 +280,42 @@ else { const allowed=mode.startsWith('allowed'); const headers={'host':'fixture.
     assert.equal(request({path:'/ready'}).status, 200);
     observations.push('real private admin load/readback, restart-persistent fence, marker and framing denials, then normal-profile restoration');
     const hashSource = source => createHash('sha256').update(fs.readFileSync(path.join(root, source))).digest('hex');
+    // The adapt control must work on both Caddy generations a deployment
+    // meets. The legacy fixture is the stock image with its stock profile and
+    // a public proxy-only Caddyfile; it is not a live legacy profile or receipt.
+    const legacyImage = process.env.CADDY_LEGACY_IMAGE_ID ?? '';
+    assert.match(legacyImage, /^sha256:[a-f0-9]{64}$/, 'legacy Caddy fixture image is required');
+    const legacyInfo = inspect(legacyImage);
+    assert.equal(legacyInfo.Architecture, native, 'legacy fixture must run on matching native daemon');
+    assert.ok(legacyInfo.Config.Env.includes('CADDY_VERSION=v2.8.4'), 'legacy fixture must be Caddy 2.8.4');
+    const legacyFile = path.join(work, 'legacy.Caddyfile');
+    fs.writeFileSync(legacyFile, 'http://fixture.local {\n\treverse_proxy dollhousemcp:8081\n}\n', {flag:'wx', mode:0o644});
+    const legacyProxy = container(['--name', `${prefix}-legacy-adapt`, '--network', network, legacyImage]);
+    engine(['cp', legacyFile, `${legacyProxy}:/etc/caddy/Caddyfile`]);
+    engine(['start', legacyProxy]);
+    await waitForReady(() => {
+      engine(['exec', legacyProxy, 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:2019/config/']);
+      return {status:200};
+    }, {}, {attempts:15});
+    const adaptScript = 'scripts/ci/caddy-adapt-native.py';
+    const adaptWitness = (id, file) => JSON.parse(execFileSync('/usr/bin/sudo', ['-n', '/usr/bin/python3',
+      path.join(root, adaptScript), id, file], {encoding:'utf8', timeout:120_000, maxBuffer:65536}));
+    const legacyAdapt = adaptWitness(legacyProxy, legacyFile);
+    assert.equal(legacyAdapt.container, legacyProxy);
+    assert.equal(legacyAdapt.serving_configuration_matches, true);
+    // Without this refusal the fixture would not be the generation that failed.
+    assert.equal(legacyAdapt.dash_form, 'refused');
+    const candidateAdapt = adaptWitness(proxy, path.join(volumeRoot, 'Caddyfile'));
+    assert.equal(candidateAdapt.container, proxy);
+    assert.equal(candidateAdapt.serving_configuration_matches, true);
+    assert.equal(candidateAdapt.dash_form, 'accepted');
+    assert.equal(candidateAdapt.input, legacyAdapt.input);
+    assert.equal(legacyAdapt.path_dependent_refused, true);
+    assert.equal(candidateAdapt.path_dependent_refused, true);
+    observations.push('real adapt control equals the serving configuration on stock Caddy 2.8.4 and on the candidate');
+    configSources.push({adaptWitness:{legacy:{...legacyAdapt, imageId:legacyInfo.Id, caddyVersion:'v2.8.4'},
+      candidate:candidateAdapt, scriptSha256:hashSource(adaptScript),
+      activeConfigSha256:hashSource('scripts/hosted-deploy/caddy_active_config.py')}});
     configSources.push({releaseWitness:{begin,refused,stopped,restarted,restored, scriptSha256:hashSource('scripts/ci/caddy-release-native.py'),
       activeConfigSha256:hashSource('scripts/hosted-deploy/caddy_active_config.py'),
       releaseActionSha256:hashSource('scripts/hosted-deploy/caddy_release_action.py')}});

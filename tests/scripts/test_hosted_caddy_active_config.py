@@ -100,6 +100,29 @@ class ActiveConfigTests(unittest.TestCase):
                 session.request('POST', '/load', b'{}')
         self.assertTrue(any('UNKNOWN' in note for note in caught.exception.__notes__))
 
+    def test_adapt_names_a_real_input_path_for_every_supported_caddy(self):
+        # Inert argv check only. scripts/ci/caddy-release-native.py runs this
+        # same call against the real legacy and qualified Caddy binaries.
+        session = control.ActiveConfig.__new__(control.ActiveConfig)
+        session.identity = {'id': 'a' * 64, 'pid': 123, 'started_at': 'start', 'restart_count': 0}
+        session.namespace = (1, 2)
+        with patch.object(session, 'recheck'), \
+                patch.object(control, 'bounded_input', return_value=b'{"b":1,"a":2}') as bounded:
+            self.assertEqual(session.adapt(b'fixture.local {\n}\n'), b'{"a":2,"b":1}')
+        command, payload = bounded.call_args.args
+        self.assertEqual(command, ['/usr/bin/docker', 'exec', '--interactive', 'a' * 64, '/usr/bin/caddy',
+                                   'adapt', '--config', '/dev/stdin', '--adapter', 'caddyfile'])
+        self.assertEqual(payload, b'fixture.local {\n}\n')
+
+    def test_adapt_refuses_output_that_depends_on_the_input_path(self):
+        # Observed on real Caddy 2.8.4 and 2.11.9: file_server hides its own configuration file.
+        session = control.ActiveConfig.__new__(control.ActiveConfig)
+        session.identity = {'id': 'a' * 64, 'pid': 123, 'started_at': 'start', 'restart_count': 0}
+        dependent = b'{"apps":{"http":{"servers":{"srv0":{"routes":[{"handle":[{"handler":"file_server","hide":["/dev/stdin"]}]}]}}}}}'
+        with patch.object(session, 'recheck'), patch.object(control, 'bounded_input', return_value=dependent):
+            with self.assertRaisesRegex(ValueError, 'depends on its input path'):
+                session.adapt(b':80 {\n\tfile_server\n}\n')
+
     def test_changed_namespace_refuses_control(self):
         session = control.ActiveConfig.__new__(control.ActiveConfig)
         session.identity = {'id': 'a' * 64, 'pid': 123, 'started_at': 'start', 'restart_count': 0}

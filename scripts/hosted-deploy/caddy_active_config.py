@@ -30,6 +30,9 @@ DOCKER = '/usr/bin/docker'
 LIMIT = 1024 * 1024
 IDENTIFIER = re.compile(r'[0-9a-f]{64}\Z')
 PROC = '/proc/'
+# Caddy 2.8.4, the legacy proxy, opens a file named "-". Only later releases
+# read standard input for it. The device path reads the same stream in both.
+ADAPT_INPUT = '/dev/stdin'
 
 
 def system_docker(command, timeout, maximum):
@@ -348,7 +351,7 @@ class ActiveConfig:
         self.recheck()
         try:
             raw = bounded_input([DOCKER, 'exec', '--interactive', self.identity['id'], '/usr/bin/caddy',
-                                 'adapt', '--config', '-', '--adapter', 'caddyfile'], caddyfile,
+                                 'adapt', '--config', ADAPT_INPUT, '--adapter', 'caddyfile'], caddyfile,
                                 context=self.failure_context('adapt'))
         except BaseException as error:
             try:
@@ -364,6 +367,10 @@ class ActiveConfig:
             raise
         else:
             self.recheck()
+        # The adapter writes its input path into some directives, such as the
+        # file_server hide list. That output can never equal a serving configuration.
+        if ADAPT_INPUT.encode() in raw:
+            raise ValueError('adapted Caddy configuration depends on its input path')
         return canonical(raw)
 
     def read(self):
