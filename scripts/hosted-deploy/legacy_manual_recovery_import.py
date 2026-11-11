@@ -138,7 +138,7 @@ def preserve_unarchived_files(root, files):
     return unarchived
 
 
-def import_accepted(root, value, evidence_dir, run):
+def import_accepted(root, value, evidence_dir, run, receipt_identities):
     window = window_path(root, value['token'])
     if window.exists() or window.is_symlink():
         raise ValueError('manual adoption cannot replace an armed recovery window')
@@ -171,9 +171,14 @@ def import_accepted(root, value, evidence_dir, run):
     verify_boot(final, retained, False)
     proxy = inspect_one(run, 'container', recovered['restored_old_profile_proxy'])
     verify_boot(final, proxy, True)
+    from legacy_reconciliation_request import identities
+    bound = identities(root, pending, proxy)
+    if receipt_identities != bound:
+        raise ValueError('manual reconciliation receipt identities differ; regenerate the request')
     unarchived = preserve_unarchived_files(root, files)
     return {'state': state, 'pending': pending, 'files': files, 'database': database, 'app': app,
-            'postgres': postgres, 'proxy': proxy, 'retained': retained, 'proxy_token': value['token'],
+            'postgres': postgres, 'proxy': proxy, 'retained': retained,
+            'proxy_token': bound['serving_proxy']['recovery_token'], 'receipt_identities': bound,
             'source': pending['source'], 'checkpoint_sha256': checkpoint_sha, 'manual_receipt_sha256': ACCEPTED['manual_receipt'],
             'original_proxy_id': manifest['original_proxy_id'], 'marker_hashes': final['markers_unchanged'],
             'unchanged_unarchived_files': unarchived}

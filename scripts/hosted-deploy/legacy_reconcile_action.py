@@ -182,11 +182,19 @@ def retire(root, instance, operation, data, receipt, run):
     return authority['sha256']
 
 
+def recovery_data(root, value, manual, run, receipt_identities):
+    if manual is not None and receipt_identities is None:
+        raise ValueError('manual reconciliation requires generated receipt identities')
+    if manual is None and receipt_identities is not None:
+        raise ValueError('automated recovery uses its armed request, not manual receipt identities')
+    return import_accepted(root, value, manual, run, receipt_identities) if manual is not None else automatic(root, value, run)
+
+
 def reconcile(root, value, manual, run=system_docker, admit=qualify, public=recovery.public_acceptance,
-              verify_compose=check_compose):
+              verify_compose=check_compose, receipt_identities=None):
     if resolution.IMPLEMENTATION.is_relative_to(root / 'server'):
         raise ValueError('reconciliation requires a pinned helper outside the replaced source cache')
-    data = import_accepted(root, value, manual, run) if manual is not None else automatic(root, value, run)
+    data = recovery_data(root, value, manual, run, receipt_identities)
     pending, instance = data['pending'], value['instance']
     kind, original, receipt = recovery_kind(root, Path(pending['previous']))
     if (kind != 'legacy' or str(receipt) != pending['receipt']
@@ -232,6 +240,8 @@ def reconcile(root, value, manual, run=system_docker, admit=qualify, public=reco
               'app_profile_sha256': profile_hash(data['app']), 'postgres_profile_sha256': profile_hash(data['postgres']),
               'database': data['database'], 'public': public_result,
               'unchanged_unarchived_files': data['unchanged_unarchived_files']}
+    if receipt_identities is not None:
+        result['receipt_identities'] = receipt_identities
     if resolution.raw_state(root) != failed or marker_inventory(root, value, data) != (handoff_directory, handoff_hashes):
         raise ValueError('failed controls changed before reconciliation completion')
     files.record(operation, 'RECONCILED', result)
@@ -239,12 +249,17 @@ def reconcile(root, value, manual, run=system_docker, admit=qualify, public=reco
 
 
 def main():
-    if sys.argv[1:] != ['reconcile-legacy']:
-        raise ValueError('explicit reconcile-legacy action required')
+    action = sys.argv[1:]
+    if action not in (['reconcile-legacy'], ['prepare-legacy-reconciliation']):
+        raise ValueError('explicit reconciliation or request preparation action required')
     raw = sys.stdin.buffer.read(MAX_RECORD + 1)
     if len(raw) > MAX_RECORD:
         raise ValueError('reconciliation request exceeds its bound')
     value = json.loads(raw, object_pairs_hook=unique_object)
+    if action == ['prepare-legacy-reconciliation']:
+        prepare_request(value)
+        return
+    identities = value.pop('receipt_identities', None) if isinstance(value, dict) else None
     if not isinstance(value, dict) or set(value) != boundary.KEYS | {'manual_evidence_dir'}:
         raise ValueError('invalid reconciliation request')
     manual = value.pop('manual_evidence_dir')
@@ -258,7 +273,29 @@ def main():
         raise ValueError('reconciliation requires the qualified native AMD64 legacy host')
     lock = acquire_lock(root, allow_control=True)
     try:
-        print(json.dumps(reconcile(root, value, manual)))
+        print(json.dumps(reconcile(root, value, manual, receipt_identities=identities)))
+    finally:
+        os.close(lock)
+
+
+def prepare_request(value):
+    from legacy_reconciliation_request import generate
+    from caddy_transition_state import read_state
+    if (not isinstance(value, dict) or set(value) != {'deploy_dir', 'instance', 'checkpoint_dir', 'manual_evidence_dir'}
+            or any(not isinstance(item, str) for item in value.values())):
+        raise ValueError('request preparation accepts paths and instance only, never tokens')
+    validate_system()
+    root = Path(value['deploy_dir'])
+    pending = read_state(root).get('pending')
+    if not isinstance(pending, dict):
+        raise ValueError('request preparation requires a retained transition')
+    root = validate_request({'deploy_dir': value['deploy_dir'], 'instance': value['instance'],
+                             'data_volume': pending['volumes'][0], 'config_volume': pending['volumes'][1]})
+    lock = acquire_lock(root, allow_control=True)
+    try:
+        prepared = generate(root, value['instance'], value['checkpoint_dir'], value['manual_evidence_dir'], system_docker)
+        validate_request({key: prepared[key] for key in ('deploy_dir', 'instance', 'data_volume', 'config_volume')})
+        print(json.dumps(prepared))
     finally:
         os.close(lock)
 

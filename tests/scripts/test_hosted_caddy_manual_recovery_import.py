@@ -12,6 +12,7 @@ sys.path.insert(0, str(SCRIPTS / 'hosted-deploy'))
 sys.path.insert(0, str(SCRIPTS))
 from legacy_manual_recovery_import import OVERLAYS, fixed_members, validate_failed_state
 from legacy_handoff import digest
+from legacy_reconcile_action import prepare_request
 
 
 class ManualArchiveTests(unittest.TestCase):
@@ -80,6 +81,13 @@ class ManualArchiveTests(unittest.TestCase):
         wrong_owner = self.archive(owner)
         with self.assertRaisesRegex(ValueError, 'archive member is unsafe'):
             fixed_members(self.ROOT, wrong_owner)
+
+    def test_preparation_never_accepts_a_handwritten_token_or_receipt_override(self):
+        inputs = {'deploy_dir': '/fixture', 'instance': 'site',
+                  'checkpoint_dir': '/protected/checkpoint', 'manual_evidence_dir': '/protected/evidence'}
+        for field in ('token', 'receipt_identities', 'data_volume', 'proxy_recovery_token'):
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, 'never tokens'):
+                prepare_request({**inputs, field: 'b' * 32})
 
 
 if __name__ == '__main__':

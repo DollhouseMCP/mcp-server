@@ -1,5 +1,6 @@
 """Forced recovery + reconciliation with inert Docker and private files."""
 import json
+import copy
 from pathlib import Path
 import sys
 import unittest
@@ -15,6 +16,7 @@ import legacy_handoff as handoff
 import legacy_reconcile_action as reconcile
 import legacy_recovery_action as recovery
 from hosted_legacy_recovery_fixture import Fixture
+from hosted_manual_reconciliation_fixture import ManualPacket
 
 
 class ReconciliationTests(unittest.TestCase):
@@ -152,6 +154,54 @@ class ReconciliationTests(unittest.TestCase):
         self.assertEqual(sum(argv[1] == 'stop' and self.fx.current['Id'] in argv for argv in self.fx.calls), 1)
         self.assertFalse(any(argv[1] == 'start' and self.fx.app['Id'] in argv for argv in self.fx.calls))
         self.assertFalse((path / 'started.json').exists())
+
+    def manual_reconcile(self, request):
+        request = copy.deepcopy(request)
+        manual = request.pop('manual_evidence_dir')
+        identities = request.pop('receipt_identities')
+        return reconcile.reconcile(self.fx.root, request, manual, self.run_docker, self.fx.p.fx.qualify,
+                                   public=self.public, verify_compose=self.verify_model, receipt_identities=identities)
+
+    def test_generated_manual_request_reconciles_distinct_transition_and_proxy_tokens(self):
+        packet = ManualPacket(self)
+        request = packet.generate()
+        ids = request['receipt_identities']
+        self.assertEqual(request['token'], '0' * 32)
+        self.assertEqual(ids['transition']['token'], request['token'])
+        self.assertNotEqual(ids['serving_proxy']['recovery_token'], request['token'])
+        self.assertNotIn(request['token'], ids['recovery_receipt']['directory'])
+        before = len(self.fx.calls)
+        result = self.manual_reconcile(request)
+        self.assertEqual(result['outcome'], 'RECONCILED')
+        receipt = json.loads(Path(result['receipt']).read_bytes())
+        self.assertEqual(receipt['receipt_identities'], ids)
+        self.assertEqual(resolution.raw_state(self.fx.root), packet.raw_state)
+        self.assertIsNone(resolution.unresolved_pending(self.fx.root, self.fx.state))
+        self.assertFalse(any(call[1] in ('start', 'stop', 'rename', 'create', 'run', 'rm')
+                             for call in self.fx.calls[before:]))
+        pending = {**self.fx.b.pending, 'token': '3' * 32, 'control': None, 'phase': 'prepared',
+                   'staged_source': None, 'admission': None, 'volumes': ['fresh-data', 'fresh-config']}
+        transition.begin(self.fx.root, pending)
+        self.assertEqual(transition.read_state(self.fx.root)['pending']['token'], pending['token'])
+        self.assertEqual(resolution.operation_path(self.fx.root, request['token']).name, 'reconciled-' + '0' * 32)
+
+    def test_manual_identity_substitution_refuses_before_installing_any_controls(self):
+        packet = ManualPacket(self)
+        request = packet.generate()
+        for role, field in (('transition', 'token'), ('transition', 'state_sha256'),
+                            ('recovery_receipt', 'directory'), ('recovery_receipt', 'sha256'),
+                            ('serving_proxy', 'id'), ('serving_proxy', 'recovery_token')):
+            changed = copy.deepcopy(request)
+            changed['receipt_identities'][role][field] += '0'
+            with self.subTest(role=role, field=field), self.assertRaisesRegex(ValueError, 'receipt identities differ'):
+                self.manual_reconcile(changed)
+            self.assertFalse(resolution.operation_path(self.fx.root, request['token']).exists())
+        confused = copy.deepcopy(request)
+        confused['token'] = confused['receipt_identities']['serving_proxy']['recovery_token']
+        with self.assertRaisesRegex(ValueError, 'no matching staged Caddy transition'):
+            self.manual_reconcile(confused)
+        self.assertEqual(resolution.raw_state(self.fx.root), packet.raw_state)
+        self.assertEqual((self.fx.root / 'server' / 'version').read_text(), 'new-staged-source')
 
 
 if __name__ == '__main__':

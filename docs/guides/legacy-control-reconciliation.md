@@ -14,6 +14,31 @@ exact filesystem archive/manifest, original inspect record and final recovery
 receipt. Those files and the checkpoint must match the retained accepted hashes.
 No other historical operation is adopted by this path.
 
+For that manual recovery, **generate the request; do not copy a token from a
+clone log, handoff or container name**. The staged transition token selects the
+failed state and reconciliation namespace. The serving proxy's recovery label
+proves a different identity, bound to the immutable proxy ID and boot in the
+accepted manual receipt. The previous-bundle recovery receipt has its own path
+and content hash. These identifiers need not be equal.
+
+Prepare a private input containing only `deploy_dir`, `instance`,
+`checkpoint_dir` and `manual_evidence_dir`, using the accepted historical paths:
+
+    python3 /pinned/source/scripts/hosted-deploy/legacy_reconcile_action.py \
+      prepare-legacy-reconciliation < /protected/reconciliation-input.json \
+      > /protected/current-reconciliation-request.json
+
+Use an exclusive output file in a protected directory with umask 077. The
+preparation action takes the deploy lock, reads the hash-bound failed state and
+accepted archives/checkpoint, and inspects only the receipt-bound serving proxy.
+It performs no service, source, configuration, database or volume operation.
+It refuses token overrides. Its output binds the transition token and raw state
+hash, recovery-receipt path/hash, and serving proxy ID/recovery token separately
+in `receipt_identities`. Execution requires that field for manual adoption and
+rechecks every binding under the lock before installing any control files.
+Do not substitute a token after a refusal or reuse a request after evidence
+changes. A generated request is not a successful reconciliation or window GO.
+
     python3 /pinned/source/scripts/hosted-deploy/legacy_reconcile_action.py \
       reconcile-legacy < /protected/current-reconciliation-request.json
 
