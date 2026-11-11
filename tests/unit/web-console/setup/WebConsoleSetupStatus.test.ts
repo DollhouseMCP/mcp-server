@@ -69,7 +69,18 @@ describe('web console setup check catalog', () => {
   it('recognises only catalog IDs', () => {
     expect(isWebConsoleSetupCheckId(MIGRATIONS)).toBe(true);
     expect(isWebConsoleSetupCheckId('not_a_check')).toBe(false);
-    expect(isWebConsoleSetupCheckId(undefined)).toBe(false);
+    for (const notAnId of [undefined, null, 42, {}, [MIGRATIONS], '']) {
+      expect(isWebConsoleSetupCheckId(notAnId)).toBe(false);
+    }
+  });
+
+  it('lists a check as pending until something reports on it, whatever its definition says', () => {
+    const probed = listWebConsoleSetupChecks().filter(check => check.verification === 'server-probe');
+    expect(probed.length).toBeGreaterThan(0);
+    const statuses = listWebConsoleSetupCheckStatuses([]);
+    for (const check of probed) {
+      expect(statuses.find(status => status.definition.id === check.id)?.state).toBe('pending');
+    }
   });
 });
 

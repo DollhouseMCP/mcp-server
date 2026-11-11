@@ -8,6 +8,10 @@
  *
  * Nothing here gates anything. A check is information for the operator; the
  * hard start-up gate is assertWebConsoleProductionActivation.
+ *
+ * A definition says how its check is verified by the probe or record reader
+ * that reports on it. The catalog does not run anything itself: a check that
+ * nothing reports on yet is listed as pending, whatever its definition says.
  */
 
 export const WEB_CONSOLE_SETUP_CHECK_IDS = [
@@ -117,7 +121,7 @@ export const WEB_CONSOLE_SETUP_CHECKS: Readonly<Record<WebConsoleSetupCheckId, W
     title: 'Every replica uses the same signing key and auth policy',
     proves: 'Tokens issued by one copy of the server are accepted by all the others, and all apply the same sign-in policy.',
     verification: 'not-verified',
-    verifiedBy: 'The server does not verify this across replicas yet. A replica holding an out-of-date signing key refuses to issue tokens, so the fault shows up as sign-ins failing on that replica.',
+    verifiedBy: 'The server does not compare replicas yet. Each replica refuses token requests while its own signing key is out of date, so the fault only shows when a sign-in reaches that replica.',
     remediation: 'After rotating the signing key, restart every replica so each reloads the current key.',
   },
   approval_execution_projection: {
