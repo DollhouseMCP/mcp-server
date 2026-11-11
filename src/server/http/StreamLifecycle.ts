@@ -51,6 +51,17 @@ export function observeStream(response: ServerResponse, options: {
   expiryGraceMs?: number;
   /** End the SDK standalone stream without destroying its draining socket. */
   closeStream?(): void;
+  /**
+   * Asks the issuer whether the credential that opened this stream is still
+   * good (grant not revoked, account still allowed). A `false` answer stops
+   * payloads at once and closes the stream; it cannot be renewed afterwards.
+   * A rejected check is reported and retried at the next interval.
+   */
+  recheckCredential?(): Promise<boolean>;
+  /** Interval between credential rechecks; zero or omitted disables them. */
+  credentialRecheckMs?: number;
+  onCredentialRevoked?(): void;
+  onCredentialRecheckFailed?(error: unknown): void;
 }): StreamObservation {
   let accepted = false;
   let stopped = false;
@@ -60,6 +71,9 @@ export function observeStream(response: ServerResponse, options: {
   let stopGracefulClose: (() => void) | undefined;
   let closing = false;
   let credentialExpired = false;
+  let credentialRevoked = false;
+  let recheckTimer: ReturnType<typeof setInterval> | undefined;
+  let recheckInFlight = false;
   let droppedWhileExpired = false;
   let expiresAt = options.expiresAt;
   const binding = options.binding ? { ...options.binding } : undefined;
@@ -68,6 +82,7 @@ export function observeStream(response: ServerResponse, options: {
     if (stopped) return;
     stopped = true;
     clearInterval(observation);
+    clearInterval(recheckTimer);
     stopLifetime?.();
     stopCredentialExpiry?.();
     stopExpiryGrace?.();
@@ -103,6 +118,21 @@ export function observeStream(response: ServerResponse, options: {
     }
     options.onCredentialExpired?.();
   };
+  const revokeCredential = (): void => {
+    if (stopped || credentialRevoked) return;
+    credentialRevoked = true;
+    clearInterval(recheckTimer);
+    options.onCredentialRevoked?.();
+    closeGracefully();
+  };
+  const recheck = (): void => {
+    if (stopped || closing || credentialRevoked || recheckInFlight || !options.recheckCredential) return;
+    recheckInFlight = true;
+    options.recheckCredential().then(
+      active => { if (!active) revokeCredential(); },
+      (error: unknown) => { if (!stopped) options.onCredentialRecheckFailed?.(error); },
+    ).finally(() => { recheckInFlight = false; });
+  };
   const inspect = (): void => {
     if (stopped || accepted) return;
     // Before acceptance there is no established SDK stream to end gracefully.
@@ -123,10 +153,14 @@ export function observeStream(response: ServerResponse, options: {
     if (expiresAt !== undefined && Number.isFinite(expiresAt)) {
       stopCredentialExpiry = atDeadline(expiresAt, expireCredential);
     }
+    if (options.recheckCredential && options.credentialRecheckMs && options.credentialRecheckMs > 0) {
+      recheckTimer = setInterval(recheck, options.credentialRecheckMs);
+      recheckTimer.unref();
+    }
     options.onOpen();
   };
   const renewCredential = (nextExpiry: number | undefined, nextBinding: StreamCredentialBinding | undefined): boolean => {
-    if (stopped || closing || !accepted || !options.isCurrent() || response.destroyed || response.writableEnded) return false;
+    if (stopped || closing || credentialRevoked || !accepted || !options.isCurrent() || response.destroyed || response.writableEnded) return false;
     if (nextExpiry === undefined || !Number.isFinite(nextExpiry) || expiresAt === undefined
       || nextExpiry <= expiresAt || nextExpiry <= Date.now() || !sameBinding(binding, nextBinding)) return false;
     const wasExpired = credentialExpired || Date.now() >= expiresAt;
@@ -148,7 +182,7 @@ export function observeStream(response: ServerResponse, options: {
     // leak a payload just because the expiry timer has not run yet.
     inspect();
     if (accepted && expiresAt !== undefined && Date.now() >= expiresAt) expireCredential();
-    return credentialExpired || options.suppressPayloads?.() === true;
+    return credentialExpired || credentialRevoked || options.suppressPayloads?.() === true;
   }, () => {
     if (credentialExpired) {
       droppedWhileExpired = true;

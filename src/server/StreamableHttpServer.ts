@@ -59,6 +59,10 @@ export interface StreamableHttpRuntimeOptions {
   sessionIdleTimeoutMs?: number;
   streamMaxLifetimeMs?: number;
   streamExpiryGraceMs?: number;
+  /** Interval between stream credential rechecks; defaults to the env setting. */
+  streamCredentialRecheckMs?: number;
+  /** Asks the auth provider whether an open stream's credential is still good. Rechecks are off when omitted. */
+  isStreamCredentialActive?: (claims: AuthClaims) => Promise<boolean>;
   streamKeepaliveMs?: number;
   sseStallWatcher?: ISseStallWatcher;
   sessionPoolSize?: number;
@@ -582,6 +586,13 @@ export async function createStreamableHttpRuntime(
     0,
     options.runtimeCommandPollIntervalMs ?? DEFAULT_RUNTIME_COMMAND_POLL_INTERVAL_MS,
   );
+  const streamCredentialRecheckMs = Math.max(0, options.streamCredentialRecheckMs ?? env.DOLLHOUSE_HTTP_STREAM_CREDENTIAL_RECHECK_MS);
+  if (options.isStreamCredentialActive && streamCredentialRecheckMs === 0) {
+    logger.warn(
+      '[StreamableHTTP] Stream credential rechecks are disabled (DOLLHOUSE_HTTP_STREAM_CREDENTIAL_RECHECK_MS=0). ' +
+      'An open stream keeps delivering after its grant is revoked or its account is disabled, until the credential expires.',
+    );
+  }
   const publicBaseUrl = env.DOLLHOUSE_PUBLIC_BASE_URL;
   if (publicBaseUrl) {
     assertSafePublicBaseUrl(publicBaseUrl);
@@ -1243,6 +1254,16 @@ export async function createStreamableHttpRuntime(
       // Presence-lapse drops do not initiate resync: a lapsed session closes rather than recovering.
       suppressPayloads: () => session.presence?.hasExpired() ?? false,
       binding: streamCredentialBinding(claims),
+      recheckCredential: claims && options.isStreamCredentialActive
+        ? () => options.isStreamCredentialActive!(claims)
+        : undefined,
+      credentialRecheckMs: streamCredentialRecheckMs,
+      onCredentialRevoked: () => logger.info(
+        '[StreamableHTTP] Stream credential is no longer active; closing the stream', { sessionId },
+      ),
+      onCredentialRecheckFailed: error => logger.warn(
+        '[StreamableHTTP] Stream credential recheck failed; retrying at the next interval', { sessionId, error: errorMessage(error) },
+      ),
       onCredentialPayloadDropped: () => { session.credentialResyncPending = true; },
       onCredentialRenewed: () => logger.debug(
         '[StreamableHTTP] Stream credential renewed; resuming MCP payloads', { sessionId },

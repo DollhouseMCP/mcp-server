@@ -68,6 +68,14 @@ export interface IAuthProvider {
   validate(token: string): Promise<AuthResult>;
 
   /**
+   * Whether a credential this provider already validated is still good.
+   * Long-lived streams call this between requests, because validate() only
+   * runs when a request arrives. Providers that cannot revoke before expiry
+   * omit it.
+   */
+  isCredentialActive?(claims: AuthClaims): Promise<boolean>;
+
+  /**
    * Issue a signed token for a subject. Implemented by:
    *   - `LocalDevAuthProvider` for the dev-convenience startup token
    *     printed to stderr at boot.

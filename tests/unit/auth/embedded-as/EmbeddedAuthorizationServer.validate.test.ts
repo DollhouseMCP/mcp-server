@@ -162,6 +162,21 @@ describe('EmbeddedAuthorizationServer.validate — RFC 9068 hardening', () => {
       expect((await as.validate(token)).ok).toBe(true);
     });
 
+    it('answers the liveness question for an already-validated credential', async () => {
+      await storage.genericSet('Grant', 'live', { accountId: LOCAL_USER_SUB });
+      const bound = { sub: LOCAL_USER_SUB, credentialBinding: { grantId: 'live' } };
+      expect(await as.isCredentialActive(bound)).toBe(true);
+      expect(await as.isCredentialActive({ sub: LOCAL_USER_SUB })).toBe(true);
+      const allowed = jest.spyOn(storage, 'isAccountAllowed').mockResolvedValue(false);
+      try {
+        expect(await as.isCredentialActive(bound)).toBe(false);
+      } finally {
+        allowed.mockRestore();
+      }
+      await storage.genericRevokeByGrantId('live');
+      expect(await as.isCredentialActive(bound)).toBe(false);
+    });
+
     it('surfaces a storage failure instead of accepting the token', async () => {
       await storage.genericSet('Grant', 'unreadable', { accountId: LOCAL_USER_SUB });
       const token = await mintToken({ bindingClaims: { grant_id: 'unreadable' } });
