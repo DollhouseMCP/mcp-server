@@ -69,6 +69,11 @@ jobs:
           # Approved exact public Node fixture input; no app packages or installs.
           docker pull docker.io/library/node:24.22.1-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea
           fixture_id=$(docker image inspect --format '{{.Id}}' docker.io/library/node:24.22.1-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea)
+          # Exact public stock Caddy 2.8.4 index: the legacy generation whose adapt control must keep working.
+          docker pull docker.io/library/caddy@sha256:226d1f059b75399fe19182893c7184591c07b97afc8dfcf44eeb80c9a77a530f
+          CADDY_LEGACY_IMAGE_ID=$(docker image inspect --format '{{.Id}}' docker.io/library/caddy@sha256:226d1f059b75399fe19182893c7184591c07b97afc8dfcf44eeb80c9a77a530f)
+          [[ "$CADDY_LEGACY_IMAGE_ID" =~ ^sha256:[a-f0-9]{64}$ ]]
+          export CADDY_LEGACY_IMAGE_ID
           docker build --platform "linux/${TARGET_ARCH}" --target qualification-tools \
             --file docker/caddy/Dockerfile --output "type=local,dest=${RUNNER_TEMP}/caddy-tools" docker/caddy
           diagnostic_dir="${RUNNER_TEMP}/caddy-runtime-diagnostics-${TARGET_ARCH}"
