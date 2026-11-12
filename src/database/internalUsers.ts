@@ -12,8 +12,12 @@ import { SYSTEM_USER_UUID, SYSTEM_USERNAME } from '../collection/shared-pool/Sha
  * The canary: a test user the server uses to check that approvals and
  * executions can be read through the console, without reading a real user's
  * session (#3257).
+ *
+ * Unlike the system user's ID, this one is a well-formed version 4 UUID. The
+ * canary is used with the per-session stores, and they refuse a user ID that
+ * is not one.
  */
-export const CANARY_USER_UUID = '00000000-0000-0000-0000-000000000002';
+export const CANARY_USER_UUID = '00000000-0000-4000-8000-000000000002';
 
 /**
  * Deliberately not shaped like a sign-in subject. Subjects are

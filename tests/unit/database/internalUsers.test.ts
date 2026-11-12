@@ -1,6 +1,7 @@
 import { describe, expect, it } from '@jest/globals';
 
 import { SYSTEM_USER_UUID } from '../../../src/collection/shared-pool/SharedPoolConfig.js';
+import { validateUserId } from '../../../src/state/db-persistence-utils.js';
 import {
   CANARY_USER_UUID,
   CANARY_USERNAME,
@@ -29,6 +30,13 @@ describe('internal users', () => {
     expect(isInternalUsername('  DollhouseMCP-Canary ')).toBe(true);
     expect(isInternalUsername('dollhousemcp-system')).toBe(true);
     expect(isInternalUsername('github_1001')).toBe(false);
+  });
+
+  it('gives the canary an ID the per-session stores accept', () => {
+    // They take only version 4 UUIDs. The system user's ID is not one, and never needs to be.
+    expect(() => validateUserId(CANARY_USER_UUID)).not.toThrow();
+    expect(() => validateUserId(SYSTEM_USER_UUID)).toThrow('expected UUID v4');
+    expect(CANARY_USER_UUID).toBe('00000000-0000-4000-8000-000000000002');
   });
 
   it('gives the canary a username no sign-in subject can equal', () => {
