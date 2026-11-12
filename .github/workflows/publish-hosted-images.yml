@@ -1,0 +1,456 @@
+name: Publish Hosted Images
+
+# Builds the runtime and migration images that a hosted deployment selects by
+# digest (DOLLHOUSE_HOSTED_IMAGE_MODE=registry), both from one commit, and
+# publishes them to ghcr.io/dollhousemcp/mcp-server-hosted.
+#
+# To publish, push a tag named hosted-images/<label> at a commit on beta or
+# main:
+#
+#   git tag hosted-images/2026-11-12-window <commit> && git push origin hosted-images/2026-11-12-window
+#
+# A run started by a tag uses this file as it is at the tagged commit, so this
+# works from beta without the file being on the default branch. The tag is only
+# a trigger; nothing reads it afterwards. The run's summary gives the two
+# digest references to deploy.
+#
+# A pull request that changes this workflow, the Dockerfile or the pair checks
+# runs the same build and checks and publishes nothing.
+#
+# Caddy is not built here. It is a separate image with its own qualification.
+
+on:
+  push:
+    tags:
+      # One path segment under hosted-images/. Release tags (v2.1.0, ...) can never match.
+      - 'hosted-images/*'
+  pull_request:
+    branches: [beta, main]
+    paths:
+      - '.github/workflows/publish-hosted-images.yml'
+      - 'docker/Dockerfile'
+      - 'scripts/ci/check-hosted-image-pair.py'
+      - 'scripts/hosted-deploy/registry_image_admission.py'
+      - 'tests/scripts/test_check_hosted_image_pair.py'
+
+# Each job asks for what it needs. The jobs that run repository code hold no write permission.
+permissions: {}
+
+concurrency:
+  group: publish-hosted-images-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/dollhousemcp/mcp-server-hosted
+  # The label the deployment tooling reads to confirm both images come from one commit.
+  SOURCE_LABEL: org.dollhousemcp.engine-proof-source
+
+jobs:
+  resolve:
+    name: Resolve the commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+      version: ${{ steps.resolve.outputs.version }}
+      tag_base: ${{ steps.resolve.outputs.tag_base }}
+      publish: ${{ steps.resolve.outputs.publish }}
+    steps:
+      - name: Check out with full history
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve and validate
+        id: resolve
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          refuse() { echo "::error::$1"; exit 1; }
+
+          case "${EVENT_NAME}" in
+            push)
+              [[ "${REPOSITORY}" == "DollhouseMCP/mcp-server" ]] || refuse "Hosted images are published only from DollhouseMCP/mcp-server."
+              [[ "${REF_TYPE}" == "tag" && "${REF_NAME}" =~ ^hosted-images/[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] ||
+                refuse "The tag must be hosted-images/<label>, where the label is 1 to 64 letters, digits, dots, underscores or hyphens."
+              # An annotated tag names a tag object; build the commit it points at.
+              sha="$(git rev-parse --verify "refs/tags/${REF_NAME}^{commit}")"
+              # The tag is on a commit that has been reviewed and merged, or the run stops here.
+              if ! git merge-base --is-ancestor "${sha}" refs/remotes/origin/beta &&
+                 ! git merge-base --is-ancestor "${sha}" refs/remotes/origin/main; then
+                refuse "Commit ${sha} is not on beta or main. Hosted images are built only from merged commits."
+              fi
+              publish=true
+              ;;
+            pull_request)
+              sha="${PR_HEAD_SHA}"
+              publish=false
+              ;;
+            *)
+              refuse "Unsupported event: ${EVENT_NAME}"
+              ;;
+          esac
+          [[ "${sha}" =~ ^[0-9a-f]{40}$ ]] || refuse "Could not resolve a full commit SHA."
+
+          version="$(git show "${sha}:package.json" | jq -er '.version')"
+          [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || refuse "Unexpected package version: ${version}"
+
+          # Unique per run, so a published tag is never moved.
+          tag_base="${version}-${sha:0:12}-gha${RUN_ID}-${RUN_ATTEMPT}"
+
+          {
+            echo "sha=${sha}"
+            echo "version=${version}"
+            echo "tag_base=${tag_base}"
+            echo "publish=${publish}"
+          } >> "${GITHUB_OUTPUT}"
+          echo "Commit ${sha}, version ${version}, publish=${publish}"
+
+  build:
+    name: Build and check (${{ matrix.arch }})
+    needs: resolve
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Each image is built on its own architecture: the tooling admits an
+          # image only on a host of the same architecture, and nothing is emulated.
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    env:
+      SHA: ${{ needs.resolve.outputs.sha }}
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - name: Check out the commit to build
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+
+      - name: Confirm the checkout is the commit to build
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "${SHA}" ]] || { echo "::error::Checked out $(git rev-parse HEAD), expected ${SHA}"; exit 1; }
+          [[ "$(uname -m)" == "$([[ "${ARCH}" == amd64 ]] && echo x86_64 || echo aarch64)" ]] ||
+            { echo "::error::Runner architecture $(uname -m) is not ${ARCH}"; exit 1; }
+
+      # The same Dockerfile targets a build-mode deployment uses. The source
+      # label is the commit checked out above, never a merge ref. Attestations
+      # are left off the image itself so each is a single plain manifest, like
+      # the pairs already in the registry; provenance is attested separately.
+      - name: Build the runtime image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --file docker/Dockerfile \
+            --target production \
+            --platform "linux/${ARCH}" \
+            --provenance=false \
+            --sbom=false \
+            --label "${SOURCE_LABEL}=${SHA}" \
+            --tag "hosted-pair/runtime:${ARCH}" \
+            --load \
+            .
+
+      - name: Build the migration image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --file docker/Dockerfile \
+            --target migration \
+            --platform "linux/${ARCH}" \
+            --provenance=false \
+            --sbom=false \
+            --label "${SOURCE_LABEL}=${SHA}" \
+            --tag "hosted-pair/migration:${ARCH}" \
+            --load \
+            .
+
+      - name: Check the pair against the deployment tooling's admission rules
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/check-hosted-image-pair.py \
+            --runtime "hosted-pair/runtime:${ARCH}" \
+            --migration "hosted-pair/migration:${ARCH}" \
+            --source "${SHA}"
+
+      - name: Report a dry run
+        if: needs.resolve.outputs.publish != 'true'
+        shell: bash
+        run: |
+          {
+            echo "### Dry run, linux/${ARCH}"
+            echo ""
+            echo "Built both images from \`${SHA}\` and checked them against the deployment tooling's admission rules. Nothing was published."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Save the pair for publishing
+        if: needs.resolve.outputs.publish == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker save --output "hosted-pair-${ARCH}.tar" "hosted-pair/runtime:${ARCH}" "hosted-pair/migration:${ARCH}"
+
+      - name: Hand the pair to the publishing job
+        if: needs.resolve.outputs.publish == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: hosted-pair-${{ matrix.arch }}
+          path: hosted-pair-${{ matrix.arch }}.tar
+          retention-days: 1
+          if-no-files-found: error
+
+  publish:
+    name: Publish (${{ matrix.arch }})
+    needs: [resolve, build]
+    if: needs.resolve.outputs.publish == 'true'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    # No checkout: this job runs no repository code. It pushes exactly the images the build job checked.
+    permissions:
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    env:
+      ARCH: ${{ matrix.arch }}
+      TAG_BASE: ${{ needs.resolve.outputs.tag_base }}
+    steps:
+      - name: Fetch the checked pair
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: hosted-pair-${{ matrix.arch }}
+
+      - name: Load the pair
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker load --input "hosted-pair-${ARCH}.tar"
+
+      - name: Log in to the registry
+        shell: bash
+        env:
+          REGISTRY_TOKEN: ${{ github.token }}
+          REGISTRY_USER: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${REGISTRY_TOKEN}" | docker login ghcr.io --username "${REGISTRY_USER}" --password-stdin
+
+      - name: Push both images
+        shell: bash
+        run: |
+          set -euo pipefail
+          pushed_digest() {
+            local digest
+            digest="$(docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' | jq -er '.digest')"
+            [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::No digest for $1"; exit 1; }
+            printf '%s' "${digest}"
+          }
+          runtime_tag="${IMAGE}:${TAG_BASE}-${ARCH}"
+          migration_tag="${IMAGE}:${TAG_BASE}-migrate-${ARCH}"
+          docker tag "hosted-pair/runtime:${ARCH}" "${runtime_tag}"
+          docker tag "hosted-pair/migration:${ARCH}" "${migration_tag}"
+          docker push "${runtime_tag}"
+          docker push "${migration_tag}"
+          jq -n --arg arch "${ARCH}" --arg runtime "$(pushed_digest "${runtime_tag}")" --arg migration "$(pushed_digest "${migration_tag}")" \
+            '{arch: $arch, runtime: $runtime, migration: $migration}' > "digests-${ARCH}.json"
+          cat "digests-${ARCH}.json"
+
+      - name: Record the pushed digests
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: hosted-digests-${{ matrix.arch }}
+          path: digests-${{ matrix.arch }}.json
+          retention-days: 1
+          if-no-files-found: error
+
+  index:
+    name: Publish the pair for both platforms
+    needs: [resolve, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      packages: write
+      id-token: write
+      attestations: write
+    outputs:
+      runtime: ${{ steps.index.outputs.runtime }}
+      migration: ${{ steps.index.outputs.migration }}
+    env:
+      TAG_BASE: ${{ needs.resolve.outputs.tag_base }}
+    steps:
+      - name: Fetch the pushed digests
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: hosted-digests-*
+          merge-multiple: true
+
+      - name: Log in to the registry
+        shell: bash
+        env:
+          REGISTRY_TOKEN: ${{ github.token }}
+          REGISTRY_USER: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${REGISTRY_TOKEN}" | docker login ghcr.io --username "${REGISTRY_USER}" --password-stdin
+
+      # One reference per role that works on either architecture, as the
+      # existing pairs are published. A host pulls the platform that matches it.
+      - name: Create the two image indexes
+        id: index
+        shell: bash
+        run: |
+          set -euo pipefail
+          digest_of() { jq -er --arg role "$2" '.[$role]' "digests-$1.json"; }
+          index_digest() {
+            local digest
+            digest="$(docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' | jq -er '.digest')"
+            [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::No digest for $1"; exit 1; }
+            printf '%s' "${digest}"
+          }
+          docker buildx imagetools create --tag "${IMAGE}:${TAG_BASE}" \
+            "${IMAGE}@$(digest_of amd64 runtime)" "${IMAGE}@$(digest_of arm64 runtime)"
+          docker buildx imagetools create --tag "${IMAGE}:${TAG_BASE}-migrate" \
+            "${IMAGE}@$(digest_of amd64 migration)" "${IMAGE}@$(digest_of arm64 migration)"
+          runtime="$(index_digest "${IMAGE}:${TAG_BASE}")"
+          migration="$(index_digest "${IMAGE}:${TAG_BASE}-migrate")"
+          [[ "${runtime}" != "${migration}" ]] || { echo "::error::Runtime and migration digests are the same"; exit 1; }
+          {
+            echo "runtime=${runtime}"
+            echo "migration=${migration}"
+          } >> "${GITHUB_OUTPUT}"
+
+      # Provenance is kept in GitHub's attestation store, not pushed beside the
+      # image, so the registry holds nothing but the images themselves.
+      - name: Attest the runtime image
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.index.outputs.runtime }}
+          push-to-registry: false
+
+      - name: Attest the migration image
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.index.outputs.migration }}
+          push-to-registry: false
+
+  admit:
+    name: Admit the published pair (${{ matrix.arch }})
+    needs: [resolve, index]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    env:
+      SHA: ${{ needs.resolve.outputs.sha }}
+      ARCH: ${{ matrix.arch }}
+      RUNTIME: ghcr.io/dollhousemcp/mcp-server-hosted@${{ needs.index.outputs.runtime }}
+      MIGRATION: ghcr.io/dollhousemcp/mcp-server-hosted@${{ needs.index.outputs.migration }}
+    steps:
+      - name: Check out the deployment tooling at the built commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+
+      - name: Log in to the registry
+        shell: bash
+        env:
+          REGISTRY_TOKEN: ${{ github.token }}
+          REGISTRY_USER: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${REGISTRY_TOKEN}" | docker login ghcr.io --username "${REGISTRY_USER}" --password-stdin
+
+      # The command a host runs before it replaces a deployment: pull both by
+      # digest and check the pair. If it refuses here, it would refuse there.
+      - name: Run the deployment tooling's admission on the published references
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/hosted-deploy/registry_image_admission.py prepare "${RUNTIME}" "${MIGRATION}" > admission.json
+          jq -e --arg sha "${SHA}" --arg platform "linux/${ARCH}" --arg runtime "${RUNTIME}" --arg migration "${MIGRATION}" '
+            length == 2
+            and .[0].reference == $runtime and .[1].reference == $migration
+            and all(.[]; .source == $sha and .platform == $platform)
+          ' admission.json > /dev/null || { echo "::error::Admission passed but did not report the expected commit, platform or references"; exit 1; }
+          echo "Admitted on linux/${ARCH} from ${SHA}"
+
+  summary:
+    name: Report the references to deploy
+    needs: [resolve, index, admit]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    env:
+      SHA: ${{ needs.resolve.outputs.sha }}
+      VERSION: ${{ needs.resolve.outputs.version }}
+      TAG_BASE: ${{ needs.resolve.outputs.tag_base }}
+      RUNTIME_DIGEST: ${{ needs.index.outputs.runtime }}
+      MIGRATION_DIGEST: ${{ needs.index.outputs.migration }}
+      REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Write the summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "## Hosted image pair published"
+            echo ""
+            echo "Built from commit \`${SHA}\`, version \`${VERSION}\`."
+            echo "The deployment tooling's own admission accepted the pair on linux/amd64 and linux/arm64."
+            echo ""
+            echo '```'
+            echo "DOLLHOUSE_HOSTED_IMAGE_MODE=registry"
+            echo "DOLLHOUSE_HOSTED_RUNTIME_IMAGE=${IMAGE}@${RUNTIME_DIGEST}"
+            echo "DOLLHOUSE_HOSTED_MIGRATION_IMAGE=${IMAGE}@${MIGRATION_DIGEST}"
+            echo '```'
+            echo ""
+            echo "Tags, for reference only (deploy by digest): \`${TAG_BASE}\` and \`${TAG_BASE}-migrate\`, each also with \`-amd64\` and \`-arm64\`."
+            echo ""
+            echo "Provenance for either reference:"
+            echo ""
+            echo '```'
+            echo "gh attestation verify oci://${IMAGE}@${RUNTIME_DIGEST} --repo ${REPOSITORY}"
+            echo "gh attestation verify oci://${IMAGE}@${MIGRATION_DIGEST} --repo ${REPOSITORY}"
+            echo '```'
+            echo ""
+            echo "The source label and the admission check show the two images belong together and were built from the commit above. They are not a security qualification: scan and qualify the images separately before selecting them."
+          } >> "${GITHUB_STEP_SUMMARY}"

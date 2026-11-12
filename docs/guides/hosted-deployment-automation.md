@@ -833,6 +833,43 @@ selected identities before maintenance and replacement. Their matching source
 labels express pair consistency only; separately qualify image provenance and
 security before selection.
 
+#### Publishing a pair
+
+The `Publish Hosted Images` workflow builds both images from one commit and
+publishes them to `ghcr.io/dollhousemcp/mcp-server-hosted`. Start it by pushing
+a tag named `hosted-images/<label>` at a commit on `beta` or `main`:
+
+```bash
+git tag hosted-images/2026-11-12-window <commit>
+git push origin hosted-images/2026-11-12-window
+```
+
+The tag only starts the run; nothing reads it afterwards, and release tags
+cannot start it. The run refuses a commit that is not on `beta` or `main`. For
+each of linux/amd64 and linux/arm64 it:
+
+1. builds the `production` and `migration` targets of `docker/Dockerfile`, with
+   the source label set to the commit it checked out;
+2. checks the pair against this tooling's admission rules, and that the
+   migrations in the migration image are exactly the list the runtime image
+   compares the database against;
+3. publishes the pair, then runs the same admission a host runs
+   (`registry_image_admission.py prepare`) on the published references.
+
+The run's summary gives the two references to deploy, ready to paste:
+
+```text
+DOLLHOUSE_HOSTED_IMAGE_MODE=registry
+DOLLHOUSE_HOSTED_RUNTIME_IMAGE=ghcr.io/dollhousemcp/mcp-server-hosted@sha256:<digest>
+DOLLHOUSE_HOSTED_MIGRATION_IMAGE=ghcr.io/dollhousemcp/mcp-server-hosted@sha256:<digest>
+```
+
+Each reference is an image index, so the same pair works on either
+architecture. Build provenance for both is recorded in GitHub's attestation
+store (`gh attestation verify oci://<reference> --repo DollhouseMCP/mcp-server`).
+The workflow does not scan the images: security qualification is still a
+separate step before selection. It does not build the Caddy image.
+
 After a successful drain, the application is always recreated with a fresh
 private control layer, even when both digest selections are unchanged. The
 unchanged qualified Caddy proxy is retained. Registry-mode rollback is refused
