@@ -33,11 +33,14 @@ export type WebConsoleSetupCheckId = typeof WEB_CONSOLE_SETUP_CHECK_IDS[number];
 /**
  * How the system knows the state of a check.
  * - `server-probe`: the server tests it itself, read-only, whenever asked.
+ * - `server-canary`: the server tests it with records it makes for its own
+ *   reserved canary user and then removes. It runs only when an admin asks or
+ *   on a schedule, and stays pending until it has run.
  * - `usage-record`: read from the records real use leaves behind. It stays
  *   pending until someone has actually done the thing.
  * - `not-verified`: the server cannot verify it yet.
  */
-export type WebConsoleSetupCheckVerification = 'server-probe' | 'usage-record' | 'not-verified';
+export type WebConsoleSetupCheckVerification = 'server-probe' | 'server-canary' | 'usage-record' | 'not-verified';
 
 export interface WebConsoleSetupCheckDefinition {
   readonly id: WebConsoleSetupCheckId;
@@ -127,10 +130,10 @@ export const WEB_CONSOLE_SETUP_CHECKS: Readonly<Record<WebConsoleSetupCheckId, W
   approval_execution_projection: {
     id: 'approval_execution_projection',
     title: 'Approvals and executions display correctly',
-    proves: 'The console can read pending approvals and agent executions from the live stores and show only the fields it is allowed to.',
-    verification: 'server-probe',
-    verifiedBy: 'The server runs the approval and execution queries and their privacy filters against the live stores, read-only.',
-    remediation: 'Check the server log for the failing query and confirm the database is fully migrated.',
+    proves: 'A pending approval and an agent execution, made the way a live session makes them, can be read through the console, which shows only the fields it is allowed to.',
+    verification: 'server-canary',
+    verifiedBy: 'The server opens a session for its reserved canary user, makes one approval request and one execution with the classes a live session uses, reads both back through the console\'s own handlers and privacy filters, and removes them. No other user\'s data is read. It runs when an admin asks in Operations, or on a schedule that is off unless configured. It does not go over the network, so it says nothing about the HTTP layer or about a real client connecting.',
+    remediation: 'Run the check from Operations. If it fails, the result names what the console did not show; check the server log and confirm the database is fully migrated. If it says the canary user is not inert, that account has been changed and must be disabled again, with no role and no sign-in identity.',
   },
   audit_telemetry_projection: {
     id: 'audit_telemetry_projection',

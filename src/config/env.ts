@@ -465,6 +465,14 @@ const envSchema = z.object({
    * step-up gated. Set false to hide them.
    */
   DOLLHOUSE_WEB_CONSOLE_ALLOWLIST_ROUTES_ENABLED: envBool(true),
+  /**
+   * How often, in minutes, the server runs the approvals and executions canary
+   * by itself. Defaults to 0, which is never: the canary then runs only when
+   * an admin asks for it in Operations. The canary writes and removes records
+   * for its own reserved user, so a schedule is an operator's choice.
+   */
+  DOLLHOUSE_WEB_CONSOLE_CANARY_INTERVAL_MINUTES: z.coerce.number().int().min(0).max(720).default(0)
+    .refine(value => value === 0 || value >= 5, 'DOLLHOUSE_WEB_CONSOLE_CANARY_INTERVAL_MINUTES: 0 switches the schedule off; the shortest interval is 5 minutes'),
   /** Base64-encoded 32-byte HMAC key for opaque console browser values. */
   DOLLHOUSE_WEB_CONSOLE_OPAQUE_HMAC_KEY: z.string().trim().optional()
     .transform(v => (v && v.length > 0) ? v : undefined),

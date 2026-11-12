@@ -36,6 +36,9 @@ export class OperationsService {
       ...(this.healthChecks.databaseMigrations ? [this.getHealthComponent('database_migrations', checkedAt)] : []),
       ...(this.healthChecks.allowlistParity ? [this.getHealthComponent('allowlist_parity', checkedAt)] : []),
       ...(this.healthChecks.auditTelemetry ? [this.getHealthComponent('audit_telemetry', checkedAt)] : []),
+      ...(this.healthChecks.approvalExecutionProjection
+        ? [this.getHealthComponent('approval_execution_projection', checkedAt)]
+        : []),
       this.getHealthComponent('api_mount', checkedAt),
     ]);
     const status = summarizeStatus(components);
@@ -122,6 +125,9 @@ export class OperationsService {
       case 'audit_telemetry':
         // Only reached when the check exists; getHealth omits the component otherwise.
         return evaluateOperationHealthComponent(component, this.healthChecks.auditTelemetry ?? (() => false), checkedAt);
+      case 'approval_execution_projection':
+        // Only reached when the check exists; getHealth omits the component otherwise.
+        return evaluateOperationHealthComponent(component, this.healthChecks.approvalExecutionProjection ?? (() => false), checkedAt);
       case 'api_mount':
         return evaluateOperationHealthComponent(component, this.healthChecks.apiMount, checkedAt);
     }

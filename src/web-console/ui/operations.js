@@ -233,11 +233,14 @@ function statusLabel(value) {
   if (value === 'ok') return 'Healthy';
   if (value === 'degraded') return 'Degraded';
   if (value === 'not_ready') return 'Not ready';
+  if (value === 'not_run') return 'No current result';
   return 'Unavailable';
 }
 
 function statusClass(value) {
-  return value === 'ok' || value === 'degraded' || value === 'not_ready' ? value.replace('_', '-') : 'unavailable';
+  return value === 'ok' || value === 'degraded' || value === 'not_ready' || value === 'not_run'
+    ? value.replace('_', '-')
+    : 'unavailable';
 }
 
 function showState(container, message, kind = 'neutral') {
