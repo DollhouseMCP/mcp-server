@@ -35,29 +35,29 @@ describe('createReleaseMigrationLedgerMonitor', () => {
     const { monitor, log } = setup(() => Promise.resolve(ledger(1)));
     expect(await monitor.isSafeToServe()).toBe(false);
     expect(log.error).toHaveBeenCalledWith(
-      '[WebConsole] Database is behind this release; reporting not ready. ' +
+      '[WebConsole] Database does not have this release\'s migrations; reporting not ready. ' +
       '1 of 2 migrations in this release are applied. First missing: 0001_second.',
     );
   });
 
   it.each([
-    ['42501', 'permission denied for schema drizzle', 'permission denied'],
-    ['42P01', 'relation "drizzle.__drizzle_migrations" does not exist', 'the ledger does not exist in this database'],
-    ['3F000', 'schema "drizzle" does not exist', 'the ledger does not exist in this database'],
-    ['57P03', 'the database system is starting up', 'PostgreSQL error 57P03'],
-  ])('warns once, with the reason and the grant, when the ledger cannot be read (%s)', async (code, driverMessage, reason) => {
+    ['42501', 'permission denied for schema drizzle',
+      'The server\'s database role is not permitted to read the applied-migration ledger, so the schema is not verified. ' +
+      'Grant it USAGE on schema drizzle and SELECT on drizzle.__drizzle_migrations.'],
+    ['42P01', 'relation "drizzle.__drizzle_migrations" does not exist',
+      'This database has no applied-migration ledger (drizzle.__drizzle_migrations), so the schema is not verified. ' +
+      'The ledger is written when this release\'s migrations are applied; a schema created any other way has none.'],
+    ['57P03', 'the database system is starting up',
+      'The applied-migration ledger could not be read (PostgreSQL error 57P03), so the schema is not verified.'],
+  ])('warns once, with the reason the result carries, when the ledger cannot be read (%s)', async (code, driverMessage, detail) => {
     const { monitor, log, advance } = setup(() => Promise.reject(postgresError(code, driverMessage)));
     expect(await monitor.isSafeToServe()).toBe(true);
+    expect((await monitor.current()).detail).toBe(detail);
     advance(1000); await monitor.current();
     advance(1000); await monitor.current();
 
     expect(log.warn).toHaveBeenCalledTimes(1);
-    const message = String(log.warn.mock.calls[0][0]);
-    expect(message).toBe(
-      `[WebConsole] Database migrations are NOT verified: the applied-migration ledger could not be read (${reason}). ` +
-      'The server keeps serving. Grant its database role SELECT on the drizzle schema ' +
-      '(GRANT USAGE ON SCHEMA drizzle and GRANT SELECT ON drizzle.__drizzle_migrations) so it can check.',
-    );
+    expect(log.warn).toHaveBeenCalledWith(`[WebConsole] Database migrations are NOT verified; the server keeps serving. ${detail}`);
     expect(log.error).not.toHaveBeenCalled();
   });
 
@@ -77,10 +77,10 @@ describe('createReleaseMigrationLedgerMonitor', () => {
       .mockResolvedValue(release);
     const { monitor, log, database, advance } = setup(() => Promise.resolve(ledger(2)), loadRelease);
 
-    expect((await monitor.current()).state).toBe('pending');
+    expect(await monitor.current()).toMatchObject({ state: 'pending', code: 'release_migrations_unavailable' });
     expect(database.execute).not.toHaveBeenCalled();
     const message = String(log.warn.mock.calls[0][0]);
-    expect(message).toContain('this release\'s migration list could not be loaded, which points to an incomplete build');
+    expect(message).toContain('This release\'s migration list could not be loaded, so the schema is not verified. The build is incomplete');
     expect(message).not.toContain('/app/dist');
 
     advance(1000);

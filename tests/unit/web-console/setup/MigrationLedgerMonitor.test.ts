@@ -2,7 +2,7 @@ import { describe, expect, it, jest } from '@jest/globals';
 
 import { MigrationLedgerMonitor } from '../../../../src/web-console/setup/MigrationLedgerMonitor.js';
 import {
-  MIGRATION_LEDGER_UNREADABLE,
+  RELEASE_MIGRATIONS_UNAVAILABLE,
   type MigrationLedgerResult,
 } from '../../../../src/web-console/setup/MigrationLedgerProbe.js';
 
@@ -45,7 +45,7 @@ describe('MigrationLedgerMonitor', () => {
   });
 
   it('does not take the replica out of service when the ledger cannot be read', async () => {
-    const { monitor } = setup([MIGRATION_LEDGER_UNREADABLE]);
+    const { monitor } = setup([RELEASE_MIGRATIONS_UNAVAILABLE]);
     expect(await monitor.isSafeToServe()).toBe(true);
     expect((await monitor.current()).state).toBe('pending');
   });
@@ -71,7 +71,7 @@ describe('MigrationLedgerMonitor', () => {
   });
 
   it('keeps re-probing an unreadable ledger at the interval until it can verify', async () => {
-    const { monitor, probe, advance } = setup([MIGRATION_LEDGER_UNREADABLE, PASSED]);
+    const { monitor, probe, advance } = setup([RELEASE_MIGRATIONS_UNAVAILABLE, PASSED]);
     expect((await monitor.current()).state).toBe('pending');
     advance(500);
     expect((await monitor.current()).state).toBe('pending');

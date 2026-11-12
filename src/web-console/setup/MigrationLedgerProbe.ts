@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 
 import type { DatabaseInstance } from '../../database/connection.js';
+import { getErrorCode } from '../../database/db-utils.js';
 import type { ReleaseMigration } from '../../database/releaseMigrations.js';
 import type { WebConsoleSetupCheckResult } from './WebConsoleSetupStatus.js';
 
@@ -10,7 +11,9 @@ export type MigrationLedgerCode =
   | 'migrations_applied'
   | 'migrations_incomplete'
   | 'migrations_mismatch'
-  | 'migration_ledger_unreadable';
+  | 'migration_ledger_unreadable'
+  | 'migration_ledger_missing'
+  | 'release_migrations_unavailable';
 
 export interface MigrationLedgerResult extends WebConsoleSetupCheckResult {
   readonly id: typeof CHECK_ID;
@@ -25,13 +28,52 @@ export interface AppliedMigration {
   readonly createdAt: string;
 }
 
-export const MIGRATION_LEDGER_UNREADABLE: MigrationLedgerResult = Object.freeze({
+/** There is nothing to compare the ledger with: this release's own migration list did not load. */
+export const RELEASE_MIGRATIONS_UNAVAILABLE: MigrationLedgerResult = Object.freeze({
   id: CHECK_ID,
   state: 'pending',
-  code: 'migration_ledger_unreadable',
-  detail: 'The applied-migration ledger could not be read, so the schema is not verified. ' +
-    'Grant the server\'s database role SELECT on the drizzle schema.',
+  code: 'release_migrations_unavailable',
+  detail: 'This release\'s migration list could not be loaded, so the schema is not verified. ' +
+    'The build is incomplete: reinstall or rebuild the server.',
 });
+
+const PG_INSUFFICIENT_PRIVILEGE = '42501';
+const PG_UNDEFINED_TABLE = '42P01';
+const PG_INVALID_SCHEMA_NAME = '3F000';
+
+/**
+ * Says why the ledger could not be read and what to do about it, from the
+ * PostgreSQL error class. The driver's own message is left out: it can carry
+ * connection details, and this text is shown to operators.
+ */
+function unverifiedLedger(error: unknown): MigrationLedgerResult {
+  const pgCode = getErrorCode(error);
+  if (pgCode === PG_INSUFFICIENT_PRIVILEGE) {
+    return {
+      id: CHECK_ID,
+      state: 'pending',
+      code: 'migration_ledger_unreadable',
+      detail: 'The server\'s database role is not permitted to read the applied-migration ledger, so the schema is not verified. ' +
+        'Grant it USAGE on schema drizzle and SELECT on drizzle.__drizzle_migrations.',
+    };
+  }
+  if (pgCode === PG_UNDEFINED_TABLE || pgCode === PG_INVALID_SCHEMA_NAME) {
+    return {
+      id: CHECK_ID,
+      state: 'pending',
+      code: 'migration_ledger_missing',
+      detail: 'This database has no applied-migration ledger (drizzle.__drizzle_migrations), so the schema is not verified. ' +
+        'The ledger is written when this release\'s migrations are applied; a schema created any other way has none.',
+    };
+  }
+  const reason = pgCode ? `PostgreSQL error ${pgCode}` : 'the database did not answer';
+  return {
+    id: CHECK_ID,
+    state: 'pending',
+    code: 'migration_ledger_unreadable',
+    detail: `The applied-migration ledger could not be read (${reason}), so the schema is not verified.`,
+  };
+}
 
 /**
  * Compares the migrations this release was built against with the ledger of
@@ -81,12 +123,12 @@ export function compareMigrationLedger(
  *
  * A ledger that cannot be read is reported as pending, not failed: the server
  * has learned nothing about the schema, and the usual cause is a role without
- * SELECT on the `drizzle` schema, which is not a schema fault.
+ * SELECT on the `drizzle` schema, which is not a schema fault. The result says
+ * which it was, so the reason reaches whoever reads the status.
  */
 export async function probeMigrationLedger(
   database: DatabaseInstance,
   release: readonly ReleaseMigration[],
-  onUnreadable?: (error: unknown) => void,
 ): Promise<MigrationLedgerResult> {
   let applied: readonly AppliedMigration[];
   try {
@@ -96,8 +138,7 @@ export async function probeMigrationLedger(
       ORDER BY created_at, id
     `) as unknown as AppliedMigration[];
   } catch (error) {
-    onUnreadable?.(error);
-    return MIGRATION_LEDGER_UNREADABLE;
+    return unverifiedLedger(error);
   }
   return compareMigrationLedger(release, applied);
 }

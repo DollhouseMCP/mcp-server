@@ -91,18 +91,49 @@ describe('probeMigrationLedger', () => {
       .resolves.toMatchObject({ state: 'failed', detail: expect.stringContaining('First missing: 0002_third') });
   });
 
-  it('reports an unreadable ledger as pending, not failed, and hands the error to the caller', async () => {
-    const failure = new Error('permission denied for schema drizzle');
-    const database = { execute: jest.fn(() => Promise.reject(failure)) } as unknown as DatabaseInstance;
-    const onUnreadable = jest.fn();
-    const result = await probeMigrationLedger(database, release, onUnreadable);
+  const postgresError = (code: string, message: string) => Object.assign(new Error(message), { code });
+  const databaseFailing = (failure: unknown): DatabaseInstance =>
+    ({ execute: jest.fn(() => Promise.reject(failure)) }) as unknown as DatabaseInstance;
+
+  it('reports a ledger the role may not read as pending, not failed, and says what to grant', async () => {
+    const result = await probeMigrationLedger(databaseFailing(postgresError('42501', 'permission denied for schema drizzle')), release);
     expect(result).toEqual({
       id: 'production_database_migrations', state: 'pending', code: 'migration_ledger_unreadable',
-      detail: 'The applied-migration ledger could not be read, so the schema is not verified. ' +
-        'Grant the server\'s database role SELECT on the drizzle schema.',
+      detail: 'The server\'s database role is not permitted to read the applied-migration ledger, so the schema is not verified. ' +
+        'Grant it USAGE on schema drizzle and SELECT on drizzle.__drizzle_migrations.',
     });
-    expect(result.detail).not.toContain('permission denied');
-    expect(onUnreadable).toHaveBeenCalledWith(failure);
+  });
+
+  it.each([
+    ['42P01', 'relation "drizzle.__drizzle_migrations" does not exist'],
+    ['3F000', 'schema "drizzle" does not exist'],
+  ])('reports a database with no ledger as pending, under its own code (%s)', async (code, driverMessage) => {
+    const result = await probeMigrationLedger(databaseFailing(postgresError(code, driverMessage)), release);
+    expect(result).toEqual({
+      id: 'production_database_migrations', state: 'pending', code: 'migration_ledger_missing',
+      detail: 'This database has no applied-migration ledger (drizzle.__drizzle_migrations), so the schema is not verified. ' +
+        'The ledger is written when this release\'s migrations are applied; a schema created any other way has none.',
+    });
+  });
+
+  it('names any other PostgreSQL failure by its error class', async () => {
+    const result = await probeMigrationLedger(databaseFailing(postgresError('57P03', 'the database system is starting up')), release);
+    expect(result).toMatchObject({
+      state: 'pending', code: 'migration_ledger_unreadable',
+      detail: 'The applied-migration ledger could not be read (PostgreSQL error 57P03), so the schema is not verified.',
+    });
+  });
+
+  it('reads the error class through the wrapper the query builder puts around driver errors', async () => {
+    const wrapped = new Error('Failed query: SELECT hash …', { cause: postgresError('42501', 'permission denied') });
+    await expect(probeMigrationLedger(databaseFailing(wrapped), release))
+      .resolves.toMatchObject({ detail: expect.stringContaining('not permitted to read') });
+  });
+
+  it('never puts the driver message in the result, since it can carry connection details', async () => {
+    const leaky = new Error('connect ECONNREFUSED db.internal.example:5432 user=dollhouse_app');
+    const result = await probeMigrationLedger(databaseFailing(leaky), release);
+    expect(result.detail).toBe('The applied-migration ledger could not be read (the database did not answer), so the schema is not verified.');
   });
 });
 
