@@ -390,6 +390,22 @@ class BuildTests(unittest.TestCase):
         self.assertEqual([call for call in self.engine.calls if call[0] == 'DELETE'], [])
         self.assertTrue(self.deploy.exists())
 
+    def test_a_failed_restoration_is_tried_again_and_a_successful_one_is_not_repeated(self):
+        self.inputs['database'] = {'container': '/database'}
+        failed, passed = ({'drop': 0, 'globals': 1, 'restore': code, 'passwords': [0]} for code in (1, 0))
+        with patch.object(build, 'restore_database', side_effect=[failed, passed]) as restore:
+            first = self.run_build()
+            self.assertEqual((first['complete'], first['state']['database']), (False, failed))
+            self.engine.existing = ['/app', '/database']
+            second = self.run_build()
+            self.assertEqual((second['complete'], second['state']['database'], restore.call_count), (True, passed, 2))
+            third = self.run_build()
+            self.assertEqual((third['complete'], restore.call_count), (True, 2))
+        for result, expected in (({'drop': 1, 'globals': 0, 'restore': 0, 'passwords': []}, False),
+                                 ({'drop': 0, 'globals': 0, 'restore': 0, 'passwords': [0, 1]}, False),
+                                 ({'drop': 0, 'globals': 1, 'restore': 0, 'passwords': [0, 0]}, True), ({}, False), (None, False)):
+            self.assertIs(build.restored(result), expected)
+
     def test_a_created_only_container_counts_as_built(self):
         self.inventory['containers'][0]['state'] = {'Status': 'created', 'Running': False, 'ExitCode': 0}
         report = self.run_build()

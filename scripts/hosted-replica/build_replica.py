@@ -379,6 +379,12 @@ def restore_database(identifier, spec):
     return {'drop': codes[0], 'globals': codes[1], 'restore': codes[2], 'passwords': codes[3:]}
 
 
+def restored(result):
+    """Whether a saved restoration succeeded. The globals step may report roles that already exist."""
+    return (bool(result) and not result.get('drop') and not result.get('restore')
+            and not any(result.get('passwords') or []))
+
+
 def build_containers(inventory, inputs, engine, state, note):
     results = {}
     names = {record['id']: record['name'] for record in inventory['containers']}
@@ -396,7 +402,8 @@ def build_containers(inventory, inputs, engine, state, note):
         reached = settle(engine, state['containers'][name], record, note)
         results[name] = {'recorded': expected, 'reached': reached}
         database = inputs['database']
-        if database.get('container') == name and reached == expected and not state.get('database'):
+        # A failed attempt is tried again: the restoration starts by dropping the database, so it can be repeated.
+        if database.get('container') == name and reached == expected and not restored(state.get('database')):
             state['database'] = restore_database(state['containers'][name], database)
             results[name]['database'] = state['database']
     return results
@@ -480,9 +487,8 @@ def build(inventory, given, state=None):
         containers.update(build_containers(inventory, inputs, engine, state, note))
     except (Refused, RuntimeError, OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
         failure = '%s: %s' % (type(error).__name__, error)  # the operator still needs the state below
-    restored = state.get('database') or {}
     complete = (failure is None and all(item['recorded'] == item['reached'] for item in containers.values())
-                and not restored.get('drop') and not restored.get('restore') and not any(restored.get('passwords') or []))
+                and (not state.get('database') or restored(state['database'])))
     return {'schema': 1, 'kind': 'replica-build', 'host': socket.gethostname(), 'containers': containers,
             'substitutions': substitutions, 'complete': complete, 'failed': failure, 'state': state}
 
