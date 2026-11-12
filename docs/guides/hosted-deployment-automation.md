@@ -549,7 +549,9 @@ later actions follow those records. If Docker or the host restarted that proxy,
 `accept-caddy-restart` checks that the running container is the same one, with
 the same profile, configuration and public acceptance, and records its new boot
 with the host's and the Docker daemon's start times. It starts and stops
-nothing. Without such a record, a proxy with another boot is refused.
+nothing. Without such a record, a proxy with another boot is refused. One
+reconciled proxy can have at most 32 recorded later boots. At that bound both
+actions refuse before they start or record anything.
 
 Before stopping ingress, preparation runs that same copier's full source
 validation in a source-only, read-only helper. It mounts only the two original

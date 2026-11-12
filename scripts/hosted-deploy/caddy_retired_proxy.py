@@ -115,6 +115,16 @@ def boot_records(root, instance, identifier, directory):
     return records
 
 
+def require_boot_capacity(root, instance, identifier):
+    """Refuse before an action that would record one boot more than boot_records reads."""
+    directory = private_directory(root / DIRECTORY)
+    try:
+        if len(boot_records(root, instance, identifier, directory)) >= MAX_BOOTS:
+            raise ValueError('serving proxy boot records are at their bound; no further boot can be recorded')
+    finally:
+        os.close(directory)
+
+
 def serving_boot(root, instance, identifier, serving):
     """The boot the reconciled serving proxy must have: its reconciled one, or the newest one recorded after it.
 

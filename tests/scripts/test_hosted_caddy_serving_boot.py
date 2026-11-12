@@ -38,15 +38,17 @@ class AbandonTests(unittest.TestCase):
         self.prepared = self.base.prepare()
         self.proxy = self.fake.proxy
         self.proxy['State']['FinishedAt'] = '2026-11-09T01:00:00Z'
-        self.calls, self.checked, self.other, self.start_output = [], [], None, None
+        self.calls, self.checked, self.other, self.start = [], [], None, None
         self.config_error = self.public_error = None
         self.value = dict(self.base.request, public_base_url=ORIGIN)
 
     def run_docker(self, argv, timeout, limit):
         self.calls.append(argv)
         if argv == ['docker', 'start', self.proxy['Id']]:
+            if self.start:
+                return self.start()
             self.proxy['State'].update(Running=True, StartedAt='2026-11-09T02:00:00Z')
-            return self.start_output or (self.proxy['Id'] + '\n').encode()
+            return (self.proxy['Id'] + '\n').encode()
         if argv == ['docker', 'ps', '--no-trunc', '--quiet'] and self.other:
             return (self.other['Id'] + '\n').encode()
         if argv[1:3] == ['container', 'inspect'] and self.other and argv[3] == self.other['Id']:
@@ -134,11 +136,40 @@ class AbandonTests(unittest.TestCase):
                 self.act()
         self.assertEqual(self.started(), [])
 
-    def test_an_unknown_start_acknowledgement_is_not_a_start(self):
-        self.start_output = b'something else\n'
-        with self.assertRaisesRegex(ValueError, 'UNKNOWN'):
-            self.act()
-        self.assertEqual(self.checked, [])
+    def fenced(self, files):
+        self.assertFalse(self.proxy['State']['Running'])
+        stops = [item for item in self.calls if item[:2] == ['docker', 'stop']]
+        self.assertEqual(stops, [['docker', 'stop', '--signal', 'SIGTERM', '--timeout', '-1', self.proxy['Id']]])
+        operations = sorted((self.root / retired.BOOTS).iterdir(), key=lambda path: path.stat().st_mtime)
+        self.assertEqual(sorted(path.name for path in operations[-1].iterdir()), files)
+
+    def test_a_start_that_cannot_be_verified_closes_ingress_again(self):
+        # Docker may have started the proxy although the start was not acknowledged or its result is not the expected one.
+        def unknown():
+            self.proxy['State'].update(Running=True, StartedAt='2026-11-09T02:00:00Z')
+            return b'something else\n'
+
+        def same_boot():
+            self.proxy['State'].update(Running=True)
+            return (self.proxy['Id'] + '\n').encode()
+
+        def changed():
+            self.proxy['State'].update(Running=True, StartedAt='2026-11-09T02:00:00Z')
+            self.proxy['HostConfig'].update(Privileged=True)
+            return (self.proxy['Id'] + '\n').encode()
+
+        for name, expected, start in (('unknown acknowledgement', 'UNKNOWN', unknown), ('no new boot', 'no new boot', same_boot),
+                                      ('another profile', 'differs from the stopped one', changed)):
+            original = copy.deepcopy(self.proxy)
+            with self.subTest(name):
+                self.start = start
+                with self.assertRaisesRegex(ValueError, expected):
+                    self.act()
+                self.assertEqual(self.checked, [])
+                self.fenced(['fenced.json', 'issued.json', 'refused.json'])
+            self.start = None
+            self.proxy.clear()
+            self.proxy.update(original)
 
     def test_a_failed_check_after_the_start_closes_ingress_again(self):
         for name in ('config_error', 'public_error'):
@@ -148,12 +179,15 @@ class AbandonTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'fixture refusal'):
                     self.act()
                 setattr(self, name, None)
-                self.assertFalse(self.proxy['State']['Running'])
-                stops = [item for item in self.calls if item[:2] == ['docker', 'stop']]
-                self.assertEqual(stops, [['docker', 'stop', '--signal', 'SIGTERM', '--timeout', '-1', self.proxy['Id']]])
-                operations = sorted((self.root / retired.BOOTS).iterdir(), key=lambda path: path.stat().st_mtime)
-                self.assertEqual(sorted(path.name for path in operations[-1].iterdir()),
-                                 ['fenced.json', 'issued.json', 'refused.json', 'started.json'])
+                self.fenced(['fenced.json', 'issued.json', 'refused.json', 'started.json'])
+
+    def test_a_reconciled_proxy_at_its_record_bound_is_not_started(self):
+        with patch.object(serving_boot, 'require_capacity', side_effect=ValueError('at their bound')) as capacity:
+            with self.assertRaisesRegex(ValueError, 'at their bound'):
+                self.act()
+        capacity.assert_called_once_with(self.root, self.value['instance'], self.proxy['Id'])
+        self.assertEqual(self.started(), [])
+        self.assertFalse((self.root / retired.BOOTS).exists())
 
     def test_request_and_action_are_exact(self):
         for bad in (dict(self.value, token='0' * 32), {key: item for key, item in self.value.items() if key != 'image'},
@@ -258,6 +292,21 @@ class RecordedBootTests(unittest.TestCase):
         self.restart('2026-11-09T05:00:00Z')
         with self.assertRaisesRegex(ValueError, 'boot changed'):
             self.startup()
+
+    def test_no_boot_is_recorded_beyond_the_bound_the_reader_accepts(self):
+        with patch.object(retired, 'MAX_BOOTS', 2):
+            for started_at in ('2026-11-09T05:00:00Z', '2026-11-09T06:00:00Z'):
+                self.restart(started_at)
+                self.accept()
+            self.restart('2026-11-09T07:00:00Z')
+            before = sorted(str(path) for path in self.root.rglob('*'))
+            with self.assertRaisesRegex(ValueError, 'at their bound'):
+                self.accept()
+            # Refused before anything was written: the records it has are still read, and the last accepted boot holds.
+            self.assertEqual(sorted(str(path) for path in self.root.rglob('*')), before)
+            self.assertEqual(retired.serving_boot(self.root, 'site', ID, self.serving)['started_at'], '2026-11-09T06:00:00Z')
+            self.restart('2026-11-09T06:00:00Z')
+            self.assertEqual(self.startup(), Path(self.serving['caddyfile']))
 
     def test_nothing_is_accepted_without_a_new_boot_or_for_another_proxy(self):
         with self.assertRaisesRegex(ValueError, 'nothing to accept'):

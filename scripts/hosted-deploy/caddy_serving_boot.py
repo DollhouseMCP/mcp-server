@@ -93,6 +93,12 @@ def require_no_transition(root):
         raise ValueError('a Caddy transition is pending; use its own recovery')
 
 
+def require_capacity(root, instance, identifier):
+    """A reconciled proxy takes a bounded number of boot records. Refuse before the action, not after one record too many."""
+    if retired.serving_record(root, instance, identifier) is not None:
+        retired.require_boot_capacity(root, instance, identifier)
+
+
 def begin(root, kind, issued):
     """A new private journal for one action, with its intent recorded before anything changes."""
     parent = root / retired.BOOTS
@@ -159,7 +165,7 @@ def started(run, before):
 
 
 def fence(run, identifier, operation, error):
-    """One non-forcing stop after a failed verification: ingress is closed again, as it was."""
+    """One non-forcing stop after a failed start or verification: ingress is closed again, as it was."""
     journal(operation, 'refused.json', {'error': str(error)[:2000], 'compensation': 'one non-forcing stop'})
     run(['docker', 'stop', '--signal', 'SIGTERM', '--timeout', '-1', identifier], 60, 65536)
     lifecycle(inspect_one(run, 'container', identifier), False)
@@ -178,12 +184,14 @@ def abandon(root, value, origin, run, admit, config, public, sleep=time.sleep):
     ingress_available(run, record['profile']['ports'])
     if unique_proxy(run, instance, root=root) != identifier:
         raise ValueError('selected proxy changed before the start')
+    require_capacity(root, instance, identifier)
     operation = begin(root, 'abandon', {'action': ACTIONS[0], 'id': identifier, 'previous': previous,
                                         'prepared_receipt': str(receipt), 'profile_sha256': handoff.digest(
                                             handoff.encoded(record['profile']))})
-    boot = started(run, before)
-    journal(operation, 'started.json', {'id': identifier, 'boot': boot})
     try:
+        # From the start command on, every failure ends in the fence: the proxy may be running unverified.
+        boot = started(run, before)
+        journal(operation, 'started.json', {'id': identifier, 'boot': boot})
         within(READY_WAIT, lambda: config(identifier, receipt, record, boot), sleep)
         results = within(ACCEPT_WAIT, lambda: public(origin), sleep)
         if lifecycle(inspect_one(run, 'container', identifier), True) != boot:
@@ -231,6 +239,7 @@ def accept(root, value, origin, run, config, public, sleep=time.sleep):
     previous = retired.serving_boot(root, instance, identifier, serving)
     if boot == previous:
         raise ValueError('the serving proxy still has its recorded boot; nothing to accept')
+    require_capacity(root, instance, identifier)
     operation = begin(root, 'accept', {'action': ACTIONS[1], 'id': identifier, 'previous': previous, 'boot': boot})
     startup = Path(serving['caddyfile']).parent
     within(READY_WAIT, lambda: config(identifier, startup, {'caddyfile_sha256': serving['caddyfile_sha256']}, boot), sleep)
