@@ -207,6 +207,23 @@ prepare_caddy_offline() {
   caddy_fresh_request_json | python3 "${HOSTED_DEPLOY_LIB_DIR}/caddy_offline_prepare.py"
 }
 
+caddy_serving_boot_request_json() {
+  HOSTED_CADDY_REQUEST_ROOT="${DEPLOY_DIR}" HOSTED_CADDY_REQUEST_INSTANCE="${INSTANCE_NAME}" \
+    HOSTED_CADDY_REQUEST_DATA="${CADDY_DATA_VOLUME}" HOSTED_CADDY_REQUEST_CONFIG="${CADDY_CONFIG_VOLUME}" \
+    HOSTED_CADDY_REQUEST_IMAGE="${CADDY_IMAGE}" HOSTED_CADDY_PUBLIC_URL="${PUBLIC_BASE_URL}" \
+    python3 -c 'import json, os; e=os.environ; print(json.dumps({"deploy_dir":e["HOSTED_CADDY_REQUEST_ROOT"], "instance":e["HOSTED_CADDY_REQUEST_INSTANCE"], "data_volume":e["HOSTED_CADDY_REQUEST_DATA"], "config_volume":e["HOSTED_CADDY_REQUEST_CONFIG"], "image":e["HOSTED_CADDY_REQUEST_IMAGE"], "public_base_url":e["HOSTED_CADDY_PUBLIC_URL"]}))'
+}
+
+# abandon-caddy-offline and accept-caddy-restart: the same proxy, started again or already restarted.
+caddy_serving_boot() {
+  local action="$1"
+  ensure_runtime_prerequisites
+  validate_persisted_caddy_fields
+  resolve_public_base_url
+  validate_caddy_selection "${CADDY_IMAGE}" "${CADDY_DATA_VOLUME}" "${CADDY_CONFIG_VOLUME}"
+  caddy_serving_boot_request_json | python3 "${HOSTED_DEPLOY_LIB_DIR}/caddy_serving_boot.py" "${action}"
+}
+
 acquire_caddy_deployment_lock() {
   need_command flock
   python3 -c 'import os, stat, sys; p=sys.argv[1]; s=os.lstat(p); sys.exit(0 if stat.S_ISDIR(s.st_mode) and s.st_uid == os.geteuid() and not s.st_mode & 0o022 and os.path.realpath(p) == p else 1)' "${DEPLOY_DIR}" || \

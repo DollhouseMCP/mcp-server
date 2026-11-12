@@ -425,6 +425,11 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     return result;
   }
 
+  /** The live half of validate(), for a credential whose signature was already verified. */
+  async isCredentialActive(claims: AuthClaims): Promise<boolean> {
+    return await this.storage.isAccountAllowed(claims.sub) && await this.isIssuingGrantActive(claims);
+  }
+
   /**
    * A flow-issued access token names its grant in the signed `grant_id`
    * claim. The token is accepted only while that Grant record exists for the

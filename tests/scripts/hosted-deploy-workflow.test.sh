@@ -359,6 +359,18 @@ DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME="new-data" DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLU
 assert_contains "${DRY_RUN_OUTPUT}" "ingress would remain closed"
 [[ ! -e "${DRY_RUN_DEPLOY_DIR}" && ! -s "${DOCKER_LOG}" && ! -s "${CURL_LOG}" ]] || fail "offline preparation dry-run must not mutate or contact Docker"
 
+for boot_action in abandon-caddy-offline accept-caddy-restart; do
+  PATH="${FAKE_BIN}:${PATH}" \
+  DOLLHOUSE_FAKE_DOCKER_LOG="${DOCKER_LOG}" \
+  DOLLHOUSE_FAKE_CURL_LOG="${CURL_LOG}" \
+  DOLLHOUSE_HOSTED_DEPLOY_DIR="${DRY_RUN_DEPLOY_DIR}" DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+  DOLLHOUSE_HOSTED_CADDY_IMAGE="registry.example.test/team/caddy@sha256:$(printf 'a%.0s' {1..64})" \
+  DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME="new-data" DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME="new-config" \
+    bash "${HOSTED_DEPLOY}" --dry-run "${boot_action}" > "${DRY_RUN_OUTPUT}"
+  assert_contains "${DRY_RUN_OUTPUT}" "public legacy acceptance"
+  [[ ! -e "${DRY_RUN_DEPLOY_DIR}" && ! -s "${DOCKER_LOG}" && ! -s "${CURL_LOG}" ]] || fail "${boot_action} dry-run must not mutate or contact Docker"
+done
+
 log "checking digest render and persisted selectors"
 REGISTRY_DIR="${TMP_ROOT}/registry-render"
 REG_RUNTIME="registry.example.test/team/runtime@sha256:$(printf 'c%.0s' {1..64})"

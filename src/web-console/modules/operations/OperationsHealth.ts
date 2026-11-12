@@ -12,6 +12,8 @@ export interface OperationsHealthChecks {
   readonly gatekeeper: OperationHealthCheck;
   readonly runtimeControl: OperationHealthCheck;
   readonly securityInvalidation: OperationHealthCheck;
+  /** Absent without a database: there is no migration ledger to compare. */
+  readonly databaseMigrations?: OperationHealthCheck;
   readonly apiMount: OperationHealthCheck;
 }
 
@@ -21,6 +23,7 @@ export const OPERATION_HEALTH_COMPONENTS: readonly OperationHealthComponent[] = 
   'gatekeeper',
   'runtime_control',
   'security_invalidation',
+  'database_migrations',
   'api_mount',
 ];
 

@@ -114,6 +114,8 @@ def fake_engine(volume, bind, missing=()):
                               'vendor.note': PLAIN},
                    'Healthcheck': {'Test': ['CMD-SHELL', 'wget -q localhost:2019'], 'Retries': 3}},
         'HostConfig': {'NetworkMode': 'dollhousemcp_default', 'MaskedPaths': ['/proc/kcore'],
+                       'LogConfig': {'Type': 'json-file',
+                                     'Config': {'max-size': '25m', 'max-file': '5', 'splunk-token': PRIVATE}},
                        'PortBindings': {'443/tcp': [{'HostIp': '0.0.0.0', 'HostPort': '443'}]}},
         'Mounts': [{'Type': 'volume', 'Name': 'dollhousemcp_caddy_data', 'Source': str(volume), 'Destination': '/data'},
                    {'Type': 'volume', 'Name': 'proxy-config', 'Source': str(volume / 'caddy'), 'Destination': '/config'},
@@ -264,6 +266,10 @@ class InventoryTests(unittest.TestCase):
         self.assertIsInstance(container['config']['labels']['vendor.note'], dict)
         self.assertEqual(container['health'], 'healthy')
         self.assertEqual(container['host_config']['MaskedPaths'], ['/proc/kcore'])
+        self.assertEqual(container['host_config']['log_driver'], 'json-file')
+        options = container['host_config']['log_options']
+        self.assertEqual((options['max-size'], options['max-file']), ('25m', '5'))
+        self.assertIsInstance(options['splunk-token'], dict)
         self.assertEqual(container['mounts'][2]['Destination'], '/etc/caddy/Caddyfile')
         self.assertEqual(missing['id'], 'f' * 64)
         self.assertIn('HTTP 404', missing['inventory_error'])

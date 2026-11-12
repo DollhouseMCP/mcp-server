@@ -134,6 +134,10 @@ import { createAccountAdminModule } from './modules/account-admin/AccountAdminMo
 import { createActivationModule } from './modules/activations/index.js';
 import { createMeLogsModule, createMemoryConsoleLogSource, type IConsoleLogSource } from './modules/me-logs/index.js';
 import { sql } from 'drizzle-orm';
+import { loadReleaseMigrations } from '../database/releaseMigrations.js';
+import type { MigrationLedgerMonitor } from './setup/MigrationLedgerMonitor.js';
+import type { MigrationLedgerResult } from './setup/MigrationLedgerProbe.js';
+import { createReleaseMigrationLedgerMonitor } from './setup/ReleaseMigrationLedgerMonitor.js';
 import { createHealthModule, type HealthReadinessChecks } from './modules/health/index.js';
 import { createConsoleMetaModule } from './modules/console-meta/ConsoleMetaModule.js';
 import {
@@ -340,6 +344,8 @@ export interface WebConsoleRegistrarOptions {
   readonly approvalAuditQuery?: IApprovalAuditQuery | null;
   readonly authenticationAuditQuery?: IAuthenticationAuditQuery | null;
   readonly securityInvalidationReadiness?: IConsoleSecurityInvalidationReadiness | null;
+  /** Replaces the default migration-ledger monitor built over the console database. */
+  readonly migrationLedgerMonitor?: MigrationLedgerMonitor;
   readonly securityInvalidationReplicaId?: string;
   readonly securityInvalidationProcessorIntervalMs?: number;
   readonly securityInvalidationProcessorLeaseDurationMs?: number;
@@ -410,6 +416,12 @@ export interface WebConsoleComposition {
   readonly cleanupScheduler: ConsoleStoreCleanupScheduler | null;
   readonly storageBackend: 'memory' | 'postgres';
   readonly routesMounted: boolean;
+  /**
+   * Whether this replica may take traffic at all. False only when the server
+   * has verified that its database is behind this release's migrations. Null
+   * when there is no database to check.
+   */
+  readonly isSafeToServe: (() => Promise<boolean>) | null;
 }
 
 export class WebConsoleRegistrar {
@@ -562,12 +574,14 @@ export class WebConsoleRegistrar {
       publicBaseUrl: this.options.publicBaseUrl,
     });
     const apiV1MountState = createApiV1MountState();
+    const migrationLedgerMonitor = resolveMigrationLedgerMonitor(this.options, database);
     const healthProbes = createConsoleHealthProbes({
       database,
       stores,
       authStorage,
       securityInvalidationReadiness,
       routesMounted: apiV1MountState.mounted,
+      migrationLedgerMonitor,
     });
     const operationHealthChecks = createOperationHealthChecks(healthProbes, container);
     registry.register(createHealthModule({
@@ -876,6 +890,7 @@ export class WebConsoleRegistrar {
       get routesMounted() {
         return apiV1MountState.mounted();
       },
+      isSafeToServe: serveSafetyCheck(migrationLedgerMonitor),
     };
 
     registerWebConsoleCompositionServices(container, composition);
@@ -1321,6 +1336,9 @@ interface ConsoleHealthProbes {
   readonly runtimeControlAvailable: () => boolean;
   readonly apiV1Mounted: () => boolean;
   readonly securityInvalidationReadiness: () => Promise<ConsoleSecurityInvalidationSnapshot>;
+  // Read-only comparison of this release's migrations with the applied ledger.
+  // Null without a database: there is no ledger to compare.
+  readonly databaseMigrations: (() => Promise<MigrationLedgerResult>) | null;
 }
 
 // Single source for the dependency probes shared by both the public readiness surface
@@ -1331,14 +1349,49 @@ function createConsoleHealthProbes(options: {
   readonly authStorage: IAuthStorageLayer | null;
   readonly securityInvalidationReadiness: IConsoleSecurityInvalidationReadiness;
   readonly routesMounted: () => boolean;
+  readonly migrationLedgerMonitor: MigrationLedgerMonitor | null;
 }): ConsoleHealthProbes {
+  const monitor = options.migrationLedgerMonitor;
   return {
     databaseAvailable: () => probeDatabaseLiveness(options.database),
     authServerAvailable: () => Boolean(options.authStorage),
     runtimeControlAvailable: () => Boolean(options.stores.runtimeSessionControlStore),
     apiV1Mounted: () => options.routesMounted(),
     securityInvalidationReadiness: () => options.securityInvalidationReadiness.getReadiness(),
+    databaseMigrations: monitor ? () => monitor.current() : null,
   };
+}
+
+/** An injected monitor wins; otherwise one is built over the console database, if there is one. */
+function resolveMigrationLedgerMonitor(
+  options: WebConsoleRegistrarOptions,
+  database: DatabaseInstance | undefined,
+): MigrationLedgerMonitor | null {
+  if (options.migrationLedgerMonitor) return options.migrationLedgerMonitor;
+  return database ? createMigrationLedgerMonitor(database) : null;
+}
+
+function serveSafetyCheck(monitor: MigrationLedgerMonitor | null): (() => Promise<boolean>) | null {
+  return monitor ? () => monitor.isSafeToServe() : null;
+}
+
+/**
+ * Builds the monitor and runs it once straight away, without waiting on it,
+ * so the outcome is in the start-up log even if nothing polls readiness. An
+ * unverifiable ledger fails nothing, and that log line is how it gets noticed.
+ */
+function createMigrationLedgerMonitor(database: DatabaseInstance): MigrationLedgerMonitor {
+  const monitor = createReleaseMigrationLedgerMonitor({
+    database,
+    loadRelease: loadReleaseMigrations,
+    log: {
+      info: message => logger.info(message),
+      warn: message => logger.warn(message),
+      error: message => logger.error(message),
+    },
+  });
+  void monitor.current();
+  return monitor;
 }
 
 /** True only if a trivial `SELECT 1` round-trips — not merely that a DB handle is wired. */
@@ -1379,6 +1432,9 @@ function createOperationHealthChecks(
     securityInvalidation: async () => operationHealthFromInvalidationReadiness(
       await probes.securityInvalidationReadiness(),
     ),
+    ...(probes.databaseMigrations
+      ? { databaseMigrations: async () => operationHealthFromMigrationLedger(await probes.databaseMigrations!()) }
+      : {}),
     apiMount: () => probes.apiV1Mounted()
       ? {
         component: 'api_mount',
@@ -1392,6 +1448,17 @@ function createOperationHealthChecks(
         checked_at: new Date(0).toISOString(),
         failure_codes: ['api_v1_not_mounted'],
       },
+  };
+}
+
+/** A database behind this release is not ready; an unreadable ledger is only unverified. */
+function operationHealthFromMigrationLedger(result: MigrationLedgerResult) {
+  const status = { passed: 'ok', failed: 'not_ready', pending: 'degraded' } as const;
+  return {
+    component: 'database_migrations' as const,
+    status: status[result.state],
+    checked_at: new Date().toISOString(),
+    failure_codes: result.state === 'passed' ? [] : [result.code],
   };
 }
 

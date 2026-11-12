@@ -7,7 +7,7 @@ import ipaddress
 import re
 
 from caddy_volume_migration import inspect_one, running_containers
-from legacy_recovery_profile import profile
+from legacy_recovery_profile import profile, same_profile
 
 PORT = re.compile(r'[1-9]\d{0,4}\Z', flags=re.ASCII)
 
@@ -30,7 +30,7 @@ def lifecycle(container, running, boot=None):
 
 def exact_container(run, identifier, expected, name, running, boot=None):
     current = inspect_one(run, 'container', identifier)
-    if current.get('Id') != identifier or current.get('Name') != '/' + name or profile(current) != expected:
+    if current.get('Id') != identifier or current.get('Name') != '/' + name or not same_profile(profile(current), expected):
         raise ValueError('full recovery container profile changed')
     lifecycle(current, running, boot)
     return current

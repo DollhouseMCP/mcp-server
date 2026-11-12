@@ -522,6 +522,37 @@ DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME='new-caddy-config' \
   npm run hosted:deploy -- prepare-caddy-offline
 ```
 
+After a successful preparation ingress is closed, and nothing has begun that
+`recover-caddy-proxy` could recover from. If the window is given up before the
+update starts, for example because the checkpoint that follows cannot be
+completed, bring the same proxy back with `abandon-caddy-offline`, using the
+same image and destination volume names:
+
+```bash
+DOLLHOUSE_HOSTED_CADDY_IMAGE='registry.example/caddy@sha256:<qualified-digest>' \
+DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME='new-caddy-data' \
+DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME='new-caddy-config' \
+  npm run hosted:deploy -- abandon-caddy-offline
+```
+
+It verifies the stopped proxy against the preparation's clone receipt (the same
+container, its full profile, a clean stop, free ports), starts that one
+container once, and requires its recorded Caddy configuration and the public
+legacy acceptance within bounded waits. If a check fails after the start, it
+stops the proxy once more without force and refuses: ingress is closed again.
+The clone, its receipt and the new volumes stay. A later preparation needs new
+destination volume names.
+
+A reconciled legacy proxy is bound to one boot. `abandon-caddy-offline` records
+the new boot in a write-once record beside the reconciled serving record, and
+later actions follow those records. If Docker or the host restarted that proxy,
+`accept-caddy-restart` checks that the running container is the same one, with
+the same profile, configuration and public acceptance, and records its new boot
+with the host's and the Docker daemon's start times. It starts and stops
+nothing. Without such a record, a proxy with another boot is refused. One
+reconciled proxy can have at most 32 recorded later boots. At that bound both
+actions refuse before they start or record anything.
+
 Before stopping ingress, preparation runs that same copier's full source
 validation in a source-only, read-only helper. It mounts only the two original
 volumes and its script; no destination volume is mounted or created. Source
@@ -637,6 +668,27 @@ DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME=octocat \
 ```
 
 Prefer `DOLLHOUSE_BOOTSTRAP_GITHUB_ID` when you already know the numeric GitHub ID, because it skips the GitHub API lookup. If neither bootstrap variable is set and the script has a TTY, it prompts for a GitHub username.
+
+#### How the first admin is claimed
+
+You name one GitHub account and that account becomes the admin by signing in. There is no setup code to copy, and nothing secret is printed or logged.
+
+1. `bootstrap-admin` resolves the username to GitHub's numeric account ID once and prints the ID it resolved. Check it is the account you meant. The server stores the ID, not the username.
+2. The first time that account signs in to the console at `/ui/` it is the admin. It is admitted even when the sign-in allowlist is required and still empty. Everyone else has to be on the allowlist or invited.
+3. Signing in does not elevate. Admin actions still need an authenticator app, set up under Security, and a step-up with its code.
+
+What to rely on:
+
+- **The match is on the account ID.** Renaming the GitHub account does not change who the admin is, and a different account that later takes the old username gets nothing.
+- **It can be claimed once.** Re-running `bootstrap-admin` for the same account is harmless. Running it for a different account is refused; transferring admin is a separate operation. Two claims made at the same moment settle on exactly one.
+- **It is audited.** The claim is recorded as `auth.bootstrap.completed` with the account and how it was designated.
+- **Until it is done, nobody can sign in.** Every sign-in is refused with `bootstrap_required` and `/readyz` reports not ready.
+
+An install done by hand, without this tooling, has to run the same command once inside the container, because the server does not read the bootstrap variables itself (#3235):
+
+```bash
+dollhouse-admin-bootstrap --method github --github-username octocat
+```
 
 ### `rollback`
 
