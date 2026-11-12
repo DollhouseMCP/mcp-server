@@ -1251,6 +1251,7 @@ async function resolveProductionReadinessForActivation(
   return {
     ...options.productionReadiness,
     databaseVerificationReady: options.productionReadiness?.databaseVerificationReady ?? databaseReadiness.ready,
+    databaseVerificationDetail: options.productionReadiness?.databaseVerificationDetail ?? databaseReadiness.detail,
     securityInvalidationProcessorReady: (await securityInvalidationReadiness.getReadiness()).ready,
     portfolioSyncWorkerReady: options.productionReadiness?.portfolioSyncWorkerReady ?? portfolioSyncWorker?.isRunning() === true,
     accountAllowlistAuthorityCutoverComplete: options.productionReadiness?.accountAllowlistAuthorityCutoverComplete ??

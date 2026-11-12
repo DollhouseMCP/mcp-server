@@ -19,6 +19,8 @@ export type WebConsoleActivationProfile = 'development' | 'shared-hosted';
 
 export interface WebConsoleProductionReadinessOptions {
   readonly databaseVerificationReady?: boolean;
+  /** Why the database could not be verified, shown in the start-up failure. */
+  readonly databaseVerificationDetail?: string;
   readonly securityInvalidationProcessorReady?: boolean;
   readonly portfolioSyncWorkerReady?: boolean;
   readonly accountAllowlistAuthorityCutoverComplete?: boolean;
@@ -53,7 +55,11 @@ export class WebConsoleProductionActivationError extends Error {
   readonly failures: readonly WebConsoleProductionActivationFailure[];
 
   constructor(failures: readonly WebConsoleProductionActivationFailure[]) {
-    super(`Web console production activation failed: ${failures.map(failure => failure.code).join(', ')}`);
+    // The message is what an operator sees when start-up stops, so it carries
+    // the reason and the fix for every failure, not the codes alone.
+    super(`Web console production activation failed: ${
+      failures.map(failure => `${failure.code}: ${failure.detail}`).join('; ')
+    }`);
     this.name = 'WebConsoleProductionActivationError';
     this.failures = failures;
   }
@@ -107,13 +113,15 @@ export function assertWebConsoleProductionActivation(
     failures,
     inputs.storageBackend === 'postgres',
     'database_required',
-    'Hosted/shared web-console activation requires shared PostgreSQL persistence.',
+    'Hosted/shared web-console activation requires shared PostgreSQL persistence. ' +
+    'Set DOLLHOUSE_STORAGE_BACKEND=database and DOLLHOUSE_DATABASE_URL.',
   );
   requireCondition(
     failures,
     inputs.readiness?.databaseVerificationReady === true,
     'database_verification_not_ready',
-    'Hosted/shared web-console activation requires verification of the intended PostgreSQL database and current migration state.',
+    'Hosted/shared web-console activation requires verification of the intended PostgreSQL database and current migration state.' +
+    (inputs.readiness?.databaseVerificationDetail ? ` ${inputs.readiness.databaseVerificationDetail}` : ''),
   );
   requireCondition(
     failures,
@@ -133,7 +141,9 @@ export function assertWebConsoleProductionActivation(
       failures,
       inputs.readiness?.accountAllowlistAuthorityCutoverComplete === true,
       'account_allowlist_authority_not_cut_over',
-      'Hosted/shared web-console activation cannot expose account allowlist CRUD before the sign-in authority cutover is complete.',
+      'Hosted/shared web-console activation cannot expose account allowlist CRUD before the sign-in authority cutover is complete. ' +
+      'The cutover needs DOLLHOUSE_AUTH_PROVIDER=embedded with DOLLHOUSE_AUTH_STORAGE_BACKEND=postgres; ' +
+      'otherwise set DOLLHOUSE_WEB_CONSOLE_ALLOWLIST_ROUTES_ENABLED=false.',
     );
   }
 

@@ -1,16 +1,7 @@
 /** Owned cookie fixture: no login, OIDC, allowlist admission or replacement qualification claim. */
-import { createHmac, randomBytes, randomUUID } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import { createServer } from 'node:net';
-import { writeFile } from 'node:fs/promises';
-import path from 'node:path';
 import type { AuthenticatedFixture, CompiledMemoryRuntime } from './authenticated-memory-runtime.js';
-
-export const UNPROVED_CONSOLE_READINESS_CHECKS = [
-  'production_database_migrations', 'security_invalidation_multi_replica', 'allowlist_authority_parity',
-  'embedded_as_login_step_up', 'account_invite_redemption', 'oauth_grant_revocation',
-  'github_integration_connect_callback', 'portfolio_sync_live_repository',
-  'signing_key_auth_policy_multi_replica', 'approval_execution_projection', 'audit_telemetry_projection',
-] as const;
 
 async function ownedPort(): Promise<number> {
   const server = createServer();
@@ -34,16 +25,6 @@ export interface OwnedConsole {
 }
 export async function consoleRuntime(fixture: AuthenticatedFixture): Promise<OwnedConsole> {
   const port = await ownedPort(), base = `http://127.0.0.1:${port}`;
-  const evidencePath = path.join(fixture.directory, `fixture-external-readiness-${randomUUID()}.json`);
-  await writeFile(evidencePath, JSON.stringify({
-    phase: 'pre-replacement',
-    composition: { activationProfile: 'shared-hosted', storageBackend: 'postgres', apiV1MountCreated: true,
-      routesMounted: false, registeredRouteModuleIds: ['auth', 'health', 'accountAdmin', 'activations', 'approvals',
-        'audit', 'executions', 'integrations', 'me-logs', 'operations', 'portfolio', 'runtimeSessions', 'security-admin',
-        'selfSecurity', 'selfService', 'session-telemetry'] },
-    liveChecks: UNPROVED_CONSOLE_READINESS_CHECKS.map(id => ({ id, ready: true,
-      detail: 'OWNED FIXTURE ASSERTION for console mount only; this external readiness check is NOT executed or proved by this test.' })),
-  }), { mode: 0o600 });
   const b64 = () => randomBytes(32).toString('base64'), hex = () => randomBytes(32).toString('hex');
   const opaqueKey = b64();
   const runtime = fixture.spawnConsole({
@@ -53,7 +34,7 @@ export async function consoleRuntime(fixture: AuthenticatedFixture): Promise<Own
     DOLLHOUSE_AUTH_ENABLED: 'true', DOLLHOUSE_AUTH_PROVIDER: 'embedded', DOLLHOUSE_AUTH_METHODS: 'local-password',
     DOLLHOUSE_AUTH_STORAGE_BACKEND: 'postgres', DOLLHOUSE_AUTH_OPEN_DCR: 'true',
     DOLLHOUSE_RATE_LIMIT_BACKEND: 'postgres', DOLLHOUSE_HTTP_WEB_CONSOLE: 'false', DOLLHOUSE_WEB_AUTH_ENABLED: 'false',
-    DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED: 'true', DOLLHOUSE_WEB_CONSOLE_REPLACEMENT_READINESS_EVIDENCE: evidencePath,
+    DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED: 'true',
     DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_NAME: new URL(fixture.f.runtime.appUrl).pathname.slice(1),
     DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_USER: fixture.f.roleName,
     DOLLHOUSE_WEB_CONSOLE_PORTFOLIO_WRITE_ROUTES_ENABLED: 'true', DOLLHOUSE_WEB_CONSOLE_OPAQUE_HMAC_KEY: opaqueKey,

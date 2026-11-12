@@ -1,5 +1,4 @@
 import { resolvePrivateBetaOnboardingConfiguration, type PrivateBetaOnboardingEnv } from '../invitations/onboarding/PrivateBetaOnboardingConfiguration.js';
-import { readFile } from 'node:fs/promises';
 
 import { env, type Env } from '../config/env.js';
 import { isLoopbackHost } from '../auth/oauth/url.js';
@@ -8,19 +7,12 @@ import type { DiContainerFacade } from '../di/DiContainerFacade.js';
 import type { AuthMethodId } from '../auth/embedded-as/AuthMethodFactory.js';
 import { WebConsoleRegistrar, type WebConsoleRegistrarOptions, type WebConsoleComposition } from './WebConsoleRegistrar.js';
 import { resolveWebConsoleProductionDatabaseVerificationFromEnv } from './WebConsoleProductionDatabaseReadiness.js';
-import { verifyWebConsoleReplacementReadiness } from './WebConsoleReplacementReadiness.js';
-import {
-  parseWebConsoleReplacementReadinessEvidence,
-  type WebConsoleReplacementReadinessEvidence,
-} from './WebConsoleReplacementReadinessEvidence.js';
 
 const REQUIRED_KEY_BYTES = 32;
 const API_V1_MOUNT_REQUIRES_PUBLIC_BASE_URL =
   'DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED=true requires DOLLHOUSE_PUBLIC_BASE_URL';
 const API_V1_REPLACEMENT_REFUSES_LEGACY_WEB_CONSOLE =
   'DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED=true replaces the legacy web console API; set DOLLHOUSE_HTTP_WEB_CONSOLE=false so legacy /api routes are not exposed';
-const API_V1_REPLACEMENT_REQUIRES_EVIDENCE =
-  'DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED=true requires DOLLHOUSE_WEB_CONSOLE_REPLACEMENT_READINESS_EVIDENCE';
 
 export type WebConsoleHttpBootstrapEnv = Pick<
   Env,
@@ -52,12 +44,7 @@ export async function bootstrapWebConsoleHttpApiV1(
 ): Promise<WebConsoleComposition | null> {
   const options = resolveWebConsoleHttpBootstrapOptions(sourceEnv);
   if (!options) return null;
-  const composition = await new WebConsoleRegistrar(options).bootstrapAndRegister(container);
-  await assertWebConsoleReplacementEvidenceReady(
-    composition,
-    sourceEnv.DOLLHOUSE_WEB_CONSOLE_REPLACEMENT_READINESS_EVIDENCE,
-  );
-  return composition;
+  return await new WebConsoleRegistrar(options).bootstrapAndRegister(container);
 }
 
 export function resolveWebConsoleHttpBootstrapOptions(
@@ -71,9 +58,7 @@ export function resolveWebConsoleHttpBootstrapOptions(
   if (!sourceEnv.DOLLHOUSE_PUBLIC_BASE_URL) {
     throw new Error(API_V1_MOUNT_REQUIRES_PUBLIC_BASE_URL);
   }
-  if (!sourceEnv.DOLLHOUSE_WEB_CONSOLE_REPLACEMENT_READINESS_EVIDENCE) {
-    throw new Error(API_V1_REPLACEMENT_REQUIRES_EVIDENCE);
-  }
+  warnRetiredReadinessEvidenceVariable(sourceEnv);
   warnCollectionBrowseWithoutGitHubToken(sourceEnv);
   const githubIntegrationProviderConfig = sourceEnv.DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_ID &&
     sourceEnv.DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_SECRET
@@ -148,36 +133,18 @@ function warnCollectionBrowseWithoutGitHubToken(sourceEnv: WebConsoleHttpBootstr
   );
 }
 
-export async function assertWebConsoleReplacementEvidenceReady(
-  composition: Pick<WebConsoleComposition,
-    'activationProfile' | 'apiV1Mount' | 'registry' | 'routesMounted' | 'storageBackend'
-  >,
-  evidencePath: string | undefined,
-): Promise<void> {
-  if (!evidencePath) {
-    throw new Error(API_V1_REPLACEMENT_REQUIRES_EVIDENCE);
-  }
-  const evidence = await readReplacementReadinessEvidence(evidencePath);
-  const result = verifyWebConsoleReplacementReadiness({
-    composition,
-    phase: 'pre-replacement',
-    liveChecks: evidence.liveChecks,
-  });
-  if (!result.ready) {
-    const details = result.failures.map(failure => `${failure.id}: ${failure.detail}`).join('; ');
-    throw new Error(`Web console replacement readiness evidence is not ready: ${details}`);
-  }
-}
-
-async function readReplacementReadinessEvidence(
-  evidencePath: string,
-): Promise<WebConsoleReplacementReadinessEvidence> {
-  try {
-    return parseWebConsoleReplacementReadinessEvidence(JSON.parse(await readFile(evidencePath, 'utf8')));
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Failed to read web console replacement readiness evidence at ${evidencePath}: ${message}`);
-  }
+/**
+ * The console used to refuse to start without an operator-written readiness
+ * evidence file. That requirement is gone and the file is never read. A
+ * deployment that still sets the variable keeps starting; it is told once
+ * that the setting does nothing.
+ */
+function warnRetiredReadinessEvidenceVariable(sourceEnv: WebConsoleHttpBootstrapEnv): void {
+  if (!sourceEnv.DOLLHOUSE_WEB_CONSOLE_REPLACEMENT_READINESS_EVIDENCE) return;
+  logger.warn(
+    '[WebConsoleHttpBootstrap] DOLLHOUSE_WEB_CONSOLE_REPLACEMENT_READINESS_EVIDENCE is set but is no longer used. ' +
+    'The web console does not read a readiness evidence file and starts without one. Remove the variable.',
+  );
 }
 
 function decodeBase64Key(value: string | undefined, name: string): Buffer {
