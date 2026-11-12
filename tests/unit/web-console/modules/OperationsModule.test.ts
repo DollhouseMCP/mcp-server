@@ -369,6 +369,34 @@ describe('OperationsModule', () => {
     });
   });
 
+  it.each([
+    ['ok', [], 'ok'],
+    ['degraded', ['audit_or_telemetry_unreadable'], 'degraded'],
+    ['degraded', ['admin_audit_chain_broken'], 'degraded'],
+    ['degraded', ['admin_audit_integrity_unverified'], 'degraded'],
+  ] as const)('reports audit and telemetry as %s with its stable code, just before the API mount', async (status, codes, overall) => {
+    const healthy = { ...HEALTH_CHECKS,
+      securityInvalidation: () => true,
+      apiMount: () => true,
+      auditTelemetry: () => ({
+        component: 'audit_telemetry' as const, status, checked_at: NOW.toISOString(), failure_codes: [...codes],
+      }),
+    };
+    const route = findRoute(createModule(healthy).routes, 'GET', '/api/v1/admin/operate/health');
+    const result = await route.handler({ query: {}, params: {} } as unknown as ConsoleRouteRequest);
+
+    // An audit page that cannot display is a console fault; this surface still answers.
+    expect(result.status).toBe(200);
+    const summary = projectOperationHealthSummary(result.body);
+    expect(summary.status).toBe(overall);
+    expect(summary.components.map(component => component.component)).toEqual([
+      'database', 'auth_server', 'gatekeeper', 'runtime_control', 'security_invalidation', 'audit_telemetry', 'api_mount',
+    ]);
+    expect(summary.components.find(component => component.component === 'audit_telemetry')).toEqual({
+      component: 'audit_telemetry', status, checked_at: NOW.toISOString(), failure_codes: [...codes],
+    });
+  });
+
   it('reports a migration check that throws as unavailable rather than failing the whole summary', async () => {
     const checks = { ...HEALTH_CHECKS, databaseMigrations: () => { throw new Error('boom'); } };
     const route = findRoute(createModule(checks).routes, 'GET', '/api/v1/admin/operate/health');

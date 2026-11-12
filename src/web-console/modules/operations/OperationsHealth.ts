@@ -16,6 +16,8 @@ export interface OperationsHealthChecks {
   readonly databaseMigrations?: OperationHealthCheck;
   /** Absent unless the console's allowlist is the sign-in authority: otherwise there is one list. */
   readonly allowlistParity?: OperationHealthCheck;
+  /** Whether the audit and telemetry reads work and the admin audit chain verifies. */
+  readonly auditTelemetry?: OperationHealthCheck;
   readonly apiMount: OperationHealthCheck;
 }
 
@@ -27,6 +29,7 @@ export const OPERATION_HEALTH_COMPONENTS: readonly OperationHealthComponent[] = 
   'security_invalidation',
   'database_migrations',
   'allowlist_parity',
+  'audit_telemetry',
   'api_mount',
 ];
 

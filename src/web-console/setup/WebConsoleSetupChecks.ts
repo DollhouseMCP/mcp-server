@@ -137,7 +137,7 @@ export const WEB_CONSOLE_SETUP_CHECKS: Readonly<Record<WebConsoleSetupCheckId, W
     title: 'Audit events and telemetry display correctly',
     proves: 'Admin audit events are intact and readable, and session telemetry can be read.',
     verification: 'server-probe',
-    verifiedBy: 'The server verifies the tamper-evident chain over the most recent admin audit events and runs the audit and telemetry queries, read-only.',
+    verifiedBy: 'The server runs the audit and telemetry queries read-only and verifies the tamper-evident chain over the first admin audit events, as the audit page does.',
     remediation: 'Check the server log for the failing query or chain break. A chain break needs investigation before the audit trail is trusted.',
   },
 };

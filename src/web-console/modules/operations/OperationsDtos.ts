@@ -6,6 +6,7 @@ export type OperationHealthComponent =
   | 'security_invalidation'
   | 'database_migrations'
   | 'allowlist_parity'
+  | 'audit_telemetry'
   | 'api_mount';
 
 export type OperationHealthStatus = 'ok' | 'degraded' | 'unavailable' | 'not_ready';

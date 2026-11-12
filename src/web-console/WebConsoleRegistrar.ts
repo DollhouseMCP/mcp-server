@@ -139,6 +139,14 @@ import type { MigrationLedgerMonitor } from './setup/MigrationLedgerMonitor.js';
 import type { MigrationLedgerResult } from './setup/MigrationLedgerProbe.js';
 import { createReleaseMigrationLedgerMonitor } from './setup/ReleaseMigrationLedgerMonitor.js';
 import { probeAllowlistParity, type AllowlistParityResult } from './setup/AllowlistParityProbe.js';
+import { cacheProbe } from './setup/cachedProbe.js';
+import {
+  AUDIT_TELEMETRY_PROBE_TTL_MS,
+  auditTelemetrySourcesFrom,
+  probeAuditTelemetry,
+  type AuditTelemetryResult,
+  type AuditTelemetrySources,
+} from './setup/AuditTelemetryProbe.js';
 import type { SignInAllowlistAuthority } from '../auth/embedded-as/allowlistGate.js';
 import { createHealthModule, type HealthReadinessChecks } from './modules/health/index.js';
 import { createConsoleMetaModule } from './modules/console-meta/ConsoleMetaModule.js';
@@ -585,6 +593,9 @@ export class WebConsoleRegistrar {
       routesMounted: apiV1MountState.mounted,
       migrationLedgerMonitor,
       signInAllowlistAuthority: resolveSignInAllowlistAuthority(container),
+      auditTelemetrySources: auditTelemetrySourcesFrom({
+        adminAuditQuery, approvalAuditQuery, authenticationAuditQuery, telemetryQuery,
+      }),
     });
     const operationHealthChecks = createOperationHealthChecks(healthProbes, container);
     registry.register(createHealthModule({
@@ -1346,6 +1357,8 @@ interface ConsoleHealthProbes {
   // consults. Null unless the console's allowlist is the authority: otherwise
   // there is only one list.
   readonly allowlistParity: (() => Promise<AllowlistParityResult>) | null;
+  // Read-only run of the audit and telemetry page queries, with the admin audit chain check.
+  readonly auditTelemetry: () => Promise<AuditTelemetryResult>;
 }
 
 // Single source for the dependency probes shared by both the public readiness surface
@@ -1358,6 +1371,7 @@ function createConsoleHealthProbes(options: {
   readonly routesMounted: () => boolean;
   readonly migrationLedgerMonitor: MigrationLedgerMonitor | null;
   readonly signInAllowlistAuthority: SignInAllowlistAuthority | null;
+  readonly auditTelemetrySources: AuditTelemetrySources;
 }): ConsoleHealthProbes {
   const monitor = options.migrationLedgerMonitor;
   const { authStorage, signInAllowlistAuthority: authority } = options;
@@ -1374,6 +1388,7 @@ function createConsoleHealthProbes(options: {
         listAuthority: () => authority.listEntries(),
       })
       : null,
+    auditTelemetry: cacheProbe(() => probeAuditTelemetry(options.auditTelemetrySources), AUDIT_TELEMETRY_PROBE_TTL_MS),
   };
 }
 
@@ -1460,6 +1475,7 @@ function createOperationHealthChecks(
     ...(probes.allowlistParity
       ? { allowlistParity: async () => operationHealthFromAllowlistParity(await probes.allowlistParity!()) }
       : {}),
+    auditTelemetry: async () => operationHealthFromAuditTelemetry(await probes.auditTelemetry()),
     apiMount: () => probes.apiV1Mounted()
       ? {
         component: 'api_mount',
@@ -1491,7 +1507,17 @@ function operationHealthFromMigrationLedger(result: MigrationLedgerResult) {
 function operationHealthFromAllowlistParity(result: AllowlistParityResult) {
   return {
     component: 'allowlist_parity' as const,
-    status: result.state === 'passed' ? 'ok' as const : 'degraded' as const,
+    status: ({ passed: 'ok', failed: 'degraded', pending: 'degraded' } as const)[result.state],
+    checked_at: new Date().toISOString(),
+    failure_codes: result.state === 'passed' ? [] : [result.code],
+  };
+}
+
+/** An audit or telemetry page that cannot display is a console fault, not a reason to drain the replica. */
+function operationHealthFromAuditTelemetry(result: AuditTelemetryResult) {
+  return {
+    component: 'audit_telemetry' as const,
+    status: ({ passed: 'ok', failed: 'degraded', pending: 'degraded' } as const)[result.state],
     checked_at: new Date().toISOString(),
     failure_codes: result.state === 'passed' ? [] : [result.code],
   };
