@@ -3,7 +3,7 @@
 import { afterAll, describe, expect, it } from '@jest/globals';
 
 import { loadReleaseMigrations } from '../../../src/database/releaseMigrations.js';
-import { probeMigrationLedger } from '../../../src/web-console/setup/MigrationLedgerProbe.js';
+import { isDatabaseBehindRelease, probeMigrationLedger } from '../../../src/web-console/setup/MigrationLedgerProbe.js';
 import { closeTestDb, getTestAdminDb, getTestDb } from './test-db-helpers.js';
 
 const required = process.env.DOLLHOUSE_REQUIRE_TEST_DATABASE === '1' ? describe : describe.skip;
@@ -32,17 +32,22 @@ required('probeMigrationLedger on PostgreSQL', () => {
       code: 'migrations_incomplete',
       detail: `${release.length} of ${release.length + 1} migrations in this release are applied. First missing: 9999_not_applied_yet.`,
     });
+    expect(isDatabaseBehindRelease(await probeMigrationLedger(getTestAdminDb(), [...release, next]))).toBe(true);
   });
 
-  it('fails when an applied migration differs from the one this release ships', async () => {
+  it('reports a mismatch, without calling the database behind, when an applied migration differs from this release', async () => {
+    // What a long-lived database looks like after a migration file was reworded:
+    // everything is applied, and one ledger hash is the old text's.
     const release = [...await loadReleaseMigrations()];
     release[5] = { ...release[5], hash: 'e'.repeat(64) };
-    expect(await probeMigrationLedger(getTestAdminDb(), release)).toEqual({
+    const result = await probeMigrationLedger(getTestAdminDb(), release);
+    expect(result).toMatchObject({
       id: 'production_database_migrations',
       state: 'failed',
       code: 'migrations_mismatch',
-      detail: `Applied migration 6 does not match ${release[5].tag} in this release.`,
+      detail: expect.stringContaining(`Applied migration 6 does not match ${release[5].tag} in this release.`),
     });
+    expect(isDatabaseBehindRelease(result)).toBe(false);
   });
 
   it('passes for an older release whose migrations are the start of the ledger', async () => {

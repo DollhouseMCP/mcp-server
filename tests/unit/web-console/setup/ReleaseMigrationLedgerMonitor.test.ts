@@ -40,6 +40,17 @@ describe('createReleaseMigrationLedgerMonitor', () => {
     );
   });
 
+  it('logs a ledger that does not match as an error, says it keeps serving, and stays in service', async () => {
+    const reworded = [{ hash: hash(99), createdAt: '1000' }, ...ledger(2).slice(1)];
+    const { monitor, log } = setup(() => Promise.resolve(reworded));
+    expect(await monitor.isSafeToServe()).toBe(true);
+    expect(log.error).toHaveBeenCalledTimes(1);
+    expect(String(log.error.mock.calls[0][0])).toMatch(
+      /^\[WebConsole\] Applied migrations do not match this release; the server keeps serving\. Applied migration 1 does not match 0000_first in this release\./,
+    );
+    expect(String(log.error.mock.calls[0][0])).not.toContain('reporting not ready');
+  });
+
   it.each([
     ['42501', 'permission denied for schema drizzle',
       'The server\'s database role is not permitted to read the applied-migration ledger, so the schema is not verified. ' +

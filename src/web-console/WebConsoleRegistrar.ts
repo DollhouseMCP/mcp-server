@@ -136,7 +136,7 @@ import { createMeLogsModule, createMemoryConsoleLogSource, type IConsoleLogSourc
 import { sql } from 'drizzle-orm';
 import { loadReleaseMigrations } from '../database/releaseMigrations.js';
 import type { MigrationLedgerMonitor } from './setup/MigrationLedgerMonitor.js';
-import type { MigrationLedgerResult } from './setup/MigrationLedgerProbe.js';
+import { isDatabaseBehindRelease, type MigrationLedgerResult } from './setup/MigrationLedgerProbe.js';
 import { createReleaseMigrationLedgerMonitor } from './setup/ReleaseMigrationLedgerMonitor.js';
 import { probeAllowlistParity, type AllowlistParityResult } from './setup/AllowlistParityProbe.js';
 import { cacheProbe } from './setup/cachedProbe.js';
@@ -1492,12 +1492,18 @@ function createOperationHealthChecks(
   };
 }
 
-/** A database behind this release is not ready; an unreadable ledger is only unverified. */
+/**
+ * A database behind this release is not ready. A ledger that cannot be read,
+ * or that does not match this release entry for entry, is reported as degraded:
+ * the schema is unverified, and the replica keeps serving.
+ */
 function operationHealthFromMigrationLedger(result: MigrationLedgerResult) {
-  const status = { passed: 'ok', failed: 'not_ready', pending: 'degraded' } as const;
+  let status: 'ok' | 'not_ready' | 'degraded' = 'degraded';
+  if (result.state === 'passed') status = 'ok';
+  else if (isDatabaseBehindRelease(result)) status = 'not_ready';
   return {
     component: 'database_migrations' as const,
-    status: status[result.state],
+    status,
     checked_at: new Date().toISOString(),
     failure_codes: result.state === 'passed' ? [] : [result.code],
   };

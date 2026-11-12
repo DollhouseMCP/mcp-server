@@ -101,9 +101,11 @@ export interface StreamableHttpRuntimeOptions {
     router: Router;
     markMounted: () => void;
     /**
-     * False when the console has verified that the database is behind this
-     * release's migrations. /readyz then reports not ready so the replica is
-     * taken out of rotation; nothing else about the fault is disclosed there.
+     * False only when the console has verified that the database has not had
+     * this release's migrations applied. /readyz then reports not ready so the
+     * replica is taken out of rotation; nothing else about the fault is
+     * disclosed there. A ledger that cannot be read, or that differs from this
+     * release in an already-applied migration, does not make this false.
      */
     isSafeToServe?: () => Promise<boolean>;
   };

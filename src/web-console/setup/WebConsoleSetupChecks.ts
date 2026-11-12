@@ -55,10 +55,10 @@ export const WEB_CONSOLE_SETUP_CHECKS: Readonly<Record<WebConsoleSetupCheckId, W
   production_database_migrations: {
     id: 'production_database_migrations',
     title: 'Database schema is fully migrated',
-    proves: 'Every migration in this release has been applied to the database, unaltered.',
+    proves: 'Every migration in this release has been applied to the database, and the record of what was applied matches this release.',
     verification: 'server-probe',
-    verifiedBy: 'The server checks that the migrations built into this release are the start of the applied-migration ledger, matched by content hash. Later migrations from a newer release are allowed.',
-    remediation: 'Run the database migration job for this release, then reload the status view.',
+    verifiedBy: 'The server checks that no migration in this release is newer than the applied-migration ledger, which is the rule the migration job itself uses, and takes the replica out of service if one is. It also compares the ledger with this release entry for entry by content hash, and reports a difference without stopping the server. Later migrations from a newer release are allowed.',
+    remediation: 'If migrations are missing, run the database migration job for this release, then reload the status view. If the ledger does not match, a migration file changed after it was applied: compare the schema with this release before relying on it.',
   },
   security_invalidation_multi_replica: {
     id: 'security_invalidation_multi_replica',

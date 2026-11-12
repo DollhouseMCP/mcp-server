@@ -11,6 +11,7 @@ import {
 } from '../../../../src/database/releaseMigrations.js';
 import {
   compareMigrationLedger,
+  isDatabaseBehindRelease,
   probeMigrationLedger,
   type AppliedMigration,
 } from '../../../../src/web-console/setup/MigrationLedgerProbe.js';
@@ -55,27 +56,66 @@ describe('compareMigrationLedger', () => {
     });
   });
 
-  it('fails when an applied migration has different content from this release', () => {
+  const MISMATCH_ADVICE = ' Every migration in this release has been applied, but the ledger does not match it entry for entry: a migration file changed after it was applied, or the ledger was edited. Compare the schema before relying on it.';
+
+  it('reports a mismatch, not a missing migration, when an applied migration was reworded afterwards', () => {
+    // The case a long-lived database hits: the file changed after it was
+    // applied, and the migrator never re-applies, so the old hash stays.
     const ledger = ledgerOf(release);
     ledger[1] = { ...ledger[1], hash: hash(99) };
-    expect(compareMigrationLedger(release, ledger)).toEqual({
+    const result = compareMigrationLedger(release, ledger);
+    expect(result).toEqual({
       id: 'production_database_migrations', state: 'failed', code: 'migrations_mismatch',
-      detail: 'Applied migration 2 does not match 0001_second in this release.',
+      detail: 'Applied migration 2 does not match 0001_second in this release.' + MISMATCH_ADVICE,
     });
+    expect(isDatabaseBehindRelease(result)).toBe(false);
   });
 
-  it('fails when an applied migration carries a different timestamp', () => {
+  it('reports a mismatch when an applied migration carries a different timestamp', () => {
     const ledger = ledgerOf(release);
     ledger[2] = { ...ledger[2], createdAt: '3001' };
-    expect(compareMigrationLedger(release, ledger).detail)
-      .toBe('Applied migration 3 does not match 0002_third in this release.');
+    expect(compareMigrationLedger(release, ledger)).toMatchObject({
+      code: 'migrations_mismatch', detail: expect.stringContaining('Applied migration 3 does not match 0002_third in this release.'),
+    });
   });
 
-  it('fails when the ledger has the right migrations in the wrong positions', () => {
+  it('reports a mismatch when the ledger has the right migrations in the wrong positions', () => {
     const [first, second, third] = ledgerOf(release);
     expect(compareMigrationLedger(release, [second, first, third])).toMatchObject({
-      state: 'failed', code: 'migrations_mismatch', detail: 'Applied migration 1 does not match 0000_first in this release.',
+      state: 'failed', code: 'migrations_mismatch',
+      detail: expect.stringContaining('Applied migration 1 does not match 0000_first in this release.'),
     });
+  });
+
+  it('reports a mismatch, not a missing migration, when the ledger is shorter but as new as this release', () => {
+    // A ledger that was squashed or renumbered: fewer rows, nothing left to apply.
+    const result = compareMigrationLedger(release, [ledgerOf(release)[0], { hash: hash(9), createdAt: '3000' }]);
+    expect(result).toMatchObject({ code: 'migrations_mismatch' });
+    expect(isDatabaseBehindRelease(result)).toBe(false);
+  });
+
+  it('says the database is behind whenever this release has a migration newer than the ledger, as the migrator would', () => {
+    // An earlier entry also differs. Being behind is what matters, and wins.
+    const ledger = ledgerOf(release.slice(0, 2));
+    ledger[0] = { ...ledger[0], hash: hash(99) };
+    const result = compareMigrationLedger(release, ledger);
+    expect(result).toEqual({
+      id: 'production_database_migrations', state: 'failed', code: 'migrations_incomplete',
+      detail: '2 of 3 migrations in this release are applied. First missing: 0002_third.',
+    });
+    expect(isDatabaseBehindRelease(result)).toBe(true);
+  });
+
+  it('ignores a ledger timestamp that is not a number when deciding whether the database is behind', () => {
+    const ledger = [...ledgerOf(release.slice(0, 1)), { hash: hash(2), createdAt: 'not-a-number' }];
+    expect(compareMigrationLedger(release, ledger)).toMatchObject({
+      code: 'migrations_incomplete', detail: '1 of 3 migrations in this release are applied. First missing: 0001_second.',
+    });
+  });
+
+  it('only a database that is behind counts as behind', () => {
+    expect(isDatabaseBehindRelease(compareMigrationLedger(release, ledgerOf(release)))).toBe(false);
+    expect(isDatabaseBehindRelease(compareMigrationLedger(release, []))).toBe(true);
   });
 });
 

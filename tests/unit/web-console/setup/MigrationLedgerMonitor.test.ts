@@ -93,20 +93,41 @@ describe('MigrationLedgerMonitor', () => {
   });
 
   it('announces each change of answer once, not every poll', async () => {
-    const { monitor, onChange, advance } = setup([INCOMPLETE, INCOMPLETE, MISMATCH, PASSED]);
+    const { monitor, onChange, advance } = setup([INCOMPLETE, INCOMPLETE, PASSED]);
     await monitor.current();
     advance(1000); await monitor.current();
     expect(onChange).toHaveBeenCalledTimes(1);
     expect(onChange).toHaveBeenLastCalledWith(INCOMPLETE);
 
     advance(1000); await monitor.current();
+    advance(1000); await monitor.current();
     expect(onChange).toHaveBeenCalledTimes(2);
-    expect(onChange).toHaveBeenLastCalledWith(MISMATCH);
-
-    advance(1000); await monitor.current();
-    advance(1000); await monitor.current();
-    expect(onChange).toHaveBeenCalledTimes(3);
     expect(onChange).toHaveBeenLastCalledWith(PASSED);
+  });
+
+  it('keeps the replica in service when the ledger does not match this release entry for entry', async () => {
+    const { monitor, onChange } = setup([MISMATCH]);
+    expect(await monitor.isSafeToServe()).toBe(true);
+    expect(await monitor.current()).toEqual(MISMATCH);
+    expect(onChange).toHaveBeenCalledWith(MISMATCH);
+  });
+
+  it('treats a mismatch as final, like a pass: the database is not behind and cannot become so', async () => {
+    const { monitor, probe, onChange, advance } = setup([MISMATCH, INCOMPLETE]);
+    await monitor.current();
+    advance(60_000);
+    expect(await monitor.current()).toEqual(MISMATCH);
+    expect(await monitor.isSafeToServe()).toBe(true);
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it('moves from behind to a mismatch once the migrations land, and then serves', async () => {
+    const { monitor, advance } = setup([INCOMPLETE, MISMATCH]);
+    expect(await monitor.isSafeToServe()).toBe(false);
+    advance(1000);
+    expect(await monitor.isSafeToServe()).toBe(true);
+    expect(await monitor.current()).toEqual(MISMATCH);
   });
 
   describe('when the ledger read does not return', () => {
