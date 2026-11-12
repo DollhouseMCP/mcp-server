@@ -28,6 +28,7 @@ FILES = ('compose.yml', '.env', '.env.production', 'Caddyfile', 'init-db.sh',
          'DEPLOYED_REVISION', 'DEPLOYED_AT')
 REQUIRED = set(FILES[:4])
 TOKEN = re.compile(r'[0-9a-f]{32}\Z')
+INVALID_REQUEST = 'invalid legacy recovery request'
 KEYS = {'deploy_dir', 'instance', 'data_volume', 'config_volume', 'token',
         'checkpoint_dir', 'app_id', 'postgres_id'}
 IMPLEMENTATION = Path(__file__).resolve().parent
@@ -268,13 +269,13 @@ def main():
     value = json.loads(raw, object_pairs_hook=unique_object)
     if (not isinstance(value, dict) or set(value) != KEYS or any(not isinstance(v, str) for v in value.values())
             or any(not handoff.SHA.fullmatch(value[k]) for k in ('app_id', 'postgres_id'))):
-        raise ValueError('invalid legacy recovery request')
+        raise ValueError(INVALID_REQUEST)
     if sys.argv[1] == 'check':
         # The check runs before a transition exists, so its request names none.
         if value['token'] != '':
-            raise ValueError('invalid legacy recovery request')
+            raise ValueError(INVALID_REQUEST)
     elif not TOKEN.fullmatch(value['token']):
-        raise ValueError('invalid legacy recovery request')
+        raise ValueError(INVALID_REQUEST)
     root = validate_request({k: value[k] for k in ('deploy_dir', 'instance', 'data_volume', 'config_volume')})
     validate_system()
     if os.uname().machine != 'x86_64':
