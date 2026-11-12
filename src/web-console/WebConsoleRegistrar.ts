@@ -574,8 +574,7 @@ export class WebConsoleRegistrar {
       publicBaseUrl: this.options.publicBaseUrl,
     });
     const apiV1MountState = createApiV1MountState();
-    const migrationLedgerMonitor = this.options.migrationLedgerMonitor
-      ?? (database ? createMigrationLedgerMonitor(database) : null);
+    const migrationLedgerMonitor = resolveMigrationLedgerMonitor(this.options, database);
     const healthProbes = createConsoleHealthProbes({
       database,
       stores,
@@ -891,7 +890,7 @@ export class WebConsoleRegistrar {
       get routesMounted() {
         return apiV1MountState.mounted();
       },
-      isSafeToServe: migrationLedgerMonitor ? () => migrationLedgerMonitor.isSafeToServe() : null,
+      isSafeToServe: serveSafetyCheck(migrationLedgerMonitor),
     };
 
     registerWebConsoleCompositionServices(container, composition);
@@ -1361,6 +1360,19 @@ function createConsoleHealthProbes(options: {
     securityInvalidationReadiness: () => options.securityInvalidationReadiness.getReadiness(),
     databaseMigrations: monitor ? () => monitor.current() : null,
   };
+}
+
+/** An injected monitor wins; otherwise one is built over the console database, if there is one. */
+function resolveMigrationLedgerMonitor(
+  options: WebConsoleRegistrarOptions,
+  database: DatabaseInstance | undefined,
+): MigrationLedgerMonitor | null {
+  if (options.migrationLedgerMonitor) return options.migrationLedgerMonitor;
+  return database ? createMigrationLedgerMonitor(database) : null;
+}
+
+function serveSafetyCheck(monitor: MigrationLedgerMonitor | null): (() => Promise<boolean>) | null {
+  return monitor ? () => monitor.isSafeToServe() : null;
 }
 
 /**
