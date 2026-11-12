@@ -856,7 +856,8 @@ each of linux/amd64 and linux/arm64 it:
 3. publishes the pair, then runs the same admission a host runs
    (`registry_image_admission.py prepare`) on the published references.
 
-The run's summary gives the two references to deploy, ready to paste:
+The run's summary gives the two references to deploy, ready to paste. The
+last job, "Report the references to deploy", prints the same lines to its log:
 
 ```text
 DOLLHOUSE_HOSTED_IMAGE_MODE=registry

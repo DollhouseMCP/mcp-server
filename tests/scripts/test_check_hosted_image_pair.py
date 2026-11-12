@@ -99,6 +99,18 @@ class LocalPairTests(unittest.TestCase):
         self.assertIn('--arch "${ARCH}"', workflow)
 
 
+class WorkflowReportTests(unittest.TestCase):
+    def test_the_references_are_printed_to_the_log_as_well_as_the_summary_page(self):
+        workflow = (ROOT / '.github/workflows/publish-hosted-images.yml').read_text()
+        printed, summary = workflow.split('- name: Write the summary')
+        for line in ('echo "commit=${SHA}"', 'echo "version=${VERSION}"',
+                     'echo "DOLLHOUSE_HOSTED_IMAGE_MODE=registry"',
+                     'echo "DOLLHOUSE_HOSTED_RUNTIME_IMAGE=${IMAGE}@${RUNTIME_DIGEST}"',
+                     'echo "DOLLHOUSE_HOSTED_MIGRATION_IMAGE=${IMAGE}@${MIGRATION_DIGEST}"'):
+            self.assertIn(line, printed.split('- name: Print the references')[1])
+        self.assertIn('GITHUB_STEP_SUMMARY', summary)
+
+
 class MigrationTests(unittest.TestCase):
     def setUp(self):
         self.runtime = {'manifest': copy.deepcopy(MIGRATIONS), 'journal': None}
