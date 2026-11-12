@@ -18,9 +18,13 @@ import {
   readEarlierAllowlistWithTx,
   reconcileEarlierAllowlist,
   type AllowlistCliActor,
+  type EarlierAllowlistLock,
 } from '../../../src/cli/allowlistAuthority.js';
+import { withSystemContext } from '../../../src/database/admin.js';
+import { lockAuthAllowlistIdentitiesWithTx } from '../../../src/database/authPrincipalLock.js';
 import type { DrizzleTx } from '../../../src/database/db-utils.js';
 import { authIdentityEvents } from '../../../src/database/schema/auth.js';
+import { authAllowlist } from '../../../src/database/schema/index.js';
 import { users } from '../../../src/database/schema/users.js';
 import { userAdminRoles } from '../../../src/database/schema/webConsole.js';
 import { InMemorySigningKeyStore } from '../../../src/storage/signingKeys/InMemorySigningKeyStore.js';
@@ -46,7 +50,8 @@ required('dollhouse-allowlist where the console manages the allowlist', () => {
     allowlistList: async () => (await storage().allowlistList()).filter(entry => earlierIds.includes(entry.id)),
   };
   // Reconcile reads and locks the earlier list inside its transaction. Here it is narrowed to this suite's rows.
-  const readOwnEarlier = async (tx: DrizzleTx) => (await readEarlierAllowlistWithTx(tx)).filter(entry => earlierIds.includes(entry.id));
+  const readOwnEarlier = async (tx: DrizzleTx, lock: EarlierAllowlistLock) =>
+    (await readEarlierAllowlistWithTx(tx, lock)).filter(entry => earlierIds.includes(entry.id));
   const strand = async (kind: 'email' | 'github_username', value: string, note: string | null = null) => {
     // What the command did on such an install before the fix: write the earlier table.
     const entry = await storage().allowlistAdd({ kind, value, note, createdBy: 'cli' });
@@ -318,6 +323,29 @@ required('dollhouse-allowlist where the console manages the allowlist', () => {
       // Once the carry is in, the console's add sees it and is refused as a duplicate.
       expect(await consoleAdd).toMatchObject({ message: 'active allowlist entry already exists' });
       expect(await authority().matchesIdentity({ githubUsername: contested })).toBe(true);
+    });
+
+    it('takes its locks in the order account deletion does, so the two cannot deadlock', async () => {
+      const leaving = `leaving-${tag}`;
+      const row = await strand('github_username', leaving);
+      let reconciled: ReturnType<typeof reconcileEarlierAllowlist> | null = null;
+
+      // What deleting an account does for one of its identities: the identity
+      // lock first, then the row in the earlier allowlist. Reconcile starts in
+      // between and has to wait without holding anything the delete needs.
+      await withSystemContext(db(), async tx => {
+        await lockAuthAllowlistIdentitiesWithTx(tx, [{ kind: 'github_username', normalizedValue: leaving }]);
+        reconciled = reconcileEarlierAllowlist({
+          db: db(), readEarlier: readOwnEarlier, mode: 'discard',
+          resolveActor: () => Promise.reject(new Error('the entry is gone before there is anything to change')),
+        });
+        await new Promise(resolve => { setTimeout(resolve, 400); });
+        await tx.delete(authAllowlist).where(eq(authAllowlist.id, row.id));
+      });
+
+      // The delete went through, and reconcile then found nothing left to do.
+      expect(await reconciled).toMatchObject({ mode: 'discard', added: 0, cleared: 0 });
+      expect(await ownEarlier.allowlistList()).toEqual([]);
     });
 
     it('does nothing, and needs no admin, when the earlier allowlist is already empty', async () => {

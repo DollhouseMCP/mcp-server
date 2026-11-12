@@ -304,9 +304,13 @@ function inOrder<Item>(items: readonly Item[], each: (item: Item) => Promise<voi
   return items.reduce((earlier, item) => earlier.then(() => each(item)), Promise.resolve());
 }
 
-/** The whole earlier allowlist, locked for the rest of the transaction. */
-export async function readEarlierAllowlistWithTx(tx: DrizzleTx): Promise<AuthAllowlistEntry[]> {
-  const rows = await tx.select().from(authAllowlist).orderBy(authAllowlist.createdAt, authAllowlist.id).for('update');
+/** Whether a read of the earlier allowlist also locks its rows for the rest of the transaction. */
+export type EarlierAllowlistLock = 'none' | 'rows';
+
+/** The whole earlier allowlist, with its rows locked for the rest of the transaction when asked. */
+export async function readEarlierAllowlistWithTx(tx: DrizzleTx, lock: EarlierAllowlistLock): Promise<AuthAllowlistEntry[]> {
+  const query = tx.select().from(authAllowlist).orderBy(authAllowlist.createdAt, authAllowlist.id);
+  const rows = await (lock === 'rows' ? query.for('update') : query);
   return rows.map(row => ({
     id: row.id,
     kind: row.kind as AuthAllowlistKind,
@@ -371,18 +375,39 @@ export function noteForCarry(note: string | null): { readonly note: string | nul
   return { note: `${kept}\u2026`, shortened: true };
 }
 
+function lockIdentity(entry: AuthAllowlistEntry): { readonly kind: AuthAllowlistKind; readonly normalizedValue: string } {
+  return { kind: entry.kind, normalizedValue: normalizeAllowlistValue(entry.kind, entry.value) };
+}
+
 /**
- * Takes the locks every writer of the allowlist sign-in uses takes, for the
- * identities the earlier entries name, and holds them to the end of the
- * transaction. Nothing can then grant or revoke one of those identities
- * between the plan being made and its entries being carried, so a carry can
- * never land on top of a removal it did not see.
+ * The earlier entries a changing run works on, with everything it needs held
+ * to the end of the transaction.
+ *
+ * First the locks every writer of the allowlist sign-in uses takes, for the
+ * identities the entries name. Nothing can then grant or revoke one of those
+ * identities between the plan being made and its entries being carried, so a
+ * carry can never land on top of a removal it did not see.
+ *
+ * Then the rows themselves. That order, identity locks before rows of the
+ * earlier allowlist, is the order account deletion takes them in, so the two
+ * cannot deadlock. It is why the entries are read twice: once to learn which
+ * identities to lock, and again, locked, for the entries to act on.
+ *
+ * An entry that appeared between the two reads names an identity this run
+ * holds no lock for. It is left alone and counted as remaining.
  */
-async function lockEarlierIdentitiesWithTx(tx: DrizzleTx, earlier: readonly AuthAllowlistEntry[]): Promise<void> {
-  await lockAuthAllowlistIdentitiesWithTx(tx, earlier.map(entry => ({
-    kind: entry.kind,
-    normalizedValue: normalizeAllowlistValue(entry.kind, entry.value),
-  })));
+async function readAndLockEarlierWithTx(
+  tx: DrizzleTx,
+  readEarlier: (tx: DrizzleTx, lock: EarlierAllowlistLock) => Promise<readonly AuthAllowlistEntry[]>,
+  seen: readonly AuthAllowlistEntry[],
+): Promise<readonly AuthAllowlistEntry[]> {
+  const identities = seen.map(lockIdentity);
+  await lockAuthAllowlistIdentitiesWithTx(tx, identities);
+  const held = new Set(identities.map(identity => `${identity.kind}:${identity.normalizedValue}`));
+  return (await readEarlier(tx, 'rows')).filter(entry => {
+    const identity = lockIdentity(entry);
+    return held.has(`${identity.kind}:${identity.normalizedValue}`);
+  });
 }
 
 /**
@@ -412,19 +437,25 @@ export async function reconcileEarlierAllowlist(options: {
   readonly resolveActor: () => Promise<AllowlistCliActor>;
   readonly mode: ReconcileMode;
   /** Which earlier entries to reconcile. Defaults to all of them. */
-  readonly readEarlier?: (tx: DrizzleTx) => Promise<readonly AuthAllowlistEntry[]>;
+  readonly readEarlier?: (tx: DrizzleTx, lock: EarlierAllowlistLock) => Promise<readonly AuthAllowlistEntry[]>;
   readonly now?: () => Date;
 }): Promise<ReconcileResult> {
   const occurredAt = (options.now ?? (() => new Date()))();
   const readEarlier = options.readEarlier ?? readEarlierAllowlistWithTx;
   return withSystemContext(options.db, async tx => {
-    const earlier = await readEarlier(tx);
-    const changes = options.mode !== 'report' && earlier.length > 0;
-    // Before the plan, not after: the plan is only good while nothing else can change what it read.
-    if (changes) await lockEarlierIdentitiesWithTx(tx, earlier);
+    // A report writes nothing, so it locks nothing.
+    const seen = await readEarlier(tx, 'none');
+    if (options.mode === 'report' || seen.length === 0) {
+      const plan = await planReconcileWithTx(tx, seen);
+      return { ...plan, mode: options.mode, added: 0, cleared: 0, remaining: seen.length, notesShortened: [] };
+    }
+    // Locked before the plan, not after: the plan is only good while nothing else can change what it read.
+    const earlier = await readAndLockEarlierWithTx(tx, readEarlier, seen);
     const plan = await planReconcileWithTx(tx, earlier);
-    if (!changes) {
-      return { ...plan, mode: options.mode, added: 0, cleared: 0, remaining: earlier.length, notesShortened: [] };
+    if (earlier.length === 0) {
+      // Everything that was seen went while this run waited for its locks. There is nothing to change or record.
+      const left = await tx.select({ id: authAllowlist.id }).from(authAllowlist);
+      return { ...plan, mode: options.mode, added: 0, cleared: 0, remaining: left.length, notesShortened: [] };
     }
     const actor = await options.resolveActor();
 
