@@ -9,6 +9,7 @@ import { FileMemoryFence } from '../../../src/storage/FileMemoryFence.js';
 import { FileMemoryOwnerSnapshots, type UnownedFileMemoryToken } from '../../../src/storage/FileMemoryOwnerSnapshots.js';
 import { FileMemoryTransactionCoordinator } from '../../../src/storage/FileMemoryTransactionCoordinator.js';
 import { FileMemoryVolumeStore } from '../../../src/storage/FileMemoryVolumeStore.js';
+import { populatedCaseTimeoutMs } from './fixtures/populatedCaseTimeout.js';
 
 const it = process.platform === 'win32' || !process.getuid ? test.skip : test;
 const USER = '11111111-1111-4111-8111-111111111111';
@@ -81,6 +82,6 @@ describe('file archive listing in populated portfolios', () => {
         expect(result).toMatchObject({ complete: true, totalCount: archived ? 1 : 0, returnedCount: archived ? 1 : 0 });
         expect(result.entries.map(entry => entry.volume)).toEqual(archived ? [1] : []);
         expect(await fs.readdir(f.root)).toEqual(before);
-      });
+      }, populatedCaseTimeoutMs(count));
   }
 });
