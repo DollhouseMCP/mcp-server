@@ -99,6 +99,56 @@ class RecoveryBoundaryTests(unittest.TestCase):
         self.assertFalse(any(command[1] in ('start', 'stop', 'run', 'create') for command in self.fixture.calls))
         boundary.refuse_forward_write(self.root, self.value['token'])
 
+    def listing(self):
+        return sorted((str(path), path.stat().st_mtime_ns) for path in self.root.rglob('*'))
+
+    def test_check_runs_before_any_transition_and_writes_nothing(self):
+        before = self.listing()
+        with patch.object(boundary, 'read_state', side_effect=AssertionError('no transition exists yet')):
+            self.assertIsNone(boundary.check(self.root, dict(self.value, token=''), self.run_docker))
+        self.assertEqual(self.listing(), before)
+        self.assertFalse(any(command[1] in ('start', 'stop', 'run', 'create') for command in self.fixture.calls))
+        self.assertEqual([boundary.valid_token(action, token) for action, token in (
+            ('check', ''), ('check', self.value['token']), ('arm', self.value['token']), ('arm', ''), ('write-intent', ''))],
+            [True, False, True, False, False])
+        # What the check accepts, arming accepts.
+        self.arm()
+
+    def test_check_refuses_what_arming_would_refuse_and_leaves_nothing_behind(self):
+        value = dict(self.value, token='')
+
+        def public():
+            (self.root / '.env').chmod(0o644)
+
+        def linked():
+            (self.root / '.env').unlink()
+            (self.root / '.env').symlink_to(self.root / '.env.production')
+
+        for name, change, error, message in (
+                ('public environment', public, ValueError, 'already be private'),
+                ('symlink', linked, OSError, ''),
+                ('missing required file', (self.root / 'Caddyfile').unlink, ValueError, 'required legacy configuration is absent')):
+            saved = {item: ((self.root / item).read_bytes(), (self.root / item).stat().st_mode & 0o777) for item in boundary.FILES}
+            with self.subTest(name):
+                change()
+                with self.assertRaisesRegex(error, message):
+                    boundary.check(self.root, value, self.run_docker)
+                self.assertFalse((self.root / boundary.DIRECTORY).exists())
+            for item, (raw, mode) in saved.items():
+                (self.root / item).unlink(missing_ok=True)
+                (self.root / item).write_bytes(raw)
+                (self.root / item).chmod(mode)
+        (self.root / 'bootstrap-admin.sh').unlink()
+        boundary.check(self.root, value, self.run_docker)
+        for field, changed in (('globals', b'changed-roles'), ('ledger', ['f' * 64] * 62)):
+            with self.subTest(field=field), patch.object(self, field, changed):
+                with self.assertRaisesRegex(ValueError, 'differ from the qualified checkpoint'):
+                    boundary.check(self.root, value, self.run_docker)
+        with patch.object(self, 'ledger', ['f' * 64] * 61):
+            with self.assertRaisesRegex(ValueError, 'exact 62-entry'):
+                boundary.check(self.root, value, self.run_docker)
+        self.assertFalse((self.root / boundary.DIRECTORY).exists())
+
     def test_write_intent_is_exclusive_and_permanently_refuses_automatic_prewrite_recovery(self):
         self.arm()
         self.complete_stop()

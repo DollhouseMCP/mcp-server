@@ -1,4 +1,4 @@
-"""Arm a protected legacy rollback baseline and fence the first forward DB write.
+"""Check and arm a protected legacy rollback baseline, and fence the first forward DB write.
 
 This action never starts/stops a service or restores data. A write intent is
 durable before migrations, grants or bootstrap can begin, even if they fail.
@@ -152,6 +152,24 @@ def create_window(root, token):
     return private_directory(window_path(root, token))
 
 
+def check(root, value, run=system_docker):
+    """Everything arming verifies that needs no pending transition, with nothing written.
+
+    It runs before the update transition begins, so that a refusal leaves nothing
+    pending. Arming repeats every check against the transition it then binds.
+    """
+    handoff.verify_inputs(value, run)
+    checkpoint_database(value, database_fingerprint(run, value['postgres_id']))
+    for identifier in (value['app_id'], value['postgres_id']):
+        profile(inspect_one(run, 'container', identifier))
+    for name in FILES:
+        try:
+            read_configuration(root, name)
+        except FileNotFoundError:
+            if name in REQUIRED:
+                raise ValueError('required legacy configuration is absent') from None
+
+
 def arm(root, value, run=system_docker):
     pending = prepared_transition(root, value)
     request, checkpoint_sha, app = handoff.verify_inputs(value, run)
@@ -239,15 +257,21 @@ def issue_forward_write(root, value, run=system_docker):
         os.close(directory)
 
 
+def valid_token(action, token):
+    """The check runs before a transition exists, so it has no token. Every other action names its transition."""
+    return token == '' if action == 'check' else TOKEN.fullmatch(token) is not None
+
+
 def main():
-    if len(sys.argv) != 2 or sys.argv[1] not in ('arm', 'write-intent'):
-        raise ValueError('explicit legacy recovery arm or write-intent action required')
+    if len(sys.argv) != 2 or sys.argv[1] not in ('check', 'arm', 'write-intent'):
+        raise ValueError('explicit legacy recovery check, arm or write-intent action required')
     raw = sys.stdin.buffer.read(MAX_RECORD + 1)
     if len(raw) > MAX_RECORD:
         raise ValueError('legacy recovery request exceeds its bound')
     value = json.loads(raw, object_pairs_hook=unique_object)
     if (not isinstance(value, dict) or set(value) != KEYS or any(not isinstance(v, str) for v in value.values())
-            or not TOKEN.fullmatch(value['token']) or any(not handoff.SHA.fullmatch(value[k]) for k in ('app_id', 'postgres_id'))):
+            or not valid_token(sys.argv[1], value['token'])
+            or any(not handoff.SHA.fullmatch(value[k]) for k in ('app_id', 'postgres_id'))):
         raise ValueError('invalid legacy recovery request')
     root = validate_request({k: value[k] for k in ('deploy_dir', 'instance', 'data_volume', 'config_volume')})
     validate_system()
@@ -255,7 +279,9 @@ def main():
         raise ValueError('legacy recovery requires the qualified native AMD64 legacy image')
     lock = acquire_lock(root, allow_control=True)
     try:
-        if sys.argv[1] == 'arm':
+        if sys.argv[1] == 'check':
+            check(root, value)
+        elif sys.argv[1] == 'arm':
             arm(root, value)
         else:
             issue_forward_write(root, value)

@@ -13,6 +13,15 @@ missing known stop acknowledgement, changed helper, or unsupported profile is
 an absolute refusal. A qualified fresh checkpoint restore is required if the
 database boundary is uncertain. This action does not infer safety from health.
 
+The update arms that baseline right after it begins its transition. A refusal
+at that point leaves a transition pending with no baseline, and this action
+cannot recover from it. So the update first runs the same checks read-only,
+before any transition exists (`legacy_recovery_boundary.py check`, with an
+empty `token`): the checkpoint and application identities, the database
+globals and ledger against the checkpoint, both container profiles, and every
+configuration file that arming would copy. A refusal there leaves nothing
+pending. Arming then repeats each check against the transition it binds.
+
 The protected request is the same eight-field JSON request used by
 `legacy_recovery_boundary.py`: `deploy_dir`, `instance`, `data_volume`,
 `config_volume`, `token`, `checkpoint_dir`, `app_id`, and `postgres_id`. It must
