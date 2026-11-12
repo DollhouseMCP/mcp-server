@@ -14,6 +14,7 @@
  * so canonical identity links and account eligibility cannot become stale.
  */
 
+import { isInternalUsername } from '../database/internalUsers.js';
 import { assertUserAccountAllowed, isSubjectAccountAllowed } from '../auth/AccountAccess.js';
 import { invitationIdentityAllowedSql } from '../auth/InvitationAuthenticationPolicy.js';
 import { and, eq, isNull, sql } from 'drizzle-orm';
@@ -146,6 +147,11 @@ export class UserIdentityService {
    * the auth_account so the console and MCP converge on one user row.
    */
   async resolveOrCreateUser(username: string, displayName?: string): Promise<string> {
+    // This path adopts whichever user row already holds the username. The
+    // server's own users are not identities anyone may adopt.
+    if (isInternalUsername(username)) {
+      throw new Error(`'${username}' is reserved for the server's own use and cannot be used as an identity.`);
+    }
     const cached = this.cache.get(username);
     if (cached) return cached;
 

@@ -6,7 +6,7 @@
  * Anything that lists, counts or administers accounts leaves these out.
  */
 
-import { SYSTEM_USER_UUID } from '../collection/shared-pool/SharedPoolConfig.js';
+import { SYSTEM_USER_UUID, SYSTEM_USERNAME } from '../collection/shared-pool/SharedPoolConfig.js';
 
 /**
  * The canary: a test user the server uses to check that approvals and
@@ -29,4 +29,11 @@ export const INTERNAL_USER_IDS: readonly string[] = Object.freeze([SYSTEM_USER_U
 
 export function isInternalUserId(userId: string): boolean {
   return INTERNAL_USER_IDS.includes(userId.toLowerCase());
+}
+
+/** The usernames those users hold. Nobody may take one as their own identity. */
+export const INTERNAL_USERNAMES: readonly string[] = Object.freeze([SYSTEM_USERNAME, CANARY_USERNAME]);
+
+export function isInternalUsername(username: string): boolean {
+  return INTERNAL_USERNAMES.includes(username.trim().toLowerCase());
 }

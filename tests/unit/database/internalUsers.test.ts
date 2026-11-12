@@ -5,7 +5,9 @@ import {
   CANARY_USER_UUID,
   CANARY_USERNAME,
   INTERNAL_USER_IDS,
+  INTERNAL_USERNAMES,
   isInternalUserId,
+  isInternalUsername,
 } from '../../../src/database/internalUsers.js';
 
 describe('internal users', () => {
@@ -19,6 +21,14 @@ describe('internal users', () => {
     expect(isInternalUserId(CANARY_USER_UUID.toUpperCase())).toBe(true);
     expect(isInternalUserId(SYSTEM_USER_UUID)).toBe(true);
     expect(isInternalUserId('11111111-1111-4111-8111-111111111111')).toBe(false);
+  });
+
+  it('reserves both usernames, whatever their case or padding', () => {
+    expect(INTERNAL_USERNAMES).toEqual(['dollhousemcp-system', CANARY_USERNAME]);
+    expect(isInternalUsername('dollhousemcp-canary')).toBe(true);
+    expect(isInternalUsername('  DollhouseMCP-Canary ')).toBe(true);
+    expect(isInternalUsername('dollhousemcp-system')).toBe(true);
+    expect(isInternalUsername('github_1001')).toBe(false);
   });
 
   it('gives the canary a username no sign-in subject can equal', () => {

@@ -59,6 +59,27 @@ required('the canary user on PostgreSQL', () => {
     expect(await accounts().findPrincipalByAccountCorrelationId(canary.accountCorrelationId)).toBeNull();
   });
 
+  it('cannot be changed through the account store, even by a caller that skips the lookup', async () => {
+    await ensureCanaryUser(db());
+    const at = new Date();
+    const by = CANARY_USER_UUID;
+    const store = accounts();
+
+    await expect(store.grantRole({ userId: CANARY_USER_UUID, role: 'auditor', grantedByUserId: by, grantedAt: at } as never))
+      .rejects.toThrow('internal users cannot hold roles');
+    expect(await store.enablePrincipal({ userId: CANARY_USER_UUID, enabledByUserId: by, enabledAt: at } as never)).toBeNull();
+    expect(await store.disablePrincipal({ userId: CANARY_USER_UUID, disabledByUserId: by, disabledAt: at } as never)).toBeNull();
+    expect(await store.bumpPrincipalAuthzVersion({ userId: CANARY_USER_UUID, bumpedAt: at } as never)).toBeNull();
+    expect(await store.updatePrincipalProfile({ userId: CANARY_USER_UUID, displayName: 'Renamed', updatedAt: at } as never)).toBeNull();
+    expect(await store.linkIdentity({ userId: CANARY_USER_UUID, sub: 'local_nobody' } as never)).toBeNull();
+    expect(await store.deletePrincipal({ userId: CANARY_USER_UUID } as never)).toBeNull();
+
+    // Still there, still inert, still unrenamed.
+    await expect(ensureCanaryUser(db())).resolves.toMatchObject({ created: false });
+    const [row] = await db().select().from(users).where(eq(users.id, CANARY_USER_UUID));
+    expect(row.displayName).toBe('DollhouseMCP canary (automated check, not a person)');
+  });
+
   describe('refuses to be used once it is no longer inert', () => {
     it('when it has been enabled', async () => {
       await ensureCanaryUser(db());

@@ -2,7 +2,7 @@ import type { DatabaseMemoryAccountDeletionBoundary } from '../../storage/Databa
 import { invitationIdentityAllowedSql } from '../../auth/InvitationAuthenticationPolicy.js';
 import { and, eq, isNull, sql, type SQL } from 'drizzle-orm';
 
-import { INTERNAL_USER_IDS } from '../../database/internalUsers.js';
+import { INTERNAL_USER_IDS, isInternalUserId } from '../../database/internalUsers.js';
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
 import type { DrizzleTx } from '../../database/db-utils.js';
@@ -55,6 +55,7 @@ import {
 } from './IConsoleAccountAdminStore.js';
 import {
   ConsoleStoreConflictError,
+  ConsoleStoreValidationError,
   assertUuid,
   isForeignKeyViolation,
   isUniqueViolation,
@@ -173,6 +174,7 @@ export class PostgresConsoleAccountAdminStore implements IConsoleAccountAdminSto
   }
 
   async grantRole(input: RoleGrantInput): Promise<ConsoleRoleAssignment> {
+    if (isInternalUserId(input.userId)) throw new ConsoleStoreValidationError('internal users cannot hold roles');
     return withSystemContext(this.db, tx => grantConsoleAdminRoleWithTx(tx, input));
   }
 
@@ -193,18 +195,22 @@ export class PostgresConsoleAccountAdminStore implements IConsoleAccountAdminSto
   }
 
   async disablePrincipal(input: PrincipalDisableInput): Promise<PrincipalStateChange | null> {
+    if (isInternalUserId(input.userId)) return null;
     return withSystemContext(this.db, tx => disableConsolePrincipalWithTx(tx, input));
   }
 
   async enablePrincipal(input: PrincipalEnableInput): Promise<PrincipalStateChange | null> {
+    if (isInternalUserId(input.userId)) return null;
     return withSystemContext(this.db, tx => enableConsolePrincipalWithTx(tx, input));
   }
 
   async bumpPrincipalAuthzVersion(input: PrincipalAuthzVersionBumpInput): Promise<PrincipalStateChange | null> {
+    if (isInternalUserId(input.userId)) return null;
     return withSystemContext(this.db, tx => bumpConsolePrincipalAuthzVersionWithTx(tx, input));
   }
 
   async deletePrincipal(input: PrincipalDeletionInput): Promise<PrincipalDeletionOutcome | null> {
+    if (isInternalUserId(input.userId)) return null;
     return withSystemContext(this.db, tx => deleteConsolePrincipalWithTx(tx, input, this.memoryDeletionBoundary));
   }
 
@@ -245,6 +251,7 @@ export class PostgresConsoleAccountAdminStore implements IConsoleAccountAdminSto
   }
 
   async linkIdentity(input: IdentityLinkInput): Promise<IdentityMutationResult | null> {
+    if (isInternalUserId(input.userId)) return null;
     input = structuredClone(input);
     return withSystemContext(this.db, tx => linkConsoleIdentityWithTx(tx, input));
   }
@@ -254,6 +261,7 @@ export class PostgresConsoleAccountAdminStore implements IConsoleAccountAdminSto
   }
 
   async updatePrincipalProfile(input: PrincipalProfileUpdateInput): Promise<ConsolePrincipalSummary | null> {
+    if (isInternalUserId(input.userId)) return null;
     validatePrincipalProfileUpdateInput(input);
     const rows: PrincipalRow[] = await withSystemContext(this.db, async tx => {
       const updated = await tx.update(users)
@@ -670,9 +678,11 @@ async function revokeConsoleAdminRoleRowsWithTx(
  * Leaves out the users the server keeps for itself (the shared-pool system
  * user and the canary). They are not accounts: they must not be listed,
  * counted, or reachable by any account administration action, all of which
- * look the account up through these queries first.
+ * look the account up through these queries first. The store's own mutation
+ * methods refuse them as well, so that does not rest on the callers alone.
  */
-const notInternalUserSql = sql`u.id NOT IN (${sql.join(INTERNAL_USER_IDS.map(id => sql`${id}::uuid`), sql`, `)})`;
+const internalUserIdList = sql.join(INTERNAL_USER_IDS.map(id => sql`${id}::uuid`), sql`, `);
+const notInternalUserSql = sql`u.id NOT IN (${internalUserIdList})`;
 
 function principalProjectionSql(whereClause: ReturnType<typeof sql>) {
   return sql`

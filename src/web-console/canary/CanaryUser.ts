@@ -26,7 +26,7 @@ export class CanaryUserStateError extends Error {}
  *
  * The checks matter because the row is long-lived and its ID is public. If
  * someone has changed it by hand, the canary stops rather than run as a user
- * that can sign in or holds a role.
+ * that can sign in or holds a role. The row is locked while it is checked.
  */
 export async function ensureCanaryUser(db: DatabaseInstance, now: () => Date = () => new Date()): Promise<CanaryUser> {
   return withSystemContext(db, async tx => {
@@ -45,7 +45,7 @@ export async function ensureCanaryUser(db: DatabaseInstance, now: () => Date = (
       disabledAt: users.disabledAt,
       deletedAt: users.deletedAt,
       accountCorrelationId: users.accountCorrelationId,
-    }).from(users).where(eq(users.id, CANARY_USER_UUID)).limit(1);
+    }).from(users).where(eq(users.id, CANARY_USER_UUID)).limit(1).for('update');
     const row = rows[0];
     if (!row) {
       // The insert did nothing and there is no row with the reserved ID, so
