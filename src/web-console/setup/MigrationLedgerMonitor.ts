@@ -1,4 +1,8 @@
-import { MIGRATION_LEDGER_PROBE_TIMED_OUT, type MigrationLedgerResult } from './MigrationLedgerProbe.js';
+import {
+  isDatabaseBehindRelease,
+  MIGRATION_LEDGER_PROBE_TIMED_OUT,
+  type MigrationLedgerResult,
+} from './MigrationLedgerProbe.js';
 
 export const DEFAULT_MIGRATION_LEDGER_RECHECK_MS = 15_000;
 export const DEFAULT_MIGRATION_LEDGER_PROBE_TIMEOUT_MS = 2_000;
@@ -19,9 +23,11 @@ export interface MigrationLedgerMonitorOptions {
  * Keeps the migration ledger answer cheap and prompt enough for a readiness
  * endpoint that load balancers poll every few seconds.
  *
- * A pass is final for the life of the process: the release's migrations do not
- * change and a ledger does not lose entries. Until then the probe is re-run at
- * most once per interval, and concurrent callers share one run.
+ * Once the ledger has been read and the database is not behind this release,
+ * the answer is final for the life of the process: the release's migrations do
+ * not change and a ledger does not lose entries. That covers a pass and a
+ * mismatch alike. Until then the probe is re-run at most once per interval,
+ * and concurrent callers share one run.
  *
  * No caller waits longer than the probe timeout. A probe that overruns, for
  * instance behind a lock on the ledger, is answered as unverified, which does
@@ -51,7 +57,7 @@ export class MigrationLedgerMonitor {
   }
 
   current(): Promise<MigrationLedgerResult> {
-    if (this.last?.state === 'passed') return Promise.resolve(this.last);
+    if (this.last && isFinal(this.last)) return Promise.resolve(this.last);
     if (this.last && this.now() - this.lastCheckedAt < this.recheckMs) return Promise.resolve(this.last);
     if (this.waiting) return this.waiting;
     // An earlier probe overran and is still out. Its timeout answer stands
@@ -62,11 +68,12 @@ export class MigrationLedgerMonitor {
   }
 
   /**
-   * False only when the server has looked and found the schema behind this
-   * release. An unverifiable ledger does not take the replica out of service.
+   * False only when the server has looked and found the database behind this
+   * release. Neither an unverifiable ledger nor one that does not match this
+   * release entry for entry takes the replica out of service.
    */
   async isSafeToServe(): Promise<boolean> {
-    return (await this.current()).state !== 'failed';
+    return !isDatabaseBehindRelease(await this.current());
   }
 
   private start(): Promise<MigrationLedgerResult> {
@@ -96,4 +103,9 @@ export class MigrationLedgerMonitor {
     if (changed) this.onChange?.(result);
     return result;
   }
+}
+
+/** The ledger was read and the database is not behind: nothing later can change that. */
+function isFinal(result: MigrationLedgerResult): boolean {
+  return result.state === 'passed' || result.code === 'migrations_mismatch';
 }

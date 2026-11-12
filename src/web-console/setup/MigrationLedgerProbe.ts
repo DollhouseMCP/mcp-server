@@ -85,36 +85,59 @@ function unverifiedLedger(error: unknown): MigrationLedgerResult {
   };
 }
 
+/** The newest applied timestamp, or -Infinity for an empty ledger. Rows that are not numbers are left to the entry check. */
+function newestAppliedAt(applied: readonly AppliedMigration[]): number {
+  return applied.reduce(
+    (newest, entry) => (/^\d+$/.test(entry.createdAt) ? Math.max(newest, Number(entry.createdAt)) : newest),
+    Number.NEGATIVE_INFINITY,
+  );
+}
+
 /**
  * Compares the migrations this release was built against with the ledger of
- * migrations already applied.
+ * migrations already applied. It answers two different questions.
  *
- * The release list must be the start of the ledger, entry for entry, matched
- * by content hash and timestamp. A longer ledger passes: a newer release may
- * already have migrated the database while this replica is still running,
- * which is what a rolling upgrade looks like.
+ * **Is the database behind this release?** This is the migrator's own rule: it
+ * applies every migration newer than the newest one in the ledger. So the
+ * database is behind exactly when this release has a migration newer than
+ * that. A database that is behind has not had this release's schema changes,
+ * and that is the one result that takes a replica out of service.
+ *
+ * **Does the ledger match this release, entry for entry?** By content hash
+ * and timestamp, with a longer ledger allowed, since a newer release may have
+ * migrated the database while this replica was still running. A mismatch
+ * means the ledger cannot prove the schema is the one this release expects.
+ * It does not mean the schema is wrong: a migration file that was reworded
+ * after it was applied leaves the old hash in the ledger for ever, because
+ * the migrator never re-applies. So a mismatch is reported for a person to
+ * look at, and the replica keeps serving.
  */
 export function compareMigrationLedger(
   release: readonly ReleaseMigration[],
   applied: readonly AppliedMigration[],
 ): MigrationLedgerResult {
+  const newest = newestAppliedAt(applied);
+  const firstUnapplied = release.findIndex(migration => migration.when > newest);
+  if (firstUnapplied !== -1) {
+    return {
+      id: CHECK_ID,
+      state: 'failed',
+      code: 'migrations_incomplete',
+      detail: `${firstUnapplied} of ${release.length} migrations in this release are applied. ` +
+        `First missing: ${release[firstUnapplied].tag}.`,
+    };
+  }
   for (const [index, expected] of release.entries()) {
     const actual = applied.at(index);
-    if (!actual) {
-      return {
-        id: CHECK_ID,
-        state: 'failed',
-        code: 'migrations_incomplete',
-        detail: `${index} of ${release.length} migrations in this release are applied. First missing: ${expected.tag}.`,
-      };
-    }
     // The ledger's created_at is the journal timestamp itself, read back as text.
-    if (actual.hash !== expected.hash || actual.createdAt !== String(expected.when)) {
+    if (actual?.hash !== expected.hash || actual.createdAt !== String(expected.when)) {
       return {
         id: CHECK_ID,
         state: 'failed',
         code: 'migrations_mismatch',
-        detail: `Applied migration ${index + 1} does not match ${expected.tag} in this release.`,
+        detail: `Applied migration ${index + 1} does not match ${expected.tag} in this release. ` +
+          'Every migration in this release has been applied, but the ledger does not match it entry for entry: ' +
+          'a migration file changed after it was applied, or the ledger was edited. Compare the schema before relying on it.',
       };
     }
   }
@@ -127,6 +150,11 @@ export function compareMigrationLedger(
       ? `All ${release.length} migrations in this release are applied, with ${newer} newer applied by a later release.`
       : `All ${release.length} migrations in this release are applied.`,
   };
+}
+
+/** True only when the database has not had this release's migrations applied. Nothing else drains a replica. */
+export function isDatabaseBehindRelease(result: MigrationLedgerResult): boolean {
+  return result.code === 'migrations_incomplete';
 }
 
 /**

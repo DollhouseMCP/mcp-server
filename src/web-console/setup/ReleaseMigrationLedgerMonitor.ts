@@ -1,7 +1,7 @@
 import type { DatabaseInstance } from '../../database/connection.js';
 import type { ReleaseMigration } from '../../database/releaseMigrations.js';
 import { MigrationLedgerMonitor } from './MigrationLedgerMonitor.js';
-import { RELEASE_MIGRATIONS_UNAVAILABLE, probeMigrationLedger } from './MigrationLedgerProbe.js';
+import { isDatabaseBehindRelease, RELEASE_MIGRATIONS_UNAVAILABLE, probeMigrationLedger } from './MigrationLedgerProbe.js';
 
 export interface ReleaseMigrationLedgerLog {
   info(message: string): void;
@@ -40,8 +40,10 @@ export function createReleaseMigrationLedgerMonitor(options: ReleaseMigrationLed
       }
     },
     onChange: result => {
-      if (result.state === 'failed') {
+      if (isDatabaseBehindRelease(result)) {
         options.log.error(`[WebConsole] Database does not have this release's migrations; reporting not ready. ${result.detail}`);
+      } else if (result.state === 'failed') {
+        options.log.error(`[WebConsole] Applied migrations do not match this release; the server keeps serving. ${result.detail}`);
       } else if (result.state === 'passed') {
         options.log.info(`[WebConsole] ${result.detail}`);
       } else {
