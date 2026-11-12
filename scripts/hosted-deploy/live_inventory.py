@@ -461,6 +461,7 @@ def public_container(item):
                               'AutoRemove', 'MaskedPaths', 'ReadonlyPaths', 'Ulimits', 'ExtraHosts', 'Dns',
                               'GroupAdd', 'VolumesFrom', 'Runtime')),
             'log_driver': (host.get('LogConfig') or {}).get('Type'),
+            'log_options': public_json((host.get('LogConfig') or {}).get('Config')),
         },
         'mounts': [selected(mount, ('Type', 'Name', 'Source', 'Destination', 'Driver', 'Mode', 'RW', 'Propagation'))
                    for mount in item.get('Mounts') or []],

@@ -61,10 +61,18 @@ No production secret is needed, and none may be copied. Data that production
 encrypted with its own keys stays unreadable on the replica. Each service's
 environment is what Docker Compose resolves from the completed files.
 
+Settings the replica must not share with production, such as mail, go into
+`overrides.json` in the same folder before the script runs:
+
+    {"EXAMPLE_MAIL_HOST": {"value": "", "reason": "the replica must not send mail"}}
+
+They are applied to the completed environment files and to every container. A
+deployment starts the new application from those files, so an override that
+reached only the containers would be lost in the rehearsal.
+
 Add to `prepared/inputs.json` what only an operator can decide: the database
-dump to restore, settings the replica must not share with production such as
-mail, and a stand-in for an image or a command that cannot be reproduced. The
-header of `build_replica.py` lists the keys.
+dump to restore, and a stand-in for an image or a command that cannot be
+reproduced. The header of `build_replica.py` lists the keys.
 
 ## 3. Build and compare
 
@@ -101,6 +109,61 @@ the same replica.
 `scripts/hosted-deploy/*.py` builds. The recorder writes each child process the
 tooling really starts. The coverage report fails until every form was issued
 at least once and no recorded command is outside the list.
+
+## 5. Rehearse the legacy upgrade
+
+The upgrade from the legacy application starts with reconciliation
+([legacy control reconciliation](legacy-control-reconciliation.md)). It reads
+the evidence of one manual recovery on the live host, and nine hashes of that
+evidence are pinned in the tooling. The evidence names the live host's
+containers, boots and volumes, so a replica needs the same records about
+itself.
+
+1. The original configuration files. Reconciliation puts the files of before
+   the failed window back, and they exist only inside the evidence archive,
+   with their secrets. Where that archive already is, scrub them as the live
+   export does. Nothing is written but the result:
+
+       python3 -I scripts/hosted-replica/export_archived_originals.py < filesystem.tar > original-control-files.tar
+
+2. A checkpoint of the replica's database, taken with the procedure a
+   deployment window uses.
+
+3. The replica's evidence. In the working folder of step 2, with
+   `original-control-files.tar` beside `prepared/`:
+
+       python3 scripts/hosted-replica/write_recovery_evidence.py < input.json > evidence-report.json
+
+   `input.json` is the input of request preparation: `deploy_dir`, `instance`,
+   `checkpoint_dir` and `manual_evidence_dir`. The header of the script lists
+   every record it rewrites. Each record it writes says that it is a
+   rehearsal record. It also writes `accepted-replica.json`, the replica's
+   own nine hashes.
+
+4. The reconciliation actions, through the launcher that replaces the nine
+   pins for one process and refuses on a host that is not a declared replica:
+
+       python3 scripts/hosted-replica/run_with_replica_pins.py preflight-legacy-reconciliation < input.json > preflight.json
+       python3 scripts/hosted-replica/run_with_replica_pins.py prepare-legacy-reconciliation < input.json > request.json
+       python3 scripts/hosted-replica/run_with_replica_pins.py reconcile-legacy < request.json
+
+5. The remaining phases need no launcher. They are the commands of a real
+   window: `scripts/hosted-deploy.sh prepare-caddy-offline`, a fresh
+   checkpoint, `scripts/hosted-deploy.sh legacy-offline-update`, then
+   `scripts/hosted-deploy.sh verify` and a read-back of what serves.
+
+Three rules, each learned from a failed rehearsal:
+
+- Run every deployment action with standard input closed (`</dev/null`).
+- Set `PYTHONDONTWRITEBYTECODE=1`. The tooling identifies itself by a hash of
+  its own folder, and a bytecode cache written there makes the next action
+  refuse.
+- A rehearsal leaves containers, volumes and folders the build did not create.
+  Remove them before the next build; `build_replica.py` refuses a host that
+  holds anything it does not know.
+
+A passing rehearsal does not prove the live host's identities or its nine
+pinned hashes. Only the read-only preflight on the live host does.
 
 ## What a replica does not reproduce
 

@@ -87,8 +87,8 @@ def record(name, **changes):
 
 
 def inputs(**changes):
-    value = {key: {} for key in ('environment', 'container_environment', 'labels', 'files', 'images', 'commands',
-                                 'skip', 'database', 'trees', 'overrides')}
+    value = {key: {} for key in ('environment', 'container_environment', 'container_logging', 'labels', 'files', 'images',
+                                 'commands', 'skip', 'database', 'trees', 'overrides')}
     value['package_name'] = None
     value.update(changes)
     return value
@@ -116,12 +116,25 @@ class CreationTests(unittest.TestCase):
         host = body['HostConfig']
         self.assertEqual({key: host[key] for key in ('Binds', 'Memory', 'CapDrop', 'NetworkMode', 'LogConfig')}, {
             'Binds': ['/host/bound:/bound:ro'], 'Memory': 512, 'CapDrop': ['ALL'], 'NetworkMode': 'app_default',
-            'LogConfig': {'Type': 'json-file'}})
+            'LogConfig': {'Type': 'json-file', 'Config': {}}})
         self.assertNotIn('Dns', host)
         self.assertNotIn('MaskedPaths', host)
         self.assertEqual(host['Mounts'], [
             {'Type': 'volume', 'Target': '/data', 'ReadOnly': False, 'Source': 'data'},
             {'Type': 'bind', 'Target': '/file', 'ReadOnly': True, 'Source': '/host/file', 'BindOptions': {'Propagation': 'rprivate'}}])
+
+    def test_log_options_are_the_recorded_ones_or_the_declared_ones(self):
+        declared = inputs(container_logging={'/app': {'max-size': '25m', 'max-file': '5'}})
+        self.assertEqual(self.body(record('/app'), declared)['HostConfig']['LogConfig'],
+                         {'Type': 'json-file', 'Config': {'max-size': '25m', 'max-file': '5'}})
+        self.assertIn(('logging', '/app', 'options supplied; the inventory does not hold them'), self.notes)
+        item = record('/app')
+        item['host_config']['log_options'] = {'max-size': '10m'}
+        self.assertEqual(self.body(item, declared)['HostConfig']['LogConfig']['Config'], {'max-size': '10m'})
+        self.assertEqual([note for note in self.notes if note[0] == 'logging'], [])
+        item['host_config']['log_options'] = {'max-size': '10m', 'token': {'redacted': 'str', 'length': 9}}
+        self.assertEqual(self.body(item, declared)['HostConfig']['LogConfig']['Config'], {'max-size': '25m', 'max-file': '5'})
+        self.assertEqual(self.body(record('/other'), declared)['HostConfig']['LogConfig']['Config'], {})
 
     def test_environment_values_come_from_the_most_specific_source(self):
         given = inputs(environment={'SHARED': 'common', 'OWN': 'not this'}, container_environment={'/app': {'OWN': 'mine'}},
@@ -475,13 +488,13 @@ class PrepareTests(unittest.TestCase):
             {'name': '/other', 'config': {'labels': {}}}]}
         self.commands = []
 
-    def prepared(self, model=None):
+    def prepared(self, model=None, overrides=None):
         def run(command, **options):
             self.commands.append(command)
             done = type('Done', (), {'returncode': 0 if model is not None else 1, 'stdout': json.dumps(model).encode()})
             return done()
         with patch.object(prepare.subprocess, 'run', side_effect=run):
-            report = prepare.prepare(self.inventory, self.control, self.output, {'VOLUME': 'data_volume'})
+            report = prepare.prepare(self.inventory, self.control, self.output, {'VOLUME': 'data_volume'}, overrides)
         return report, json.loads((self.output / 'inputs.json').read_text(encoding='utf-8'))
 
     def test_placeholders_become_known_values_or_fresh_keys_of_the_required_form(self):
@@ -497,9 +510,12 @@ class PrepareTests(unittest.TestCase):
         self.assertNotIn(environment['TOKEN_SECRET'], json.dumps(report))
 
     def test_service_environment_is_what_compose_resolves_from_the_completed_files(self):
-        model = {'services': {'web': {'environment': {'FROM_BASE': 'postgres://resolved', 'COUNT': 2, 'UNSET': None}}}}
+        model = {'services': {'web': {'environment': {'FROM_BASE': 'postgres://resolved', 'COUNT': 2, 'UNSET': None},
+                                      'logging': {'driver': 'json-file', 'options': {'max-size': '25m', 'max-file': 5}}}}}
         report, inputs_file = self.prepared(model)
         self.assertEqual(inputs_file['container_environment']['/web'], {'FROM_BASE': 'postgres://resolved', 'COUNT': '2'})
+        self.assertEqual(inputs_file['container_logging'], {'/web': {'max-size': '25m', 'max-file': '5'}})
+        self.assertEqual(report['service_logging'], ['/web'])
         files = self.output / 'files'
         self.assertEqual(self.commands, [[
             '/usr/bin/docker', 'compose', '--project-name', 'app', '--project-directory', str(files),
@@ -513,6 +529,25 @@ class PrepareTests(unittest.TestCase):
         self.assertEqual(inputs_file['container_environment'], {
             '/web': {'TOKEN_SECRET': secret, 'COUNT': '2'}, '/old': {'TOKEN_SECRET': secret, 'COUNT': '2'}})
         self.assertEqual(report['service_environments'], {'/old': 'overlay', '/web': 'overlay'})
+        self.assertEqual((inputs_file['container_logging'], report['service_logging']), ({}, []))
+
+    def test_overrides_reach_the_environment_files_and_the_builder(self):
+        overrides = {'PORT': {'value': '', 'reason': 'no listener'}, 'TOKEN_SECRET': {'value': None, 'reason': 'no token'},
+                     'ABSENT': {'value': 'x', 'reason': 'not in the file'}}
+        report, inputs_file = self.prepared(overrides=overrides)
+        text = (self.output / 'files' / '.env.production').read_text(encoding='utf-8')
+        self.assertEqual(text.split('\n')[0], 'PORT=')
+        self.assertNotIn('TOKEN_SECRET=', text)
+        self.assertIn('# note', text)
+        self.assertNotIn('ABSENT', text)
+        self.assertEqual((inputs_file['environment']['PORT'], 'TOKEN_SECRET' in inputs_file['environment']), ('', False))
+        self.assertEqual((inputs_file['overrides'], report['overrides']), (overrides, ['ABSENT', 'PORT', 'TOKEN_SECRET']))
+        self.assertRegex((self.output / 'files' / 'staging' / 'overlay.json').read_text(encoding='utf-8'), r'[0-9a-f]{64}')
+
+    def test_an_override_needs_a_value_and_a_reason(self):
+        for bad in ({'PORT': ''}, {'PORT': {'value': ''}}, {'PORT': {'value': 1, 'reason': 'x'}}):
+            with self.assertRaises(ValueError):
+                self.prepared(overrides=bad)
 
     def test_second_run_keeps_the_same_secrets_and_everything_is_private(self):
         first = self.prepared()[1]
