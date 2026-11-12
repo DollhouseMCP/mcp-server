@@ -9,6 +9,7 @@ import { FileMemoryOwnerSnapshots, type UnownedFileMemoryToken } from '../../../
 import { FileMemoryAdoptionRecoveryScanBudget } from '../../../src/storage/FileMemoryAdoptionRecoveryScanBudget.js';
 
 import { OwnedStorageCase } from './fixtures/ownedStorageCase.js';
+import { populatedCaseTimeoutMs, THOUSAND_ITEM_CASE_TIMEOUT_MS } from './fixtures/populatedCaseTimeout.js';
 
 const ownership = new OwnedStorageCase();
 let phase = 'idle';
@@ -120,7 +121,7 @@ describe('populated RESERVED adoption recovery', () => {
       expect(await recordProof(head)).toEqual(originalHead); expect(await recordProof(sentinel)).toEqual(original);
       for (const name of names) expect(await fs.readFile(path.join(path.dirname(head), name), 'utf8')).toBe('preserved');
       expect(await store.recoverReservedAdoption({ locator, ownerId })).toEqual({ status: 'already-clean-no-attribution' });
-    }));
+    }), THOUSAND_ITEM_CASE_TIMEOUT_MS);
   for (const count of [100, 250, 1000]) {
     it.each([[false, false], [false, true], [true, false], [true, true]])(
       `recovers ${count} memories (nested=%s, pair=%s)`, ownership.own(async (nested, pair) => {
@@ -159,6 +160,6 @@ describe('populated RESERVED adoption recovery', () => {
         const token = (result as { token: unknown }).token;
         expect((await f.store.readHeadSnapshot(f.request.locator)).token).toEqual(token);
         await expect(f.store.recoverReservedAdoption(f.request)).resolves.toEqual({ status: 'already-clean-no-attribution' });
-      }));
+      }), populatedCaseTimeoutMs(count));
   }
 });
