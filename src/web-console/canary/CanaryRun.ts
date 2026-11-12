@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 
-import { and, eq, inArray, like, lt, sql } from 'drizzle-orm';
+import { and, eq, like, lt, sql } from 'drizzle-orm';
 
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
@@ -218,7 +218,7 @@ async function createApprovalRequest(deps: CanaryRunDependencies, userId: string
 async function createExecution(db: DatabaseInstance, userId: string, sessionId: string, at: Date): Promise<string> {
   const agentId = randomUUID();
   const goalId = `canary-goal-${randomUUID().slice(0, 8)}`;
-  const agentName = canaryAgentName(goalId);
+  const agentName = canaryAgentName(sessionId);
   const raw = `---\nname: ${agentName}\ntype: agents\n---\nCanary agent. Not a real agent.`;
   await withSystemContext(db, tx => tx.insert(elements).values({
     id: agentId,
@@ -303,23 +303,30 @@ async function readApprovalBack(deps: CanaryRunDependencies, request: ConsoleReq
   }
 }
 
-function canaryAgentName(goalId: string): string {
-  return `${CANARY_AGENT_PREFIX}${goalId}`;
+/**
+ * A run's one agent is named after the run's session, so clean-up can find it
+ * from the session ID alone, whether or not its state was ever saved.
+ */
+function canaryAgentName(sessionId: string): string {
+  return `${CANARY_AGENT_PREFIX}${sessionId.slice(CANARY_SESSION_PREFIX.length)}`;
 }
 
-/** Every field the console may show for an execution. Anything else in its answer was meant to be stripped. */
-const EXECUTION_FIELDS: ReadonlySet<string> = new Set([
+/** Every field the console may show for an execution in a listing. Anything else was meant to be stripped. */
+const EXECUTION_SUMMARY_FIELDS: ReadonlySet<string> = new Set([
   'goal_id', 'session_id', 'agent_name', 'status', 'progress', 'started_at', 'updated_at', 'completed_at',
-  'current_step', 'stable_error_code', 'output',
+  'current_step', 'stable_error_code',
 ]);
+/** The detail adds its output and nothing else. */
+const EXECUTION_DETAIL_FIELDS: ReadonlySet<string> = new Set([...EXECUTION_SUMMARY_FIELDS, 'output']);
 
 /** Checks one execution as the console showed it against what the canary recorded. */
-function checkShownExecution(shown: Record<string, unknown>, made: { goalId: string; sessionId: string }, where: string): void {
-  if (shown.session_id !== made.sessionId || shown.agent_name !== canaryAgentName(made.goalId) || shown.status !== 'succeeded') {
+function checkShownExecution(shown: Record<string, unknown>, made: { goalId: string; sessionId: string }, where: 'listing' | 'detail'): void {
+  if (shown.session_id !== made.sessionId || shown.agent_name !== canaryAgentName(made.sessionId) || shown.status !== 'succeeded') {
     throw new CanaryFinding('canary_execution_not_readable',
       `The console's execution ${where} showed the canary's execution with a different session, agent or status than it was recorded with.`);
   }
-  const unexpected = Object.keys(shown).filter(field => !EXECUTION_FIELDS.has(field));
+  const allowed = where === 'listing' ? EXECUTION_SUMMARY_FIELDS : EXECUTION_DETAIL_FIELDS;
+  const unexpected = Object.keys(shown).filter(field => !allowed.has(field));
   if (unexpected.length > 0) {
     throw new CanaryFinding('canary_privacy_projection_failed',
       `The console's execution ${where} included fields it should strip: ${unexpected.join(', ')}.`);
@@ -365,13 +372,12 @@ async function readExecutionBack(
 export async function removeCanarySession(db: DatabaseInstance, sessionId: string): Promise<void> {
   if (!sessionId.startsWith(CANARY_SESSION_PREFIX)) throw new Error('not a canary session');
   await withSystemContext(db, async tx => {
-    const agents = await tx.delete(agentStates)
-      .where(and(eq(agentStates.userId, CANARY_USER_UUID), eq(agentStates.sessionId, sessionId)))
-      .returning({ agentId: agentStates.agentId });
-    if (agents.length > 0) {
-      await tx.delete(elements)
-        .where(and(inArray(elements.id, agents.map(agent => agent.agentId)), eq(elements.userId, CANARY_USER_UUID)));
-    }
+    await tx.delete(agentStates)
+      .where(and(eq(agentStates.userId, CANARY_USER_UUID), eq(agentStates.sessionId, sessionId)));
+    // By name, not through the state just removed: a run that made its agent
+    // and then could not save the agent's state still has an agent to remove.
+    await tx.delete(elements)
+      .where(and(eq(elements.userId, CANARY_USER_UUID), eq(elements.name, canaryAgentName(sessionId))));
     await tx.delete(sessions).where(and(eq(sessions.userId, CANARY_USER_UUID), eq(sessions.sessionId, sessionId)));
     await tx.delete(runtimeSessionPresence)
       .where(and(eq(runtimeSessionPresence.userId, CANARY_USER_UUID), eq(runtimeSessionPresence.sessionId, sessionId)));

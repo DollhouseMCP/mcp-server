@@ -160,6 +160,33 @@ required('the canary run on PostgreSQL', () => {
     expect(await canaryRows()).toEqual(nothingLeft);
   });
 
+  it('removes the canary agent too when the agent was made but its state could not be saved', async () => {
+    // The approval request is made before the execution, through its own
+    // store. From then on the run's database handle is used to add the agent,
+    // then to save the agent's state, then to clean up. The second fails.
+    let approvalMade = false;
+    let transactionsSince = 0;
+    const database = new Proxy(db(), {
+      get(target, property) {
+        const value: unknown = Reflect.get(target, property, target);
+        if (typeof value !== 'function') return value;
+        const bound = value.bind(target) as (...args: unknown[]) => Promise<unknown>;
+        if (property !== 'transaction') return bound;
+        return (...args: unknown[]) => {
+          if (approvalMade && ++transactionsSince === 2) return Promise.reject(new Error('could not save agent state'));
+          return bound(...args);
+        };
+      },
+    });
+    const outcome = await runCanary(dependencies({
+      db: database,
+      createConfirmationStore: (userId, sessionId) => { approvalMade = true; return confirmationStore(userId, sessionId); },
+    }));
+    expect(outcome).toMatchObject({ state: 'pending', code: 'canary_could_not_run' });
+    expect(transactionsSince).toBeGreaterThanOrEqual(3);
+    expect(await canaryRows()).toEqual(nothingLeft);
+  });
+
   it('reports that it could not run, without the driver\'s words, and cleans up, when a store breaks', async () => {
     const broken = new PostgresRuntimeSessionControlStore(db());
     broken.registerPresence = () => Promise.reject(new Error('connect ECONNREFUSED db.internal.example:5432 user=dollhouse_app'));
