@@ -39,6 +39,32 @@ rechecks every binding under the lock before installing any control files.
 Do not substitute a token after a refusal or reuse a request after evidence
 changes. A generated request is not a successful reconciliation or window GO.
 
+## Preflight every read-only control first
+
+Reconciliation stops at its first refusal, so one attempt can reveal only one
+defect. Before any GO, run the preflight with the same private input:
+
+    python3 /pinned/source/scripts/hosted-deploy/legacy_reconcile_preflight.py \
+      preflight-legacy-reconciliation < /protected/reconciliation-input.json \
+      > /protected/reconciliation-preflight.json
+
+It generates the request in memory and runs every control that reconciliation
+runs before its first write: receipt identities, the failed state and handoff
+markers, each serving proof, public acceptance and the private Compose model
+check. A refusal is recorded and the remaining controls still run. Each control
+reports `PASS`, `REFUSED` with the reason, or `NOT_RUN` with the input it
+lacked. Exit status is 0 only when every control passes, and 3 otherwise.
+
+The preflight creates no reconciliation operation, stages no file and passes
+only Docker observations to the daemon. It holds the deployment lock while it
+runs and refuses when the lock file does not exist. Its only write is one
+private temporary directory for the Compose model, outside the deployment,
+removed before exit. A complete preflight is not a reconciliation, does not
+replace the checks reconciliation repeats under its own lock, and is not a
+window GO.
+
+## Reconcile
+
     python3 /pinned/source/scripts/hosted-deploy/legacy_reconcile_action.py \
       reconcile-legacy < /protected/current-reconciliation-request.json
 
