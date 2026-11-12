@@ -49,6 +49,9 @@ python3 -B /root/window/source/scripts/hosted-window/window_driver.py status PLA
 python3 -B /root/window/source/scripts/hosted-window/window_driver.py recover PLAN JOURNAL ACTION
 ```
 
+`PLAN`, `JOURNAL` and `DIR` are absolute paths as written, without a `.` or
+`..` part.
+
 - `plan` prints the runbook: every step with its exact command line, input and
   environment. It is built from the list of steps that `run` executes, so the
   two cannot differ. It changes nothing.
@@ -98,7 +101,8 @@ never starts it, and removes it.
   environment, the exit status and the hashes of its output files.
 
 The pinned source is checked by commit and tree, and must hold no other file,
-before the first step and again before every step that changes the host.
+before the first step and again before every step that changes the host,
+each step of a recovery included.
 
 A step that changes the host is never ended by the driver, however long it
 takes; the journal notes when it passes its expected time. A read-only step

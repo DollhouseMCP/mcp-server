@@ -20,6 +20,7 @@ Exit status: 0 when every check passed, 3 when one did not or could not be made.
 import hashlib
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -31,6 +32,9 @@ MIGRATIONS = '/app/src/database/migrations'
 PUBLIC = ('/healthz', '/readyz', '/mcp')
 LIMIT = 16 * 1024 * 1024
 UTF8 = 'utf-8'
+# A folder or file named by the operator or the plan: an absolute path as written, without a "." or ".." part.
+LOCATION = re.compile(r'(?:/\w[\w.-]*)+\Z', re.ASCII)
+TAG = re.compile(r'\w+\Z', re.ASCII)
 LEDGER_QUERY = ('exec psql --no-password --no-psqlrc --set ON_ERROR_STOP=1 --quiet --tuples-only --no-align '
                 '--username "$POSTGRES_USER" --dbname dollhousemcp '
                 "--command 'BEGIN READ ONLY; SELECT json_agg(hash ORDER BY id) FROM drizzle.__drizzle_migrations; COMMIT;'")
@@ -60,6 +64,8 @@ def image_ledger(run, image):
         entries = sorted(journal['entries'], key=lambda entry: entry['idx'])
         if [entry['idx'] for entry in entries] != list(range(len(entries))):
             raise ValueError('the migration journal does not number its entries from zero without a gap')
+        if not all(isinstance(entry['tag'], str) and TAG.match(entry['tag']) for entry in entries):
+            raise ValueError('the migration journal names a file outside its own folder')
         return [hashlib.sha256((migrations / (entry['tag'] + '.sql')).read_bytes()).hexdigest() for entry in entries]
 
 
@@ -88,6 +94,8 @@ def public_facts(run, origin):
 
 
 def collect(plan, checkpoint, run=system):
+    if not LOCATION.fullmatch(plan['deploy_dir']):
+        raise ValueError('the deployment folder in the plan is not an absolute path as written')
     instance, root = plan['instance'], Path(plan['deploy_dir'])
     source, before = checkpoint_facts(checkpoint)
     database = inspect(run, instance + '-postgres')
@@ -140,6 +148,8 @@ def report(plan, checkpoint, run=system):
 def main(argv):
     if len(argv) != 3:
         raise ValueError('usage: read_back.py PLAN CHECKPOINT_DIR')
+    if not LOCATION.fullmatch(argv[1]) or not LOCATION.fullmatch(argv[2]):
+        raise ValueError('PLAN and CHECKPOINT_DIR must be absolute paths as written, without a "." or ".." part')
     result = report(json.loads(Path(argv[1]).read_bytes()), argv[2])
     print(json.dumps(result, indent=1, sort_keys=True))
     return 0 if result['passed'] else 3

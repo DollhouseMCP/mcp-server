@@ -39,7 +39,7 @@ class ReadBackTests(unittest.TestCase):
         }
         self.ledger = self.hashes()
         self.public = {'/healthz': (200, {'version': '2.1.0-beta.3'}), '/readyz': (200, {'version': '2.1.0-beta.3'}), '/mcp': (401, {})}
-        self.journal_gap = False
+        self.journal_gap, self.tag = False, None
         self.calls = []
         (self.deploy / '.caddy-state' / 'state.json').write_text(json.dumps({'pending': None, 'completed': {'source': 'fixture'}}))
         (self.deploy / 'DEPLOYED_REVISION').write_text('1' * 40 + '\n')
@@ -64,6 +64,8 @@ class ReadBackTests(unittest.TestCase):
             (target / 'meta').mkdir(parents=True)
             entries = [{'idx': index + (1 if self.journal_gap and index else 0), 'tag': '%04d_fixture' % index}
                        for index in range(len(self.migrations))]
+            if self.tag:
+                entries[0]['tag'] = self.tag
             (target / 'meta' / '_journal.json').write_text(json.dumps({'entries': list(reversed(entries))}))
             for index, text in enumerate(self.migrations):
                 (target / ('%04d_fixture.sql' % index)).write_text(text)
@@ -159,7 +161,22 @@ class ReadBackTests(unittest.TestCase):
         plan.write_text(json.dumps(self.plan))
         done = subprocess.run([sys.executable, '-B', str(SCRIPT), str(plan), str(self.folder / 'absent')], capture_output=True)
         self.assertEqual(done.returncode, 3)
-        self.assertEqual(json.loads(done.stdout)['complete'], False)
+        self.assertFalse(json.loads(done.stdout)['complete'])
+        for arguments in (['plan.json', str(self.checkpoint)], [str(plan), str(self.folder) + '/../checkpoint']):
+            refused = subprocess.run([sys.executable, '-B', str(SCRIPT), *arguments], capture_output=True)
+            self.assertEqual((refused.returncode, refused.stdout), (1, b''))
+            self.assertIn(b'absolute paths as written', refused.stderr)
+
+    def test_a_folder_or_a_migration_name_that_leads_elsewhere_is_not_followed(self):
+        self.plan['deploy_dir'] = str(self.deploy) + '/../deploy'
+        result = self.result()
+        self.assertEqual((result['complete'], result['passed']), (False, False))
+        self.assertIn('not an absolute path as written', result['error'])
+        self.plan['deploy_dir'] = str(self.deploy)
+        self.tag = '../../elsewhere'
+        result = self.result()
+        self.assertEqual((result['complete'], result['passed']), (False, False))
+        self.assertIn('outside its own folder', result['error'])
 
 
 if __name__ == '__main__':

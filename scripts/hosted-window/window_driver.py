@@ -71,6 +71,9 @@ IMAGE = re.compile(r'[a-z0-9][a-z0-9./_-]*@sha256:[0-9a-f]{64}\Z')
 NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z')
 VERSION = re.compile(r'\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?\Z', re.ASCII)
 HOST = re.compile(r'[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?\Z')
+# Where the plan and the journal are: an absolute path as written, without a "." or ".." part.
+LOCATION = re.compile(r'(?:/\w[\w.-]*)+\Z', re.ASCII)
+LOCATION_FAULT = '%s must be an absolute path as written, without a "." or ".." part'
 PHASES = ('source check and read-only preflight', 'legacy reconciliation', 'offline Caddy preparation',
           'fresh checkpoint (hand-over)', 'update', 'verification and read-back')
 CLOSING = 2   # ingress closes in this phase
@@ -140,10 +143,17 @@ def replica_section(replica, declared):
     return replica
 
 
+def plan_bytes(path):
+    """The plan file as it is on disk."""
+    if not LOCATION.fullmatch(str(path)):
+        raise Refused(LOCATION_FAULT % 'the plan')
+    return Path(path).read_bytes()
+
+
 def load_plan(path, declared=None):
     """The plan, or a refusal that names what is wrong. Unknown fields are refused, never ignored."""
     try:
-        plan = json.loads(Path(path).read_bytes())
+        plan = json.loads(plan_bytes(path))
     except (OSError, ValueError) as error:
         raise Refused('the plan cannot be read: %s' % type(error).__name__) from None
     replica = plan.pop('replica', None) if isinstance(plan, dict) else None
@@ -273,12 +283,14 @@ class Journal:
     """An append-only record. Each line is on disk before the driver goes on."""
 
     def __init__(self, path):
+        if not LOCATION.fullmatch(str(path)):
+            raise Refused(LOCATION_FAULT % 'the journal')
         self.path = Path(path)
         self.log = self.path / 'journal.jsonl'
 
     def open(self, plan_path, first):
         """Create the journal, or continue one that was written for this exact plan."""
-        raw = Path(plan_path).read_bytes()
+        raw = plan_bytes(plan_path)
         if not self.path.exists():
             self.path.mkdir(mode=0o700)
             write_private(self.path / PLAN_COPY, raw)
@@ -296,7 +308,7 @@ class Journal:
 
     def records(self, plan_path):
         try:
-            if file_hash(self.path / PLAN_COPY) != file_hash(plan_path):
+            if file_hash(self.path / PLAN_COPY) != hashlib.sha256(plan_bytes(plan_path)).hexdigest():
                 raise Refused('this journal belongs to another plan; a changed plan needs a new journal')
             return [json.loads(line) for line in self.log.read_text(encoding=UTF8).splitlines() if line]
         except OSError:
@@ -627,8 +639,8 @@ def recover(plan_path, journal_path, action, stop=None, tools=None):
     if action not in RECOVERIES or action != report['recovery_action']:
         raise Refused('%s is not the action that fits; status names: %s' % (action, report['recovery_action']))
     plan, journal = load_plan(plan_path, tools.get('declared')), Journal(journal_path)
-    env = environment(plan)
-    tools.get('check_source', check_source)(plan, env)
+    env, verify = environment(plan), tools.get('check_source', check_source)
+    verify(plan, env)
     if action == RECOVER:
         armed = Path(plan['deploy_dir']) / '.legacy-recovery' / ('window-%s' % report['markers']['token']) / 'armed.json'
         request = json.loads(armed.read_bytes())['request']
@@ -642,6 +654,12 @@ def recover(plan_path, journal_path, action, stop=None, tools=None):
     journal.write({'event': 'recovery', 'action': action})
     stop = stop or Stop()
     for step in recovery_steps(plan, journal.path, action):
+        try:
+            # Every recovery step changes the host, and the step before it ran from this source.
+            verify(plan, env)
+        except Refused as error:
+            journal.write({'event': 'source-refused', 'before': step.name, 'reason': str(error)})
+            raise
         say('recovery  %s: %s' % (step.name, step.title))
         if execute(step, journal, env, stop, **tools.get('process', {})) != 0:
             return 3
@@ -707,7 +725,7 @@ def runbook(plan):
     return '\n'.join(lines) + '\n'
 
 
-def main(argv):
+def parsed(argv):
     parser = argparse.ArgumentParser(prog='window_driver.py')
     commands = parser.add_subparsers(dest='command', required=True)
     for name in ('plan', 'run', 'status', 'recover'):
@@ -721,8 +739,16 @@ def main(argv):
             command.add_argument('--checkpoint')
         if name == 'recover':
             command.add_argument('action', choices=RECOVERIES)
-    arguments = parser.parse_args(argv[1:])
+    return parser.parse_args(argv[1:])
+
+
+def main(argv):
+    arguments = parsed(argv)
     try:
+        if not LOCATION.fullmatch(arguments.plan):
+            raise Refused(LOCATION_FAULT % 'PLAN')
+        if arguments.command != 'plan' and not LOCATION.fullmatch(arguments.journal):
+            raise Refused(LOCATION_FAULT % 'JOURNAL')
         if arguments.command == 'plan':
             sys.stdout.write(runbook(load_plan(arguments.plan)))
             return 0

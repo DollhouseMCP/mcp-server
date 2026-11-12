@@ -126,7 +126,7 @@ class DriverTests(unittest.TestCase):
     # The plan ------------------------------------------------------------------------------------------------------
 
     def test_a_plan_is_exact_and_names_every_image_by_digest(self):
-        self.assertEqual(driver.load_plan(self.plan)['replica'], None)
+        self.assertIsNone(driver.load_plan(self.plan)['replica'])
         changes = {
             'an unknown field': lambda plan: plan.update(extra=1),
             'a missing field': lambda plan: plan.pop('hostname'),
@@ -448,10 +448,42 @@ class DriverTests(unittest.TestCase):
         self.assertEqual([argv for _, argv, _ in self.started[-2:]], [
             ['python3', '/srv/window/source/scripts/hosted-deploy/legacy_update_return.py', 'return-unarmed-update'],
             ['bash', '/srv/window/source/scripts/hosted-deploy.sh', 'abandon-caddy-offline']])
+        # The pinned source is checked before anything is written, and again before each of the two steps.
+        steps = len(self.started)
+        self.assertEqual(self.source_checks[-3:], [steps - 2, steps - 2, steps - 1])
         self.assertEqual(json.loads((self.journal / 'return-request.json').read_text()), {
             'deploy_dir': '/opt/dollhousemcp', 'instance': 'site', 'data_volume': 'site_caddy_data_v2',
             'config_volume': 'site_caddy_config_v2'})
         self.assertEqual(self.started[-2][2]['stdin'].name, str(self.journal / 'return-request.json'))
+
+    def test_a_source_that_changed_during_a_recovery_step_stops_the_next_one(self):
+        self.exits['legacy-offline-update'] = 1
+        self.assertEqual(self.drive(checkpoint=CHECKPOINT), 3)
+        self.markers = dict(OPEN, pending=True, token='0' * 32)
+        self.during['return-unarmed-update'] = lambda: setattr(self, 'dirty', True)
+        with self.assertRaisesRegex(driver.Refused, 'not clean'):
+            driver.recover(self.plan, self.journal, 'return-unarmed-update', self.stop, self.tools)
+        self.assertEqual(self.names()[-1], 'return-unarmed-update')
+        last = self.events()[-2:]
+        self.assertEqual([(record['event'], record.get('step'), record.get('before')) for record in last],
+                         [('finished', 'return-unarmed-update', None), ('source-refused', None, 'abandon-caddy-offline')])
+        # The return passed and the proxy is still stopped: with nothing pending, the journal names the rest.
+        self.dirty, self.markers = False, dict(OPEN)
+        self.assertEqual(self.status()['recovery_action'], 'abandon-caddy-offline')
+        self.assertEqual(driver.recover(self.plan, self.journal, 'abandon-caddy-offline', self.stop, self.tools), 0)
+
+    def test_the_plan_and_the_journal_are_named_by_absolute_paths_as_written(self):
+        for path in ('plan.json', str(self.folder) + '/../plan.json', str(self.folder) + '/./plan.json', str(self.plan) + '/'):
+            with self.subTest(path), self.assertRaisesRegex(driver.Refused, 'the plan must be an absolute path as written'):
+                driver.load_plan(path)
+        for path in ('journal', str(self.folder) + '/../journal', str(self.folder) + '/.journal'):
+            with self.subTest(path), self.assertRaisesRegex(driver.Refused, 'the journal must be an absolute path as written'):
+                driver.run(self.plan, path, stop=self.stop, tools=self.tools)
+        self.assertEqual(self.started, [])
+        for arguments in (['plan', 'plan.json'], ['status', str(self.plan), 'journal'], ['run', str(self.plan), str(self.folder) + '/../j']):
+            done = subprocess.run([sys.executable, '-B', str(SCRIPT), *arguments], capture_output=True)
+            self.assertEqual((done.returncode, done.stdout.decode().startswith('refused: ')), (3, True))
+            self.assertIn('absolute path as written', done.stdout.decode())
 
     def test_a_running_proxy_beside_an_unarmed_update_names_no_action(self):
         self.exits['legacy-offline-update'] = 1
