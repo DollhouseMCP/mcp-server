@@ -5,6 +5,7 @@ export type OperationHealthComponent =
   | 'runtime_control'
   | 'security_invalidation'
   | 'database_migrations'
+  | 'allowlist_parity'
   | 'api_mount';
 
 export type OperationHealthStatus = 'ok' | 'degraded' | 'unavailable' | 'not_ready';

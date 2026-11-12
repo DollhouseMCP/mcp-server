@@ -35,7 +35,7 @@ import type {
 } from './embedded-as/AuthMethodFactory.js';
 import type { IAuthStorageLayer } from './embedded-as/storage/IAuthStorageLayer.js';
 import type { IRateLimitStore } from './embedded-as/storage/IRateLimitStore.js';
-import type { SignInAllowlistAuthority } from './embedded-as/allowlistGate.js';
+import { findAllowlistEntriesMissingFromAuthority, type SignInAllowlistAuthority } from './embedded-as/allowlistGate.js';
 import type { IAuthMethod } from './embedded-as/IAuthMethod.js';
 import type { InviteTokenStore } from './embedded-as/inviteTokens.js';
 import type { DatabaseInstance } from '../database/connection.js';
@@ -600,18 +600,10 @@ async function verifySignInAllowlistAuthorityCutover(
   const legacyEntries = await storage.allowlistList();
   if (legacyEntries.length === 0) return;
 
-  const authorityEntries = await authority.listEntries();
-  const authorityKeys = new Set(
-    authorityEntries.map(entry => allowlistEntryKey(entry.kind, entry.value)),
-  );
-  const missing = legacyEntries.filter(entry => !authorityKeys.has(allowlistEntryKey(entry.kind, entry.value)));
+  const missing = findAllowlistEntriesMissingFromAuthority(legacyEntries, await authority.listEntries());
   if (missing.length > 0) {
     throw new Error(
       'Sign-in allowlist authority cutover refused: legacy auth_allowlist entries are not fully represented in account_allowlist_entries.',
     );
   }
-}
-
-function allowlistEntryKey(kind: string, value: string): string {
-  return `${kind}\0${kind === 'github_id' ? value.trim() : value.trim().toLowerCase()}`;
 }
