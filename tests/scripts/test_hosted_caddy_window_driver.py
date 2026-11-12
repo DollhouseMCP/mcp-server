@@ -31,6 +31,7 @@ PLAN = {
 ORDER = ['preflight', 'prepare-legacy-reconciliation', 'reconcile-legacy', 'prepare-caddy-offline', 'legacy-offline-update',
          'verify', 'read-back']
 CHECKPOINT = '/srv/window/checkpoint'
+AFTER = 'reconcile-legacy-after-recovery'
 OPEN = {'pending': False, 'token': None, 'armed': False, 'forward_write': False, 'proxy_running': False}
 
 
@@ -415,7 +416,8 @@ class DriverTests(unittest.TestCase):
             # recover-caddy-proxy may have been used: that order is unrehearsed, so nothing is named.
             (ORDER[:4], ('failed', 'legacy-offline-update'), dict(pending, proxy_running=True), 'started', None),
             (ORDER[:4], ('failed', 'legacy-offline-update'), dict(pending, proxy_running=None), 'started', None),
-            (ORDER[:4] + ['recover-legacy'], ('failed', 'reconcile-legacy-after-recovery'), dict(pending, armed=True), 'half', None),
+            (ORDER[:4] + ['recover-legacy'], ('failed', AFTER), dict(pending, armed=True), 'half', AFTER),
+            (ORDER[:4] + ['recover-legacy'], ('unknown', AFTER), dict(pending, armed=True), 'half', AFTER),
             (ORDER[:5], None, OPEN, 'done', None),
             (ORDER[:4] + ['abandon-caddy-offline'], ('recovered', 'abandon-caddy-offline'), OPEN, 'recovered', None),
         )
@@ -506,6 +508,89 @@ class DriverTests(unittest.TestCase):
                 self.drive(checkpoint=path)
         self.assertEqual(self.started, [])
         self.assertFalse(self.journal.exists())
+
+    def test_a_stop_asked_during_a_recovery_step_keeps_the_next_one_from_starting(self):
+        self.exits['legacy-offline-update'] = 1
+        self.assertEqual(self.drive(checkpoint=CHECKPOINT), 3)
+        self.markers = dict(OPEN, pending=True, token='0' * 32)
+        self.during['return-unarmed-update'] = lambda: self.stop.ask(signal.SIGTERM, None)
+        self.assertEqual(driver.recover(self.plan, self.journal, 'return-unarmed-update', self.stop, self.tools), 5)
+        self.assertEqual(self.names()[-1], 'return-unarmed-update')
+        last = self.events()[-1]
+        self.assertEqual((last['event'], last['signal'], last['before']), ('stopped', 'SIGTERM', 'abandon-caddy-offline'))
+        # The return passed. Ingress is still closed, nothing is pending, and the journal names the rest.
+        self.stop, self.markers = driver.Stop(), dict(OPEN)
+        self.assertEqual(self.status()['recovery_action'], 'abandon-caddy-offline')
+        self.assertEqual(driver.recover(self.plan, self.journal, 'abandon-caddy-offline', self.stop, self.tools), 0)
+        self.assertEqual(self.status()['situation'], 'recovered')
+
+    def armed_window(self):
+        deploy = self.folder / 'deploy'
+        window = deploy / '.legacy-recovery' / ('window-' + '0' * 32)
+        window.mkdir(parents=True)
+        request = {'deploy_dir': str(deploy), 'instance': 'site', 'token': '0' * 32, 'checkpoint_dir': CHECKPOINT}
+        (window / 'armed.json').write_text(json.dumps({'request': request}))
+        self.write_plan(dict(self.base, deploy_dir=str(deploy)))
+        self.exits['legacy-offline-update'] = 1
+        self.assertEqual(self.drive(checkpoint=CHECKPOINT), 3)
+        self.markers = dict(OPEN, pending=True, token='0' * 32, armed=True)
+        return window, request
+
+    def test_a_legacy_recovery_that_ended_before_its_reconciliation_names_the_reconciliation_alone(self):
+        _, request = self.armed_window()
+        self.during['recover-legacy'] = lambda: self.stop.ask(signal.SIGINT, None)
+        self.assertEqual(driver.recover(self.plan, self.journal, 'recover-legacy', self.stop, self.tools), 5)
+        self.assertEqual(self.names()[-1], 'recover-legacy')
+        self.stop = driver.Stop()
+        report = self.status()
+        self.assertEqual((report['situation'], report['recovery_action']), ('half', AFTER))
+        # recover-legacy passed, so it cannot be named again; only its second step is run, with the request already written.
+        with self.assertRaisesRegex(driver.Refused, 'not the action that fits'):
+            driver.recover(self.plan, self.journal, 'recover-legacy', self.stop, self.tools)
+        self.assertEqual(driver.recover(self.plan, self.journal, AFTER, self.stop, self.tools), 0)
+        self.assertEqual(self.names()[-2:], ['recover-legacy', AFTER])
+        self.assertEqual(self.started[-1][2]['stdin'].name, str(self.journal / 'reconcile-after-recovery.json'))
+        self.assertEqual(json.loads((self.journal / 'reconcile-after-recovery.json').read_text()),
+                         dict(request, manual_evidence_dir=None))
+        self.markers = dict(OPEN)
+        self.assertEqual(self.status()['situation'], 'recovered')
+
+    def test_a_reconciliation_after_recovery_that_failed_can_be_named_again(self):
+        self.armed_window()
+        self.exits[AFTER] = 1
+        self.assertEqual(driver.recover(self.plan, self.journal, 'recover-legacy', self.stop, self.tools), 3)
+        self.assertEqual(self.status()['recovery_action'], AFTER)
+        self.exits.pop(AFTER)
+        self.assertEqual(driver.recover(self.plan, self.journal, AFTER, self.stop, self.tools), 0)
+        self.assertEqual(self.names()[-3:], ['recover-legacy', AFTER, AFTER])
+
+    def test_an_action_that_is_named_again_reads_the_request_its_first_run_wrote(self):
+        self.exits['legacy-offline-update'] = 1
+        self.assertEqual(self.drive(checkpoint=CHECKPOINT), 3)
+        self.markers = dict(OPEN, pending=True, token='0' * 32)
+        self.exits['return-unarmed-update'] = 1
+        self.assertEqual(driver.recover(self.plan, self.journal, 'return-unarmed-update', self.stop, self.tools), 3)
+        self.assertEqual(self.status()['recovery_action'], 'return-unarmed-update')
+        self.exits.pop('return-unarmed-update')
+        request = self.journal / 'return-request.json'
+        before, started = request.read_bytes(), len(self.started)
+        request.write_text('{"deploy_dir": "/elsewhere"}')
+        with self.assertRaisesRegex(driver.Refused, 'return-request.json in this journal holds another request'):
+            driver.recover(self.plan, self.journal, 'return-unarmed-update', self.stop, self.tools)
+        self.assertEqual(len(self.started), started)
+        request.write_bytes(before)
+        self.assertEqual(driver.recover(self.plan, self.journal, 'return-unarmed-update', self.stop, self.tools), 0)
+        self.assertEqual(request.read_bytes(), before)
+        self.assertEqual(self.names()[-3:], ['return-unarmed-update', 'return-unarmed-update', 'abandon-caddy-offline'])
+
+    def test_a_legacy_recovery_that_failed_can_be_named_again_with_the_same_requests(self):
+        window, _ = self.armed_window()
+        self.exits['recover-legacy'] = 1
+        self.assertEqual(driver.recover(self.plan, self.journal, 'recover-legacy', self.stop, self.tools), 3)
+        self.exits.pop('recover-legacy')
+        self.assertEqual(driver.recover(self.plan, self.journal, 'recover-legacy', self.stop, self.tools), 0)
+        self.assertEqual(self.names()[-3:], ['recover-legacy', 'recover-legacy', AFTER])
+        self.assertTrue(window.is_dir())
 
     def test_a_running_proxy_beside_an_unarmed_update_names_no_action(self):
         self.exits['legacy-offline-update'] = 1

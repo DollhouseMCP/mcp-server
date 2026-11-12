@@ -84,7 +84,9 @@ REQUEST, RECONCILE, PREPARE, UPDATE = 'prepare-legacy-reconciliation', 'reconcil
 RECONCILE_SCRIPT, TOOLING, PYTHON = 'legacy_reconcile_action.py', 'hosted-deploy', 'python3'
 PLAN_COPY, ACCEPTED, STDOUT, UTF8 = 'plan.json', 'checkpoint-accepted', '.stdout', 'utf-8'
 REPLICA_FAULT = 'replica must hold pins_dir and at most path_prefix, as absolute paths'
-RECOVERIES = (ABANDON, RECOVER, RETURN)
+AFTER = 'reconcile-legacy-after-recovery'   # the second step of recover-legacy, and the action that runs it alone
+ARMED_REQUEST, AFTER_REQUEST, RETURN_REQUEST = 'armed-request.json', 'reconcile-after-recovery.json', 'return-request.json'
+RECOVERIES = (ABANDON, RECOVER, RETURN, AFTER)
 POLL = 0.5
 GRACE = 30
 
@@ -245,23 +247,22 @@ def steps(plan, journal, checkpoint=None):
 
 
 def recovery_steps(plan, journal, action):
+    """The steps of one recovery action. The second step of a two-step action is also an action of its own."""
     journal = Path(journal)
+    abandon = Step(ABANDON, CLOSING, 'start the same proxy again and prove the legacy service', deploy(plan, ABANDON))
+    reconcile = Step(AFTER, 4, 'reconcile the recovered transition, so that a second attempt can start',
+                     [PYTHON, tooling(plan, RECONCILE_SCRIPT), RECONCILE], str(journal / AFTER_REQUEST))
     if action == ABANDON:
-        return [Step(ABANDON, CLOSING, 'start the same proxy again and prove the legacy service',
-                     deploy(plan, ABANDON))]
+        return [abandon]
+    if action == AFTER:
+        return [reconcile]
     if action == RETURN:
         return [Step(RETURN, 4, 'return the update transition that began and was never armed',
-                     [PYTHON, tooling(plan, 'legacy_update_return.py'), RETURN],
-                     str(journal / 'return-request.json')),
-                Step(ABANDON, CLOSING, 'start the same proxy again and prove the legacy service',
-                     deploy(plan, ABANDON))]
-    return [
-        Step(RECOVER, 4, 'bring the legacy service back from the armed baseline',
-             [PYTHON, tooling(plan, 'legacy_recovery_action.py'), RECOVER], str(journal / 'armed-request.json')),
-        Step('reconcile-legacy-after-recovery', 4, 'reconcile the recovered transition, so that a second attempt can start',
-             [PYTHON, tooling(plan, RECONCILE_SCRIPT), RECONCILE],
-             str(journal / 'reconcile-after-recovery.json')),
-    ]
+                     [PYTHON, tooling(plan, 'legacy_update_return.py'), RETURN], str(journal / RETURN_REQUEST)),
+                abandon]
+    return [Step(RECOVER, 4, 'bring the legacy service back from the armed baseline',
+                 [PYTHON, tooling(plan, 'legacy_recovery_action.py'), RECOVER], str(journal / ARMED_REQUEST)),
+            reconcile]
 
 
 # Journal ----------------------------------------------------------------------------------------------------------
@@ -579,8 +580,9 @@ def proxy_running(plan, run=subprocess.run):
 ADVICE = {
     'forward': (None, 'The update wrote forward: migrations may have run. No tooling action undoes that yet. '
                       'Follow the checkpoint restore runbook; ingress stays closed until it is done.'),
-    'half': (None, 'recover-legacy passed and its reconciliation did not. Review the reconciliation refusal; '
-                   'the legacy service is back, and a second attempt cannot start until reconciliation passes.'),
+    'half': (AFTER, 'recover-legacy passed and the reconciliation after it did not run to its end. The legacy service '
+                    'is back. If the reconciliation ran and refused, review that refusal first. %s runs it again with '
+                    'the same request; a second attempt cannot start until it passes.' % AFTER),
     'armed': (RECOVER, 'The update stopped before its forward write. recover-legacy brings the legacy service back '
                                 'from the armed baseline, then reconciliation makes a second attempt possible.'),
     'unarmed': (RETURN, 'The update began its transition and stopped before a recovery baseline was armed. '
@@ -633,6 +635,31 @@ def status(plan_path, journal_path, tools=None):
             'recovery_action': ADVICE[where][0], 'reason': ADVICE[where][1]}
 
 
+def write_request(path, value):
+    """One request file of a recovery. An action that is named again finds the same request, or is refused."""
+    raw = json.dumps(value).encode(UTF8)
+    try:
+        write_private(path, raw)
+    except FileExistsError:
+        if Path(path).read_bytes() != raw:
+            raise Refused('%s in this journal holds another request; nothing was run' % Path(path).name) from None
+
+
+def recovery_requests(plan, journal, action, token):
+    """The request files the action's steps read, in the journal."""
+    if action == RECOVER:
+        armed = Path(plan['deploy_dir']) / '.legacy-recovery' / ('window-%s' % token) / 'armed.json'
+        request = json.loads(armed.read_bytes())['request']
+        write_request(journal.path / ARMED_REQUEST, request)
+        write_request(journal.path / AFTER_REQUEST, {**request, 'manual_evidence_dir': None})
+    if action == RETURN:
+        write_request(journal.path / RETURN_REQUEST, {
+            'deploy_dir': plan['deploy_dir'], 'instance': plan['instance'], 'data_volume': plan['caddy_volumes']['data'],
+            'config_volume': plan['caddy_volumes']['config']})
+    if action == AFTER and not (journal.path / AFTER_REQUEST).is_file():
+        raise Refused('this journal holds no reconciliation request; recover-legacy did not run in it')
+
+
 def recover(plan_path, journal_path, action, stop=None, tools=None):
     """Run the named recovery action, only if it is the one that fits."""
     tools = tools or {}
@@ -642,19 +669,15 @@ def recover(plan_path, journal_path, action, stop=None, tools=None):
     plan, journal = load_plan(plan_path, tools.get('declared')), Journal(journal_path)
     env, verify = environment(plan), tools.get('check_source', check_source)
     verify(plan, env)
-    if action == RECOVER:
-        armed = Path(plan['deploy_dir']) / '.legacy-recovery' / ('window-%s' % report['markers']['token']) / 'armed.json'
-        request = json.loads(armed.read_bytes())['request']
-        write_private(journal.path / 'armed-request.json', json.dumps(request).encode(UTF8))
-        write_private(journal.path / 'reconcile-after-recovery.json',
-                      json.dumps({**request, 'manual_evidence_dir': None}).encode(UTF8))
-    if action == RETURN:
-        request = {'deploy_dir': plan['deploy_dir'], 'instance': plan['instance'], 'data_volume': plan['caddy_volumes']['data'],
-                   'config_volume': plan['caddy_volumes']['config']}
-        write_private(journal.path / 'return-request.json', json.dumps(request).encode(UTF8))
+    recovery_requests(plan, journal, action, report['markers']['token'])
     journal.write({'event': 'recovery', 'action': action})
     stop = stop or Stop()
     for step in recovery_steps(plan, journal.path, action):
+        if stop.asked:
+            # As between the steps of a run: nothing more changes the host, and status names what is left.
+            journal.write({'event': 'stopped', 'signal': stop.asked, 'before': step.name})
+            say('stopped by %s before %s. Next: window_driver.py status PLAN JOURNAL' % (stop.asked, step.name))
+            return 5
         try:
             # Every recovery step changes the host, and the step before it ran from this source.
             verify(plan, env)
@@ -697,7 +720,8 @@ FAILURE_NOTES = [
     '| In phase 4, before the forward write | `%s`, then reconciliation |' % RECOVER,
     '| In phase 4, after the forward write | none yet: the checkpoint restore runbook |',
     '| In phase 4, before a recovery baseline was armed, proxy still stopped | `%s`, then `%s` |' % (RETURN, ABANDON),
-    '| The same, but the proxy is running or its state is unknown | none: an unrehearsed order, review first |', '',
+    '| The same, but the proxy is running or its state is unknown | none: an unrehearsed order, review first |',
+    '| A recovery ended between its two steps | the second step: `%s`, or `%s` |' % (ABANDON, AFTER), '',
     '`recover PLAN JOURNAL ACTION` runs that action only when ACTION is the one `status` names.',
     'A second attempt needs a new journal, a plan with new Caddy volume names, and `--first 2`.']
 

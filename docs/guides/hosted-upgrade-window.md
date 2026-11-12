@@ -120,6 +120,12 @@ The driver stops. It retries nothing and recovers nothing by itself.
 | The same, but the proxy is running or its state is unknown | nothing: an unrehearsed order, review first |
 | In phase 4, after arming, before the forward write | `recover-legacy`, then `reconcile-legacy` |
 | In phase 4, after the forward write | nothing yet: restore from the checkpoint by its runbook |
+| A recovery ended between its two steps | the second step: `abandon-caddy-offline`, or `reconcile-legacy-after-recovery` |
+
+A recovery of two steps can end between them: the first step failed its
+source check, a signal asked for a stop, or the second step did not pass.
+`status` then names the second step alone. An action that is named again reads
+the request file its first run wrote in the journal.
 
 A journal that ended in a failure or a recovery is closed. A second attempt
 needs a new journal, a plan with new Caddy volume names, and `--first 2`:

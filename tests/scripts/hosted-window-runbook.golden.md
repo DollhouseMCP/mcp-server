@@ -89,6 +89,7 @@ The driver stops. It runs nothing else and recovers nothing by itself.
 | In phase 4, after the forward write | none yet: the checkpoint restore runbook |
 | In phase 4, before a recovery baseline was armed, proxy still stopped | `return-unarmed-update`, then `abandon-caddy-offline` |
 | The same, but the proxy is running or its state is unknown | none: an unrehearsed order, review first |
+| A recovery ended between its two steps | the second step: `abandon-caddy-offline`, or `reconcile-legacy-after-recovery` |
 
 `recover PLAN JOURNAL ACTION` runs that action only when ACTION is the one `status` names.
 A second attempt needs a new journal, a plan with new Caddy volume names, and `--first 2`.
