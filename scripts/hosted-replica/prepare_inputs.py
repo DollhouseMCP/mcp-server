@@ -13,6 +13,11 @@ Run it in a private working folder that holds:
     control-files/     the unpacked export
     known.json         optional: placeholder name -> a value an operator knows is
                        not secret, such as a volume name the export hid
+    overrides.json     optional: environment name -> {"value", "reason"}: a setting the
+                       replica must not share with production, such as mail. It is
+                       applied to the completed environment files and passed on to
+                       build_replica.py for every container. A null value leaves
+                       the setting out.
 
     prepare_inputs.py
 
@@ -22,8 +27,9 @@ _KEY and as hex otherwise: the forms the application requires of its keys and
 secrets. Random values are kept in prepared/secrets.json so a second run
 produces the same files.
 
-A service's environment is what Docker Compose itself resolves from the
-completed Compose files and environment file that the container's labels name.
+A service's environment and its log driver options are what Docker Compose
+itself resolves from the completed Compose files and environment file that the
+container's labels name.
 When Compose cannot resolve them, the environment declared in the JSON overlays
 is used instead and the report says so. Nothing is printed but names and counts.
 """
@@ -36,7 +42,8 @@ import secrets
 import subprocess
 import sys
 
-INVENTORY, CONTROL, KNOWN, OUTPUT = 'inventory.json', 'control-files', 'known.json', 'prepared'
+INVENTORY, CONTROL, KNOWN, OVERRIDES, OUTPUT = 'inventory.json', 'control-files', 'known.json', 'overrides.json', 'prepared'
+ENVIRONMENT_FILES = ('.env', '.env.production')
 MANIFEST = 'MANIFEST.json'
 PLACEHOLDER = re.compile(r'__DOLLHOUSE_REPLICA_([A-Z0-9_]+?)__')
 ASSIGNMENT = re.compile(r'(?:export\s+)?([A-Za-z_]\w*)=(.*)\Z', re.ASCII)
@@ -63,6 +70,18 @@ def assignments(text):
     return result
 
 
+def overridden(text, overrides):
+    """An environment file with the replica's own settings: an overridden line is replaced, or dropped for a null value."""
+    lines = []
+    for line in text.split('\n'):
+        match = None if line.lstrip().startswith('#') else ASSIGNMENT.match(line.strip())
+        if match is None or match.group(1) not in overrides:
+            lines.append(line)
+        elif overrides[match.group(1)]['value'] is not None:
+            lines.append('%s=%s' % (match.group(1), overrides[match.group(1)]['value']))
+    return '\n'.join(lines)
+
+
 class Values:
     """The value of each placeholder: a known one, or a random one that is made once and kept."""
 
@@ -81,7 +100,7 @@ class Values:
         return self.stored[name]
 
 
-def complete_files(control, output, modes, values):
+def complete_files(control, output, modes, values, overrides):
     """Write every exported file with its placeholders completed. Paths come from the folder itself."""
     staged = {}
     for folder, _, names in sorted(os.walk(control)):
@@ -91,6 +110,8 @@ def complete_files(control, output, modes, values):
             if relative != MANIFEST:
                 staged[relative] = output / 'files' / relative
                 text = PLACEHOLDER.sub(values, source.read_text(encoding='utf-8'))
+                if relative in ENVIRONMENT_FILES:
+                    text = overridden(text, overrides)
                 private(staged[relative], text.encode('utf-8'), modes.get(relative, 0o600))
     return staged
 
@@ -116,11 +137,11 @@ def declared(service, files):
         if path.suffix == '.json':
             overlay = json.loads(path.read_text(encoding='utf-8'))
             found.update(((overlay.get('services') or {}).get(service) or {}).get('environment') or {})
-    return (found, 'overlay') if found else None
+    return (found, 'overlay', None) if found else None
 
 
-def service_environment(labels, staged, root, directory, models):
-    """One container's environment and where it came from, or None when its Compose files were not exported."""
+def service_settings(labels, staged, root, directory, models):
+    """One container's environment, where it came from and its log options, or None when its Compose files were not exported."""
     service, configured = labels.get(SERVICE), labels.get(CONFIG_FILES)
     if not isinstance(service, str) or not isinstance(configured, str):
         return None
@@ -134,31 +155,40 @@ def service_environment(labels, staged, root, directory, models):
         models[key] = compose_model(labels.get(PROJECT) or 'replica', files, environment_file, directory)
     if models[key] is None:
         return declared(service, files)
-    return ((models[key].get('services') or {}).get(service) or {}).get('environment') or {}, 'compose'
+    resolved = (models[key].get('services') or {}).get(service) or {}
+    return resolved.get('environment') or {}, 'compose', (resolved.get('logging') or {}).get('options')
 
 
-def prepare(inventory, control, output, known):
+def prepare(inventory, control, output, known, overrides=None):
+    overrides = overrides or {}
+    if any(not isinstance(item, dict) or set(item) != {'value', 'reason'} or not isinstance(item['reason'], str)
+           or not isinstance(item['value'], (str, type(None))) for item in overrides.values()):
+        raise ValueError('an override needs a value, or null, and a reason')
     store = output / 'secrets.json'
     values = Values(known, json.loads(store.read_text(encoding='utf-8')) if store.exists() else {})
     manifest = json.loads((control / MANIFEST).read_text(encoding='utf-8'))
     modes = {record['path']: int(record['mode'], 8) for record in manifest['files']}
-    staged = complete_files(control, output, modes, values)
+    staged = complete_files(control, output, modes, values, overrides)
     private(store, json.dumps(values.stored, indent=1).encode('utf-8'))
 
-    root, environment, services, sources, models = inventory['deployment']['path'], {}, {}, {}, {}
-    for name in ('.env', '.env.production'):
+    root, environment, services, sources, logging, models = inventory['deployment']['path'], {}, {}, {}, {}, {}
+    for name in ENVIRONMENT_FILES:
         if name in staged:
             environment.update(assignments(staged[name].read_text(encoding='utf-8')))
     for container in inventory['containers']:
-        found = service_environment(container['config'].get('labels') or {}, staged, root, output / 'files', models)
+        found = service_settings(container['config'].get('labels') or {}, staged, root, output / 'files', models)
         if found is not None:
             services[container['name']] = {key: str(item) for key, item in found[0].items() if item is not None}
             sources[container['name']] = found[1]
-    inputs = {'environment': environment, 'container_environment': services,
+            if found[2]:
+                logging[container['name']] = {key: str(item) for key, item in found[2].items()}
+    inputs = {'environment': environment, 'container_environment': services, 'container_logging': logging,
+              'overrides': overrides,
               'files': {root + '/' + relative: str(path) for relative, path in staged.items()}}
     private(output / 'inputs.json', json.dumps(inputs, indent=1).encode('utf-8'))
     return {'schema': 1, 'kind': 'replica-inputs', 'files': len(staged), 'environment_names': len(environment),
-            'service_environments': dict(sorted(sources.items())), 'placeholders_known': sorted(values.used_known),
+            'service_environments': dict(sorted(sources.items())), 'service_logging': sorted(logging),
+            'overrides': sorted(overrides), 'placeholders_known': sorted(values.used_known),
             'placeholders_random': len(values.used_random)}
 
 
@@ -166,8 +196,9 @@ def main(argv):
     if len(argv) != 1:
         raise ValueError('usage: prepare_inputs.py (no arguments; see the header for the working folder)')
     inventory = json.loads(Path(INVENTORY).read_text(encoding='utf-8'))
-    known = json.loads(Path(KNOWN).read_text(encoding='utf-8')) if Path(KNOWN).exists() else {}
-    print(json.dumps(prepare(inventory, Path(CONTROL), Path(OUTPUT), known), indent=1))
+    known, overrides = (json.loads(Path(name).read_text(encoding='utf-8')) if Path(name).exists() else {}
+                        for name in (KNOWN, OVERRIDES))
+    print(json.dumps(prepare(inventory, Path(CONTROL), Path(OUTPUT), known, overrides), indent=1))
     return 0
 
 

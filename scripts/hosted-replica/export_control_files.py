@@ -231,7 +231,11 @@ def is_text(raw):
 
 def export(root=None):
     root = root or DEPLOY_DIR
-    sources, skipped = collect(root)
+    return scrub(*collect(root), root)
+
+
+def scrub(sources, skipped, root):
+    """The manifest and the archive members for files already read: every secret replaced, or the export refused."""
     skipped.update({relative: 'not text' for relative, (raw, _) in sources.items() if not is_text(raw)})
     for relative in ENVIRONMENTS:
         # Its secrets would never be searched for, so copies in other files would be exported.

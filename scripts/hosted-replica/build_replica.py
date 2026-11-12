@@ -22,6 +22,8 @@ supplies what it cannot:
                 not share with production, applied to every container; a null
                 value leaves the variable out
   labels        values for labels the inventory redacted
+  container_logging  container name -> log driver options, for an inventory that does
+                not record them; prepare_inputs.py takes them from the Compose model
   files         host path -> file to copy its content from; other files get filler
   trees         host folder -> folder to copy into it, with owners and modes kept
   images        live image ID -> local image to use instead, with a reason
@@ -272,10 +274,21 @@ def chosen_image(record, inputs, note, engine):
     return image, defaults
 
 
-def host_settings(record, created):
+def log_options(record, inputs, note):
+    """The log driver's options: the recorded ones, or the ones the inputs supply for an inventory without them."""
+    recorded = record['host_config'].get('log_options')
+    if isinstance(recorded, dict) and all(isinstance(value, str) for value in recorded.values()):
+        return recorded
+    declared = inputs['container_logging'].get(record['name'])
+    if declared is not None:
+        note('logging', record['name'], 'options supplied; the inventory does not hold them')
+    return declared or {}
+
+
+def host_settings(record, created, inputs, note):
     recorded = record['host_config']
     host = {key: recorded[key] for key in HOST_KEYS if recorded.get(key) is not None}
-    host['LogConfig'] = {'Type': recorded.get('log_driver') or 'json-file'}
+    host['LogConfig'] = {'Type': recorded.get('log_driver') or 'json-file', 'Config': log_options(record, inputs, note)}
     if host.get('NetworkMode', '').startswith(JOINED):
         # The recorded mode names a live container ID. Join the replica's container of the same name.
         host['NetworkMode'] = JOINED + created[host['NetworkMode'][len(JOINED):]]
@@ -290,7 +303,7 @@ def creation(record, inputs, note, engine, created):
     if record['name'] in inputs['commands']:
         note('command', record['name'], inputs['commands'][record['name']]['reason'])
         command = inputs['commands'][record['name']]['cmd']
-    host = host_settings(record, created)
+    host = host_settings(record, created, inputs, note)
     body = {'Image': image, 'Cmd': command, 'Entrypoint': config['entrypoint'],
             'Env': environment(record, inputs, note, defaults),
             'Labels': label_values(config.get('labels'), inputs, note, record['name'], defaults.get('Labels') or {}),
@@ -469,8 +482,8 @@ def build_files(inventory, inputs, state, note):
 
 def build(inventory, given, state=None):
     """Build or extend the replica. The returned result always carries the state, also after a failed step."""
-    inputs = {key: {} for key in ('environment', 'container_environment', 'labels', 'files', 'images', 'commands',
-                                  'skip', 'database', 'trees', 'overrides')}
+    inputs = {key: {} for key in ('environment', 'container_environment', 'container_logging', 'labels', 'files',
+                                  'images', 'commands', 'skip', 'database', 'trees', 'overrides')}
     inputs['package_name'] = None
     inputs.update(given)
     state = state or json.loads(json.dumps(EMPTY))
