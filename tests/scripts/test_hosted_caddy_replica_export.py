@@ -128,6 +128,24 @@ class ExportTests(unittest.TestCase):
         with self.assertRaisesRegex(export.Refused, r'environment file \.env\.production is not text'):
             export.export(str(self.root))
 
+    def test_export_is_refused_when_a_value_continues_over_more_than_one_line(self):
+        # Only the first line of such a value is an assignment. The rest would be exported as it is.
+        body = 'ab12' * 12
+        for opening, closing in (('"', '"'), ("'", "'"), ('"begin \\"', '"')):
+            with self.subTest(opening=opening):
+                self.write('.env.production', ('PRIVATE_KEY=%s-----BEGIN-----\n%s\n-----END-----%s\nPORT=3000\n'
+                                               % (opening, body, closing)).encode(), 0o600)
+                with self.assertRaisesRegex(export.Refused, r'the value of PRIVATE_KEY continues over more than one line'):
+                    export.export(str(self.root))
+
+    def test_a_quoted_value_that_ends_on_its_line_is_replaced(self):
+        self.write('.env.production', ('TOKEN_SECRET="%s"\nNOTE=\'two words\'\nESCAPED_TOKEN="a\\"%s"\n'
+                                       % (QUOTED, 'cd34' * 6)).encode(), 0o600)
+        manifest, files, data = self.exported()
+        self.assertNotIn(QUOTED.encode(), data)
+        self.assertNotIn(('cd34' * 6).encode(), data)
+        self.assertIn(b"NOTE='two words'", files['control-files/.env.production'][0])
+
     def test_export_is_refused_when_an_environment_file_is_not_a_regular_file(self):
         (self.root / '.env').unlink()
         os.symlink(self.root / '.env.production', self.root / '.env')

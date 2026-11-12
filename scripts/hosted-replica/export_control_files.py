@@ -21,7 +21,9 @@ Read-only contract, enforced by tests/scripts/test_hosted_caddy_replica_export.p
 - Before anything is written, every archive member is searched again for every
   secret value. One hit aborts the export with no output.
 - An environment file that exists but cannot be read as text aborts the export
-  too: its secrets would be unknown to the search.
+  too: its secrets would be unknown to the search. So does a value that opens
+  a quote and does not close it on its line: the lines that continue it would
+  be exported as they are.
 
     ssh HOST python3 -I - < export_control_files.py > control-files.tar
 
@@ -52,6 +54,7 @@ SECRET_NAME = re.compile(r'SECRET|PASSWORD|PASSWD|KEY|TOKEN|HMAC|CREDENTIAL|PRIV
 OPAQUE = re.compile(r'(?=.*\d)(?=.*[A-Za-z])[\w+/=-]{20,}\Z', re.ASCII)
 ASSIGNMENT = re.compile(r'(?:export\s+)?([A-Za-z_]\w*)=(.*)\Z', re.ASCII)
 QUOTED = re.compile(r'''(["'])(.*?)\1''')
+CLOSED = re.compile(r'"(?:[^"\\]|\\.)*"' r"|'[^']*'")
 URL_PASSWORD = re.compile(rb'(://[^/\s:@"\']+:)([^@/\s"\']+)(@)')
 MINIMUM = 6  # shorter values cannot be searched for safely; they are replaced by name only
 
@@ -126,6 +129,12 @@ def forms(text):
     return value, [item for item in dict.fromkeys((value, first)) if item]
 
 
+def continues(text):
+    """Whether a value opens a quote that its own line does not close, so that it runs on over later lines."""
+    text = text.strip()
+    return text.startswith(('"', "'")) and not CLOSED.match(text)
+
+
 def classify(name, value, candidates):
     if not value:
         return 'empty'
@@ -154,6 +163,9 @@ def environment(raw, secrets, names, short):
     lines = []
     for line in raw.decode('utf-8').split('\n'):
         match = None if line.lstrip().startswith('#') else ASSIGNMENT.match(line.strip())
+        if match and continues(match.group(2)):
+            # Only its first line would be replaced. The rest matches no assignment and no search.
+            raise Refused('the value of %s continues over more than one line' % match.group(1))
         verdict, needles = judged(match.group(1), match.group(2)) if match else ('kept', [])
         if match:
             name = match.group(1)
