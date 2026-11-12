@@ -1,9 +1,12 @@
 """Private disposable files/inert Docker: no host, service or database mutation."""
 import copy
+import io
 import itertools
 import json
+import os
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -108,11 +111,29 @@ class RecoveryBoundaryTests(unittest.TestCase):
             self.assertIsNone(boundary.check(self.root, dict(self.value, token=''), self.run_docker))
         self.assertEqual(self.listing(), before)
         self.assertFalse(any(command[1] in ('start', 'stop', 'run', 'create') for command in self.fixture.calls))
-        self.assertEqual([boundary.valid_token(action, token) for action, token in (
-            ('check', ''), ('check', self.value['token']), ('arm', self.value['token']), ('arm', ''), ('write-intent', ''))],
-            [True, False, True, False, False])
         # What the check accepts, arming accepts.
         self.arm()
+
+    def test_only_the_check_takes_a_request_without_a_token(self):
+        called = []
+        for action, token, accepted in (('check', '', True), ('check', self.value['token'], False), ('arm', self.value['token'], True),
+                                        ('arm', '', False), ('write-intent', '', False), ('arm', '../' + 'a' * 29, False)):
+            request = io.BytesIO(json.dumps(dict(self.value, token=token)).encode())
+            with self.subTest(action=action, token=token), patch.object(sys, 'argv', ['legacy_recovery_boundary.py', action]), \
+                    patch.object(sys, 'stdin', SimpleNamespace(buffer=request)), patch.object(boundary, 'validate_request', return_value=self.root), \
+                    patch.object(boundary, 'validate_system'), patch.object(boundary.os, 'uname', return_value=SimpleNamespace(machine='x86_64')), \
+                    patch.object(boundary, 'acquire_lock', side_effect=lambda *a, **k: os.open(os.devnull, os.O_RDONLY)), \
+                    patch.object(boundary, 'check', side_effect=lambda root, value: called.append(('check', value['token']))), \
+                    patch.object(boundary, 'arm', side_effect=lambda root, value: called.append(('arm', value['token']))):
+                if accepted:
+                    boundary.main()
+                else:
+                    with self.assertRaisesRegex(ValueError, 'invalid legacy recovery request'):
+                        boundary.main()
+        self.assertEqual(called, [('check', ''), ('arm', self.value['token'])])
+        with self.assertRaisesRegex(ValueError, 'invalid legacy recovery token'):
+            boundary.create_window(self.root, '../' + 'a' * 29)
+        self.assertFalse((self.root / boundary.DIRECTORY).exists())
 
     def test_check_refuses_what_arming_would_refuse_and_leaves_nothing_behind(self):
         value = dict(self.value, token='')

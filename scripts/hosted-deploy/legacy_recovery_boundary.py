@@ -141,6 +141,8 @@ def prepared_transition(root, value):
 
 
 def create_window(root, token):
+    if not isinstance(token, str) or not TOKEN.fullmatch(token):
+        raise ValueError('invalid legacy recovery token')
     parent = root / DIRECTORY
     parent.mkdir(mode=0o700, exist_ok=True)
     owner = private_directory(parent)
@@ -257,11 +259,6 @@ def issue_forward_write(root, value, run=system_docker):
         os.close(directory)
 
 
-def valid_token(action, token):
-    """The check runs before a transition exists, so it has no token. Every other action names its transition."""
-    return token == '' if action == 'check' else TOKEN.fullmatch(token) is not None
-
-
 def main():
     if len(sys.argv) != 2 or sys.argv[1] not in ('check', 'arm', 'write-intent'):
         raise ValueError('explicit legacy recovery check, arm or write-intent action required')
@@ -270,8 +267,13 @@ def main():
         raise ValueError('legacy recovery request exceeds its bound')
     value = json.loads(raw, object_pairs_hook=unique_object)
     if (not isinstance(value, dict) or set(value) != KEYS or any(not isinstance(v, str) for v in value.values())
-            or not valid_token(sys.argv[1], value['token'])
             or any(not handoff.SHA.fullmatch(value[k]) for k in ('app_id', 'postgres_id'))):
+        raise ValueError('invalid legacy recovery request')
+    if sys.argv[1] == 'check':
+        # The check runs before a transition exists, so its request names none.
+        if value['token'] != '':
+            raise ValueError('invalid legacy recovery request')
+    elif not TOKEN.fullmatch(value['token']):
         raise ValueError('invalid legacy recovery request')
     root = validate_request({k: value[k] for k in ('deploy_dir', 'instance', 'data_volume', 'config_volume')})
     validate_system()
