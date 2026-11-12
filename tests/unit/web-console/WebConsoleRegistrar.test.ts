@@ -789,6 +789,14 @@ describe('WebConsoleRegistrar', () => {
         expect.objectContaining({ code: 'accountAdmin_protectedCorrelationRateLimiter_missing' }),
       ]),
     });
+    // The message an operator sees names what to set, not the failure codes alone.
+    await expect(new WebConsoleRegistrar({
+      activationProfile: SHARED_HOSTED_PROFILE,
+      opaqueValueHmacKey: Buffer.alloc(32, 26),
+      registerCleanup: false,
+    }).bootstrapAndRegister(new TestContainer())).rejects.toThrow(
+      /database_verification_not_ready: [^;]*Set DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_NAME to the name of the database/,
+    );
   });
 
   it('does not block hosted/shared activation when the optional GitHub integration provider is absent', async () => {

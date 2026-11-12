@@ -40,7 +40,6 @@ The deployment's `.env.production` is loaded by generated Compose. Preserve its 
 | `DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY`, `DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY_ID` | Existing base64-encoded 32-byte encryption key and stable key ID; preserve any retired decryption keys. |
 | `DOLLHOUSE_WEB_CONSOLE_PROTECTED_CORRELATION_HMAC_KEY` | Shared base64-encoded 32-byte selector key. |
 | `DOLLHOUSE_AUDIT_HMAC_SECRET` | If explicitly configured, preserve the shared hex key; otherwise verify the existing database-managed audit resolver/key material is shared. |
-| `DOLLHOUSE_WEB_CONSOLE_REPLACEMENT_READINESS_EVIDENCE` | Path to genuine, complete replacement evidence; never generate placeholder successes. |
 | `DOLLHOUSE_HTTP_ALLOWED_HOSTS`, `DOLLHOUSE_TRUSTED_PROXIES` | Approved public Host allowlist and actual trusted immediate-proxy CIDRs. |
 | `DOLLHOUSE_INVITE_TTL_HOURS` | Default 24; deliberate integer override 1–168. Existing issued expirations are unchanged. |
 | `DOLLHOUSE_INVITE_RETENTION_DAYS` | Do not enable destructive invitation cleanup without preserving the durable GitHub-only cohort marker. |
@@ -53,7 +52,9 @@ Apply and record the existing migration procedure before activation, including `
 
 A successful zero-row probe proves readable table/column shape only. Record migration provenance plus required constraints, unique indexes, RLS, write privileges and the actual database identity separately. Do not infer those properties from an empty SELECT or repair production by rerunning test DDL.
 
-Existing console readiness and replacement-evidence checks remain mandatory. The evidence parser requires all 11 `WEB_CONSOLE_REPLACEMENT_LIVE_CHECK_IDS` from `WebConsoleReplacementReadiness.ts`, including database migrations, multi-replica invalidation, allowlist parity, login/step-up, audit projection and other console capabilities. Existing `/healthz`, `/readyz` and unauthenticated `/mcp` → 401 checks remain useful but do not qualify onboarding.
+Existing console activation checks remain mandatory: the server refuses to start the console when its database, adapters, allowlist cutover or invalidation processor are not ready, and the start-up message names what to set.
+
+The console no longer reads a replacement-readiness evidence file. `DOLLHOUSE_WEB_CONSOLE_REPLACEMENT_READINESS_EVIDENCE` is ignored, with a start-up warning if it is still set; remove it. The capabilities that file listed still have to be qualified on the deployment before onboarding is enabled, and the result recorded: database migrations, multi-replica invalidation, allowlist parity, login and step-up, invite redemption, grant revocation, the GitHub connection callback, portfolio sync against a real repository, signing-key and auth-policy agreement across replicas, and the approval, execution and audit views. Existing `/healthz`, `/readyz` and unauthenticated `/mcp` → 401 checks remain useful but do not qualify onboarding.
 
 ## Provider and log prerequisites
 
