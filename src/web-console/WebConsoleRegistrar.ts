@@ -138,6 +138,8 @@ import { loadReleaseMigrations } from '../database/releaseMigrations.js';
 import type { MigrationLedgerMonitor } from './setup/MigrationLedgerMonitor.js';
 import type { MigrationLedgerResult } from './setup/MigrationLedgerProbe.js';
 import { createReleaseMigrationLedgerMonitor } from './setup/ReleaseMigrationLedgerMonitor.js';
+import { probeAllowlistParity, type AllowlistParityResult } from './setup/AllowlistParityProbe.js';
+import type { SignInAllowlistAuthority } from '../auth/embedded-as/allowlistGate.js';
 import { createHealthModule, type HealthReadinessChecks } from './modules/health/index.js';
 import { createConsoleMetaModule } from './modules/console-meta/ConsoleMetaModule.js';
 import {
@@ -582,6 +584,7 @@ export class WebConsoleRegistrar {
       securityInvalidationReadiness,
       routesMounted: apiV1MountState.mounted,
       migrationLedgerMonitor,
+      signInAllowlistAuthority: resolveSignInAllowlistAuthority(container),
     });
     const operationHealthChecks = createOperationHealthChecks(healthProbes, container);
     registry.register(createHealthModule({
@@ -1339,6 +1342,10 @@ interface ConsoleHealthProbes {
   // Read-only comparison of this release's migrations with the applied ledger.
   // Null without a database: there is no ledger to compare.
   readonly databaseMigrations: (() => Promise<MigrationLedgerResult>) | null;
+  // Read-only comparison of the earlier sign-in allowlist with the one sign-in
+  // consults. Null unless the console's allowlist is the authority: otherwise
+  // there is only one list.
+  readonly allowlistParity: (() => Promise<AllowlistParityResult>) | null;
 }
 
 // Single source for the dependency probes shared by both the public readiness surface
@@ -1350,8 +1357,10 @@ function createConsoleHealthProbes(options: {
   readonly securityInvalidationReadiness: IConsoleSecurityInvalidationReadiness;
   readonly routesMounted: () => boolean;
   readonly migrationLedgerMonitor: MigrationLedgerMonitor | null;
+  readonly signInAllowlistAuthority: SignInAllowlistAuthority | null;
 }): ConsoleHealthProbes {
   const monitor = options.migrationLedgerMonitor;
+  const { authStorage, signInAllowlistAuthority: authority } = options;
   return {
     databaseAvailable: () => probeDatabaseLiveness(options.database),
     authServerAvailable: () => Boolean(options.authStorage),
@@ -1359,7 +1368,20 @@ function createConsoleHealthProbes(options: {
     apiV1Mounted: () => options.routesMounted(),
     securityInvalidationReadiness: () => options.securityInvalidationReadiness.getReadiness(),
     databaseMigrations: monitor ? () => monitor.current() : null,
+    allowlistParity: authStorage && authority
+      ? () => probeAllowlistParity({
+        listEarlier: () => authStorage.allowlistList(),
+        listAuthority: () => authority.listEntries(),
+      })
+      : null,
   };
+}
+
+/** The allowlist sign-in consults, when it is not the earlier one. Registered by the auth registrar. */
+function resolveSignInAllowlistAuthority(container: DiContainerFacade): SignInAllowlistAuthority | null {
+  return container.hasRegistration('SignInAllowlistAuthority')
+    ? container.resolve<SignInAllowlistAuthority>('SignInAllowlistAuthority')
+    : null;
 }
 
 /** An injected monitor wins; otherwise one is built over the console database, if there is one. */
@@ -1435,6 +1457,9 @@ function createOperationHealthChecks(
     ...(probes.databaseMigrations
       ? { databaseMigrations: async () => operationHealthFromMigrationLedger(await probes.databaseMigrations!()) }
       : {}),
+    ...(probes.allowlistParity
+      ? { allowlistParity: async () => operationHealthFromAllowlistParity(await probes.allowlistParity!()) }
+      : {}),
     apiMount: () => probes.apiV1Mounted()
       ? {
         component: 'api_mount',
@@ -1457,6 +1482,16 @@ function operationHealthFromMigrationLedger(result: MigrationLedgerResult) {
   return {
     component: 'database_migrations' as const,
     status: status[result.state],
+    checked_at: new Date().toISOString(),
+    failure_codes: result.state === 'passed' ? [] : [result.code],
+  };
+}
+
+/** A gap between the allowlists affects some sign-ins, not whether this replica can serve. */
+function operationHealthFromAllowlistParity(result: AllowlistParityResult) {
+  return {
+    component: 'allowlist_parity' as const,
+    status: result.state === 'passed' ? 'ok' as const : 'degraded' as const,
     checked_at: new Date().toISOString(),
     failure_codes: result.state === 'passed' ? [] : [result.code],
   };

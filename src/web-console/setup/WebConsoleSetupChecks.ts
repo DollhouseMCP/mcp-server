@@ -73,8 +73,8 @@ export const WEB_CONSOLE_SETUP_CHECKS: Readonly<Record<WebConsoleSetupCheckId, W
     title: 'Sign-in allowlist sources agree',
     proves: 'Every entry in the earlier sign-in allowlist is present in the allowlist the console manages, so nobody loses access by accident.',
     verification: 'server-probe',
-    verifiedBy: 'The server compares the two allowlists and confirms the identity migration was reviewed.',
-    remediation: 'Add the entries reported as missing in the console, or complete the identity migration review.',
+    verifiedBy: 'The server compares the two allowlists with the rule it enforces at start-up, where a gap stops it from starting.',
+    remediation: 'Add the entries reported as missing in the console, or remove them from the earlier list with dollhouse-allowlist.',
   },
   embedded_as_login_step_up: {
     id: 'embedded_as_login_step_up',

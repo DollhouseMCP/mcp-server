@@ -34,6 +34,7 @@ export class OperationsService {
       this.getHealthComponent('runtime_control', checkedAt),
       this.getHealthComponent('security_invalidation', checkedAt),
       ...(this.healthChecks.databaseMigrations ? [this.getHealthComponent('database_migrations', checkedAt)] : []),
+      ...(this.healthChecks.allowlistParity ? [this.getHealthComponent('allowlist_parity', checkedAt)] : []),
       this.getHealthComponent('api_mount', checkedAt),
     ]);
     const status = summarizeStatus(components);
@@ -114,6 +115,9 @@ export class OperationsService {
       case 'database_migrations':
         // Only reached when the check exists; getHealth omits the component otherwise.
         return evaluateOperationHealthComponent(component, this.healthChecks.databaseMigrations ?? (() => false), checkedAt);
+      case 'allowlist_parity':
+        // Only reached when the check exists; getHealth omits the component otherwise.
+        return evaluateOperationHealthComponent(component, this.healthChecks.allowlistParity ?? (() => false), checkedAt);
       case 'api_mount':
         return evaluateOperationHealthComponent(component, this.healthChecks.apiMount, checkedAt);
     }

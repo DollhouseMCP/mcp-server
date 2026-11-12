@@ -14,6 +14,8 @@ export interface OperationsHealthChecks {
   readonly securityInvalidation: OperationHealthCheck;
   /** Absent without a database: there is no migration ledger to compare. */
   readonly databaseMigrations?: OperationHealthCheck;
+  /** Absent unless the console's allowlist is the sign-in authority: otherwise there is one list. */
+  readonly allowlistParity?: OperationHealthCheck;
   readonly apiMount: OperationHealthCheck;
 }
 
@@ -24,6 +26,7 @@ export const OPERATION_HEALTH_COMPONENTS: readonly OperationHealthComponent[] = 
   'runtime_control',
   'security_invalidation',
   'database_migrations',
+  'allowlist_parity',
   'api_mount',
 ];
 

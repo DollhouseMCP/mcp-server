@@ -340,6 +340,35 @@ describe('OperationsModule', () => {
     });
   });
 
+  it.each([
+    ['ok', [], 'ok'],
+    ['degraded', ['allowlist_entries_not_carried_over'], 'degraded'],
+    ['degraded', ['allowlists_unreadable'], 'degraded'],
+  ] as const)('reports allowlist parity as %s with its stable code, after database migrations', async (status, codes, overall) => {
+    const healthy = { ...HEALTH_CHECKS,
+      securityInvalidation: () => true,
+      apiMount: () => true,
+      databaseMigrations: () => true,
+      allowlistParity: () => ({
+        component: 'allowlist_parity' as const, status, checked_at: NOW.toISOString(), failure_codes: [...codes],
+      }),
+    };
+    const route = findRoute(createModule(healthy).routes, 'GET', '/api/v1/admin/operate/health');
+    const result = await route.handler({ query: {}, params: {} } as unknown as ConsoleRouteRequest);
+
+    // A gap between the allowlists affects some sign-ins; the console itself still answers.
+    expect(result.status).toBe(200);
+    const summary = projectOperationHealthSummary(result.body);
+    expect(summary.status).toBe(overall);
+    expect(summary.components.map(component => component.component)).toEqual([
+      'database', 'auth_server', 'gatekeeper', 'runtime_control', 'security_invalidation',
+      'database_migrations', 'allowlist_parity', 'api_mount',
+    ]);
+    expect(summary.components.find(component => component.component === 'allowlist_parity')).toEqual({
+      component: 'allowlist_parity', status, checked_at: NOW.toISOString(), failure_codes: [...codes],
+    });
+  });
+
   it('reports a migration check that throws as unavailable rather than failing the whole summary', async () => {
     const checks = { ...HEALTH_CHECKS, databaseMigrations: () => { throw new Error('boom'); } };
     const route = findRoute(createModule(checks).routes, 'GET', '/api/v1/admin/operate/health');
