@@ -128,3 +128,39 @@ returned consumption is the only consumption that does not close its
 reconciliation: `legacy_control_resolution.lookup` accepts it only with all
 six records present and bound to each other, to the reconciliation and to the
 restored state by hash.
+
+## An update that stopped after the upgraded app started
+
+After its forward write the legacy update cannot be taken back by
+`recover-legacy`. Once the upgraded app has started, four steps are left: the
+public acceptance probe, the release of the normal proxy profile, the
+completion record and the deployed markers. If one of them does not pass, the
+update stops with the upgraded app running on the migrated database and the
+proxy answering 503 from its verification profile. Every other action refuses
+the pending release.
+
+`legacy_update_completion.py` runs the steps that are left:
+
+```bash
+python3 /pinned/source/scripts/hosted-deploy/legacy_update_completion.py \
+  complete-legacy-update < /protected/complete-request.json
+```
+
+The request holds `deploy_dir`, `instance`, `data_volume`, `config_volume`,
+`token`, `public_base_url`, `timeout`, `runtime_image` (by digest) and
+`revision` (the staged commit). The action refuses unless all of this holds:
+
+- the forward write of this transition was issued on this host;
+- the pending transition is this update, staged, with these volumes, and its
+  source and receipt are unchanged;
+- its release stands at `probed`, `accepted` or `released`, for this public
+  origin;
+- the app is another container than the legacy app that was stopped, it was
+  created from the named runtime image, and it runs.
+
+It then goes on from where the release stands, with the update's own
+functions. A failed acceptance changes nothing, so the action can be run
+again. It is not a retry of anything that writes to the database, and it does
+not replace a checkpoint restore: if the upgraded app does not answer as
+required, the acceptance fails again. The window driver names this action in
+`status` and writes its request; see `hosted-upgrade-window.md`.

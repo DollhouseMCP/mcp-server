@@ -84,12 +84,15 @@ The driver stops. It runs nothing else and recovers nothing by itself.
 | Where it stopped | Action |
 |---|---|
 | Before phase 2 | none: nothing that serves was stopped |
-| After phase 2, and no update is pending | `abandon-caddy-offline` |
+| After phase 2, no update is pending and the proxy is stopped | `abandon-caddy-offline` |
 | In phase 4, before the forward write | `recover-legacy`, then reconciliation |
-| In phase 4, after the forward write | none yet: the checkpoint restore runbook |
+| In phase 4, after the forward write, the upgraded app runs, stopped at acceptance or release | `complete-legacy-update`, then `run` |
+| In phase 4, after the forward write, anywhere else | none yet: the checkpoint restore runbook |
 | In phase 4, before a recovery baseline was armed, proxy still stopped | `return-unarmed-update`, then `abandon-caddy-offline` |
 | The same, but the proxy is running or its state is unknown | none: an unrehearsed order, review first |
 | A recovery ended between its two steps | the second step: `abandon-caddy-offline`, or `reconcile-legacy-after-recovery` |
+| No update is pending, and the proxy runs or its state is unknown | none: check what serves first |
+| The update was completed outside the journal | none: verify it in a new journal with `--first 5` |
 
 `recover PLAN JOURNAL ACTION` runs that action only when ACTION is the one `status` names.
 A second attempt needs a new journal, a plan with new Caddy volume names, and `--first 2`.

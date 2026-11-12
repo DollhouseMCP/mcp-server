@@ -258,16 +258,38 @@ const http=require('node:http'); const http2=require('node:http2'); const net=re
 const mode=process.argv[1], token=process.argv[2];
 let settled=false; const finish=ok=>{if(!settled){settled=true;process.exit(ok?0:2);}};
 process.on('beforeExit',()=>{if(!settled)process.exitCode=2;}); setTimeout(()=>finish(false),2000);
+const raw={
+  conflict:'GET /healthz HTTP/1.1\r\nHost: fixture.local\r\nContent-Length: 0\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n',
+  'cl-conflict':'GET /healthz HTTP/1.1\r\nHost: fixture.local\r\nContent-Length: 0\r\nContent-Length: 4\r\n\r\nx',
+  aborted:'GET /healthz HTTP/1.1\r\nHost: fixture.local\r\nContent-Length: 4\r\n\r\nx',
+  chunked:'GET /healthz HTTP/1.1\r\nHost: fixture.local\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nx\r\n0\r\n\r\n',
+  'chunked-empty':'GET /healthz HTTP/1.1\r\nHost: fixture.local\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n',
+};
 if(mode==='h2') { const s=http2.connect('http://proxy:80'); s.on('error',()=>finish(true)); const q=s.request({':method':'GET',':path':'/healthz',':authority':'fixture.local'},{endStream:false}); q.on('error',()=>finish(true)); q.on('close',()=>finish(true)); q.on('response',()=>finish(false)); q.end('unexpected'); }
-else if(mode==='conflict'||mode==='cl-conflict'||mode==='aborted') { const s=net.connect(80,'proxy',()=>{s.end(mode==='conflict'?'GET /healthz HTTP/1.1\r\nHost: fixture.local\r\nContent-Length: 0\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n':mode==='cl-conflict'?'GET /healthz HTTP/1.1\r\nHost: fixture.local\r\nContent-Length: 0\r\nContent-Length: 4\r\n\r\nx':'GET /healthz HTTP/1.1\r\nHost: fixture.local\r\nContent-Length: 4\r\n\r\nx')});let data='';s.on('data',x=>data+=x);s.on('error',()=>finish(true));s.on('close',()=>finish(!/200 OK/i.test(data))); }
-else { const allowed=mode.startsWith('allowed'); const headers={'host':'fixture.local','content-length':'0'}; if(mode==='auth')headers.authorization='Bearer fixture'; if(mode==='cookie')headers.cookie='x=y'; const path=mode==='query'?'/healthz?x=1':mode==='allowed-ready'?'/readyz':mode==='allowed-mcp'?'/mcp':'/healthz'; const r=http.request({host:'proxy',port:80,path,method:mode==='post'?'POST':'GET',headers},res=>{res.on('aborted',()=>finish(false));res.on('error',()=>finish(false));res.resume();res.on('end',()=>finish(res.complete&&(allowed ? res.statusCode===(mode==='allowed-mcp'?401:200) : res.statusCode===503)&&res.headers['x-dollhouse-verification']===token));});r.on('error',()=>finish(false));r.end(); }
+else if(Object.hasOwn(raw,mode)) { const s=net.connect(80,'proxy',()=>{s.end(raw[mode])});let data='';s.on('data',x=>data+=x);s.on('error',()=>finish(true));s.on('close',()=>finish(!/200 OK/i.test(data))); }
+else {
+  const allowed=mode.startsWith('allowed'), plain=mode.includes('-plain'), viaHop=mode.includes('-hop'); let stripped=0;
+  // A stand-in for a CDN in front of the proxy: it passes the request on and drops "Content-Length: 0" from a GET.
+  const hop=net.createServer(client=>{ const origin=net.connect(80,'proxy'); let head='';
+    client.on('data',chunk=>{ head+=chunk; if(!head.includes('\r\n\r\n'))return; const lines=head.split('\r\n');
+      const kept=lines.filter(line=>!(lines[0].startsWith('GET ')&&/^content-length: *0$/i.test(line)));
+      stripped+=lines.length-kept.length; head=''; origin.write(kept.join('\r\n')); });
+    origin.pipe(client); origin.on('error',()=>finish(false)); client.on('error',()=>finish(false)); });
+  const headers={'host':'fixture.local'}; if(!plain)headers['content-length']='0'; if(mode==='auth')headers.authorization='Bearer fixture'; if(mode==='cookie')headers.cookie='x=y';
+  const path=mode==='query'?'/healthz?x=1':mode.endsWith('-ready')?'/readyz':mode.endsWith('-mcp')?'/mcp':'/healthz';
+  const send=()=>{ const target=viaHop?{host:'127.0.0.1',port:hop.address().port}:{host:'proxy',port:80};
+    const r=http.request({...target,path,method:mode==='post'?'POST':'GET',headers},res=>{res.on('aborted',()=>finish(false));res.on('error',()=>finish(false));res.resume();res.on('end',()=>finish(res.complete&&(allowed ? res.statusCode===(mode.endsWith('-mcp')?401:200) : res.statusCode===503)&&res.headers['x-dollhouse-verification']===token&&stripped===(viaHop?1:0)));});r.on('error',()=>finish(false));r.end(); };
+  if(viaHop)hop.listen(0,'127.0.0.1',send); else send();
+}
 `;
     const probe = mode => engine(['exec', upstream, 'node', '-e', probeSource, mode, token]);
     const probeCount = () => engine(['logs', upstream]).split('\n').filter(line => line.includes('"fixture":"probe"')).length;
     const countBefore = probeCount();
-    for (const mode of ['allowed','allowed-ready','allowed-mcp']) probe(mode);
-    for (const mode of ['query','auth','cookie','post','conflict','cl-conflict','aborted','h2']) probe(mode);
-    assert.equal(probeCount(), countBefore + 3, 'unsafe framing or request reached the upstream');
+    // With "Content-Length: 0", without it, and with it through a hop that drops it as a CDN does.
+    const allowedModes = ['', '-plain', '-hop'].flatMap(kind => ['', '-ready', '-mcp'].map(route => `allowed${kind}${route}`));
+    for (const mode of allowedModes) probe(mode);
+    for (const mode of ['query','auth','cookie','post','conflict','cl-conflict','aborted','chunked','chunked-empty','h2']) probe(mode);
+    assert.equal(probeCount(), countBefore + allowedModes.length, 'unsafe framing or request reached the upstream');
     const stopped = runControl('stop-witness');
     assert.equal(stopped.id, proxy);
     assert.equal(stopped.clean_stop, true);
@@ -278,7 +300,7 @@ else { const allowed=mode.startsWith('allowed'); const headers={'host':'fixture.
     for (const mode of ['allowed','allowed-ready','allowed-mcp']) probe(mode);
     const restored = runControl('finish');
     assert.equal(request({path:'/ready'}).status, 200);
-    observations.push('real private admin load/readback, restart-persistent fence, marker and framing denials, then normal-profile restoration');
+    observations.push('real private admin load/readback, restart-persistent fence, acceptance behind a header-dropping hop, marker and framing denials, then normal-profile restoration');
     const hashSource = source => createHash('sha256').update(fs.readFileSync(path.join(root, source))).digest('hex');
     // The adapt control must work on both Caddy generations a deployment
     // meets. The legacy fixture is the stock image with its stock profile and

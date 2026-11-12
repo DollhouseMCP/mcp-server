@@ -58,7 +58,10 @@ class ReleaseActionTests(unittest.TestCase):
         normal, verification = release.render_profiles(renderer, 'a' * 32)
         self.assertNotIn(b'protocols h1', normal)
         self.assertIn(b'protocols h1', verification)
-        self.assertIn(b'header Content-Length 0', verification)
+        # A body is refused, and a CDN that drops "Content-Length: 0" from a GET is not: absent or exactly 0.
+        self.assertNotIn(b'header Content-Length', verification)
+        self.assertIn(b'({http.request.header.Content-Length} == "" || {http.request.header.Content-Length} == "0")', verification)
+        self.assertIn(b'header !Transfer-Encoding', verification)
         self.assertIn(b'{http.request.orig_uri}', verification)
         self.assertIn(b'>X-Dollhouse-Verification ' + b'a' * 32, verification)
         with self.assertRaises(ValueError):
@@ -71,7 +74,7 @@ class ReleaseActionTests(unittest.TestCase):
                 release.public_probe('https://fixture.example', '/healthz', b'200', False, 10, 'a' * 32)
         self.assertLessEqual(call.call_args.kwargs['timeout'], 12)
         self.assertIn('--http1.1', call.call_args.args[0])
-        self.assertIn('Content-Length: 0', call.call_args.args[0])
+        self.assertFalse([word for word in call.call_args.args[0] if 'content-length' in word.lower()])
 
     def test_zero_retry_window_attempts_once_and_requires_current_marker(self):
         response = b'HTTP/1.1 200 OK\r\nX-Dollhouse-Verification: ' + b'a' * 32 + b'\r\n\r\nok\n200'
@@ -90,6 +93,13 @@ class ReleaseActionTests(unittest.TestCase):
         with patch.object(release, 'bounded_input', return_value=valid) as call:
             release.confirm_denials('https://fixture.example', 'a' * 32)
         self.assertEqual(call.call_count, 2)
+        post, get = (item.args[0] for item in call.call_args_list)
+        self.assertEqual(post[post.index('--request') + 1], 'POST')
+        self.assertEqual([word for word in post if ': ' in word or word.startswith('https:')],
+                         ['Content-Length: 0', 'https://fixture.example/mcp'])
+        self.assertEqual(get[get.index('--request') + 1], 'GET')
+        self.assertEqual([word for word in get if ': ' in word or word.startswith('https:')],
+                         ['Authorization: Bearer verification-probe', 'https://fixture.example/healthz'])
         for response in (valid.replace(b'a' * 32, b'b' * 32),
                          valid.replace(b'X-Dollhouse-Verification:', b'X-Unrelated:'),
                          valid.replace(b'503', b'200')):
