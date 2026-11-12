@@ -3,7 +3,7 @@ import { sql } from 'drizzle-orm';
 import type { DatabaseInstance } from '../../database/connection.js';
 import { getErrorCode } from '../../database/db-utils.js';
 import type { ReleaseMigration } from '../../database/releaseMigrations.js';
-import type { WebConsoleSetupCheckResult } from './WebConsoleSetupStatus.js';
+import type { WebConsoleSetupCheckResult, WebConsoleSetupCheckState } from './WebConsoleSetupStatus.js';
 
 const CHECK_ID = 'production_database_migrations';
 
@@ -17,6 +17,8 @@ export type MigrationLedgerCode =
 
 export interface MigrationLedgerResult extends WebConsoleSetupCheckResult {
   readonly id: typeof CHECK_ID;
+  /** A deployment always has a schema to check, so this is never not-applicable. */
+  readonly state: Exclude<WebConsoleSetupCheckState, 'not_applicable'>;
   /** Stable code for surfaces that show codes, not prose. */
   readonly code: MigrationLedgerCode;
   readonly detail: string;
@@ -98,6 +100,7 @@ export function compareMigrationLedger(
         detail: `${index} of ${release.length} migrations in this release are applied. First missing: ${expected.tag}.`,
       };
     }
+    // The ledger's created_at is the journal timestamp itself, read back as text.
     if (actual.hash !== expected.hash || actual.createdAt !== String(expected.when)) {
       return {
         id: CHECK_ID,
@@ -120,6 +123,10 @@ export function compareMigrationLedger(
 
 /**
  * Reads the ledger and compares it. Read-only.
+ *
+ * The ledger is read in the order the migrator applied it: by timestamp, then
+ * by insertion. The release list is strictly increasing by timestamp, so the
+ * two line up position by position.
  *
  * A ledger that cannot be read is reported as pending, not failed: the server
  * has learned nothing about the schema, and the usual cause is a role without

@@ -1453,7 +1453,7 @@ function createOperationHealthChecks(
 
 /** A database behind this release is not ready; an unreadable ledger is only unverified. */
 function operationHealthFromMigrationLedger(result: MigrationLedgerResult) {
-  const status = { passed: 'ok', failed: 'not_ready', pending: 'degraded', not_applicable: 'ok' } as const;
+  const status = { passed: 'ok', failed: 'not_ready', pending: 'degraded' } as const;
   return {
     component: 'database_migrations' as const,
     status: status[result.state],

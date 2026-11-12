@@ -40,19 +40,18 @@ export async function readReleaseMigrationsFromSource(folder: string): Promise<r
     entries?: unknown;
   };
   if (!Array.isArray(journal.entries)) throw new Error('Migration journal has no entries');
-  const migrations: ReleaseMigration[] = [];
-  for (const entry of journal.entries as readonly { tag?: unknown; when?: unknown }[]) {
+  const entries = (journal.entries as readonly { tag?: unknown; when?: unknown }[]).map(entry => {
     if (typeof entry.tag !== 'string' || !TAG_PATTERN.test(entry.tag) || !Number.isSafeInteger(entry.when)) {
       throw new Error('Migration journal entry is malformed');
     }
-    // The tag is restricted to [a-z0-9_] above, so it cannot leave the folder.
-    const sql = await readFile(join(folder, `${entry.tag}.sql`));
-    migrations.push({
-      tag: entry.tag,
-      when: entry.when as number,
-      hash: createHash('sha256').update(sql).digest('hex'),
-    });
-  }
+    return { tag: entry.tag, when: entry.when as number };
+  });
+  // Every tag is restricted to [a-z0-9_] above, so none can leave the folder.
+  const migrations = await Promise.all(entries.map(async ({ tag, when }): Promise<ReleaseMigration> => ({
+    tag,
+    when,
+    hash: createHash('sha256').update(await readFile(join(folder, `${tag}.sql`))).digest('hex'),
+  })));
   return parseReleaseMigrations(migrations);
 }
 
