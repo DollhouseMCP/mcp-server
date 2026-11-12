@@ -442,6 +442,19 @@ jobs:
       MIGRATION_DIGEST: ${{ needs.index.outputs.migration }}
       REPOSITORY: ${{ github.repository }}
     steps:
+      # Printed to the log as well as the summary page, so the references can
+      # be read by anyone who can read the run, with or without the page.
+      - name: Print the references
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Hosted image pair published and admitted on linux/amd64 and linux/arm64."
+          echo "commit=${SHA}"
+          echo "version=${VERSION}"
+          echo "DOLLHOUSE_HOSTED_IMAGE_MODE=registry"
+          echo "DOLLHOUSE_HOSTED_RUNTIME_IMAGE=${IMAGE}@${RUNTIME_DIGEST}"
+          echo "DOLLHOUSE_HOSTED_MIGRATION_IMAGE=${IMAGE}@${MIGRATION_DIGEST}"
+
       - name: Write the summary
         shell: bash
         run: |
