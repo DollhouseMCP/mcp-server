@@ -222,7 +222,7 @@ class EvidenceTests(unittest.TestCase):
         good = dict(dict.fromkeys(evidence.REQUEST, str(self.root)), instance='app')
         changes = [{'instance': 'app/../x'}, {'instance': ''}, {'deploy_dir': 'deploy'}, {'checkpoint_dir': str(self.root) + '/../deploy'},
                    {'manual_evidence_dir': str(self.root) + '/'}, {'deploy_dir': str(self.work) + '/./deploy'},
-                   {'checkpoint_dir': str(self.work) + '/.hidden'}]
+                   {'checkpoint_dir': str(self.work) + '/.hidden'}, {'checkpoint_dir': str(self.work) + '/d\u00e9ploy'}]
         for change in changes:
             with self.subTest(change), patch.object(evidence, 'declared_replica') as declared, \
                     patch.object(evidence.sys, 'stdin', io.StringIO(json.dumps(dict(good, **change)))):

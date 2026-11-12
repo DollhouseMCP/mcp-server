@@ -73,7 +73,7 @@ NOTE = 'written on a replica by write_recovery_evidence.py; a rehearsal record, 
 HEALTH_WAIT = 180
 REQUEST = {'deploy_dir', 'instance', 'checkpoint_dir', 'manual_evidence_dir'}
 INSTANCE = re.compile(r'[a-z0-9][a-z0-9_-]{0,62}\Z')
-FOLDER = re.compile(r'(?:/[A-Za-z0-9_][A-Za-z0-9_.-]*)+\Z')
+FOLDER = re.compile(r'(?:/\w[\w.-]*)+\Z', re.ASCII)
 
 
 def now():
