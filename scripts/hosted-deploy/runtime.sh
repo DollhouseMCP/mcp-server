@@ -504,6 +504,8 @@ start_or_update() {
   if [[ "${ACTION:-}" == legacy-offline-update ]]; then
     [[ "${IMAGE_MODE}" == registry && -d "${SERVER_DIR}" ]] || die "legacy handoff requires an existing registry-mode deployment"
     legacy_handoff preflight
+    # Arming's own checks, before a transition exists: a refusal here leaves nothing pending.
+    legacy_recovery_boundary check
   fi
   if [[ -d "${SERVER_DIR}" ]]; then
     if [[ "${transition_status}" == fresh ]]; then

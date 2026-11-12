@@ -316,6 +316,7 @@ check_fixture() {
     fi
     if [[ "${action}" == legacy-offline-update ]]; then
       assert_order "${fixture}/events" legacy-preflight transition-pending
+      assert_order "${fixture}/events" recovery-check transition-pending
       assert_order "${fixture}/events" recovery-arm render
       assert_order "${fixture}/events" legacy-stop recovery-write-intent
       assert_order "${fixture}/events" recovery-write-intent migration
@@ -371,7 +372,7 @@ for action in update rollback; do
     check_fixture "${action}" "${mode}" app
   done
 done
-for phase in arm write-intent; do
+for phase in check arm write-intent; do
   fixture="$(mktemp -d "${TMP_ROOT}/recovery-${phase}.XXXXXX")"
   mkdir -p "${fixture}/server" "${fixture}/source"
   printf 'current\n' > "${fixture}/server/version"
@@ -381,6 +382,8 @@ for phase in arm write-intent; do
     fail "recovery ${phase} refusal advanced"
   fi
   if grep -Eq '^(migration|bootstrap|replacement)$' "${fixture}/events"; then fail "recovery refusal reached forward writes"; fi
+  # A refused check must leave nothing pending: the transition begins only after it.
+  if [[ "${phase}" == check ]] && grep -q '^transition-pending$' "${fixture}/events"; then fail "recovery check refusal began a transition"; fi
   printf 'preparation-order PASS recovery-%s-refusal\n' "${phase}"
 done
 for mode in release-prepare-failure release-confirm-failure release-probe-fence-failure release-accept-failure release-release-failure; do
