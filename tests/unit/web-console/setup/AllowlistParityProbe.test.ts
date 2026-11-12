@@ -26,6 +26,16 @@ describe('compareAllowlistParity', () => {
     });
   });
 
+  it('words a single entry in the singular, both when it is carried and when it is not', () => {
+    expect(compareAllowlistParity([email('alice@example.com')], [email('alice@example.com')]).detail)
+      .toBe('The 1 entry in the earlier sign-in allowlist is in the allowlist sign-in uses.');
+    expect(compareAllowlistParity([email('alice@example.com')], []).detail).toBe(
+      '1 of 1 entry in the earlier sign-in allowlist is not in the allowlist sign-in uses (1 by email). ' +
+      'Sign-in does not honour it, and this server will refuse to start at its next restart until the two lists agree. ' +
+      'Add it in the console, or remove it from the earlier list with dollhouse-allowlist.',
+    );
+  });
+
   it('treats emails and usernames as the same entry regardless of case, as start-up does', () => {
     expect(compareAllowlistParity(
       [email('Alice@Example.com'), username('OctoCat')],

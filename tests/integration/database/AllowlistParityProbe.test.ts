@@ -68,7 +68,7 @@ required('probeAllowlistParity on PostgreSQL', () => {
     await addEarlier('email', email.toUpperCase());
     expect(await probe()).toMatchObject({
       state: 'passed', code: 'allowlists_agree',
-      detail: 'All 1 entries in the earlier sign-in allowlist are in the allowlist sign-in uses.',
+      detail: 'The 1 entry in the earlier sign-in allowlist is in the allowlist sign-in uses.',
     });
   });
 
@@ -78,7 +78,7 @@ required('probeAllowlistParity on PostgreSQL', () => {
     expect(await authority().matchesIdentity({ githubUsername: username })).toBe(false);
     expect(await probe()).toMatchObject({
       state: 'failed', code: 'allowlist_entries_not_carried_over',
-      detail: expect.stringContaining('1 of 2 entries in the earlier sign-in allowlist are not in the allowlist sign-in uses (1 by GitHub username).'),
+      detail: expect.stringContaining('1 of 2 entries in the earlier sign-in allowlist is not in the allowlist sign-in uses (1 by GitHub username).'),
     });
   });
 

@@ -53,11 +53,10 @@ export function compareAllowlistParity(
       id: CHECK_ID,
       state: 'passed',
       code: 'allowlists_agree',
-      detail: earlier.length === 0
-        ? 'The earlier sign-in allowlist is empty, so there is nothing to carry over.'
-        : `All ${earlier.length} entries in the earlier sign-in allowlist are in the allowlist sign-in uses.`,
+      detail: agreementDetail(earlier.length),
     };
   }
+  const one = missing.length === 1;
   const byKind = (Object.keys(KIND_LABELS) as AuthAllowlistKind[])
     .map(kind => ({ kind, count: missing.filter(entry => entry.kind === kind).length }))
     .filter(group => group.count > 0)
@@ -67,10 +66,17 @@ export function compareAllowlistParity(
     id: CHECK_ID,
     state: 'failed',
     code: 'allowlist_entries_not_carried_over',
-    detail: `${missing.length} of ${earlier.length} entries in the earlier sign-in allowlist are not in the allowlist sign-in uses ` +
-      `(${byKind}). Sign-in does not honour them, and this server will refuse to start at its next restart until the two lists agree. ` +
-      'Add them in the console, or remove them from the earlier list with dollhouse-allowlist.',
+    detail: `${missing.length} of ${earlier.length} ${earlier.length === 1 ? 'entry' : 'entries'} in the earlier sign-in allowlist ` +
+      `${one ? 'is' : 'are'} not in the allowlist sign-in uses (${byKind}). Sign-in does not honour ${one ? 'it' : 'them'}, ` +
+      'and this server will refuse to start at its next restart until the two lists agree. ' +
+      `Add ${one ? 'it' : 'them'} in the console, or remove ${one ? 'it' : 'them'} from the earlier list with dollhouse-allowlist.`,
   };
+}
+
+function agreementDetail(count: number): string {
+  if (count === 0) return 'The earlier sign-in allowlist is empty, so there is nothing to carry over.';
+  if (count === 1) return 'The 1 entry in the earlier sign-in allowlist is in the allowlist sign-in uses.';
+  return `All ${count} entries in the earlier sign-in allowlist are in the allowlist sign-in uses.`;
 }
 
 /**
