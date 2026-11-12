@@ -1,3 +1,4 @@
+import { isInternalUserId } from '../../database/internalUsers.js';
 import { randomUUID } from 'node:crypto';
 
 import {
@@ -87,6 +88,7 @@ export class InMemoryConsoleAccountAdminStore implements IConsoleAccountAdminSto
     const limit = query.limit ?? 100;
     const search = query.search?.toLowerCase();
     const filtered = [...this.principals.values()]
+      .filter(principal => !isInternalUserId(principal.userId))
       .map(principal => this.withCurrentRoles(principal))
       .filter(p => !query.sub || p.primarySub === query.sub)
       .filter(p => query.enabled === undefined || (p.disabledAt === null) === query.enabled)
@@ -121,6 +123,7 @@ export class InMemoryConsoleAccountAdminStore implements IConsoleAccountAdminSto
   async findPrincipal(userId: string): Promise<ConsolePrincipalSummary | null> {
     await Promise.resolve();
     assertUuid(userId, 'userId');
+    if (isInternalUserId(userId)) return null;
     const principal = this.principals.get(userId);
     return principal ? this.withCurrentRoles(principal) : null;
   }
@@ -129,7 +132,7 @@ export class InMemoryConsoleAccountAdminStore implements IConsoleAccountAdminSto
     await Promise.resolve();
     assertUuid(accountCorrelationId, 'accountCorrelationId');
     const principal = [...this.principals.values()]
-      .find(candidate => candidate.accountCorrelationId === accountCorrelationId);
+      .find(candidate => candidate.accountCorrelationId === accountCorrelationId && !isInternalUserId(candidate.userId));
     return principal ? this.withCurrentRoles(principal) : null;
   }
 

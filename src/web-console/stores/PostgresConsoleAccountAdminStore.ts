@@ -2,6 +2,7 @@ import type { DatabaseMemoryAccountDeletionBoundary } from '../../storage/Databa
 import { invitationIdentityAllowedSql } from '../../auth/InvitationAuthenticationPolicy.js';
 import { and, eq, isNull, sql, type SQL } from 'drizzle-orm';
 
+import { INTERNAL_USER_IDS } from '../../database/internalUsers.js';
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
 import type { DrizzleTx } from '../../database/db-utils.js';
@@ -128,6 +129,7 @@ export class PostgresConsoleAccountAdminStore implements IConsoleAccountAdminSto
         WHERE uar.user_id = u.id AND uar.revoked_at IS NULL
       ) role_summary ON true
       WHERE u.deleted_at IS NULL
+        AND ${notInternalUserSql}
         ${buildPrincipalDirectoryFilters(query)}
       ORDER BY u.created_at ASC, u.id ASC
       LIMIT ${limit + 1}
@@ -664,6 +666,14 @@ async function revokeConsoleAdminRoleRowsWithTx(
   return revoked;
 }
 
+/**
+ * Leaves out the users the server keeps for itself (the shared-pool system
+ * user and the canary). They are not accounts: they must not be listed,
+ * counted, or reachable by any account administration action, all of which
+ * look the account up through these queries first.
+ */
+const notInternalUserSql = sql`u.id NOT IN (${sql.join(INTERNAL_USER_IDS.map(id => sql`${id}::uuid`), sql`, `)})`;
+
 function principalProjectionSql(whereClause: ReturnType<typeof sql>) {
   return sql`
     SELECT
@@ -704,7 +714,7 @@ function principalProjectionSql(whereClause: ReturnType<typeof sql>) {
       FROM user_admin_roles uar
       WHERE uar.user_id = u.id AND uar.revoked_at IS NULL
     ) role_summary ON true
-    WHERE u.deleted_at IS NULL AND (${whereClause})
+    WHERE u.deleted_at IS NULL AND ${notInternalUserSql} AND (${whereClause})
   `;
 }
 
