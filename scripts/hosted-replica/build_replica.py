@@ -218,7 +218,7 @@ def build_volumes(inventory, inputs, engine, state, note):
 def environment(record, inputs, note, image):
     names = record['config']['env']['names']
     public = record['config']['env'].get('public') or {}
-    inherited = dict(item.split('=', 1) for item in image.get('Env') or [])
+    inherited = {name: value for name, _, value in (item.partition('=') for item in image.get('Env') or [])}
     own = inputs['container_environment'].get(record['name'], {})
     result = []
     for name in names:
