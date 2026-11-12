@@ -638,6 +638,27 @@ DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME=octocat \
 
 Prefer `DOLLHOUSE_BOOTSTRAP_GITHUB_ID` when you already know the numeric GitHub ID, because it skips the GitHub API lookup. If neither bootstrap variable is set and the script has a TTY, it prompts for a GitHub username.
 
+#### How the first admin is claimed
+
+You name one GitHub account and that account becomes the admin by signing in. There is no setup code to copy, and nothing secret is printed or logged.
+
+1. `bootstrap-admin` resolves the username to GitHub's numeric account ID once and prints the ID it resolved. Check it is the account you meant. The server stores the ID, not the username.
+2. The first time that account signs in to the console at `/ui/` it is the admin. It is admitted even when the sign-in allowlist is required and still empty. Everyone else has to be on the allowlist or invited.
+3. Signing in does not elevate. Admin actions still need an authenticator app, set up under Security, and a step-up with its code.
+
+What to rely on:
+
+- **The match is on the account ID.** Renaming the GitHub account does not change who the admin is, and a different account that later takes the old username gets nothing.
+- **It can be claimed once.** Re-running `bootstrap-admin` for the same account is harmless. Running it for a different account is refused; transferring admin is a separate operation. Two claims made at the same moment settle on exactly one.
+- **It is audited.** The claim is recorded as `auth.bootstrap.completed` with the account and how it was designated.
+- **Until it is done, nobody can sign in.** Every sign-in is refused with `bootstrap_required` and `/readyz` reports not ready.
+
+An install done by hand, without this tooling, has to run the same command once inside the container, because the server does not read the bootstrap variables itself (#3235):
+
+```bash
+dollhouse-admin-bootstrap --method github --github-username octocat
+```
+
 ### `rollback`
 
 Validates the selected previous source bundle and its unique proxy receipt.
