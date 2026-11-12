@@ -4,3 +4,4 @@ export * from './MigrationLedgerProbe.js';
 export * from './MigrationLedgerMonitor.js';
 export * from './ReleaseMigrationLedgerMonitor.js';
 export * from './AllowlistParityProbe.js';
+export * from './AuditTelemetryProbe.js';
