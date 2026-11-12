@@ -15,9 +15,11 @@ import {
   chooseActor,
   ConsoleAllowlistCliTarget,
   listConsoleAdmins,
+  readEarlierAllowlistWithTx,
   reconcileEarlierAllowlist,
   type AllowlistCliActor,
 } from '../../../src/cli/allowlistAuthority.js';
+import type { DrizzleTx } from '../../../src/database/db-utils.js';
 import { authIdentityEvents } from '../../../src/database/schema/auth.js';
 import { users } from '../../../src/database/schema/users.js';
 import { userAdminRoles } from '../../../src/database/schema/webConsole.js';
@@ -43,6 +45,8 @@ required('dollhouse-allowlist where the console manages the allowlist', () => {
   const ownEarlier = {
     allowlistList: async () => (await storage().allowlistList()).filter(entry => earlierIds.includes(entry.id)),
   };
+  // Reconcile reads and locks the earlier list inside its transaction. Here it is narrowed to this suite's rows.
+  const readOwnEarlier = async (tx: DrizzleTx) => (await readEarlierAllowlistWithTx(tx)).filter(entry => earlierIds.includes(entry.id));
   const strand = async (kind: 'email' | 'github_username', value: string, note: string | null = null) => {
     // What the command did on such an install before the fix: write the earlier table.
     const entry = await storage().allowlistAdd({ kind, value, note, createdBy: 'cli' });
@@ -131,7 +135,7 @@ required('dollhouse-allowlist where the console manages the allowlist', () => {
 
     it('reports the three kinds of leftover and changes nothing', async () => {
       const result = await reconcileEarlierAllowlist({
-        db: db(), storage: ownEarlier, mode: 'report',
+        db: db(), readEarlier: readOwnEarlier, mode: 'report',
         resolveActor: () => Promise.reject(new Error('a report must not need an admin')),
       });
 
@@ -160,7 +164,7 @@ required('dollhouse-allowlist where the console manages the allowlist', () => {
 
     it('carries the stranded entry over, never re-adds the removed one, and empties the earlier allowlist', async () => {
       const result = await reconcileEarlierAllowlist({
-        db: db(), storage: ownEarlier, mode: 'carry', resolveActor: () => Promise.resolve(actor),
+        db: db(), readEarlier: readOwnEarlier, mode: 'carry', resolveActor: () => Promise.resolve(actor),
       });
 
       expect(result).toMatchObject({ mode: 'carry', added: 1, cleared: 3 });
@@ -178,12 +182,37 @@ required('dollhouse-allowlist where the console manages the allowlist', () => {
       expect(findAllowlistEntriesMissingFromAuthority(await ownEarlier.allowlistList(), await authority().listEntries())).toEqual([]);
     });
 
+    it('does not call an entry redundant unless sign-in really admits that identity', async () => {
+      // The two allowlists fold case differently outside ASCII. The earlier one
+      // stores this address all in lower case; the console keeps the capital.
+      // Comparing stored values would call them the same entry. Sign-in does not.
+      const consoleAddress = `\u00dcser-${tag}@example.com`;
+      const earlierAddress = `\u00fcser-${tag}@example.com`;
+      await target().add({ kind: 'email', value: consoleAddress, note: null });
+      await strand('email', earlierAddress);
+      expect(await authority().matchesIdentity({ email: earlierAddress })).toBe(false);
+
+      const report = await reconcileEarlierAllowlist({
+        db: db(), readEarlier: readOwnEarlier, mode: 'report', resolveActor: () => Promise.resolve(actor),
+      });
+      expect(report.uncarried.map(entry => entry.value)).toEqual([earlierAddress]);
+      expect(report.carried).toEqual([]);
+
+      const result = await reconcileEarlierAllowlist({
+        db: db(), readEarlier: readOwnEarlier, mode: 'carry', resolveActor: () => Promise.resolve(actor),
+      });
+      expect(result).toMatchObject({ added: 1, cleared: 1 });
+      // Clearing the earlier entry lost nothing: sign-in now admits the identity it named.
+      expect(await authority().matchesIdentity({ email: earlierAddress })).toBe(true);
+      expect(await ownEarlier.allowlistList()).toEqual([]);
+    });
+
     it('discards without adding anything', async () => {
       const dropped = `discarded-${tag}`;
       await strand('github_username', dropped);
 
       const result = await reconcileEarlierAllowlist({
-        db: db(), storage: ownEarlier, mode: 'discard', resolveActor: () => Promise.resolve(actor),
+        db: db(), readEarlier: readOwnEarlier, mode: 'discard', resolveActor: () => Promise.resolve(actor),
       });
 
       expect(result).toMatchObject({ mode: 'discard', added: 0, cleared: 1 });
@@ -194,7 +223,7 @@ required('dollhouse-allowlist where the console manages the allowlist', () => {
 
     it('does nothing, and needs no admin, when the earlier allowlist is already empty', async () => {
       const result = await reconcileEarlierAllowlist({
-        db: db(), storage: ownEarlier, mode: 'carry',
+        db: db(), readEarlier: readOwnEarlier, mode: 'carry',
         resolveActor: () => Promise.reject(new Error('nothing to change, so no admin is needed')),
       });
       expect(result).toMatchObject({ added: 0, cleared: 0, carried: [], removedInConsole: [], uncarried: [] });

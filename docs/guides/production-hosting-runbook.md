@@ -154,7 +154,7 @@ docker compose run --rm dollhousemcp \
   npx dollhouse-allowlist update --id <uuid> --note "new note"
 ```
 
-**If the server refuses to start with "Sign-in allowlist authority cutover refused".** The earlier `auth_allowlist` table holds entries that are not in the allowlist sign-in uses. Versions before this fix let `dollhouse-allowlist add` put them there on a hosted install. Sign-in does not honour them, and the server will not start while they remain. The message names the entries. Clear them with:
+**If the server refuses to start with "Sign-in allowlist authority cutover refused".** The earlier `auth_allowlist` table holds entries that are not in the allowlist sign-in uses. Versions before this fix let `dollhouse-allowlist add` put them there on a hosted install. Sign-in does not honour them, and the server will not start while they remain. The message names the entries, by kind and value, in the server log; if your logs are shipped somewhere with stricter rules about personal data than the host itself, bear that in mind. Clear them with:
 
 ```bash
 # Show what is left in the earlier allowlist. Changes nothing.

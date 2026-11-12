@@ -14,7 +14,6 @@
 
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 
-import { findAllowlistEntriesMissingFromAuthority } from '../auth/embedded-as/allowlistGate.js';
 import type {
   AllowlistMatchValues,
   AuthAllowlistEntry,
@@ -30,6 +29,7 @@ import { ConsoleStoreConflictError } from '../web-console/stores/ConsoleStoreVal
 import type { ConsoleAccountAllowlistEntry } from '../web-console/stores/IConsoleAccountAllowlistStore.js';
 import {
   accountAllowlistDeniesIdentityWithTx,
+  accountAllowlistMatchesIdentityWithTx,
   addAccountAllowlistEntryWithTx,
   listActiveAccountAllowlistEntriesWithTx,
   removeAccountAllowlistEntryWithTx,
@@ -235,11 +235,11 @@ export class ConsoleAllowlistCliTarget implements AllowlistCliTarget {
 export type ReconcileMode = 'report' | 'carry' | 'discard';
 
 export interface ReconcilePlan {
-  /** In the earlier allowlist and already in the one sign-in uses. Redundant. */
+  /** In the earlier allowlist, and sign-in already admits the identity. Redundant. */
   readonly carried: readonly AuthAllowlistEntry[];
   /** In the earlier allowlist, and removed in the console since. The removal stands. */
   readonly removedInConsole: readonly AuthAllowlistEntry[];
-  /** In the earlier allowlist only. These are what stop the server from starting. */
+  /** In the earlier allowlist only: sign-in does not admit the identity. */
   readonly uncarried: readonly AuthAllowlistEntry[];
 }
 
@@ -249,6 +249,8 @@ export interface ReconcileResult extends ReconcilePlan {
   readonly added: number;
   /** Entries deleted from the earlier allowlist. */
   readonly cleared: number;
+  /** Entries in the earlier allowlist afterwards. Zero unless something else added to it meanwhile. */
+  readonly remaining: number;
 }
 
 function matchValues(entry: Pick<AuthAllowlistEntry, 'kind' | 'value'>): AllowlistMatchValues {
@@ -257,24 +259,49 @@ function matchValues(entry: Pick<AuthAllowlistEntry, 'kind' | 'value'>): Allowli
   return { githubId: entry.value };
 }
 
+/** One statement at a time, in order: a transaction has one connection, and the order of writes is recorded. */
+function inOrder<Item>(items: readonly Item[], each: (item: Item) => Promise<void>): Promise<void> {
+  return items.reduce((earlier, item) => earlier.then(() => each(item)), Promise.resolve());
+}
+
+/** The whole earlier allowlist, locked for the rest of the transaction. */
+export async function readEarlierAllowlistWithTx(tx: DrizzleTx): Promise<AuthAllowlistEntry[]> {
+  const rows = await tx.select().from(authAllowlist).orderBy(authAllowlist.createdAt, authAllowlist.id).for('update');
+  return rows.map(row => ({
+    id: row.id,
+    kind: row.kind as AuthAllowlistKind,
+    value: row.value,
+    note: row.note,
+    createdBy: row.createdBy,
+    createdAt: row.createdAt,
+  }));
+}
+
+/**
+ * Sorts the earlier entries by what sign-in would do with each identity
+ * today. The sign-in authority itself is asked, entry by entry, because that
+ * is the only answer that matters: an entry is redundant only if the identity
+ * it names is already admitted. Comparing stored values instead would get
+ * identities with non-ASCII letters wrong, since the two allowlists do not
+ * fold case the same way.
+ */
 async function planReconcileWithTx(tx: DrizzleTx, earlier: readonly AuthAllowlistEntry[]): Promise<ReconcilePlan> {
-  const active = (await listActiveAccountAllowlistEntriesWithTx(tx)).map(fromConsoleEntry);
-  const missing = new Set(findAllowlistEntriesMissingFromAuthority(earlier, active).map(entry => entry.id));
   const carried: AuthAllowlistEntry[] = [];
   const removedInConsole: AuthAllowlistEntry[] = [];
   const uncarried: AuthAllowlistEntry[] = [];
-  for (const entry of earlier) {
-    if (!missing.has(entry.id)) carried.push(entry);
-    else if (await accountAllowlistDeniesIdentityWithTx(tx, matchValues(entry))) removedInConsole.push(entry);
+  await inOrder(earlier, async entry => {
+    const values = matchValues(entry);
+    if (await accountAllowlistMatchesIdentityWithTx(tx, values)) carried.push(entry);
+    else if (await accountAllowlistDeniesIdentityWithTx(tx, values)) removedInConsole.push(entry);
     else uncarried.push(entry);
-  }
+  });
   return { carried, removedInConsole, uncarried };
 }
 
 /**
  * Empties the earlier allowlist, so start-up no longer has anything to refuse.
  *
- * `report` changes nothing. `carry` adds every entry sign-in does not have to
+ * `report` changes nothing. `carry` adds every entry sign-in does not admit to
  * the allowlist it uses, then clears the earlier list. `discard` clears it
  * without adding anything.
  *
@@ -283,28 +310,32 @@ async function planReconcileWithTx(tx: DrizzleTx, earlier: readonly AuthAllowlis
  * re-admit someone who was taken off. It is cleared from the earlier list in
  * both modes and reported.
  *
- * Everything happens in one transaction: either the earlier list is empty and
- * the carried entries are in place, or nothing changed.
+ * Everything happens in one transaction, with the earlier list read and
+ * locked inside it: either the entries that were read are gone and the
+ * carried ones are in place, or nothing changed.
  */
 export async function reconcileEarlierAllowlist(options: {
   readonly db: DatabaseInstance;
-  readonly storage: Pick<IAuthStorageLayer, 'allowlistList'>;
   /** Asked only when the mode changes something. */
   readonly resolveActor: () => Promise<AllowlistCliActor>;
   readonly mode: ReconcileMode;
+  /** Which earlier entries to reconcile. Defaults to all of them. */
+  readonly readEarlier?: (tx: DrizzleTx) => Promise<readonly AuthAllowlistEntry[]>;
   readonly now?: () => Date;
 }): Promise<ReconcileResult> {
   const occurredAt = (options.now ?? (() => new Date()))();
-  const earlier = await options.storage.allowlistList();
-  const changes = options.mode !== 'report' && earlier.length > 0;
-  const actor = changes ? await options.resolveActor() : null;
+  const readEarlier = options.readEarlier ?? readEarlierAllowlistWithTx;
   return withSystemContext(options.db, async tx => {
+    const earlier = await readEarlier(tx);
     const plan = await planReconcileWithTx(tx, earlier);
-    if (!actor) return { ...plan, mode: options.mode, added: 0, cleared: 0 };
+    if (options.mode === 'report' || earlier.length === 0) {
+      return { ...plan, mode: options.mode, added: 0, cleared: 0, remaining: earlier.length };
+    }
+    const actor = await options.resolveActor();
 
     let added = 0;
     if (options.mode === 'carry') {
-      for (const entry of plan.uncarried) {
+      await inOrder(plan.uncarried, async entry => {
         const created = await addAccountAllowlistEntryWithTx(tx, {
           kind: entry.kind,
           value: entry.value,
@@ -312,11 +343,9 @@ export async function reconcileEarlierAllowlist(options: {
           createdByUserId: actor.userId,
           createdAt: occurredAt,
         });
-        await recordChange(tx, actor, occurredAt, {
-          operation: 'carry_over', kind: created.kind, entryId: created.id,
-        });
+        await recordChange(tx, actor, occurredAt, { operation: 'carry_over', kind: created.kind, entryId: created.id });
         added += 1;
-      }
+      });
     }
     const cleared = await tx.delete(authAllowlist)
       .where(inArray(authAllowlist.id, earlier.map(entry => entry.id)))
@@ -329,6 +358,7 @@ export async function reconcileEarlierAllowlist(options: {
       removedInConsole: plan.removedInConsole.length,
       [options.mode === 'carry' ? 'added' : 'discarded']: plan.uncarried.length,
     });
-    return { ...plan, mode: options.mode, added, cleared: cleared.length };
+    const left = await tx.select({ id: authAllowlist.id }).from(authAllowlist);
+    return { ...plan, mode: options.mode, added, cleared: cleared.length, remaining: left.length };
   });
 }

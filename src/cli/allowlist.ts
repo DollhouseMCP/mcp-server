@@ -140,7 +140,10 @@ async function runAdd(session: AllowlistCliSession, opts: AddOptions): Promise<v
   }
   try {
     const entry = await session.target.add({ kind, value, note: note ?? null });
-    process.stdout.write(`Added to ${session.target.description}: ${formatEntry(entry)}\n`);
+    // The line is unchanged where the command has always worked on its one allowlist.
+    process.stdout.write(session.consoleIsAuthority
+      ? `Added to ${session.target.description}: ${formatEntry(entry)}\n`
+      : `Added: ${formatEntry(entry)}\n`);
     await warnAboutEarlierEntries(session);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -257,23 +260,27 @@ async function runUpdate(session: AllowlistCliSession, opts: UpdateOptions): Pro
 
 function describeEntries(label: string, entries: readonly AuthAllowlistEntry[]): string {
   if (entries.length === 0) return '';
-  return `${label} (${entries.length}):\n${entries.map(entry => `  [${entry.kind}]  ${entry.value}`).join('\n')}\n`;
+  const lines = entries.map(entry => `  [${entry.kind}]  ${entry.value}`).join('\n');
+  return `${label} (${entries.length}):\n${lines}\n`;
 }
 
 function reconcileReport(result: ReconcileResult): string {
   const total = result.carried.length + result.removedInConsole.length + result.uncarried.length;
   if (total === 0) return 'The earlier allowlist is empty. Nothing to reconcile.\n';
   const lines = [
-    describeEntries('Not in the allowlist sign-in uses; these stop the server from starting', result.uncarried),
+    describeEntries('Sign-in does not admit these; they were only ever in the earlier allowlist', result.uncarried),
     describeEntries('Removed in the console since; the removal stands and they are not added back', result.removedInConsole),
-    describeEntries('Already in the allowlist sign-in uses; redundant', result.carried),
+    describeEntries('Sign-in already admits these; redundant here', result.carried),
   ].join('');
   if (result.mode === 'report') {
     return `${lines}Nothing was changed. To clear the earlier allowlist:\n` +
       '  dollhouse-allowlist reconcile --carry     add the first group to the allowlist sign-in uses, then clear\n' +
       '  dollhouse-allowlist reconcile --discard   clear without adding anything\n';
   }
-  return `${lines}Added ${result.added} to the allowlist sign-in uses. Cleared ${result.cleared} from the earlier allowlist, which is now empty.\n`;
+  const after = result.remaining === 0
+    ? 'which is now empty.'
+    : `which still holds ${result.remaining} added while this ran. Run reconcile again.`;
+  return `${lines}Added ${result.added} to the allowlist sign-in uses. Cleared ${result.cleared} from the earlier allowlist, ${after}\n`;
 }
 
 async function runReconcile(session: AllowlistCliSession, opts: ReconcileOptions): Promise<void> {
@@ -288,12 +295,7 @@ async function runReconcile(session: AllowlistCliSession, opts: ReconcileOptions
   let mode: ReconcileMode = 'report';
   if (opts.carry) mode = 'carry';
   if (opts.discard) mode = 'discard';
-  const result = await reconcileEarlierAllowlist({
-    db: session.handle.db,
-    storage: session.handle.storage,
-    resolveActor: session.resolveActor,
-    mode,
-  });
+  const result = await reconcileEarlierAllowlist({ db: session.handle.db, resolveActor: session.resolveActor, mode });
   process.stdout.write(reconcileReport(result));
 }
 
