@@ -50,6 +50,32 @@ required('the canary run on PostgreSQL', () => {
     elements: await db().select().from(elements).where(eq(elements.userId, CANARY_USER_UUID)),
   });
   const nothingLeft = { presence: [], sessions: [], agentStates: [], elements: [] };
+  /**
+   * Dependencies whose clean-up meets `atCleanUp` in place of the database.
+   * The detail read is the last thing a run does before it cleans up, and
+   * nothing after it uses the run's own database handle except the clean-up.
+   */
+  const withCleanUp = (atCleanUp: (transaction: () => Promise<unknown>) => Promise<unknown>) => {
+    let readBackDone = false;
+    const reader = new PostgresSessionExecutionReader(db());
+    const find = reader.find.bind(reader);
+    reader.find = async (...args) => {
+      const found = await find(...args);
+      readBackDone = true;
+      return found;
+    };
+    const database = new Proxy(db(), {
+      get(target, property) {
+        const value: unknown = Reflect.get(target, property, target);
+        if (typeof value !== 'function') return value;
+        const bound = value.bind(target) as (...args: unknown[]) => Promise<unknown>;
+        if (property !== 'transaction') return bound;
+        return (...args: unknown[]) => (readBackDone ? atCleanUp(() => bound(...args)) : bound(...args));
+      },
+    });
+    return dependencies({ db: database, executionReader: reader });
+  };
+  const sweepEverything = () => sweepCanaryLeftovers(db(), new Date(Date.now() + CANARY_LEFTOVER_AGE_MS + 60_000));
 
   afterAll(async () => {
     await closeTestDb();
@@ -85,6 +111,52 @@ required('the canary run on PostgreSQL', () => {
     expect(await runCanary(dependencies({ executionReader: blind }))).toMatchObject({
       state: 'failed', code: 'canary_execution_not_readable',
     });
+    expect(await canaryRows()).toEqual(nothingLeft);
+  });
+
+  it('fails when the console shows the execution with a different status than it was recorded with', async () => {
+    const wrong = new PostgresSessionExecutionReader(db());
+    const list = wrong.list.bind(wrong);
+    wrong.list = async (...args) => (await list(...args)).map(execution => ({ ...execution, status: 'failed' as const }));
+    expect(await runCanary(dependencies({ executionReader: wrong }))).toMatchObject({
+      state: 'failed', code: 'canary_execution_not_readable',
+      detail: 'The console\'s execution listing showed the canary\'s execution with a different session, agent or status than it was recorded with.',
+    });
+    expect(await canaryRows()).toEqual(nothingLeft);
+  });
+
+  it('does not pass, and does not claim its records are gone, when it cannot remove them', async () => {
+    const outcome = await runCanary(withCleanUp(
+      () => Promise.reject(new Error('connect ECONNREFUSED db.internal.example:5432 user=dollhouse_app')),
+    ));
+    expect(outcome).toEqual({
+      id: 'approval_execution_projection', state: 'failed', code: 'canary_cleanup_failed',
+      detail: 'The canary\'s approval request and execution were read back through the console, but the run did not clean up. '
+        + 'The canary could not remove the records it made (an unexpected error). '
+        + 'They belong to the canary user only, and a later run removes them.',
+    });
+    const left = await canaryRows();
+    expect(left.presence).toHaveLength(1);
+    expect(left.sessions).toHaveLength(1);
+    // A later run's sweep is what removes them.
+    await sweepEverything();
+    expect(await canaryRows()).toEqual(nothingLeft);
+  });
+
+  it('keeps to its time limit when it is the clean-up that hangs, and still cleans up once it can', async () => {
+    let release = () => {};
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const started = Date.now();
+    const outcome = await runCanary({
+      ...withCleanUp(async transaction => { await held; return transaction(); }),
+      timeoutMs: 1500,
+    });
+    expect(outcome).toMatchObject({ state: 'pending', code: 'canary_timed_out' });
+    expect(Date.now() - started).toBeLessThan(10_000);
+    release();
+    for (let attempt = 0; attempt < 50 && (await canaryRows()).presence.length > 0; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
     expect(await canaryRows()).toEqual(nothingLeft);
   });
 

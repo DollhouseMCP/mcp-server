@@ -42,7 +42,8 @@ export type CanaryCode =
   | 'canary_timed_out'
   | 'canary_approval_not_readable'
   | 'canary_execution_not_readable'
-  | 'canary_privacy_projection_failed';
+  | 'canary_privacy_projection_failed'
+  | 'canary_cleanup_failed';
 
 export interface CanaryResult extends WebConsoleSetupCheckResult {
   readonly id: typeof CHECK_ID;
@@ -90,6 +91,10 @@ class CanaryFinding extends Error {
  * It does not go over the network. The canary holds no credential, so there is
  * no token to open an MCP connection with; the HTTP transport, the MCP
  * handshake and the console's HTTP authentication are outside this check.
+ *
+ * The time limit covers the whole run, clean-up included. A run that overruns
+ * is not waited for: it carries on, cleans up when it stops, and the sweep at
+ * the start of a later run covers a server that goes down first.
  */
 export async function runCanary(deps: CanaryRunDependencies): Promise<CanaryResult> {
   const now = deps.now ?? (() => new Date());
@@ -103,27 +108,53 @@ export async function runCanary(deps: CanaryRunDependencies): Promise<CanaryResu
     );
     timer.unref?.();
   });
-  const attempt = (async () => {
+  const run = (async () => {
+    const checked = await check(deps, sessionId, now);
+    // Whatever the check found, what it made is removed. Clean-up starts only
+    // once the check has stopped touching the database, so it cannot race what
+    // it removes.
     try {
-      await sweepCanaryLeftovers(deps.db, now());
-      const canary = await ensureCanaryUser(deps.db, now);
-      await exercise(deps, canary, sessionId, now);
-      return result('passed', 'canary_passed',
-        'A canary approval request and a canary execution were created, read back through the console and removed.');
+      await removeCanarySession(deps.db, sessionId);
     } catch (error) {
-      return describeFailure(error);
+      return withCleanupFailure(checked, error);
     }
+    return checked;
   })();
-  // Whatever happens, nothing the run made is left behind. Clean-up waits for
-  // the run to stop touching the database, so it cannot race what it removes.
-  const cleaned = attempt.then(() => removeCanarySession(deps.db, sessionId)).catch(() => undefined);
-  const outcome = await Promise.race([attempt, deadline]);
+  const outcome = await Promise.race([run, deadline]);
   clearTimeout(timer);
-  // A run that finished is cleaned up before its result is returned. One that
-  // overran is not waited for: it is cleaned up when it stops, and the sweep
-  // at the start of the next run covers a server that goes down first.
-  if (outcome.code !== 'canary_timed_out') await cleaned;
   return outcome;
+}
+
+async function check(deps: CanaryRunDependencies, sessionId: string, now: () => Date): Promise<CanaryResult> {
+  try {
+    await sweepCanaryLeftovers(deps.db, now());
+    const canary = await ensureCanaryUser(deps.db, now);
+    await exercise(deps, canary, sessionId, now);
+    return result('passed', 'canary_passed',
+      'A canary approval request and a canary execution were created, read back through the console and removed.');
+  } catch (error) {
+    return describeFailure(error);
+  }
+}
+
+/** The driver's message can carry connection details; only the error code is used. */
+function errorReason(error: unknown): string {
+  const code = getErrorCode(error);
+  return code ? `error ${code}` : 'an unexpected error';
+}
+
+/**
+ * A run that could not remove its records has not passed, whatever it read
+ * back: the result must not say the records were removed when they were not.
+ */
+function withCleanupFailure(checked: CanaryResult, error: unknown): CanaryResult {
+  const leftBehind = `The canary could not remove the records it made (${errorReason(error)}). `
+    + 'They belong to the canary user only, and a later run removes them.';
+  if (checked.state === 'passed') {
+    return result('failed', 'canary_cleanup_failed',
+      `The canary's approval request and execution were read back through the console, but the run did not clean up. ${leftBehind}`);
+  }
+  return result(checked.state, checked.code, `${checked.detail} ${leftBehind}`);
 }
 
 function describeFailure(error: unknown): CanaryResult {
@@ -131,10 +162,7 @@ function describeFailure(error: unknown): CanaryResult {
   if (error instanceof CanaryUserStateError) {
     return result('failed', 'canary_user_not_inert', `${error.message} The canary will not run until it is put right.`);
   }
-  // The driver's message can carry connection details; only the error code is used.
-  const code = getErrorCode(error);
-  const reason = code ? `error ${code}` : 'an unexpected error';
-  return result('pending', 'canary_could_not_run', `The canary could not complete its run (${reason}), so nothing is verified.`);
+  return result('pending', 'canary_could_not_run', `The canary could not complete its run (${errorReason(error)}), so nothing is verified.`);
 }
 
 async function exercise(
@@ -161,7 +189,7 @@ async function exercise(
   const request = canaryRequest(canary.userId, sessionId, startedAt);
 
   await readApprovalBack(deps, request, approvalId, now);
-  await readExecutionBack(deps, request, goalId, now);
+  await readExecutionBack(deps, request, { goalId, sessionId }, now);
 }
 
 /** A real approval request, written through the store a live session's Gatekeeper uses. */
@@ -190,7 +218,8 @@ async function createApprovalRequest(deps: CanaryRunDependencies, userId: string
 async function createExecution(db: DatabaseInstance, userId: string, sessionId: string, at: Date): Promise<string> {
   const agentId = randomUUID();
   const goalId = `canary-goal-${randomUUID().slice(0, 8)}`;
-  const raw = `---\nname: ${CANARY_AGENT_PREFIX}${goalId}\ntype: agents\n---\nCanary agent. Not a real agent.`;
+  const agentName = canaryAgentName(goalId);
+  const raw = `---\nname: ${agentName}\ntype: agents\n---\nCanary agent. Not a real agent.`;
   await withSystemContext(db, tx => tx.insert(elements).values({
     id: agentId,
     userId,
@@ -198,7 +227,7 @@ async function createExecution(db: DatabaseInstance, userId: string, sessionId: 
     contentHash: createHash('sha256').update(raw).digest('hex'),
     byteSize: Buffer.byteLength(raw),
     elementType: 'agents',
-    name: `${CANARY_AGENT_PREFIX}${goalId}`,
+    name: agentName,
     metadata: {},
     visibility: 'private',
     createdAt: at,
@@ -274,7 +303,36 @@ async function readApprovalBack(deps: CanaryRunDependencies, request: ConsoleReq
   }
 }
 
-async function readExecutionBack(deps: CanaryRunDependencies, request: ConsoleRequest, goalId: string, now: () => Date): Promise<void> {
+function canaryAgentName(goalId: string): string {
+  return `${CANARY_AGENT_PREFIX}${goalId}`;
+}
+
+/** Every field the console may show for an execution. Anything else in its answer was meant to be stripped. */
+const EXECUTION_FIELDS: ReadonlySet<string> = new Set([
+  'goal_id', 'session_id', 'agent_name', 'status', 'progress', 'started_at', 'updated_at', 'completed_at',
+  'current_step', 'stable_error_code', 'output',
+]);
+
+/** Checks one execution as the console showed it against what the canary recorded. */
+function checkShownExecution(shown: Record<string, unknown>, made: { goalId: string; sessionId: string }, where: string): void {
+  if (shown.session_id !== made.sessionId || shown.agent_name !== canaryAgentName(made.goalId) || shown.status !== 'succeeded') {
+    throw new CanaryFinding('canary_execution_not_readable',
+      `The console's execution ${where} showed the canary's execution with a different session, agent or status than it was recorded with.`);
+  }
+  const unexpected = Object.keys(shown).filter(field => !EXECUTION_FIELDS.has(field));
+  if (unexpected.length > 0) {
+    throw new CanaryFinding('canary_privacy_projection_failed',
+      `The console's execution ${where} included fields it should strip: ${unexpected.join(', ')}.`);
+  }
+}
+
+async function readExecutionBack(
+  deps: CanaryRunDependencies,
+  request: ConsoleRequest,
+  made: { goalId: string; sessionId: string },
+  now: () => Date,
+): Promise<void> {
+  const { goalId } = made;
   const module = createExecutionModule({
     runtimeStore: deps.runtimeStore, executionReader: deps.executionReader, gatekeeperReader: deps.gatekeeperReader, now,
   });
@@ -288,14 +346,19 @@ async function readExecutionBack(deps: CanaryRunDependencies, request: ConsoleRe
     if (error instanceof CanaryFinding) throw new CanaryFinding('canary_execution_not_readable', `The canary's execution could not be read through the console. ${error.message}`);
     throw error;
   }
-  if (!JSON.stringify(listed).includes(goalId)) {
+  const executions = (listed as { executions?: Record<string, unknown>[] }).executions ?? [];
+  const found = executions.find(execution => execution.goal_id === goalId);
+  if (!found) {
     throw new CanaryFinding('canary_execution_not_readable',
       'The canary recorded an execution, but the console did not list it. Executions may not be displaying.');
   }
-  if (!JSON.stringify(detail).includes(goalId)) {
+  checkShownExecution(found, made, 'listing');
+  const shown = (detail ?? {}) as Record<string, unknown>;
+  if (shown.goal_id !== goalId || !Array.isArray(shown.output)) {
     throw new CanaryFinding('canary_execution_not_readable',
       'The console listed the canary\'s execution but could not show its detail.');
   }
+  checkShownExecution(shown, made, 'detail');
 }
 
 /** Removes what one run made. Scoped to the canary user and one canary session, so it can match nothing else. */
@@ -330,6 +393,11 @@ export async function sweepCanaryLeftovers(db: DatabaseInstance, now: Date): Pro
         lt(runtimeSessionPresence.startedAt, before),
       ))
       .returning({ sessionId: runtimeSessionPresence.sessionId });
+    // The age limit above is what protects a run that is still going: its
+    // presence row stays, and a session or agent state is removed below only
+    // where no presence row remains, in this same transaction. The canary
+    // agent has an age limit of its own because it exists for a moment before
+    // its state does.
     await tx.delete(sessions).where(and(
       eq(sessions.userId, CANARY_USER_UUID),
       like(sessions.sessionId, `${CANARY_SESSION_PREFIX}%`),
