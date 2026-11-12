@@ -22,13 +22,17 @@ import type {
 } from '../auth/embedded-as/storage/IAuthStorageLayer.js';
 import { normalizeAuthAllowlistValue } from '../auth/embedded-as/allowlistIdentity.js';
 import { withSystemContext } from '../database/admin.js';
+import { lockAuthAllowlistIdentitiesWithTx } from '../database/authPrincipalLock.js';
 import type { DatabaseInstance } from '../database/connection.js';
 import type { DrizzleTx } from '../database/db-utils.js';
 import { authAllowlist, userAdminRoles, users } from '../database/schema/index.js';
 import { authIdentityEvents } from '../database/schema/auth.js';
-import { ConsoleStoreConflictError } from '../web-console/stores/ConsoleStoreValidation.js';
+import { ConsoleStoreConflictError, ConsoleStoreValidationError } from '../web-console/stores/ConsoleStoreValidation.js';
 import {
+  MAX_ALLOWLIST_NOTE_LENGTH,
+  normalizeAllowlistValue,
   storedConsoleAllowlistValueMatches,
+  validateAllowlistValue,
   type ConsoleAccountAllowlistEntry,
 } from '../web-console/stores/IConsoleAccountAllowlistStore.js';
 import {
@@ -263,6 +267,18 @@ export interface ReconcilePlan {
   readonly removedInConsole: readonly AuthAllowlistEntry[];
   /** In the earlier allowlist only: sign-in does not admit the identity. */
   readonly uncarried: readonly AuthAllowlistEntry[];
+  /**
+   * In the earlier allowlist only, with a value the allowlist sign-in uses
+   * does not accept. The earlier allowlist took any text. These are never
+   * carried, and `carry` leaves them where they are.
+   */
+  readonly uncarriable: readonly UncarriableEntry[];
+}
+
+export interface UncarriableEntry {
+  readonly entry: AuthAllowlistEntry;
+  /** Why the allowlist sign-in uses will not take the value. */
+  readonly reason: string;
 }
 
 export interface ReconcileResult extends ReconcilePlan {
@@ -271,8 +287,10 @@ export interface ReconcileResult extends ReconcilePlan {
   readonly added: number;
   /** Entries deleted from the earlier allowlist. */
   readonly cleared: number;
-  /** Entries in the earlier allowlist afterwards. Zero unless something else added to it meanwhile. */
+  /** Entries in the earlier allowlist afterwards: any that could not be carried, and any added meanwhile. */
   readonly remaining: number;
+  /** Entries carried with a note longer than the allowlist sign-in uses allows. The note was cut to fit. */
+  readonly notesShortened: readonly AuthAllowlistEntry[];
 }
 
 function matchValues(entry: Pick<AuthAllowlistEntry, 'kind' | 'value'>): AllowlistMatchValues {
@@ -311,13 +329,60 @@ async function planReconcileWithTx(tx: DrizzleTx, earlier: readonly AuthAllowlis
   const carried: AuthAllowlistEntry[] = [];
   const removedInConsole: AuthAllowlistEntry[] = [];
   const uncarried: AuthAllowlistEntry[] = [];
+  const uncarriable: UncarriableEntry[] = [];
   await inOrder(earlier, async entry => {
     const values = matchValues(entry);
-    if (await accountAllowlistMatchesIdentityWithTx(tx, values)) carried.push(entry);
-    else if (await accountAllowlistDeniesIdentityWithTx(tx, values)) removedInConsole.push(entry);
-    else uncarried.push(entry);
+    if (await accountAllowlistMatchesIdentityWithTx(tx, values)) {
+      carried.push(entry);
+      return;
+    }
+    if (await accountAllowlistDeniesIdentityWithTx(tx, values)) {
+      removedInConsole.push(entry);
+      return;
+    }
+    const reason = whyNotCarriable(entry);
+    if (reason === null) uncarried.push(entry);
+    else uncarriable.push({ entry, reason });
   });
-  return { carried, removedInConsole, uncarried };
+  return { carried, removedInConsole, uncarried, uncarriable };
+}
+
+/** The earlier allowlist took any text as a value. The one sign-in uses checks the value's form. */
+function whyNotCarriable(entry: AuthAllowlistEntry): string | null {
+  try {
+    validateAllowlistValue(entry.kind, entry.value, 'value');
+    return null;
+  } catch (error) {
+    if (error instanceof ConsoleStoreValidationError) return error.message;
+    throw error;
+  }
+}
+
+/**
+ * A note as the allowlist sign-in uses will take it. The earlier allowlist
+ * put no limit on a note's length, so a long one is cut to fit and marked.
+ */
+export function noteForCarry(note: string | null): { readonly note: string | null; readonly shortened: boolean } {
+  if (note === null || note.length <= MAX_ALLOWLIST_NOTE_LENGTH) return { note, shortened: false };
+  let kept = note.slice(0, MAX_ALLOWLIST_NOTE_LENGTH - 1);
+  // Never end on half of a character that takes two code units.
+  const last = kept.charCodeAt(kept.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) kept = kept.slice(0, -1);
+  return { note: `${kept}\u2026`, shortened: true };
+}
+
+/**
+ * Takes the locks every writer of the allowlist sign-in uses takes, for the
+ * identities the earlier entries name, and holds them to the end of the
+ * transaction. Nothing can then grant or revoke one of those identities
+ * between the plan being made and its entries being carried, so a carry can
+ * never land on top of a removal it did not see.
+ */
+async function lockEarlierIdentitiesWithTx(tx: DrizzleTx, earlier: readonly AuthAllowlistEntry[]): Promise<void> {
+  await lockAuthAllowlistIdentitiesWithTx(tx, earlier.map(entry => ({
+    kind: entry.kind,
+    normalizedValue: normalizeAllowlistValue(entry.kind, entry.value),
+  })));
 }
 
 /**
@@ -332,8 +397,13 @@ async function planReconcileWithTx(tx: DrizzleTx, earlier: readonly AuthAllowlis
  * re-admit someone who was taken off. It is cleared from the earlier list in
  * both modes and reported.
  *
+ * An entry whose value the allowlist sign-in uses does not accept cannot be
+ * carried. `carry` leaves it in the earlier list and reports it with the
+ * reason, so the rest still go across; `discard` clears it with the others.
+ *
  * Everything happens in one transaction, with the earlier list read and
- * locked inside it: either the entries that were read are gone and the
+ * locked inside it, and the identities it names locked against other
+ * allowlist changes: either the entries that were read are dealt with and the
  * carried ones are in place, or nothing changed.
  */
 export async function reconcileEarlierAllowlist(options: {
@@ -349,38 +419,55 @@ export async function reconcileEarlierAllowlist(options: {
   const readEarlier = options.readEarlier ?? readEarlierAllowlistWithTx;
   return withSystemContext(options.db, async tx => {
     const earlier = await readEarlier(tx);
+    const changes = options.mode !== 'report' && earlier.length > 0;
+    // Before the plan, not after: the plan is only good while nothing else can change what it read.
+    if (changes) await lockEarlierIdentitiesWithTx(tx, earlier);
     const plan = await planReconcileWithTx(tx, earlier);
-    if (options.mode === 'report' || earlier.length === 0) {
-      return { ...plan, mode: options.mode, added: 0, cleared: 0, remaining: earlier.length };
+    if (!changes) {
+      return { ...plan, mode: options.mode, added: 0, cleared: 0, remaining: earlier.length, notesShortened: [] };
     }
     const actor = await options.resolveActor();
 
-    let added = 0;
+    const notesShortened: AuthAllowlistEntry[] = [];
     if (options.mode === 'carry') {
       await inOrder(plan.uncarried, async entry => {
+        const { note, shortened } = noteForCarry(entry.note);
         const created = await addAccountAllowlistEntryWithTx(tx, {
           kind: entry.kind,
           value: entry.value,
-          note: entry.note,
+          note,
           createdByUserId: actor.userId,
           createdAt: occurredAt,
         });
-        await recordChange(tx, actor, occurredAt, { operation: 'carry_over', kind: created.kind, entryId: created.id });
-        added += 1;
+        await recordChange(tx, actor, occurredAt, {
+          operation: 'carry_over', kind: created.kind, entryId: created.id, ...(shortened ? { noteShortened: true } : {}),
+        });
+        if (shortened) notesShortened.push(entry);
       });
     }
-    const cleared = await tx.delete(authAllowlist)
-      .where(inArray(authAllowlist.id, earlier.map(entry => entry.id)))
-      .returning({ id: authAllowlist.id });
+    const carrying = options.mode === 'carry';
+    const kept = new Set(carrying ? plan.uncarriable.map(({ entry }) => entry.id) : []);
+    const toClear = earlier.filter(entry => !kept.has(entry.id)).map(entry => entry.id);
+    const cleared = toClear.length === 0
+      ? []
+      : await tx.delete(authAllowlist).where(inArray(authAllowlist.id, toClear)).returning({ id: authAllowlist.id });
     await recordChange(tx, actor, occurredAt, {
       operation: 'earlier_allowlist_cleared',
       mode: options.mode,
       cleared: cleared.length,
       carried: plan.carried.length,
       removedInConsole: plan.removedInConsole.length,
-      [options.mode === 'carry' ? 'added' : 'discarded']: plan.uncarried.length,
+      [carrying ? 'added' : 'discarded']: plan.uncarried.length,
+      [carrying ? 'notCarriable' : 'discardedNotCarriable']: plan.uncarriable.length,
     });
     const left = await tx.select({ id: authAllowlist.id }).from(authAllowlist);
-    return { ...plan, mode: options.mode, added, cleared: cleared.length, remaining: left.length };
+    return {
+      ...plan,
+      mode: options.mode,
+      added: carrying ? plan.uncarried.length : 0,
+      cleared: cleared.length,
+      remaining: left.length,
+      notesShortened,
+    };
   });
 }

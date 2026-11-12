@@ -241,6 +241,85 @@ required('dollhouse-allowlist where the console manages the allowlist', () => {
       expect(await authority().matchesIdentity({ githubUsername: dropped })).toBe(false);
     });
 
+    it('carries an entry whose note is longer than the console allows, with the note cut to fit', async () => {
+      const wordy = `wordy-${tag}`;
+      const longNote = `kept from the earlier allowlist ${'x'.repeat(600)}`;
+      await strand('github_username', wordy, longNote);
+
+      const result = await reconcileEarlierAllowlist({
+        db: db(), readEarlier: readOwnEarlier, mode: 'carry', resolveActor: () => Promise.resolve(actor),
+      });
+
+      expect(result).toMatchObject({ added: 1, cleared: 1 });
+      // The result still has the whole note, so the command can print it before it is gone.
+      expect(result.notesShortened.map(entry => entry.note)).toEqual([longNote]);
+      const carriedOver = (await target().list()).find(entry => entry.value === wordy);
+      expect(carriedOver?.note).toBe(`${longNote.slice(0, 499)}\u2026`);
+      expect((await changesFor(carriedOver!.id))[0].details).toMatchObject({ operation: 'carry_over', noteShortened: true });
+      expect(await ownEarlier.allowlistList()).toEqual([]);
+    });
+
+    it('carries what it can, leaves an entry the console cannot hold, and says why', async () => {
+      // The earlier allowlist took any text. A GitHub username cannot contain an underscore.
+      const malformed = `not_a_login_${tag}`;
+      const fine = `fine-${tag}`;
+      const bad = await strand('github_username', malformed);
+      await strand('github_username', fine);
+
+      const report = await reconcileEarlierAllowlist({
+        db: db(), readEarlier: readOwnEarlier, mode: 'report', resolveActor: () => Promise.resolve(actor),
+      });
+      expect(report.uncarriable).toEqual([
+        { entry: expect.objectContaining({ id: bad.id, value: malformed }), reason: 'value must be a valid GitHub username' },
+      ]);
+      expect(report.uncarried.map(entry => entry.value)).toEqual([fine]);
+
+      const carry = await reconcileEarlierAllowlist({
+        db: db(), readEarlier: readOwnEarlier, mode: 'carry', resolveActor: () => Promise.resolve(actor),
+      });
+      expect(carry).toMatchObject({ added: 1, cleared: 1 });
+      expect(carry.remaining).toBeGreaterThanOrEqual(1);
+      expect(await authority().matchesIdentity({ githubUsername: fine })).toBe(true);
+      expect((await ownEarlier.allowlistList()).map(entry => entry.value)).toEqual([malformed]);
+
+      // The way out for what is left: discard clears it.
+      const discard = await reconcileEarlierAllowlist({
+        db: db(), readEarlier: readOwnEarlier, mode: 'discard', resolveActor: () => Promise.resolve(actor),
+      });
+      expect(discard).toMatchObject({ added: 0, cleared: 1 });
+      expect(await ownEarlier.allowlistList()).toEqual([]);
+    });
+
+    it('holds off a console change to an identity it is carrying until the carry is done', async () => {
+      const contested = `contested-${tag}`;
+      await strand('github_username', contested);
+      const store = new PostgresConsoleAccountAllowlistStore(db());
+      let consoleAdd: Promise<unknown> = Promise.resolve();
+      let whileCarrying = '';
+
+      const result = await reconcileEarlierAllowlist({
+        db: db(), readEarlier: readOwnEarlier, mode: 'carry',
+        // Asked after the plan is made and before anything is written.
+        resolveActor: async () => {
+          consoleAdd = store.add({
+            kind: 'github_username', value: contested, note: null, createdByUserId: actor.userId, createdAt: new Date(),
+          }).then(() => 'added', (error: unknown) => error);
+          whileCarrying = await Promise.race([
+            consoleAdd.then(() => 'went ahead'),
+            new Promise<string>(resolve => { setTimeout(() => resolve('waited'), 400); }),
+          ]);
+          return actor;
+        },
+      });
+
+      // Without the lock the console's add lands first and the carry then collides with it.
+      expect(whileCarrying).toBe('waited');
+      expect(result).toMatchObject({ added: 1, cleared: 1 });
+      // Once the carry is in, the console's add sees it and is refused as a duplicate.
+      expect(await consoleAdd).toMatchObject({ message: 'active allowlist entry already exists' });
+      expect(await authority().matchesIdentity({ githubUsername: contested })).toBe(true);
+    });
+
     it('does nothing, and needs no admin, when the earlier allowlist is already empty', async () => {
       const result = await reconcileEarlierAllowlist({
         db: db(), readEarlier: readOwnEarlier, mode: 'carry',

@@ -59,6 +59,7 @@ import {
   type ReconcileResult,
 } from './allowlistAuthority.js';
 import { consoleAllowlistIsSignInAuthority } from '../auth/embedded-as/allowlistGate.js';
+import { MAX_ALLOWLIST_NOTE_LENGTH } from '../web-console/stores/IConsoleAccountAllowlistStore.js';
 import { env } from '../config/env.js';
 import type { AuthAllowlistEntry, AuthAllowlistKind } from '../auth/embedded-as/storage/IAuthStorageLayer.js';
 import {
@@ -263,23 +264,53 @@ function describeEntries(label: string, entries: readonly AuthAllowlistEntry[]):
   return `${label} (${entries.length}):\n${lines}\n`;
 }
 
+function describeUncarriable(entries: ReconcileResult['uncarriable']): string {
+  if (entries.length === 0) return '';
+  const lines = entries.map(({ entry, reason }) => `  [${entry.kind}]  ${entry.value}  (${reason})`).join('\n');
+  return `The allowlist sign-in uses does not accept these values, so they cannot be carried (${entries.length}):\n${lines}\n`;
+}
+
+function describeShortenedNotes(entries: ReconcileResult['notesShortened']): string {
+  if (entries.length === 0) return '';
+  // The full note is printed because this is the last place it exists.
+  const lines = entries.map(entry => `  [${entry.kind}]  ${entry.value}\n    ${entry.note ?? ''}`).join('\n');
+  return `These notes were longer than ${MAX_ALLOWLIST_NOTE_LENGTH} characters and were cut to fit. The full text of each was (${entries.length}):\n${lines}\n`;
+}
+
+function describeWhatRemains(result: ReconcileResult): string {
+  if (result.remaining === 0) return 'which is now empty.';
+  const stuck = result.mode === 'carry' ? result.uncarriable.length : 0;
+  const addedMeanwhile = result.remaining - stuck;
+  const parts: string[] = [];
+  if (stuck > 0) {
+    parts.push(`${stuck} that could not be carried. Add a corrected entry for each one you still want with ` +
+      '`dollhouse-allowlist add`, then run `dollhouse-allowlist reconcile --discard` to clear them. ' +
+      'The server will not start while they are there.');
+  }
+  if (addedMeanwhile > 0) parts.push(`${addedMeanwhile} added while this ran. Run reconcile again.`);
+  return `which still holds ${parts.join(' And ')}`;
+}
+
 function reconcileReport(result: ReconcileResult): string {
-  const total = result.carried.length + result.removedInConsole.length + result.uncarried.length;
+  const total = result.carried.length + result.removedInConsole.length + result.uncarried.length + result.uncarriable.length;
   if (total === 0) return 'The earlier allowlist is empty. Nothing to reconcile.\n';
   const lines = [
     describeEntries('Sign-in does not admit these; they were only ever in the earlier allowlist', result.uncarried),
+    describeUncarriable(result.uncarriable),
     describeEntries('Removed in the console since; the removal stands and they are not added back', result.removedInConsole),
     describeEntries('Sign-in already admits these; redundant here', result.carried),
   ].join('');
   if (result.mode === 'report') {
+    const stuck = result.uncarriable.length === 0
+      ? ''
+      : 'Entries that cannot be carried stay in the earlier allowlist after --carry. Add a corrected entry for each one ' +
+        'you still want with `dollhouse-allowlist add`; --discard then clears them.\n';
     return `${lines}Nothing was changed. To clear the earlier allowlist:\n` +
       '  dollhouse-allowlist reconcile --carry     add the first group to the allowlist sign-in uses, then clear\n' +
-      '  dollhouse-allowlist reconcile --discard   clear without adding anything\n';
+      `  dollhouse-allowlist reconcile --discard   clear without adding anything\n${stuck}`;
   }
-  const after = result.remaining === 0
-    ? 'which is now empty.'
-    : `which still holds ${result.remaining} added while this ran. Run reconcile again.`;
-  return `${lines}Added ${result.added} to the allowlist sign-in uses. Cleared ${result.cleared} from the earlier allowlist, ${after}\n`;
+  return `${lines}${describeShortenedNotes(result.notesShortened)}` +
+    `Added ${result.added} to the allowlist sign-in uses. Cleared ${result.cleared} from the earlier allowlist, ${describeWhatRemains(result)}\n`;
 }
 
 async function runReconcile(session: AllowlistCliSession, opts: ReconcileOptions): Promise<void> {
@@ -296,6 +327,8 @@ async function runReconcile(session: AllowlistCliSession, opts: ReconcileOptions
   if (opts.discard) mode = 'discard';
   const result = await reconcileEarlierAllowlist({ db: session.handle.db, resolveActor: session.resolveActor, mode });
   process.stdout.write(reconcileReport(result));
+  // The earlier allowlist was meant to end up empty. Say so to a script when it did not.
+  if (mode !== 'report' && result.remaining > 0) process.exitCode = 1;
 }
 
 async function main(): Promise<void> {

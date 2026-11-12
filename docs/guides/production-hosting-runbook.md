@@ -167,7 +167,14 @@ docker compose run --rm dollhousemcp npx dollhouse-allowlist reconcile --carry
 docker compose run --rm dollhousemcp npx dollhouse-allowlist reconcile --discard
 ```
 
-`reconcile` never adds back an entry that an admin has since removed in the console; it reports it and clears it. Either flag leaves the earlier allowlist empty, after which the server starts. On a running server the same gap shows as `allowlist_parity` degraded in the console's Operations health, before a restart finds it.
+`reconcile` never adds back an entry that an admin has since removed in the console; it reports it and clears it. Either flag normally leaves the earlier allowlist empty, after which the server starts.
+
+Two things can differ, because the earlier allowlist took any text and the console's does not:
+
+- **A value the console's allowlist does not accept** (a GitHub username with a character GitHub does not allow, an email with no domain) cannot be carried. `--carry` carries the rest, leaves that entry where it is, says why, and exits non-zero. Add a corrected entry with `dollhouse-allowlist add` if you still want it, then run `reconcile --discard` to clear what is left. The server does not start while such an entry remains.
+- **A note longer than 500 characters** is cut to fit when its entry is carried. The command prints the full note once, since the earlier copy is then cleared.
+
+While `--carry` or `--discard` runs, it holds off console changes to the identities it is working on, so a removal made in the console at the same moment is never overwritten. On a running server the same gap shows as `allowlist_parity` degraded in the console's Operations health, before a restart finds it.
 
 An install that is rolled back to a version from before the console managed the allowlist would read the earlier table again, which `reconcile` has emptied. Re-add the entries there after such a rollback.
 

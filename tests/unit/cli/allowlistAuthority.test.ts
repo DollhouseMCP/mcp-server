@@ -9,6 +9,7 @@ import {
   AllowlistCliError,
   chooseActor,
   StorageAllowlistCliTarget,
+  noteForCarry,
 } from '../../../src/cli/allowlistAuthority.js';
 
 const ALICE = { userId: '11111111-1111-4111-8111-111111111111', username: 'github_1001' };
@@ -82,6 +83,27 @@ describe('describeAllowlistCutoverRefusal', () => {
 
   it('keeps the phrase existing checks and operators search for', () => {
     expect(describeAllowlistCutoverRefusal([{ kind: 'email', value: 'a@example.com' }])).toMatch(/cutover refused/);
+  });
+});
+
+describe('noteForCarry', () => {
+  it('leaves a note that fits, or no note, as it is', () => {
+    expect(noteForCarry(null)).toEqual({ note: null, shortened: false });
+    expect(noteForCarry('added for onboarding')).toEqual({ note: 'added for onboarding', shortened: false });
+    expect(noteForCarry('n'.repeat(500))).toEqual({ note: 'n'.repeat(500), shortened: false });
+  });
+
+  it('cuts a longer note to the limit and marks the cut', () => {
+    const { note, shortened } = noteForCarry('n'.repeat(501));
+    expect(shortened).toBe(true);
+    expect(note).toBe(`${'n'.repeat(499)}\u2026`);
+    expect(note).toHaveLength(500);
+  });
+
+  it('never cuts a character in half', () => {
+    // The 499th and 500th code units are the two halves of one emoji.
+    const { note } = noteForCarry(`${'n'.repeat(498)}\u{1F600}${'n'.repeat(10)}`);
+    expect(note).toBe(`${'n'.repeat(498)}\u2026`);
   });
 });
 
