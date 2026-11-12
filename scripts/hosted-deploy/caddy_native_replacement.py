@@ -18,7 +18,7 @@ import legacy_handoff as handoff
 from legacy_recovery_boundary import TOKEN
 from caddy_transition_action import sync_root
 from legacy_recovery_guards import exact_container, ingress_available, lifecycle
-from legacy_recovery_profile import profile
+from legacy_recovery_profile import profile, same_profile
 
 DIRECTORY = '.caddy-native-replacements'
 REPLACEMENT_PREFIX = 'replace-'
@@ -190,7 +190,8 @@ def verify_failed_start_fence(root, token, current):
     except FileNotFoundError:
         raise ValueError(FENCE_UNPROVEN + '; missing acknowledged stop') from None
     identity = current['Id']
-    if (proof != {'id': identity, 'profile': profile(current), 'boot': lifecycle(current, False)}
+    if (set(proof) != {'id', 'profile', 'boot'} or proof['id'] != identity or not same_profile(proof['profile'], profile(current))
+            or proof['boot'] != lifecycle(current, False)
             or ack.get('exit_code') != 0 or ack.get('stdout_sha256') != handoff.digest((identity + '\n').encode())
             or current.get('Config', {}).get('Labels', {}).get('org.dollhousemcp.proxy-recovery-token') != token):
         raise ValueError(FENCE_UNPROVEN)

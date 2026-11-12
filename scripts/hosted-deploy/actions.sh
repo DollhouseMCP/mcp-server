@@ -42,6 +42,9 @@ run_action() {
     prepare-caddy-offline)
       prepare_caddy_offline
       ;;
+    abandon-caddy-offline|accept-caddy-restart)
+      caddy_serving_boot "${ACTION}"
+      ;;
     clone-caddy-volumes)
       clone_caddy_volumes
       ;;

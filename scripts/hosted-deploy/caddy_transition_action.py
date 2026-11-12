@@ -167,9 +167,15 @@ def complete(root, token, instance):
     return finish(root, token)
 
 
+def unresolved(root, state):
+    # A transition that a qualified reconciliation resolved is retained as evidence. It is not pending.
+    from legacy_control_resolution import unresolved_pending
+    return unresolved_pending(root, state)
+
+
 def selected(root, allow_pending=False):
     state = read_state(root)
-    pending = state['pending']
+    pending = unresolved(root, state)
     if pending is not None:
         if pending.get('control') is not None:
             raise ValueError('verification or release is pending; automatic proxy recovery is refused')
@@ -179,7 +185,8 @@ def selected(root, allow_pending=False):
     else:
         chosen = state['completed']
     if chosen is None:
-        raise ValueError('no completed Caddy transition is available')
+        raise ValueError('no completed Caddy transition is available; after an offline preparation alone, '
+                         'abandon-caddy-offline brings the same proxy back')
     previous = Path(chosen['previous'])
     if bundle_identity(previous) != chosen['source'] or receipt_hash(Path(chosen['receipt'])) != chosen['receipt_sha256']:
         raise ValueError('selected previous source or receipt changed')
@@ -205,7 +212,7 @@ def validate_unmoved_proxy_source(root, pending):
 
 def selected_proxy(root):
     state = read_state(root)
-    pending = state['pending']
+    pending = unresolved(root, state)
     if isinstance(pending, dict) and pending.get('control') is not None:
         raise ValueError('verification or release is pending; automatic proxy recovery is refused')
     if isinstance(pending, dict) and pending['kind'] in ('update', 'rollback'):
