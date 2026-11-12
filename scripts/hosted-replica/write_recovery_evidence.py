@@ -41,6 +41,9 @@ preparation takes:
 
     {"deploy_dir": ..., "instance": ..., "checkpoint_dir": ..., "manual_evidence_dir": ...}
 
+Each folder is an absolute path as written, without a "." or ".." part, that
+exists and that no link leads to: the rule of the tooling that reads them next.
+
 The checkpoint is taken beforehand, with the procedure a deployment window
 uses. Nothing is printed but names, counts and hashes.
 """
@@ -69,6 +72,8 @@ TOKEN_LABEL = 'org.dollhousemcp.proxy-recovery-token'
 NOTE = 'written on a replica by write_recovery_evidence.py; a rehearsal record, not a record of a real recovery'
 HEALTH_WAIT = 180
 REQUEST = {'deploy_dir', 'instance', 'checkpoint_dir', 'manual_evidence_dir'}
+INSTANCE = re.compile(r'[a-z0-9][a-z0-9_-]{0,62}\Z')
+FOLDER = re.compile(r'(?:/[A-Za-z0-9_][A-Za-z0-9_.-]*)+\Z')
 
 
 def now():
@@ -81,6 +86,14 @@ def digest(data):
 
 def encoded(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
+
+
+def canonical(text):
+    """One folder of the request: it exists, and no link leads to it."""
+    path = Path(text)
+    if not path.is_dir() or path.resolve(strict=True) != path:
+        raise ValueError('a folder of the request does not exist, or a link leads to it')
+    return path
 
 
 def private(path, data):
@@ -233,8 +246,8 @@ def write(request):
     def inspect(name):
         return inspect_one(system_docker, 'container', name)
 
-    root, instance = Path(request['deploy_dir']), request['instance']
-    checkpoint, evidence = Path(request['checkpoint_dir']), Path(request['manual_evidence_dir'])
+    root, instance = canonical(request['deploy_dir']), request['instance']
+    checkpoint, evidence = canonical(request['checkpoint_dir']), canonical(request['manual_evidence_dir'])
     report = {'kind': 'replica-evidence', 'written_utc': now(), 'note': NOTE}
     header = json.loads((checkpoint / 'checkpoint.json').read_bytes())
     report['application_restart'] = restart_application(inspect, instance, header)
@@ -298,6 +311,11 @@ def main(argv):
     request = json.loads(sys.stdin.read())
     if not isinstance(request, dict) or set(request) != REQUEST or any(not isinstance(item, str) for item in request.values()):
         raise ValueError('the request holds exactly: ' + ', '.join(sorted(REQUEST)))
+    if not INSTANCE.fullmatch(request['instance']):
+        raise ValueError('the instance name is not valid')
+    if (not FOLDER.fullmatch(request['deploy_dir']) or not FOLDER.fullmatch(request['checkpoint_dir'])
+            or not FOLDER.fullmatch(request['manual_evidence_dir'])):
+        raise ValueError('each folder is an absolute path as written, without a "." or ".." part')
     declared_replica()
     print(json.dumps(write(request), indent=1))
     return 0

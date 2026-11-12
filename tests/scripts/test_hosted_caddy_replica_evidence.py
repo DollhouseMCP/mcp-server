@@ -24,15 +24,22 @@ import write_recovery_evidence as evidence
 SECRET = 'Zq7-SENTINEL-original'
 ORIGIN = 'https://mcp.example.invalid'
 OVERLAY = 'cutover-staging-e544-20261013-r2/'
+PRODUCTION, COMPOSE = 'opt/dollhousemcp/.env.production', 'opt/dollhousemcp/compose.yml'
+SECRET_LINE = b'TOKEN_SECRET=%s\n' % SECRET.encode()
+ARGV = ['write_recovery_evidence.py']
 
 
-def tar_of(members):
+def tar_of(members, links=()):
     output = io.BytesIO()
     with tarfile.open(fileobj=output, mode='w') as archive:
-        for name, (raw, mode) in members.items():
+        for name, (raw, mode) in (members.items() if isinstance(members, dict) else members):
             item = tarfile.TarInfo(name)
             item.size, item.mode = len(raw), mode
             archive.addfile(item, io.BytesIO(raw))
+        for name, target in links:
+            item = tarfile.TarInfo(name)
+            item.type, item.linkname = tarfile.SYMTYPE, target
+            archive.addfile(item)
     return output.getvalue()
 
 
@@ -90,6 +97,38 @@ class ArchivedOriginalsTests(unittest.TestCase):
         done = self.run_script(raw)
         self.assertEqual((done.returncode, done.stdout), (3, b''))
 
+    def test_an_environment_file_that_cannot_be_taken_refuses_the_export(self):
+        # Its secrets would be unknown to the search, and the copy in compose.yml would be exported as it is.
+        copy = (COMPOSE, (SECRET.encode(), 0o600))
+        large = SECRET_LINE + b'#' * export.MAX_FILE
+        cases = {'too large': tar_of([(PRODUCTION, (large, 0o600)), copy]),
+                 'not a regular file': tar_of([copy], links=[(PRODUCTION, 'elsewhere')]),
+                 'more than once': tar_of([(PRODUCTION, (b'PORT=3000\n', 0o600)), copy,
+                                           (PRODUCTION, (SECRET_LINE, 0o600))])}
+        for reason, raw in cases.items():
+            with self.subTest(reason):
+                done = self.run_script(raw)
+                self.assertEqual((done.returncode, done.stdout), (3, b''))
+                self.assertIn(reason.encode(), done.stderr)
+                self.assertNotIn(SECRET.encode(), done.stderr)
+
+    def test_a_member_is_the_same_file_however_the_archive_spells_its_name(self):
+        for spelling in ('./' + PRODUCTION, '/' + PRODUCTION, 'opt/./dollhousemcp/.env.production'):
+            with self.subTest(spelling):
+                raw = tar_of([(spelling, (SECRET_LINE, 0o600)), (COMPOSE, (SECRET.encode(), 0o600))])
+                done = self.run_script(raw)
+                self.assertEqual(done.returncode, 0)
+                self.assertNotIn(SECRET.encode(), done.stdout)
+
+    def test_another_file_that_cannot_be_taken_is_listed_with_its_reason(self):
+        raw = tar_of([(PRODUCTION, (b'PORT=3000\n', 0o600)), ('opt/dollhousemcp/Caddyfile', (b'x' * (export.MAX_FILE + 1), 0o644))],
+                     links=[(COMPOSE, 'elsewhere')])
+        sources, skipped = originals.members(raw, export.DEPLOY_DIR)
+        self.assertEqual(set(sources), {'.env.production'})
+        self.assertEqual((skipped['Caddyfile'], skipped['compose.yml'], skipped['.env']), ('too large', 'not a regular file', 'absent'))
+        manifest, _ = export.scrub(sources, skipped, export.DEPLOY_DIR)
+        self.assertEqual(manifest['skipped']['Caddyfile'], 'too large')
+
 
 class EvidenceTests(unittest.TestCase):
     def setUp(self):
@@ -142,8 +181,8 @@ class EvidenceTests(unittest.TestCase):
                   for path, status, version in (('/healthz', 200, '2.1.0-beta.2'), ('/readyz', 200, '2.1.0-beta.2'), ('/mcp', 401, None))]
         final = evidence.final_receipt(ORIGIN, '2.1.0-beta.2', public, services, {'.caddy-state/state.json': 'c' * 64})
         recovered = manual.check_acceptance(final, ORIGIN)
-        self.assertEqual((recovered['app'], recovered['postgres'], recovered['restored_old_profile_proxy'],
-                          recovered['retained_aborted_proxy']), tuple(item['Id'] for item in services))
+        named = [recovered[key] for key in ('app', 'postgres', 'restored_old_profile_proxy', 'retained_aborted_proxy')]
+        self.assertEqual(named, [item['Id'] for item in services])
         for item in services:
             manual.verify_boot(final, item, item['State']['Running'])
         self.assertIn('rehearsal record', final['replica_rehearsal'])
@@ -168,16 +207,34 @@ class EvidenceTests(unittest.TestCase):
             evidence.restart_application(lambda name: app, 'app', {'app': {'id': 'f' * 64, 'started_at': 'x'}})
 
     def test_command_is_refused_off_a_replica_and_needs_the_exact_request(self):
-        request = dict.fromkeys(evidence.REQUEST, '/x')
+        request = dict(dict.fromkeys(evidence.REQUEST, '/x'), instance='app')
         with patch.object(evidence.sys, 'stdin', io.StringIO(json.dumps(request))), \
                 patch.object(evidence, 'declared_replica', side_effect=evidence.Refused('not declared')), \
                 patch.object(evidence, 'write') as write:
             with self.assertRaises(evidence.Refused):
-                evidence.main(['write_recovery_evidence.py'])
+                evidence.main(ARGV)
         write.assert_not_called()
         with patch.object(evidence.sys, 'stdin', io.StringIO(json.dumps(dict(request, token='0' * 32)))):
             with self.assertRaises(ValueError):
-                evidence.main(['write_recovery_evidence.py'])
+                evidence.main(ARGV)
+
+    def test_a_folder_of_the_request_is_absolute_as_written_and_no_link_leads_to_it(self):
+        good = dict(dict.fromkeys(evidence.REQUEST, str(self.root)), instance='app')
+        changes = [{'instance': 'app/../x'}, {'instance': ''}, {'deploy_dir': 'deploy'}, {'checkpoint_dir': str(self.root) + '/../deploy'},
+                   {'manual_evidence_dir': str(self.root) + '/'}, {'deploy_dir': str(self.work) + '/./deploy'},
+                   {'checkpoint_dir': str(self.work) + '/.hidden'}]
+        for change in changes:
+            with self.subTest(change), patch.object(evidence, 'declared_replica') as declared, \
+                    patch.object(evidence.sys, 'stdin', io.StringIO(json.dumps(dict(good, **change)))):
+                with self.assertRaisesRegex(ValueError, 'instance name|absolute path'):
+                    evidence.main(ARGV)
+                declared.assert_not_called()
+        (self.work / 'link').symlink_to(self.root)
+        self.assertEqual(evidence.canonical(str(self.root)), self.root)
+        for text in (str(self.work / 'link'), str(self.work / 'link' / 'server.prev'), str(self.work / 'absent'),
+                     str(self.root / 'server.prev' / 'index.js')):
+            with self.subTest(text), self.assertRaisesRegex(ValueError, 'does not exist, or a link'):
+                evidence.canonical(text)
 
 
 if __name__ == '__main__':
