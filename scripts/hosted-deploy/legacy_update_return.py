@@ -87,9 +87,9 @@ def consumption(root, pending, value):
             raise ValueError('the consumption records are incomplete, or a return was already issued')
         # An earlier attempt's consumption must itself have been returned, whole.
         resolution.require_returned(directory, record, digest, found)
-        issued, issued_sha = handoff.read_json(directory, prefix + '-issued.json', lineage['consumption_sha256'])
-        handoff.read_json(directory, prefix + '-completed.json', issued_sha)
-        preserved = read_private(directory, prefix + '-failed-state.json', MAX_RECORD)
+        issued, issued_sha = handoff.read_json(directory, prefix + resolution.ISSUED, lineage['consumption_sha256'])
+        handoff.read_json(directory, prefix + resolution.COMPLETED, issued_sha)
+        preserved = read_private(directory, prefix + resolution.FAILED_STATE, MAX_RECORD)
     finally:
         os.close(directory)
     if (issued.get('resolution_sha256') != digest or issued.get('old_token') != record['token']

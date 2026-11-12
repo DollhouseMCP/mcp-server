@@ -273,8 +273,9 @@ class ReturnTests(unittest.TestCase):
         self.put(self.root / '.caddy-state' / 'state.json', self.raw)
         with self.assertRaisesRegex(ValueError, 'already issued or is UNKNOWN'):
             self.gate()
+        third = self.transition(THIRD, ['new-data', 'new-config'])
         with self.assertRaisesRegex(ValueError, 'already issued or is UNKNOWN'):
-            begin(self.root, self.transition(THIRD, ['new-data', 'new-config']))
+            begin(self.root, third)
 
 
 if __name__ == '__main__':
