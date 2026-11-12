@@ -81,6 +81,24 @@ class ProfileTests(unittest.TestCase):
                 self.check()
 
 
+class LocalPairTests(unittest.TestCase):
+    def test_the_images_checked_are_fixed_names_per_architecture_not_arguments(self):
+        self.assertEqual(subject.LOCAL_PAIR, {
+            'amd64': ('hosted-pair/runtime:amd64', 'hosted-pair/migration:amd64'),
+            'arm64': ('hosted-pair/runtime:arm64', 'hosted-pair/migration:arm64'),
+        })
+
+    def test_an_unknown_architecture_is_refused_before_any_docker_command(self):
+        with self.assertRaises(SystemExit):
+            subject.main(['--arch', 'riscv64', '--source', SOURCE])
+
+    def test_the_workflow_builds_under_the_same_names(self):
+        workflow = (ROOT / '.github/workflows/publish-hosted-images.yml').read_text()
+        self.assertIn('--tag "hosted-pair/runtime:${ARCH}"', workflow)
+        self.assertIn('--tag "hosted-pair/migration:${ARCH}"', workflow)
+        self.assertIn('--arch "${ARCH}"', workflow)
+
+
 class MigrationTests(unittest.TestCase):
     def setUp(self):
         self.runtime = {'manifest': copy.deepcopy(MIGRATIONS), 'journal': None}

@@ -77,7 +77,11 @@ jobs:
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          refuse() { echo "::error::$1"; exit 1; }
+          refuse() {
+            local message="$1"
+            echo "::error::${message}"
+            exit 1
+          }
 
           case "${EVENT_NAME}" in
             push)
@@ -190,10 +194,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/check-hosted-image-pair.py \
-            --runtime "hosted-pair/runtime:${ARCH}" \
-            --migration "hosted-pair/migration:${ARCH}" \
-            --source "${SHA}"
+          # The script checks the images named hosted-pair/<role>:<arch>, as built above.
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/check-hosted-image-pair.py --arch "${ARCH}" --source "${SHA}"
 
       - name: Report a dry run
         if: needs.resolve.outputs.publish != 'true'
@@ -267,9 +269,9 @@ jobs:
         run: |
           set -euo pipefail
           pushed_digest() {
-            local digest
-            digest="$(docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' | jq -er '.digest')"
-            [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::No digest for $1"; exit 1; }
+            local reference="$1" digest
+            digest="$(docker buildx imagetools inspect "${reference}" --format '{{json .Manifest}}' | jq -er '.digest')"
+            [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::No digest for ${reference}"; exit 1; }
             printf '%s' "${digest}"
           }
           runtime_tag="${IMAGE}:${TAG_BASE}-${ARCH}"
@@ -278,7 +280,10 @@ jobs:
           docker tag "hosted-pair/migration:${ARCH}" "${migration_tag}"
           docker push "${runtime_tag}"
           docker push "${migration_tag}"
-          jq -n --arg arch "${ARCH}" --arg runtime "$(pushed_digest "${runtime_tag}")" --arg migration "$(pushed_digest "${migration_tag}")" \
+          # Assigned one at a time so a missing digest stops the step here.
+          runtime_digest="$(pushed_digest "${runtime_tag}")"
+          migration_digest="$(pushed_digest "${migration_tag}")"
+          jq -n --arg arch "${ARCH}" --arg runtime "${runtime_digest}" --arg migration "${migration_digest}" \
             '{arch: $arch, runtime: $runtime, migration: $migration}' > "digests-${ARCH}.json"
           cat "digests-${ARCH}.json"
 
@@ -327,17 +332,27 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          digest_of() { jq -er --arg role "$2" '.[$role]' "digests-$1.json"; }
-          index_digest() {
-            local digest
-            digest="$(docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' | jq -er '.digest')"
-            [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::No digest for $1"; exit 1; }
+          digest_of() {
+            local arch="$1" role="$2" digest
+            digest="$(jq -er --arg role "${role}" '.[$role]' "digests-${arch}.json")"
+            [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::No ${role} digest recorded for ${arch}"; exit 1; }
             printf '%s' "${digest}"
           }
+          index_digest() {
+            local reference="$1" digest
+            digest="$(docker buildx imagetools inspect "${reference}" --format '{{json .Manifest}}' | jq -er '.digest')"
+            [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::No digest for ${reference}"; exit 1; }
+            printf '%s' "${digest}"
+          }
+          # Assigned one at a time so a missing digest stops the step here.
+          amd64_runtime="$(digest_of amd64 runtime)"
+          arm64_runtime="$(digest_of arm64 runtime)"
+          amd64_migration="$(digest_of amd64 migration)"
+          arm64_migration="$(digest_of arm64 migration)"
           docker buildx imagetools create --tag "${IMAGE}:${TAG_BASE}" \
-            "${IMAGE}@$(digest_of amd64 runtime)" "${IMAGE}@$(digest_of arm64 runtime)"
+            "${IMAGE}@${amd64_runtime}" "${IMAGE}@${arm64_runtime}"
           docker buildx imagetools create --tag "${IMAGE}:${TAG_BASE}-migrate" \
-            "${IMAGE}@$(digest_of amd64 migration)" "${IMAGE}@$(digest_of arm64 migration)"
+            "${IMAGE}@${amd64_migration}" "${IMAGE}@${arm64_migration}"
           runtime="$(index_digest "${IMAGE}:${TAG_BASE}")"
           migration="$(index_digest "${IMAGE}:${TAG_BASE}-migrate")"
           [[ "${runtime}" != "${migration}" ]] || { echo "::error::Runtime and migration digests are the same"; exit 1; }

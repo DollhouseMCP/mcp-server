@@ -26,6 +26,13 @@ ROOT = Path(__file__).resolve().parents[2]
 ADMISSION = ROOT / 'scripts/hosted-deploy/registry_image_admission.py'
 SOURCE = re.compile(r'[0-9a-f]{40}')
 RELEASE_MIGRATIONS = '/app/dist/database/release-migrations.json'
+# The local names the publishing workflow builds under, by architecture. The
+# images to inspect and run are taken from this table and never from the
+# command line, so no argument can reach a docker command.
+LOCAL_PAIR = {
+    'amd64': ('hosted-pair/runtime:amd64', 'hosted-pair/migration:amd64'),
+    'arm64': ('hosted-pair/runtime:arm64', 'hosted-pair/migration:arm64'),
+}
 MIGRATIONS_DIR = '/app/src/database/migrations'
 
 # Prints the migration files as the image holds them. Runs in the image itself,
@@ -122,15 +129,17 @@ def read_migrations(reference):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument('--runtime', required=True, help='local runtime image reference')
-    parser.add_argument('--migration', required=True, help='local migration image reference')
+    parser.add_argument('--arch', required=True, choices=sorted(LOCAL_PAIR), help='architecture the pair was built for')
     parser.add_argument('--source', required=True, help='the commit both images were built from')
     arguments = parser.parse_args(argv)
+    runtime, migration = LOCAL_PAIR[arguments.arch]
 
     admission = load_admission()
     daemon = docker_json('info', '--format', '{{json .}}')
-    platform = check_profiles(admission, inspect(arguments.runtime), inspect(arguments.migration), daemon, arguments.source)
-    migrations = check_migrations(read_migrations(arguments.runtime), read_migrations(arguments.migration))
+    platform = check_profiles(admission, inspect(runtime), inspect(migration), daemon, arguments.source)
+    if platform != 'linux/' + arguments.arch:
+        raise PairError(f'pair is {platform}, not linux/{arguments.arch}')
+    migrations = check_migrations(read_migrations(runtime), read_migrations(migration))
     print(json.dumps({'platform': platform, 'source': arguments.source, 'migrations': migrations},
                      sort_keys=True, separators=(',', ':')))
 
