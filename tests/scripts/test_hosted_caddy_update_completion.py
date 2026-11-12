@@ -189,8 +189,10 @@ class CompletionTests(unittest.TestCase):
                             {'runtime_image': None}, {'extra': 1}):
                 with self.subTest(changed=changed), self.assertRaises(ValueError):
                     completion.validate({**self.value, **changed})
+            without = dict(self.value)
+            del without['revision']
             with self.assertRaises(ValueError):
-                completion.validate({key: item for key, item in self.value.items() if key != 'revision'})
+                completion.validate(without)
 
 
 if __name__ == '__main__':
