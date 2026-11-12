@@ -141,6 +141,14 @@ const envSchema = z.object({
   DOLLHOUSE_HTTP_STREAM_EXPIRY_GRACE_MS: z.coerce.number().int().min(0).max(MAX_TIMER_DELAY_MS)
     .refine(value => value === 0 || value >= 1000, 'DOLLHOUSE_HTTP_STREAM_EXPIRY_GRACE_MS: 0 disables expiry-based closure; minimum nonzero grace is 1000 ms')
     .default(300000),
+  /**
+   * How often an open standalone MCP stream asks the auth provider whether its
+   * credential is still good (grant not revoked, account still allowed). A
+   * revoked credential stops payloads and closes the stream. 0 disables.
+   */
+  DOLLHOUSE_HTTP_STREAM_CREDENTIAL_RECHECK_MS: z.coerce.number().int().min(0).max(MAX_TIMER_DELAY_MS)
+    .refine(value => value === 0 || value >= 1000, 'DOLLHOUSE_HTTP_STREAM_CREDENTIAL_RECHECK_MS: 0 disables rechecks; minimum nonzero interval is 1000 ms')
+    .default(30000),
   /** Session idle timeout in milliseconds (0 = no timeout). */
   DOLLHOUSE_HTTP_SESSION_IDLE_TIMEOUT_MS: z.coerce.number().int().min(0).default(900000),
   /** Pre-warmed session pool size (0 = disabled). */

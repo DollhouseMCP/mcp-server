@@ -1230,6 +1230,7 @@ export async function startStreamableHttpServer(
     ...options,
     authMiddleware,
     oauthProvider,
+    isStreamCredentialActive: resolveStreamCredentialCheck(authProvider),
     tlsConfig: container.hasRegistration('TlsConfig')
       ? container.resolve<TlsConfig>('TlsConfig')
       : undefined,
@@ -1339,6 +1340,14 @@ function resolveRuntimeReplicaId(): string {
     replicaId,
   });
   return replicaId;
+}
+
+/** Providers that can revoke a credential before it expires expose a liveness check for open streams. */
+function resolveStreamCredentialCheck(provider: unknown): ((claims: AuthClaims) => Promise<boolean>) | undefined {
+  const check = (provider as { isCredentialActive?: unknown } | null | undefined)?.isCredentialActive;
+  return typeof check === 'function'
+    ? claims => (check as (claims: AuthClaims) => Promise<boolean>).call(provider, claims)
+    : undefined;
 }
 
 function isEmbeddedOAuthProvider(value: unknown): value is {
