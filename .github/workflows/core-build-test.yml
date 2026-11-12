@@ -79,6 +79,7 @@ jobs:
           npm run test:hosted-deploy
           PYTHONDONTWRITEBYTECODE=1 python3 tests/scripts/test_migration_export_environment.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/scripts/test_hosted_registry_image_admission.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/scripts/test_check_hosted_image_pair.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/scripts/test_hosted_live_inventory.py
           bash tests/scripts/hosted-maintenance-source.test.sh
           bash tests/scripts/hosted-deploy-preparation-order.test.sh
