@@ -1267,7 +1267,11 @@ function resolveWebConsoleHttpMounts(
     return {};
   }
   return {
-    webConsoleApiV1: { router: composition.apiV1Mount.router, markMounted: composition.apiV1Mount.markMounted },
+    webConsoleApiV1: {
+      router: composition.apiV1Mount.router,
+      markMounted: composition.apiV1Mount.markMounted,
+      isSafeToServe: composition.isSafeToServe ?? undefined,
+    },
     onboarding: composition.onboarding,
   };
 }

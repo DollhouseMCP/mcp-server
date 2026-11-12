@@ -4,6 +4,7 @@ export type OperationHealthComponent =
   | 'gatekeeper'
   | 'runtime_control'
   | 'security_invalidation'
+  | 'database_migrations'
   | 'api_mount';
 
 export type OperationHealthStatus = 'ok' | 'degraded' | 'unavailable' | 'not_ready';

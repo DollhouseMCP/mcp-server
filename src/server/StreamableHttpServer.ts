@@ -100,6 +100,12 @@ export interface StreamableHttpRuntimeOptions {
   webConsoleApiV1?: {
     router: Router;
     markMounted: () => void;
+    /**
+     * False when the console has verified that the database is behind this
+     * release's migrations. /readyz then reports not ready so the replica is
+     * taken out of rotation; nothing else about the fault is disclosed there.
+     */
+    isSafeToServe?: () => Promise<boolean>;
   };
   /** Poll interval for durable runtime termination commands when runtimeSessionControl is configured. */
   runtimeCommandPollIntervalMs?: number;
@@ -1003,6 +1009,15 @@ export async function createStreamableHttpRuntime(
             });
             return;
           }
+        }
+        // A server running against a schema older than its release is unsafe
+        // for MCP traffic as well as the console, so the whole replica drains.
+        if (options.webConsoleApiV1?.isSafeToServe && !await options.webConsoleApiV1.isSafeToServe()) {
+          res.status(503).json({
+            ready: false,
+            version: PACKAGE_VERSION,
+          });
+          return;
         }
         res.status(200).json({
           ready: true,
