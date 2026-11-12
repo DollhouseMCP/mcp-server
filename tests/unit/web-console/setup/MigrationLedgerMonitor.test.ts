@@ -2,6 +2,7 @@ import { describe, expect, it, jest } from '@jest/globals';
 
 import { MigrationLedgerMonitor } from '../../../../src/web-console/setup/MigrationLedgerMonitor.js';
 import {
+  MIGRATION_LEDGER_PROBE_TIMED_OUT,
   RELEASE_MIGRATIONS_UNAVAILABLE,
   type MigrationLedgerResult,
 } from '../../../../src/web-console/setup/MigrationLedgerProbe.js';
@@ -106,6 +107,97 @@ describe('MigrationLedgerMonitor', () => {
     advance(1000); await monitor.current();
     expect(onChange).toHaveBeenCalledTimes(3);
     expect(onChange).toHaveBeenLastCalledWith(PASSED);
+  });
+
+  describe('when the ledger read does not return', () => {
+    // A probe the test settles by hand, behind a short real timeout.
+    function stalled(first?: MigrationLedgerResult) {
+      let clock = 0;
+      const finish: Array<(result: MigrationLedgerResult) => void> = [];
+      let calls = 0;
+      const probe = jest.fn(() => (first && calls++ === 0)
+        ? Promise.resolve(first)
+        : new Promise<MigrationLedgerResult>(resolve => { finish.push(resolve); }));
+      const onChange = jest.fn();
+      const monitor = new MigrationLedgerMonitor({ probe, recheckMs: 1000, probeTimeoutMs: 20, now: () => clock, onChange });
+      return { monitor, probe, onChange, finish, advance: (ms: number) => { clock += ms; } };
+    }
+    const settle = () => new Promise<void>(resolve => { setImmediate(resolve); });
+
+    it('answers as unverified within the timeout, and keeps the replica in service', async () => {
+      const { monitor, onChange } = stalled();
+      const started = Date.now();
+      expect(await monitor.isSafeToServe()).toBe(true);
+      expect(Date.now() - started).toBeLessThan(1000);
+      expect(await monitor.current()).toEqual(MIGRATION_LEDGER_PROBE_TIMED_OUT);
+      expect(onChange).toHaveBeenCalledTimes(1);
+      expect(onChange).toHaveBeenCalledWith(MIGRATION_LEDGER_PROBE_TIMED_OUT);
+    });
+
+    it('gives every caller that arrived together the same timeout answer from one probe', async () => {
+      const { monitor, probe } = stalled();
+      expect(await Promise.all([monitor.current(), monitor.current(), monitor.isSafeToServe()]))
+        .toEqual([MIGRATION_LEDGER_PROBE_TIMED_OUT, MIGRATION_LEDGER_PROBE_TIMED_OUT, true]);
+      expect(probe).toHaveBeenCalledTimes(1);
+    });
+
+    it('starts no second probe while the first is still out, and answers at once', async () => {
+      const { monitor, probe, advance } = stalled();
+      await monitor.current();
+      for (let poll = 0; poll < 5; poll++) {
+        advance(1000);
+        // Already settled: it wins a race against the next turn of the event loop.
+        expect(await Promise.race([monitor.current(), settle().then(() => 'still waiting')]))
+          .toEqual(MIGRATION_LEDGER_PROBE_TIMED_OUT);
+      }
+      expect(probe).toHaveBeenCalledTimes(1);
+    });
+
+    it('uses the late answer when the probe finally returns, then probes normally again', async () => {
+      const { monitor, probe, onChange, finish, advance } = stalled();
+      await monitor.current();
+      finish[0](INCOMPLETE);
+      await settle();
+      expect(await monitor.current()).toEqual(INCOMPLETE);
+      expect(await monitor.isSafeToServe()).toBe(false);
+      expect(onChange).toHaveBeenLastCalledWith(INCOMPLETE);
+
+      advance(1000);
+      const next = monitor.current();
+      expect(probe).toHaveBeenCalledTimes(2);
+      finish[1](PASSED);
+      expect(await next).toEqual(PASSED);
+    });
+
+    it('does not let a slow re-check overturn a shortfall it has already verified', async () => {
+      const { monitor, probe, onChange, finish, advance } = stalled(INCOMPLETE);
+      expect(await monitor.isSafeToServe()).toBe(false);
+      advance(1000);
+      expect(await monitor.isSafeToServe()).toBe(false);
+      expect(await monitor.current()).toEqual(INCOMPLETE);
+      expect(probe).toHaveBeenCalledTimes(2);
+      expect(onChange).toHaveBeenCalledTimes(1);
+
+      finish[0](PASSED);
+      await settle();
+      expect(await monitor.isSafeToServe()).toBe(true);
+    });
+  });
+
+  it('defaults to a two-second wait for the probe', async () => {
+    jest.useFakeTimers();
+    try {
+      const monitor = new MigrationLedgerMonitor({ probe: () => new Promise<MigrationLedgerResult>(() => {}), now: () => 0 });
+      const answer = monitor.current();
+      let settled = false;
+      void answer.then(() => { settled = true; });
+      await jest.advanceTimersByTimeAsync(1999);
+      expect(settled).toBe(false);
+      await jest.advanceTimersByTimeAsync(1);
+      expect(await answer).toEqual(MIGRATION_LEDGER_PROBE_TIMED_OUT);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('defaults to a fifteen-second interval', async () => {

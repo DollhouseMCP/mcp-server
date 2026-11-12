@@ -39,6 +39,14 @@ export const RELEASE_MIGRATIONS_UNAVAILABLE: MigrationLedgerResult = Object.free
     'The build is incomplete: reinstall or rebuild the server.',
 });
 
+/** The ledger read was still outstanding when the caller's wait ran out. */
+export const MIGRATION_LEDGER_PROBE_TIMED_OUT: MigrationLedgerResult = Object.freeze({
+  id: CHECK_ID,
+  state: 'pending',
+  code: 'migration_ledger_unreadable',
+  detail: 'The applied-migration ledger did not answer in time, so the schema is not verified. The check is tried again.',
+});
+
 const PG_INSUFFICIENT_PRIVILEGE = '42501';
 const PG_UNDEFINED_TABLE = '42P01';
 const PG_INVALID_SCHEMA_NAME = '3F000';
