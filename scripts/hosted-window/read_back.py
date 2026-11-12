@@ -32,8 +32,10 @@ MIGRATIONS = '/app/src/database/migrations'
 PUBLIC = ('/healthz', '/readyz', '/mcp')
 LIMIT = 16 * 1024 * 1024
 UTF8 = 'utf-8'
-# A folder or file named by the operator or the plan: an absolute path as written, without a "." or ".." part.
-LOCATION = re.compile(r'(?:/\w[\w.-]*)+\Z', re.ASCII)
+# A path named on the command line or in the plan: absolute, as written, without a "." or ".." part.
+# The same pattern as window_driver.py, which checks every one of these paths before the first step.
+LOCATION = re.compile(r'(?:/(?!\.{1,2}(?:/|\Z))[^/\0]+)+\Z')
+LOCATION_FAULT = '%s must be an absolute path as written, without a "." or ".." part'
 TAG = re.compile(r'\w+\Z', re.ASCII)
 LEDGER_QUERY = ('exec psql --no-password --no-psqlrc --set ON_ERROR_STOP=1 --quiet --tuples-only --no-align '
                 '--username "$POSTGRES_USER" --dbname dollhousemcp '
@@ -69,9 +71,11 @@ def image_ledger(run, image):
         return [hashlib.sha256((migrations / (entry['tag'] + '.sql')).read_bytes()).hexdigest() for entry in entries]
 
 
-def checkpoint_facts(directory):
+def checkpoint_facts(folder):
     """What the fresh checkpoint recorded: the database container and boot, and the ledger before the upgrade."""
-    directory = Path(directory)
+    if not LOCATION.fullmatch(folder):
+        raise ValueError(LOCATION_FAULT % 'the checkpoint folder')
+    directory = Path(folder)
     source = json.loads((directory / 'manifest.json').read_bytes())['source_database']
     for line in (directory / 'observation.jsonl').read_text(encoding=UTF8).splitlines():
         record = json.loads(line)
@@ -94,9 +98,10 @@ def public_facts(run, origin):
 
 
 def collect(plan, checkpoint, run=system):
-    if not LOCATION.fullmatch(plan['deploy_dir']):
-        raise ValueError('the deployment folder in the plan is not an absolute path as written')
-    instance, root = plan['instance'], Path(plan['deploy_dir'])
+    folder = plan['deploy_dir']
+    if not LOCATION.fullmatch(folder):
+        raise ValueError(LOCATION_FAULT % 'the deployment folder in the plan')
+    instance, root = plan['instance'], Path(folder)
     source, before = checkpoint_facts(checkpoint)
     database = inspect(run, instance + '-postgres')
     return {
@@ -148,9 +153,12 @@ def report(plan, checkpoint, run=system):
 def main(argv):
     if len(argv) != 3:
         raise ValueError('usage: read_back.py PLAN CHECKPOINT_DIR')
-    if not LOCATION.fullmatch(argv[1]) or not LOCATION.fullmatch(argv[2]):
-        raise ValueError('PLAN and CHECKPOINT_DIR must be absolute paths as written, without a "." or ".." part')
-    result = report(json.loads(Path(argv[1]).read_bytes()), argv[2])
+    plan_path, checkpoint = argv[1], argv[2]
+    if not LOCATION.fullmatch(plan_path):
+        raise ValueError(LOCATION_FAULT % 'PLAN')
+    if not LOCATION.fullmatch(checkpoint):
+        raise ValueError(LOCATION_FAULT % 'CHECKPOINT_DIR')
+    result = report(json.loads(Path(plan_path).read_bytes()), checkpoint)
     print(json.dumps(result, indent=1, sort_keys=True))
     return 0 if result['passed'] else 3
 

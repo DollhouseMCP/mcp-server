@@ -476,7 +476,7 @@ class DriverTests(unittest.TestCase):
         for path in ('plan.json', str(self.folder) + '/../plan.json', str(self.folder) + '/./plan.json', str(self.plan) + '/'):
             with self.subTest(path), self.assertRaisesRegex(driver.Refused, 'the plan must be an absolute path as written'):
                 driver.load_plan(path)
-        for path in ('journal', str(self.folder) + '/../journal', str(self.folder) + '/.journal'):
+        for path in ('journal', str(self.folder) + '/../journal', str(self.folder) + '/journal/', str(self.folder) + '//journal'):
             with self.subTest(path), self.assertRaisesRegex(driver.Refused, 'the journal must be an absolute path as written'):
                 driver.run(self.plan, path, stop=self.stop, tools=self.tools)
         self.assertEqual(self.started, [])
@@ -484,6 +484,28 @@ class DriverTests(unittest.TestCase):
             done = subprocess.run([sys.executable, '-B', str(SCRIPT), *arguments], capture_output=True)
             self.assertEqual((done.returncode, done.stdout.decode().startswith('refused: ')), (3, True))
             self.assertIn('absolute path as written', done.stdout.decode())
+
+    def test_one_path_rule_holds_from_the_first_step_to_the_read_back(self):
+        # The read-back runs after the upgrade. It must not refuse a path that the driver accepted before the first step.
+        own = importlib.util.spec_from_file_location('read_back', SCRIPT.with_name('read_back.py'))
+        read_back = importlib.util.module_from_spec(own)
+        own.loader.exec_module(read_back)
+        self.assertEqual(read_back.LOCATION.pattern, driver.LOCATION.pattern)
+        accepted = ('/root/.checkpoints/fresh', '/srv/window/check point', '/srv/...', '/a')
+        refused = ('relative', '/srv/window/', '/srv//window', '/srv/./window', '/srv/window/..', '/', '', '/srv/win\0dow', None, 7)
+        self.assertEqual([path for path in accepted if not driver.absolute(path)], [])
+        self.assertEqual([path for path in refused if driver.absolute(path)], [])
+        # A checkpoint in a hidden folder is taken to the end, and one with a way out is refused before any step.
+        self.assertEqual(self.drive(checkpoint='/root/.checkpoints/fresh'), 0)
+        self.assertEqual(self.started[-1][1][-1], '/root/.checkpoints/fresh')
+        self.assertEqual(self.names(), ORDER)
+
+    def test_a_checkpoint_path_with_a_way_out_is_refused_before_any_step(self):
+        for path in ('checkpoint', CHECKPOINT + '/../other', CHECKPOINT + '/'):
+            with self.subTest(path), self.assertRaisesRegex(driver.Refused, 'the checkpoint folder must be an absolute path as written'):
+                self.drive(checkpoint=path)
+        self.assertEqual(self.started, [])
+        self.assertFalse(self.journal.exists())
 
     def test_a_running_proxy_beside_an_unarmed_update_names_no_action(self):
         self.exits['legacy-offline-update'] = 1

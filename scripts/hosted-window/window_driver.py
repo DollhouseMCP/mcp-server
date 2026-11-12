@@ -71,8 +71,9 @@ IMAGE = re.compile(r'[a-z0-9][a-z0-9./_-]*@sha256:[0-9a-f]{64}\Z')
 NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z')
 VERSION = re.compile(r'\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?\Z', re.ASCII)
 HOST = re.compile(r'[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?\Z')
-# Where the plan and the journal are: an absolute path as written, without a "." or ".." part.
-LOCATION = re.compile(r'(?:/\w[\w.-]*)+\Z', re.ASCII)
+# Every path the driver takes, on the command line or in the plan: absolute, as written, without a "." or ".." part.
+# read_back.py holds the same pattern, so that it cannot refuse a path this driver accepted.
+LOCATION = re.compile(r'(?:/(?!\.{1,2}(?:/|\Z))[^/\0]+)+\Z')
 LOCATION_FAULT = '%s must be an absolute path as written, without a "." or ".." part'
 PHASES = ('source check and read-only preflight', 'legacy reconciliation', 'offline Caddy preparation',
           'fresh checkpoint (hand-over)', 'update', 'verification and read-back')
@@ -93,7 +94,7 @@ class Refused(Exception):
 
 
 def absolute(value):
-    return isinstance(value, str) and value.startswith('/') and '\0' not in value and Path(value) == Path(os.path.normpath(value))
+    return isinstance(value, str) and LOCATION.fullmatch(value) is not None
 
 
 def exact(value, keys, what):
@@ -531,7 +532,7 @@ def run(plan_path, journal_path, first=None, last=5, checkpoint=None, stop=None,
     tools = tools or {}
     plan = load_plan(plan_path, tools.get('declared'))
     if checkpoint is not None and not absolute(checkpoint):
-        raise Refused('the checkpoint folder must be an absolute path')
+        raise Refused(LOCATION_FAULT % 'the checkpoint folder')
     journal = Journal(journal_path)
     first, passed, checkpoint = resume_point(journal, plan_path, first, checkpoint)
     window = Window(plan, journal, checkpoint, stop or Stop(), tools)

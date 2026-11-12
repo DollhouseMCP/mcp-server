@@ -165,13 +165,16 @@ class ReadBackTests(unittest.TestCase):
         for arguments in (['plan.json', str(self.checkpoint)], [str(plan), str(self.folder) + '/../checkpoint']):
             refused = subprocess.run([sys.executable, '-B', str(SCRIPT), *arguments], capture_output=True)
             self.assertEqual((refused.returncode, refused.stdout), (1, b''))
-            self.assertIn(b'absolute paths as written', refused.stderr)
+            self.assertIn(b'must be an absolute path as written', refused.stderr)
 
     def test_a_folder_or_a_migration_name_that_leads_elsewhere_is_not_followed(self):
         self.plan['deploy_dir'] = str(self.deploy) + '/../deploy'
         result = self.result()
         self.assertEqual((result['complete'], result['passed']), (False, False))
-        self.assertIn('not an absolute path as written', result['error'])
+        self.assertIn('the deployment folder in the plan must be an absolute path as written', result['error'])
+        self.plan['deploy_dir'] = str(self.deploy)
+        result = read_back.report(self.plan, str(self.checkpoint) + '/.', self.run_fake)
+        self.assertIn('the checkpoint folder must be an absolute path as written', result['error'])
         self.plan['deploy_dir'] = str(self.deploy)
         self.tag = '../../elsewhere'
         result = self.result()
