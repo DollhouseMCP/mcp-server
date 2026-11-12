@@ -12,12 +12,20 @@ from caddy_recovery_receipt import MAX_RECORD, private_directory, read_current_c
 from caddy_volume_migration import inspect_one
 import legacy_handoff as handoff
 from legacy_recovery_guards import lifecycle
-from legacy_recovery_profile import profile
+from legacy_recovery_profile import profile, same_profile
 
 DIRECTORY = '.caddy-retired-proxies'
 STARTUP_NAME = 'Caddyfile'
 JSON_SUFFIX = '.json'
 ID = re.compile(r'[0-9a-f]{64}\Z')
+# A later boot of the reconciled serving proxy, recorded by one qualified action. See caddy_serving_boot.py.
+BOOTS = '.caddy-serving-boots'
+BOOT_SCHEMA = 'serving-proxy-boot-v1'
+BOOT_NAME = re.compile(r'boot-([0-9a-f]{64})-[0-9a-f]{32}\.json\Z')
+BOOT_FIELDS = {'schema', 'host', 'instance', 'id', 'previous', 'boot', 'serving_sha256', 'reason', 'authority'}
+BOOT_REASONS = ('abandoned-offline-preparation', 'accepted-restart')
+BOOT_RECEIPT = 'RECORDED.json'
+MAX_BOOTS = 32
 
 
 def authority(root, value):
@@ -52,13 +60,90 @@ def verify_retired(root, instance, item, run):
             key: item[key] for key in ('id', 'name', 'profile', 'boot')}:
         raise ValueError('retired proxy differs from its qualified authority')
     actual = inspect_one(run, 'container', item['id'])
-    if actual.get('Name') != '/' + item['name'] or profile(actual) != item['profile']:
+    if actual.get('Name') != '/' + item['name'] or not same_profile(profile(actual), item['profile']):
         raise ValueError('retired proxy full profile or retained name changed')
     labels = actual.get('Config', {}).get('Labels', {})
     if labels.get('com.docker.compose.project') != instance or labels.get('com.docker.compose.service') != 'caddy':
         raise ValueError('retired proxy Compose ownership changed')
     lifecycle(actual, False, item['boot'])
     return item['id']
+
+
+def boot_authority(root, value):
+    """The receipt of the action that recorded a boot: one private file in that action's own folder."""
+    if not isinstance(value, dict) or set(value) != {'path', 'sha256'}:
+        raise ValueError('serving proxy boot authority is missing')
+    path = Path(value['path'])
+    relative = path.relative_to(root)
+    if (len(relative.parts) != 3 or relative.parts[0] != BOOTS
+            or not re.fullmatch(r'(?:abandon|accept)-[0-9a-f]{32}', relative.parts[1])
+            or relative.parts[2] != BOOT_RECEIPT or path.resolve(strict=True) != path):
+        raise ValueError('serving proxy boot authority is outside its qualified operation')
+    owner = private_directory(path.parent)
+    try:
+        record, _ = handoff.read_json(owner, path.name, value['sha256'])
+    finally:
+        os.close(owner)
+    return record
+
+
+def valid_boot(value):
+    return (isinstance(value, dict) and set(value) == {'started_at', 'restart_count'}
+            and isinstance(value['started_at'], str) and bool(value['started_at'])
+            and type(value['restart_count']) is int and value['restart_count'] >= 0)
+
+
+def boot_records(root, instance, identifier, directory):
+    """Every recorded later boot of one serving proxy, each bound to its serving record and its authority."""
+    serving_sha = handoff.digest(read_private(directory, 'serving-' + identifier + JSON_SUFFIX, MAX_RECORD))
+    names = sorted(name for name in os.listdir(directory)
+                   if (match := BOOT_NAME.fullmatch(name)) is not None and match.group(1) == identifier)
+    if len(names) > MAX_BOOTS:
+        raise ValueError('serving proxy boot records exceed their bound')
+    records = []
+    for name in names:
+        record, _ = handoff.read_json(directory, name)
+        if (set(record) != BOOT_FIELDS or record['schema'] != BOOT_SCHEMA or record['host'] != handoff.host_identity()
+                or record['instance'] != instance or record['id'] != identifier or record['reason'] not in BOOT_REASONS
+                or record['serving_sha256'] != serving_sha or not valid_boot(record['previous'])
+                or not valid_boot(record['boot']) or record['previous']['started_at'] == record['boot']['started_at']):
+            raise ValueError('serving proxy boot record is invalid')
+        proof = boot_authority(root, record['authority'])
+        if proof.get('boot_record') != {key: record[key] for key in BOOT_FIELDS - {'authority'}}:
+            raise ValueError('serving proxy boot record differs from its qualified authority')
+        records.append(record)
+    return records
+
+
+def require_boot_capacity(root, instance, identifier):
+    """Refuse before an action that would record one boot more than boot_records reads."""
+    directory = private_directory(root / DIRECTORY)
+    try:
+        if len(boot_records(root, instance, identifier, directory)) >= MAX_BOOTS:
+            raise ValueError('serving proxy boot records are at their bound; no further boot can be recorded')
+    finally:
+        os.close(directory)
+
+
+def serving_boot(root, instance, identifier, serving):
+    """The boot the reconciled serving proxy must have: its reconciled one, or the newest one recorded after it.
+
+    The records must form exactly one chain from the reconciled boot. A fork, a
+    loop or a record that is not on the chain refuses.
+    """
+    directory = private_directory(root / DIRECTORY)
+    try:
+        records = boot_records(root, instance, identifier, directory)
+    finally:
+        os.close(directory)
+    current, started = serving['boot'], {serving['boot']['started_at']}
+    for _ in records:
+        following = [record for record in records if record['previous'] == current]
+        if len(following) != 1 or following[0]['boot']['started_at'] in started:
+            raise ValueError('serving proxy boot records do not form one chain')
+        current = following[0]['boot']
+        started.add(current['started_at'])
+    return current
 
 
 def inventory(root, instance, run):
@@ -73,7 +158,7 @@ def inventory(root, instance, run):
             raise ValueError('retired proxy inventory exceeds its bound')
         result = set()
         for name in names:
-            if re.fullmatch(r'serving-[0-9a-f]{64}\.json', name):
+            if re.fullmatch(r'serving-[0-9a-f]{64}\.json', name) or BOOT_NAME.fullmatch(name):
                 continue
             if not re.fullmatch(r'proxy-[0-9a-f]{64}\.json', name):
                 raise ValueError('retired proxy inventory has an unknown entry')
@@ -108,19 +193,19 @@ def register(root, instance, identifier, name, proof_path, run):
         os.close(directory)
 
 
-def startup_path(root, instance, identifier, run, require_root_copy=True):
-    """Only the one reconciled legacy proxy may use its protected old bind."""
+def serving_record(root, instance, identifier):
+    """The reconciled serving proxy record for this ID, bound to its authority, or None when there is none."""
     try:
         directory = private_directory(root / DIRECTORY)
     except FileNotFoundError:
-        return root / STARTUP_NAME
+        return None
     try:
         try:
             if not isinstance(identifier, str) or not ID.fullmatch(identifier):
                 raise ValueError('reconciled serving proxy ID is invalid')
             record, _ = handoff.read_json(directory, 'serving-' + identifier + JSON_SUFFIX)
         except FileNotFoundError:
-            return root / STARTUP_NAME
+            return None
     finally:
         os.close(directory)
     proof = authority(root, record['authority'])
@@ -129,13 +214,21 @@ def startup_path(root, instance, identifier, run, require_root_copy=True):
     serving = record['serving']
     if serving['id'] != identifier:
         raise ValueError('reconciled serving proxy selector differs')
+    return serving
+
+
+def startup_path(root, instance, identifier, run, require_root_copy=True):
+    """Only the one reconciled legacy proxy may use its protected old bind."""
+    serving = serving_record(root, instance, identifier)
+    if serving is None:
+        return root / STARTUP_NAME
     current = inspect_one(run, 'container', identifier)
-    if profile(current) != serving['profile'] or current.get('Name') != '/' + instance + '-caddy':
+    if not same_profile(profile(current), serving['profile']) or current.get('Name') != '/' + instance + '-caddy':
         raise ValueError('reconciled serving proxy profile changed')
     running = current.get('State', {}).get('Running')
     if type(running) is not bool:
         raise ValueError('reconciled serving proxy lifecycle is UNKNOWN')
-    lifecycle(current, running, serving['boot'])
+    lifecycle(current, running, serving_boot(root, instance, identifier, serving))
     path = Path(serving['caddyfile'])
     relative = path.relative_to(root)
     if (len(relative.parts) != 3 or relative.parts[0] != '.caddy-recovery'

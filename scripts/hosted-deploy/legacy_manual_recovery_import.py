@@ -20,7 +20,7 @@ from legacy_control_resolution import raw_state
 from legacy_recovery_action import LEGACY_VERSION
 from legacy_recovery_boundary import FILES, REQUIRED, checkpoint_database, database_fingerprint, read_configuration, window_path
 from legacy_recovery_guards import lifecycle
-from legacy_recovery_profile import profile, profile_hash
+from legacy_recovery_profile import profile, profile_hashes, same_profile
 
 ACCEPTED = {
     'manual_receipt': 'b77bda432e549d0bf845db01478d48aed31466862c58dbb7ee61819b5a012ce8',
@@ -204,7 +204,7 @@ class Adoption:
         found['app'] = inspect_one(self.run, 'container', self.value['app_id'])
         found['postgres'] = inspect_one(self.run, 'container', self.value['postgres_id'])
         for actual in (found['app'], found['postgres']):
-            if profile(actual) != profile(found['originals'][actual['Id']]):
+            if not same_profile(profile(actual), profile(found['originals'][actual['Id']])):
                 raise ValueError('manual recovery app or database full profile changed')
             verify_boot(found['final'], actual, True)
 
@@ -218,7 +218,7 @@ class Adoption:
         found = self.found
         retained = found['retained'] = inspect_one(self.run, 'container', found['recovered']['retained_aborted_proxy'])
         if (retained['Id'] != found['control']['proxy']['id']
-                or profile_hash(retained) != ACCEPTED['retained_proxy_profile']):
+                or ACCEPTED['retained_proxy_profile'] not in profile_hashes(retained)):
             raise ValueError('accepted retained proxy full profile changed')
         verify_boot(found['final'], retained, False)
 

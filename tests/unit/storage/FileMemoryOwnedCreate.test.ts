@@ -15,6 +15,7 @@ import { FileMemoryOwnedCreate, commitCreateDirectory } from '../../../src/stora
 
 import { fileMetadataProof } from './helpers/fileProof.js';
 import { OwnedStorageCase } from './fixtures/ownedStorageCase.js';
+import { populatedCaseTimeoutMs, THOUSAND_ITEM_CASE_TIMEOUT_MS } from './fixtures/populatedCaseTimeout.js';
 
 const USER = '11111111-1111-4111-8111-111111111111';
 const roots: string[] = [];
@@ -859,10 +860,11 @@ describe('exclusive owned CREATE', () => {
       inode: (await fs.stat(path.join(path.dirname(f.head), entry.name))).ino }).toEqual({ raw: entry.raw, inode: entry.inode });
     await expect(fs.stat(f.head)).rejects.toMatchObject({ code: 'ENOENT' });
   }));
-  it.each([
+  // One it.each per row keeps every title and gives only the 1,000-item rows the longer limit.
+  for (const row of [
     ['Created.yaml', 100], ['Created.yaml', 250], ['Created.yaml', 1000],
     ['Notes/Created.yaml', 100], ['Notes/Created.yaml', 250], ['Notes/Created.yaml', 1000],
-  ] as const)('fits compact phase evidence and completes %s with %s existing memories', ownership.own(async (locator, count) => {
+  ] as const) it.each([row])('fits compact phase evidence and completes %s with %s existing memories', ownership.own(async (locator, count) => {
       const diagnostic = count === 1000 ? capacityDiagnostic(locator) : undefined;
       diagnostic?.('setup-start');
       const f = await fixture(locator);
@@ -886,7 +888,7 @@ describe('exclusive owned CREATE', () => {
       expect(observed.budget().limit).toBeLessThanOrEqual(454656);
       diagnostic?.('operation-complete', undefined, observed);
       process.stderr.write(`CREATE capacity ${JSON.stringify({ locator, count, sizes, consumed: observed.budget().consumed, reserved: observed.budget().limit, ms: performance.now() - start, measured: observed.measured })}\n`);
-  }));
+  }), populatedCaseTimeoutMs(row[1]));
   function capacityDiagnostic(locator: string, stop?: CreatePublication) {
     const started = performance.now(); let records = 0;
     return (event: 'setup-start' | 'setup-complete' | 'interrupted-start' | 'interrupted-end' | 'operation-start' | 'publication' | 'operation-complete',
@@ -970,7 +972,7 @@ describe('exclusive owned CREATE', () => {
     diagnostic('operation-complete', undefined, observed);
     process.stderr.write(`CREATE target recovery ${JSON.stringify({ locator, stop, before: observed.records[0].before,
       consumed: observed.budget().consumed, reserved: observed.budget().limit, ms: performance.now() - start, measured: observed.measured })}\n`);
-  }));
+  }), THOUSAND_ITEM_CASE_TIMEOUT_MS);
   it.each([
     ['Created.yaml', 1], ['Created.yaml', 5], ['Notes/Created.yaml', 1], ['Notes/Created.yaml', 5],
   ] as const)('completes real %s CREATE with %s existing owners inside its reserved protocol', ownership.own(async (locator, count) => {
