@@ -40,6 +40,8 @@ export interface HttpTestEnvironmentOptions {
   streamKeepaliveMs?: number;
   streamMaxLifetimeMs?: number;
   streamExpiryGraceMs?: number;
+  streamCredentialRecheckMs?: number;
+  isStreamCredentialActive?: (claims: import('../../src/auth/IAuthProvider.js').AuthClaims) => Promise<boolean>;
   sseStallWatcher?: import('../../src/server/http/SseStallWatcher.js').ISseStallWatcher;
   memoryUpgradeLifecycle?: import('../../src/lifecycle/MemoryUpgradeLifecycle.js').MemoryUpgradeLifecycle;
   authMiddleware?: import('express').RequestHandler;
@@ -167,6 +169,8 @@ export async function createHttpTestEnvironment(
       memoryUpgradeLifecycle: options.memoryUpgradeLifecycle,
       streamMaxLifetimeMs: options.streamMaxLifetimeMs,
       streamExpiryGraceMs: options.streamExpiryGraceMs,
+      streamCredentialRecheckMs: options.streamCredentialRecheckMs,
+      isStreamCredentialActive: options.isStreamCredentialActive,
       authMiddleware: options.authMiddleware,
       streamKeepaliveMs: options.streamKeepaliveMs ?? 15000,
       sseStallWatcher: options.sseStallWatcher ?? new SseStallWatcher(options.streamKeepaliveMs ?? 15000),

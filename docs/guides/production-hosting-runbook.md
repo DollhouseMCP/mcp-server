@@ -955,7 +955,9 @@ sudo systemctl restart dollhousemcp
 sudo journalctl -u dollhousemcp -f
 ```
 
-Migrations run automatically on startup. Watch `/readyz` — it returns 503 with `reason: "migrations_pending"` during a migration window and 200 once everything is current.
+The server does not apply database migrations when it starts. Run the migration job for the new release (`docker compose --env-file .env.production run --rm dollhousemcp-migrate`, or `npm run db:migrate` for the bare binary), then watch `/readyz`. With the web console enabled, it returns 503 while the database is missing any of this release's migrations, and 200 once they are all applied. The response gives no reason: the server log names the first missing migration, and the console's Operations health shows `database_migrations` as not ready.
+
+If the server's database role cannot read the migration ledger (`drizzle.__drizzle_migrations`), the server cannot check and keeps serving. It logs one warning that migrations are not verified, with the grant that fixes it, and Operations health shows `database_migrations` as degraded.
 
 Migration `0048` marks a non-GitHub integration credential that cannot be attributed to a provider descriptor as `status='error'` with `error_reason='revocation_failed'`. The encrypted credential is retained so it can still be revoked through its provider, and account deletion remains blocked with HTTP 409 and code `integration_credential_cleanup_pending` until the credential is resolved. There are two exits: the user can open the console integrations page and click **Disconnect** for the provider in the error state, or an administrator can repeat the account-deletion request with `integration_credential_cleanup_override: "abandon_unrevoked_provider_credentials"` in the request body to record an audited abandonment.
 
