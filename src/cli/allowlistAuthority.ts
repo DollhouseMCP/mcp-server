@@ -20,13 +20,17 @@ import type {
   AuthAllowlistKind,
   IAuthStorageLayer,
 } from '../auth/embedded-as/storage/IAuthStorageLayer.js';
+import { normalizeAuthAllowlistValue } from '../auth/embedded-as/allowlistIdentity.js';
 import { withSystemContext } from '../database/admin.js';
 import type { DatabaseInstance } from '../database/connection.js';
 import type { DrizzleTx } from '../database/db-utils.js';
 import { authAllowlist, userAdminRoles, users } from '../database/schema/index.js';
 import { authIdentityEvents } from '../database/schema/auth.js';
 import { ConsoleStoreConflictError } from '../web-console/stores/ConsoleStoreValidation.js';
-import type { ConsoleAccountAllowlistEntry } from '../web-console/stores/IConsoleAccountAllowlistStore.js';
+import {
+  storedConsoleAllowlistValueMatches,
+  type ConsoleAccountAllowlistEntry,
+} from '../web-console/stores/IConsoleAccountAllowlistStore.js';
 import {
   accountAllowlistDeniesIdentityWithTx,
   accountAllowlistMatchesIdentityWithTx,
@@ -50,6 +54,12 @@ export interface AllowlistCliTarget {
   /** Shown to the operator so it is clear which list was changed. */
   readonly description: string;
   list(): Promise<AuthAllowlistEntry[]>;
+  /**
+   * The entry for an identity as the operator typed it, compared by this
+   * allowlist's own rules. The two allowlists do not fold case the same way
+   * outside ASCII, so the comparison cannot be done by the caller.
+   */
+  findByValue(kind: AuthAllowlistKind, value: string): Promise<AuthAllowlistEntry | null>;
   add(input: AllowlistCliAddInput): Promise<AuthAllowlistEntry>;
   /** Null when no entry has that id. */
   updateNote(id: string, note: string | null): Promise<AuthAllowlistEntry | null>;
@@ -65,6 +75,11 @@ export class StorageAllowlistCliTarget implements AllowlistCliTarget {
 
   list(): Promise<AuthAllowlistEntry[]> {
     return this.storage.allowlistList();
+  }
+
+  async findByValue(kind: AuthAllowlistKind, value: string): Promise<AuthAllowlistEntry | null> {
+    const normalized = normalizeAuthAllowlistValue(kind, value);
+    return (await this.storage.allowlistList()).find(entry => entry.kind === kind && entry.value === normalized) ?? null;
   }
 
   add(input: AllowlistCliAddInput): Promise<AuthAllowlistEntry> {
@@ -175,6 +190,13 @@ export class ConsoleAllowlistCliTarget implements AllowlistCliTarget {
   async list(): Promise<AuthAllowlistEntry[]> {
     const entries = await withSystemContext(this.db, tx => listActiveAccountAllowlistEntriesWithTx(tx));
     return entries.map(fromConsoleEntry);
+  }
+
+  async findByValue(kind: AuthAllowlistKind, value: string): Promise<AuthAllowlistEntry | null> {
+    const entries = await withSystemContext(this.db, tx => listActiveAccountAllowlistEntriesWithTx(tx));
+    // The rule sign-in itself matches a stored entry by.
+    const found = entries.find(entry => entry.kind === kind && storedConsoleAllowlistValueMatches(kind, entry.displayValue, value));
+    return found ? fromConsoleEntry(found) : null;
   }
 
   async add(input: AllowlistCliAddInput): Promise<AuthAllowlistEntry> {

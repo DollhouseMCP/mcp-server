@@ -97,6 +97,9 @@ describe('StorageAllowlistCliTarget', () => {
     const target = new StorageAllowlistCliTarget(storage as unknown as IAuthStorageLayer);
 
     expect(await target.list()).toEqual([entry]);
+    expect(await target.findByValue('email', '  Alice@Example.com ')).toBe(entry);
+    expect(await target.findByValue('github_username', 'alice@example.com')).toBeNull();
+    expect(await target.findByValue('email', 'nobody@example.com')).toBeNull();
     expect(await target.add({ kind: 'email', value: 'alice@example.com', note: 'founder' })).toBe(entry);
     expect(storage.allowlistAdd).toHaveBeenCalledWith({ kind: 'email', value: 'alice@example.com', note: 'founder', createdBy: 'cli' });
     expect(await target.updateNote('entry-1', null)).toBe(entry);

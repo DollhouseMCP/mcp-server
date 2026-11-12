@@ -221,11 +221,10 @@ async function runRemove(session: AllowlistCliSession, opts: RemoveOptions): Pro
     }
     const kind = normalizeCliInput(opts.kind).trim();
     assertValidKind(kind);
-    const value = normalizeAuthAllowlistValue(kind, opts.value);
-    const all = await session.target.list();
-    const found = all.find(e => e.kind === kind && e.value === value);
+    // Matched by the rules of the allowlist being changed, not by the caller.
+    const found = await session.target.findByValue(kind, normalizeAuthAllowlistPrincipal(opts.value));
     if (!found) {
-      process.stderr.write(`No allowlist entry found for kind=${kind} value=${value}\n`);
+      process.stderr.write(`No allowlist entry found for kind=${kind} value=${normalizeAuthAllowlistValue(kind, opts.value)}\n`);
       process.exit(1);
     }
     targetId = found.id;

@@ -118,6 +118,26 @@ required('dollhouse-allowlist where the console manages the allowlist', () => {
       .toEqual(['add', 'remove', 'update']);
   });
 
+  it('finds an entry by value with the rules sign-in uses, so removing one never removes its look-alike', async () => {
+    // Two different identities to sign-in: the console folds only ASCII case.
+    const capital = `\u00dcmlaut-${tag}@example.com`;
+    const small = `\u00fcmlaut-${tag}@example.com`;
+    const first = await target().add({ kind: 'email', value: capital, note: null });
+    const second = await target().add({ kind: 'email', value: small, note: null });
+
+    expect((await target().findByValue('email', capital))?.id).toBe(first.id);
+    expect((await target().findByValue('email', small))?.id).toBe(second.id);
+    // ASCII letters are still matched whatever their case.
+    expect((await target().findByValue('email', capital.replace('example', 'EXAMPLE')))?.id).toBe(first.id);
+    expect(await target().findByValue('github_username', capital)).toBeNull();
+
+    // Removing the capital one, as `remove --kind email --value …` does, leaves the other admitted.
+    expect(await target().remove((await target().findByValue('email', capital))!.id)).toBe(true);
+    expect(await authority().matchesIdentity({ email: capital })).toBe(false);
+    expect(await authority().matchesIdentity({ email: small })).toBe(true);
+    expect(await target().findByValue('email', capital)).toBeNull();
+  });
+
   describe('reconcile', () => {
     const carried = `Carried-${tag}@Example.com`;
     const removed = `removed-in-console-${tag}`;
