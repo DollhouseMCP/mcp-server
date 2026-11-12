@@ -158,14 +158,20 @@ def judged(name, text):
     return verdict, [item for item in candidates if OPAQUE.match(item)] if verdict == 'opaque' else []
 
 
+def assignment(line):
+    """The match of one assignment line, or None for a comment, a blank line or anything else."""
+    match = None if line.lstrip().startswith('#') else ASSIGNMENT.match(line.strip())
+    if match and continues(match.group(2)):
+        # Only its first line would be replaced. The rest matches no assignment and no search.
+        raise Refused('the value of %s continues over more than one line' % match.group(1))
+    return match
+
+
 def environment(raw, secrets, names, short):
     """The file with secret values replaced, one line at a time. Values are never returned elsewhere."""
     lines = []
     for line in raw.decode('utf-8').split('\n'):
-        match = None if line.lstrip().startswith('#') else ASSIGNMENT.match(line.strip())
-        if match and continues(match.group(2)):
-            # Only its first line would be replaced. The rest matches no assignment and no search.
-            raise Refused('the value of %s continues over more than one line' % match.group(1))
+        match = assignment(line)
         verdict, needles = judged(match.group(1), match.group(2)) if match else ('kept', [])
         if match:
             name = match.group(1)
