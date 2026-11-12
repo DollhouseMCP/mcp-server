@@ -139,7 +139,9 @@ import type { MigrationLedgerMonitor } from './setup/MigrationLedgerMonitor.js';
 import type { MigrationLedgerResult } from './setup/MigrationLedgerProbe.js';
 import { createReleaseMigrationLedgerMonitor } from './setup/ReleaseMigrationLedgerMonitor.js';
 import { probeAllowlistParity, type AllowlistParityResult } from './setup/AllowlistParityProbe.js';
+import { cacheProbe } from './setup/cachedProbe.js';
 import {
+  AUDIT_TELEMETRY_PROBE_TTL_MS,
   auditTelemetrySourcesFrom,
   probeAuditTelemetry,
   type AuditTelemetryResult,
@@ -1386,7 +1388,7 @@ function createConsoleHealthProbes(options: {
         listAuthority: () => authority.listEntries(),
       })
       : null,
-    auditTelemetry: () => probeAuditTelemetry(options.auditTelemetrySources),
+    auditTelemetry: cacheProbe(() => probeAuditTelemetry(options.auditTelemetrySources), AUDIT_TELEMETRY_PROBE_TTL_MS),
   };
 }
 
@@ -1505,7 +1507,7 @@ function operationHealthFromMigrationLedger(result: MigrationLedgerResult) {
 function operationHealthFromAllowlistParity(result: AllowlistParityResult) {
   return {
     component: 'allowlist_parity' as const,
-    status: result.state === 'passed' ? 'ok' as const : 'degraded' as const,
+    status: ({ passed: 'ok', failed: 'degraded', pending: 'degraded' } as const)[result.state],
     checked_at: new Date().toISOString(),
     failure_codes: result.state === 'passed' ? [] : [result.code],
   };
@@ -1515,7 +1517,7 @@ function operationHealthFromAllowlistParity(result: AllowlistParityResult) {
 function operationHealthFromAuditTelemetry(result: AuditTelemetryResult) {
   return {
     component: 'audit_telemetry' as const,
-    status: result.state === 'passed' ? 'ok' as const : 'degraded' as const,
+    status: ({ passed: 'ok', failed: 'degraded', pending: 'degraded' } as const)[result.state],
     checked_at: new Date().toISOString(),
     failure_codes: result.state === 'passed' ? [] : [result.code],
   };

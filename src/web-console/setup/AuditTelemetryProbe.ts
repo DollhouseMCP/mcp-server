@@ -9,6 +9,13 @@ const CHECK_ID = 'audit_telemetry_projection';
 /** How many admin audit events one run verifies, from the start of the chain. */
 export const AUDIT_CHAIN_SAMPLE_SIZE = 50;
 
+/**
+ * How long one result is reused. The metrics read aggregates the whole
+ * activity table and has no limit to pass, so a caller that polls health must
+ * not be able to run it on every request.
+ */
+export const AUDIT_TELEMETRY_PROBE_TTL_MS = 30_000;
+
 export type AuditTelemetryCode =
   | 'audit_and_telemetry_readable'
   | 'audit_or_telemetry_unreadable'
@@ -89,7 +96,8 @@ export async function probeAuditTelemetry(sources: AuditTelemetrySources): Promi
   const unreadable = settled.flatMap((outcome, index) => {
     if (outcome.status === 'fulfilled') return [];
     const code = getErrorCode(outcome.reason);
-    return [`${READ_LABELS[names[index]]} (${code ? `error ${code}` : 'no answer'})`];
+    const reason = code ? `error ${code}` : 'no answer';
+    return [`${READ_LABELS[names[index]]} (${reason})`];
   });
   if (unreadable.length > 0) {
     return {
