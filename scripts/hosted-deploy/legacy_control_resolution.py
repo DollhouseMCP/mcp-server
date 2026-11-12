@@ -2,7 +2,13 @@
 
 The old state/handoff bytes remain evidence. A new transition may consume one
 fully verified disposition, with separate issued/completed lineage records.
+
+A reconciliation is consumed once. The one exception is a consumption that
+legacy_update_return.py returned: the transition that consumed it was never
+used, its records are complete, and the preserved state is back. lookup accepts
+such a consumption, and only such a one, as not open.
 """
+import json
 import os
 from pathlib import Path
 import re
@@ -15,6 +21,11 @@ from legacy_recovery_boundary import DIRECTORY, FILES, read_configuration
 IMPLEMENTATION = Path(__file__).resolve().parent
 CONSUME_PREFIX = 'consume-'
 CORE = ('kind', 'token', 'image', 'volumes', 'previous', 'receipt', 'receipt_sha256', 'source')
+FAILED_STATE, ISSUED, COMPLETED = '-failed-state.json', '-issued.json', '-completed.json'
+CONSUMPTION = (FAILED_STATE, ISSUED, COMPLETED)
+RETURN = ('-removed-state.json', '-return-issued.json', '-return-completed.json')
+RETURN_SCHEMA = 'legacy-reconciliation-return-v1'
+UNKNOWN = 'reconciliation consumption was already issued or is UNKNOWN'
 
 
 def operation_path(root, token):
@@ -109,11 +120,57 @@ def lookup(root, state):
     verify_files(root, record['files'])
     directory = private_directory(operation_path(root, pending['token']))
     try:
-        if any(name.startswith(CONSUME_PREFIX) for name in os.listdir(directory)):
-            raise ValueError('reconciliation consumption was already issued or is UNKNOWN')
+        require_returned(directory, record, digest, consumptions(directory))
     finally:
         os.close(directory)
     return record, digest
+
+
+def consumptions(directory):
+    """The consumption records of one reconciliation: the file suffixes present, by consuming token."""
+    found = {}
+    for name in os.listdir(directory):
+        if name.startswith(CONSUME_PREFIX):
+            match = re.fullmatch(r'([0-9a-f]{32})(-[a-z-]+\.json)', name[len(CONSUME_PREFIX):])
+            if match is None:
+                raise ValueError(UNKNOWN)
+            found.setdefault(match.group(1), set()).add(match.group(2))
+    return found
+
+
+def require_returned(directory, record, digest, found):
+    """The only relaxation of single use: a consumption that was returned, whole and verified, is not open."""
+    for token, names in found.items():
+        if names != set(CONSUMPTION + RETURN):
+            raise ValueError(UNKNOWN)
+        verify_return(directory, record, digest, token)
+
+
+def return_record(record, digest, token, consumption_sha, removed_raw):
+    return {'schema': RETURN_SCHEMA, 'resolution_sha256': digest, 'old_token': record['token'], 'token': token,
+            'host': record['host'], 'consumption_sha256': consumption_sha, 'removed_state_sha256': handoff.digest(removed_raw),
+            'restored_state_sha256': record['failed_state_sha256']}
+
+
+def verify_return(directory, record, digest, token):
+    """One returned consumption: its own records, the state the return removed and the state it restored, bound by hash."""
+    prefix = CONSUME_PREFIX + token
+    try:
+        issued, issued_sha = handoff.read_json(directory, prefix + ISSUED)
+        handoff.read_json(directory, prefix + COMPLETED, issued_sha)
+        returned, returned_sha = handoff.read_json(directory, prefix + '-return-issued.json')
+        handoff.read_json(directory, prefix + '-return-completed.json', returned_sha)
+        removed_raw = read_private(directory, prefix + '-removed-state.json', MAX_RECORD)
+        restored_raw = read_private(directory, prefix + FAILED_STATE, MAX_RECORD)
+        removed = json.loads(removed_raw).get('pending')
+        intact = (issued.get('resolution_sha256') == digest and issued.get('old_token') == record['token']
+                  and isinstance(removed, dict) and removed.get('token') == token and issued.get('pending') == core(removed)
+                  and handoff.digest(restored_raw) == record['failed_state_sha256']
+                  and returned == return_record(record, digest, token, issued_sha, removed_raw))
+    except (OSError, ValueError, KeyError, AttributeError):
+        intact = False
+    if not intact:
+        raise ValueError(UNKNOWN)
 
 
 def unresolved_pending(root, state):
@@ -137,8 +194,8 @@ def issue_consumption(root, state, pending):
              'old_token': record['token'], 'host': record['host'], 'pending': core(pending)}
     try:
         # Preserve the exact raw failed state before the current state can move.
-        write_exclusive(directory, name + '-failed-state.json', raw_state(root))
-        write_exclusive(directory, name + '-issued.json', handoff.encoded(value))
+        write_exclusive(directory, name + FAILED_STATE, raw_state(root))
+        write_exclusive(directory, name + ISSUED, handoff.encoded(value))
         os.fsync(directory)
     finally:
         os.close(directory)
@@ -149,7 +206,7 @@ def complete_consumption(issued, root):
     path, name, value = issued
     directory = private_directory(path)
     try:
-        write_exclusive(directory, name + '-completed.json', handoff.encoded(value))
+        write_exclusive(directory, name + COMPLETED, handoff.encoded(value))
         os.fsync(directory)
     finally:
         os.close(directory)
@@ -174,9 +231,9 @@ def consumed(root, state, token):
     record, digest = read_resolution(root, lineage['old_token'])
     directory = private_directory(operation_path(root, record['token']))
     try:
-        issued, sha = handoff.read_json(directory, CONSUME_PREFIX + token + '-issued.json', lineage['consumption_sha256'])
-        completed, _ = handoff.read_json(directory, CONSUME_PREFIX + token + '-completed.json', sha)
-        old = read_private(directory, CONSUME_PREFIX + token + '-failed-state.json', MAX_RECORD)
+        issued, sha = handoff.read_json(directory, CONSUME_PREFIX + token + ISSUED, lineage['consumption_sha256'])
+        completed, _ = handoff.read_json(directory, CONSUME_PREFIX + token + COMPLETED, sha)
+        old = read_private(directory, CONSUME_PREFIX + token + FAILED_STATE, MAX_RECORD)
     finally:
         os.close(directory)
     if (issued != completed or issued['resolution_sha256'] != digest or issued['pending'] != core(pending)

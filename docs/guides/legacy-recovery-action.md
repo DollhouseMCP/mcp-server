@@ -76,3 +76,46 @@ If a native replacement start has an unknown outcome and its later inspection
 shows the candidate stopped, that observation is diagnostic only. Recovery
 requires a separately acknowledged offline fence; no stopped observation
 promotes the forward start or substitutes for the fence.
+
+## An update that began and was never armed
+
+The legacy update begins its Caddy transition and then arms the recovery
+baseline. If it stops between those two steps, a transition is pending with no
+baseline. `recover-legacy` cannot run, and every later action refuses the
+pending transition. Beginning the transition consumed the reconciliation of
+the earlier failed transition, and a reconciliation is consumed once.
+
+`legacy_update_return.py` returns that one consumption:
+
+```bash
+python3 /pinned/source/scripts/hosted-deploy/legacy_update_return.py \
+  return-unarmed-update < /protected/return-request.json
+```
+
+The request holds `deploy_dir`, `instance`, `data_volume` and `config_volume`,
+with the volume names the update was started with. The action issues no Docker
+command. It refuses unless all of this holds:
+
+- the pending transition is an update in its first phase: nothing admitted,
+  nothing staged, no verification control;
+- its consumption records are complete, bind this transition, and no return
+  was issued for it before;
+- no recovery baseline is armed and no forward write was issued (then
+  `recover-legacy` or a checkpoint restore applies);
+- no legacy stop was issued for it, and the previous source was not staged;
+- the serving source and every configuration file are exactly as the
+  reconciliation recorded them.
+
+It then preserves the state it removes, records the return, puts the preserved
+state back as the exact preserved bytes, compares the hash of what it reads
+back, and records the return as completed. After that the deployment is as it
+was after reconciliation. Ingress is still closed: `abandon-caddy-offline`
+brings the proxy back, or `accept-caddy-restart` if `recover-caddy-proxy`
+already started it. A second attempt needs new destination volume names.
+
+A return that is interrupted leaves a return issued without its completion.
+Every later action then refuses, as after an interrupted consumption. A
+returned consumption is the only consumption that does not close its
+reconciliation: `legacy_control_resolution.lookup` accepts it only with all
+six records present and bound to each other, to the reconciliation and to the
+restored state by hash.
