@@ -522,6 +522,35 @@ DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME='new-caddy-config' \
   npm run hosted:deploy -- prepare-caddy-offline
 ```
 
+After a successful preparation ingress is closed, and nothing has begun that
+`recover-caddy-proxy` could recover from. If the window is given up before the
+update starts, for example because the checkpoint that follows cannot be
+completed, bring the same proxy back with `abandon-caddy-offline`, using the
+same image and destination volume names:
+
+```bash
+DOLLHOUSE_HOSTED_CADDY_IMAGE='registry.example/caddy@sha256:<qualified-digest>' \
+DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME='new-caddy-data' \
+DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME='new-caddy-config' \
+  npm run hosted:deploy -- abandon-caddy-offline
+```
+
+It verifies the stopped proxy against the preparation's clone receipt (the same
+container, its full profile, a clean stop, free ports), starts that one
+container once, and requires its recorded Caddy configuration and the public
+legacy acceptance within bounded waits. If a check fails after the start, it
+stops the proxy once more without force and refuses: ingress is closed again.
+The clone, its receipt and the new volumes stay. A later preparation needs new
+destination volume names.
+
+A reconciled legacy proxy is bound to one boot. `abandon-caddy-offline` records
+the new boot in a write-once record beside the reconciled serving record, and
+later actions follow those records. If Docker or the host restarted that proxy,
+`accept-caddy-restart` checks that the running container is the same one, with
+the same profile, configuration and public acceptance, and records its new boot
+with the host's and the Docker daemon's start times. It starts and stops
+nothing. Without such a record, a proxy with another boot is refused.
+
 Before stopping ingress, preparation runs that same copier's full source
 validation in a source-only, read-only helper. It mounts only the two original
 volumes and its script; no destination volume is mounted or created. Source

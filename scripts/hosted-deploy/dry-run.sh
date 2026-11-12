@@ -174,6 +174,18 @@ run_dry_action() {
     bootstrap-admin)
       dry_run_bootstrap_admin
       ;;
+    abandon-caddy-offline)
+      validate_persisted_caddy_fields
+      resolve_public_base_url
+      validate_caddy_selection "${CADDY_IMAGE}" "${CADDY_DATA_VOLUME}" "${CADDY_CONFIG_VOLUME}"
+      log "dry-run: would verify the proxy that the offline preparation stopped against its clone receipt, start that same proxy once, and require its recorded configuration and public legacy acceptance; a failed check would stop it again"
+      ;;
+    accept-caddy-restart)
+      validate_persisted_caddy_fields
+      resolve_public_base_url
+      validate_caddy_selection "${CADDY_IMAGE}" "${CADDY_DATA_VOLUME}" "${CADDY_CONFIG_VOLUME}"
+      log "dry-run: would verify that the running proxy is the reconciled serving proxy with a new boot, check its configuration and public legacy acceptance, and record the new boot; nothing would be started or stopped"
+      ;;
     prepare-caddy-offline)
       validate_persisted_caddy_fields
       resolve_mode_defaults
