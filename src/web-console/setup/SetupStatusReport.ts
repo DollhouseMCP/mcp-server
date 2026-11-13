@@ -131,7 +131,8 @@ function used<Record extends UsageRecord>(
 
 function describeSync(record: SyncUsageRecord): string {
   return record.repositoryName
-    ? `A portfolio sync with an account's ${record.repositoryName} repository has succeeded.`
+    // Each account syncs with its own repository. Only the name is shared: it is this deployment's setting.
+    ? `A portfolio sync has succeeded, with a repository named ${record.repositoryName}, the name this deployment is set to use.`
     : 'A portfolio sync has succeeded. Its repository name was not recorded, because the sync ran on a version from before that was added.';
 }
 

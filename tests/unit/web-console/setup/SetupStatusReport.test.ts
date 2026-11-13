@@ -187,7 +187,7 @@ describe('buildSetupStatusReport', () => {
       }
       expect(check('portfolio_sync_live_repository')).toMatchObject({
         state: 'passed',
-        detail: 'A portfolio sync with an account\'s dollhouse-portfolio repository has succeeded.',
+        detail: 'A portfolio sync has succeeded, with a repository named dollhouse-portfolio, the name this deployment is set to use.',
         observedAt: EARLIER,
       });
     });
