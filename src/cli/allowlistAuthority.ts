@@ -369,8 +369,9 @@ function whyNotCarriable(entry: AuthAllowlistEntry): string | null {
 export function noteForCarry(note: string | null): { readonly note: string | null; readonly shortened: boolean } {
   if (note === null || note.length <= MAX_ALLOWLIST_NOTE_LENGTH) return { note, shortened: false };
   let kept = note.slice(0, MAX_ALLOWLIST_NOTE_LENGTH - 1);
-  // Never end on half of a character that takes two code units.
-  const last = kept.charCodeAt(kept.length - 1);
+  // Never end on half of a character that takes two code units. A first half
+  // with its second half cut off reads back as the half's own code.
+  const last = kept.codePointAt(kept.length - 1) ?? 0;
   if (last >= 0xd800 && last <= 0xdbff) kept = kept.slice(0, -1);
   return { note: `${kept}\u2026`, shortened: true };
 }
