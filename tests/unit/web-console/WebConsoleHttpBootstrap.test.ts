@@ -41,6 +41,15 @@ describe('WebConsoleHttpBootstrap', () => {
     }))).toThrow('Private beta onboarding requires');
   });
 
+  it('leaves the canary schedule off unless an interval is configured', () => {
+    expect(resolveWebConsoleHttpBootstrapOptions(env({
+      DOLLHOUSE_WEB_CONSOLE_CANARY_INTERVAL_MINUTES: 0,
+    }))?.canaryIntervalMs).toBe(0);
+    expect(resolveWebConsoleHttpBootstrapOptions(env({
+      DOLLHOUSE_WEB_CONSOLE_CANARY_INTERVAL_MINUTES: 30,
+    }))?.canaryIntervalMs).toBe(30 * 60_000);
+  });
+
   it('passes validated private beta configuration only on explicit opt-in', () => {
     expect(resolveWebConsoleHttpBootstrapOptions(env())?.onboardingConfiguration).toBeNull();
     const options = resolveWebConsoleHttpBootstrapOptions(env({

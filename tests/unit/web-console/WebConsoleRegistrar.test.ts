@@ -1810,6 +1810,79 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.authenticationAuditQuery.constructor.name).toBe('PostgresAuthenticationAuditQuery');
   });
 
+  describe('the approvals and executions canary', () => {
+    const CANARY_RUN_ROUTE = { method: 'POST', path: '/api/v1/admin/operate/canary/run' };
+
+    function seedPostgres(container: TestContainer, lifecycle: { registerPeriodicTask: jest.Mock } | null) {
+      container.seed('SystemDatabaseInstance', {});
+      container.seed('AuditHmacResolver', { resolve: jest.fn() });
+      container.seed('UserConfigStore', { load: jest.fn(), save: jest.fn() });
+      container.seed('SigningKeyStore', new InMemorySigningKeyStore());
+      if (lifecycle) container.seed('LifecycleService', lifecycle);
+      seedCanonicalPortfolioManagers(container);
+    }
+
+    it('is offered with a database, has not run, and has no schedule unless one is configured', async () => {
+      const container = new TestContainer();
+      const lifecycle = { registerPeriodicTask: jest.fn() };
+      seedPostgres(container, lifecycle);
+      const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+
+      const composition = await new WebConsoleRegistrar({
+        opaqueValueHmacKey: Buffer.alloc(32, 21),
+        reportCleanupError: jest.fn(),
+      }).bootstrapAndRegister(container);
+
+      expect(composition.canaryMonitor?.status()).toMatchObject({ state: 'pending', code: 'canary_not_run', lastRun: null });
+      expect(composition.registry.createRouteManifest().routes).toContainEqual(expect.objectContaining(CANARY_RUN_ROUTE));
+      expect(lifecycle.registerPeriodicTask.mock.calls.map(call => call[2])).not.toContain('webConsole.canary');
+    });
+
+    it('runs on the schedule when one is configured', async () => {
+      const container = new TestContainer();
+      const lifecycle = { registerPeriodicTask: jest.fn() };
+      seedPostgres(container, lifecycle);
+      const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+
+      await new WebConsoleRegistrar({
+        opaqueValueHmacKey: Buffer.alloc(32, 22),
+        reportCleanupError: jest.fn(),
+        canaryIntervalMs: 30 * 60_000,
+      }).bootstrapAndRegister(container);
+
+      expect(lifecycle.registerPeriodicTask).toHaveBeenCalledWith(30 * 60_000, expect.any(Function), 'webConsole.canary');
+    });
+
+    it('fails clearly when a schedule is configured without LifecycleService', async () => {
+      const container = new TestContainer();
+      seedPostgres(container, null);
+      const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+
+      await expect(new WebConsoleRegistrar({
+        opaqueValueHmacKey: Buffer.alloc(32, 23),
+        registerCleanup: false,
+        canaryIntervalMs: 30 * 60_000,
+      }).bootstrapAndRegister(container)).rejects.toThrow('Web console canary schedule registration requires LifecycleService');
+    });
+
+    it('is not offered without a database, even if a schedule is configured', async () => {
+      const lifecycle = { registerPeriodicTask: jest.fn() };
+      const container = new TestContainer();
+      container.seed('LifecycleService', lifecycle);
+      const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+
+      const composition = await new WebConsoleRegistrar({
+        opaqueValueHmacKey: Buffer.alloc(32, 24),
+        registerCleanup: false,
+        canaryIntervalMs: 30 * 60_000,
+      }).bootstrapAndRegister(container);
+
+      expect(composition.canaryMonitor).toBeNull();
+      expect(composition.registry.createRouteManifest().routes).not.toContainEqual(expect.objectContaining(CANARY_RUN_ROUTE));
+      expect(lifecycle.registerPeriodicTask).not.toHaveBeenCalled();
+    });
+  });
+
   it('fails clearly when PostgreSQL self-service settings lacks UserConfigStore', async () => {
     const container = new TestContainer();
     container.seed('SystemDatabaseInstance', { execute: jest.fn().mockResolvedValue([]) });

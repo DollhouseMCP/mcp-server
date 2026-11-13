@@ -7,9 +7,14 @@ export type OperationHealthComponent =
   | 'database_migrations'
   | 'allowlist_parity'
   | 'audit_telemetry'
+  | 'approval_execution_projection'
   | 'api_mount';
 
-export type OperationHealthStatus = 'ok' | 'degraded' | 'unavailable' | 'not_ready';
+/**
+ * `not_run` is a check that only runs when asked and has not been asked yet.
+ * Nothing is known to be wrong, so it does not lower the overall status.
+ */
+export type OperationHealthStatus = 'ok' | 'degraded' | 'unavailable' | 'not_ready' | 'not_run';
 
 export interface OperationHealthComponentDto {
   readonly component: OperationHealthComponent;
@@ -22,6 +27,16 @@ export interface OperationHealthSummaryDto {
   readonly status: OperationHealthStatus;
   readonly checked_at: string;
   readonly components: readonly OperationHealthComponentDto[];
+}
+
+export interface CanaryRunDto {
+  readonly check: 'approval_execution_projection';
+  readonly state: 'passed' | 'pending' | 'failed';
+  readonly code: string;
+  readonly detail: string;
+  readonly trigger: 'admin' | 'schedule';
+  readonly started_at: string;
+  readonly finished_at: string;
 }
 
 export type OperationLogLevel = 'debug' | 'info' | 'warn' | 'error';

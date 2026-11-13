@@ -31,7 +31,9 @@ What it guarantees about each step:
 
 It stops at the first failure and never retries. It never recovers by itself:
 `status` names the one recovery action that fits, and `recover` runs that
-action only when the operator names the same one.
+action only when the operator names the same one. `status` reads the journal
+and the host: an update that was completed outside the journal is reported as
+complete, and no action is named for it.
 
 Phase 3 is a hand-over. The checkpoint is made outside this program, with the
 procedure the operator owns. `run` stops after phase 2 and waits. Run it again
@@ -85,8 +87,12 @@ RECONCILE_SCRIPT, TOOLING, PYTHON = 'legacy_reconcile_action.py', 'hosted-deploy
 PLAN_COPY, ACCEPTED, STDOUT, UTF8 = 'plan.json', 'checkpoint-accepted', '.stdout', 'utf-8'
 REPLICA_FAULT = 'replica must hold pins_dir and at most path_prefix, as absolute paths'
 AFTER = 'reconcile-legacy-after-recovery'   # the second step of recover-legacy, and the action that runs it alone
+COMPLETE = 'complete-legacy-update'   # the update's own last steps, when only they are left after the forward write
 ARMED_REQUEST, AFTER_REQUEST, RETURN_REQUEST = 'armed-request.json', 'reconcile-after-recovery.json', 'return-request.json'
-RECOVERIES = (ABANDON, RECOVER, RETURN, AFTER)
+COMPLETE_REQUEST = 'complete-request.json'
+RECOVERIES = (ABANDON, RECOVER, RETURN, AFTER, COMPLETE)
+RELEASE_LEFT = ('probed', 'accepted', 'released')   # where the release stands once the proxy's fence was probed
+ACCEPT_SECONDS = 60   # the update's own default window for its public acceptance probe
 POLL = 0.5
 GRACE = 30
 
@@ -256,6 +262,9 @@ def recovery_steps(plan, journal, action):
         return [abandon]
     if action == AFTER:
         return [reconcile]
+    if action == COMPLETE:
+        return [Step(COMPLETE, 4, 'the update\'s last steps: public acceptance, release, completion record, markers',
+                     [PYTHON, tooling(plan, 'legacy_update_completion.py'), COMPLETE], str(journal / COMPLETE_REQUEST))]
     if action == RETURN:
         return [Step(RETURN, 4, 'return the update transition that began and was never armed',
                      [PYTHON, tooling(plan, 'legacy_update_return.py'), RETURN], str(journal / RETURN_REQUEST)),
@@ -325,7 +334,10 @@ class Journal:
 
 
 def progress(records):
-    """What the journal proves: steps that passed, and how it ended, if it did: (failed|unknown|recovered, step)."""
+    """What the journal proves: steps that passed, and how it ended, if it did: (failed|unknown|recovered, step).
+
+    An update that failed and was then completed by its recovery action has passed: the run goes on after it.
+    """
     passed, started, ended = [], None, None
     for record in records:
         event = record['event']
@@ -341,6 +353,9 @@ def progress(records):
             passed.append('checkpoint')
         elif event == 'recovered':
             ended = ('recovered', record['step'])
+        elif event == 'completed':
+            passed.append(record['step'])
+            ended = None
     return passed, ('unknown', started) if started else ended
 
 
@@ -554,32 +569,59 @@ def run(plan_path, journal_path, first=None, last=5, checkpoint=None, stop=None,
 # Status and recovery ------------------------------------------------------------------------------------------------
 
 def markers(plan):
-    """What the tooling's own records say, read with the tooling's own rule for a resolved transition."""
+    """What the tooling's own records and Docker say, read with the tooling's own rule for a resolved transition."""
     sys.path.insert(0, str(Path(plan['source']['dir']) / 'scripts' / TOOLING))
     from legacy_control_resolution import unresolved_pending
     root = Path(plan['deploy_dir'])
     state = json.loads((root / '.caddy-state' / 'state.json').read_bytes())
     pending = unresolved_pending(root, state)
     window = root / '.legacy-recovery' / ('window-%s' % pending['token']) if pending else None
+    control = (pending or {}).get('control') or {}
     return {'pending': pending is not None, 'token': pending['token'] if pending else None,
             'armed': bool(window and (window / 'armed.json').is_file()),
             'forward_write': bool(window and (window / 'forward-write-issued.json').is_file()),
-            'proxy_running': proxy_running(plan)}
+            'release_stage': control.get('phase'), 'proxy_running': proxy_running(plan),
+            'app_upgraded': app_upgraded(plan), 'deployed': deployed(plan, root, state)}
+
+
+def deployed(plan, root, state):
+    """Whether the tooling's records say the plan's source is deployed: a completed transition, nothing pending, its marker."""
+    try:
+        revision = (root / 'DEPLOYED_REVISION').read_text(encoding=UTF8).strip()
+    except (OSError, ValueError):
+        return False
+    return state.get('pending') is None and state.get('completed') is not None and revision == plan['source']['commit']
+
+
+def docker_says(plan, name, template, run):
+    """One fact about one container, or None when Docker does not say."""
+    try:
+        done = run(['docker', 'inspect', '--format', template, name], stdin=subprocess.DEVNULL, capture_output=True,
+                   env=environment(plan), timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout.decode(UTF8, 'replace').strip() if done.returncode == 0 else None
 
 
 def proxy_running(plan, run=subprocess.run):
     """Whether the serving proxy runs: True, False, or None when Docker does not say."""
-    try:
-        done = run(['docker', 'inspect', '--format', '{{.State.Running}}', plan['instance'] + '-caddy'], stdin=subprocess.DEVNULL,
-                   capture_output=True, env=environment(plan), timeout=30)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return {'true': True, 'false': False}.get(done.stdout.decode(UTF8, 'replace').strip()) if done.returncode == 0 else None
+    return {'true': True, 'false': False}.get(docker_says(plan, plan['instance'] + '-caddy', '{{.State.Running}}', run))
+
+
+def app_upgraded(plan, run=subprocess.run):
+    """Whether the app runs from the plan's runtime image: True, False, or None when Docker does not say."""
+    said = docker_says(plan, plan['instance'], '{{.State.Running}} {{.Config.Image}}', run)
+    return None if said is None else said == 'true ' + plan['images']['runtime']
 
 
 ADVICE = {
     'forward': (None, 'The update wrote forward: migrations may have run. No tooling action undoes that yet. '
                       'Follow the checkpoint restore runbook; ingress stays closed until it is done.'),
+    'unreleased': (COMPLETE, 'The update wrote forward and started the upgraded app, and stopped at its public acceptance or '
+                             'its release. complete-legacy-update runs the steps that are left: the acceptance probe, the '
+                             'release, the completion record and the markers. Then run goes on with phase 5 in this journal. '
+                             'If the acceptance fails again, the upgraded app does not answer on the public path as '
+                             'required: read the step\'s output. The other way is the checkpoint restore runbook.'),
     'half': (AFTER, 'recover-legacy passed and the reconciliation after it did not run to its end. The legacy service '
                     'is back. If the reconciliation ran and refused, review that refusal first. %s runs it again with '
                     'the same request; a second attempt cannot start until it passes.' % AFTER),
@@ -592,11 +634,18 @@ ADVICE = {
                       'recover-caddy-proxy may have been used. Returning the transition after that is an unrehearsed order. '
                       'Stop here and review.'),
     'done': (None, 'The update passed. Nothing is to be recovered.'),
+    'deployed': (None, 'The host records this plan\'s update as complete, and this journal did not see it pass: it was '
+                       'completed outside this journal. Nothing is to be recovered. To verify it, run phase 5 in a new '
+                       'journal: --first 5 with the checkpoint.'),
     'recovered': (None, 'A recovery ran in this journal. A second attempt needs a new journal, a plan with new Caddy '
                         'volume names, and --first 2.'),
     'closed': (ABANDON, 'The serving proxy was stopped and no update is pending. abandon-caddy-offline verifies '
                                         'that proxy, starts it again and proves the legacy service. It refuses if the proxy '
                                         'never stopped.'),
+    'serving': (None, 'No update is pending, and the serving proxy runs or its state is unknown. If the step that stops it '
+                      'failed before the stop, the service never closed. If something outside this journal changed the '
+                      'host, its records do not say what. abandon-caddy-offline starts a stopped proxy and does not apply. '
+                      'Check what serves before anything else.'),
     'open': (None, 'No step that stops the service has run. Nothing is to be recovered.'),
 }
 
@@ -604,7 +653,8 @@ ADVICE = {
 def pending_situation(passed, found):
     """Where an update that is still pending stands."""
     if found['forward_write']:
-        return 'forward'
+        # Starting the upgraded app is the update's last step before acceptance. Only then is nothing but the release left.
+        return 'unreleased' if found['release_stage'] in RELEASE_LEFT and found['app_upgraded'] is True else 'forward'
     if RECOVER in passed:
         return 'half'
     if found['armed']:
@@ -614,15 +664,21 @@ def pending_situation(passed, found):
 
 
 def situation(passed, ended, found):
-    """Where the window stands. A pure function of the journal and the tooling's markers."""
+    """Where the window stands. A pure function of the journal and the tooling's markers.
+
+    The journal alone cannot say that ingress is closed: the host may have been changed outside it.
+    """
     if found['pending']:
         return pending_situation(passed, found)
     if UPDATE in passed:
         return 'done'
+    if found['deployed']:
+        return 'deployed'
     if ended and ended[0] == 'recovered':
         return 'recovered'
-    stopped = PREPARE in passed or (ended and ended[1] in (PREPARE, UPDATE))
-    return 'closed' if stopped else 'open'
+    if not (PREPARE in passed or (ended and ended[1] in (PREPARE, UPDATE, COMPLETE))):
+        return 'open'
+    return 'closed' if found['proxy_running'] is False else 'serving'
 
 
 def status(plan_path, journal_path, tools=None):
@@ -658,6 +714,11 @@ def recovery_requests(plan, journal, action, token):
             'config_volume': plan['caddy_volumes']['config']})
     if action == AFTER and not (journal.path / AFTER_REQUEST).is_file():
         raise Refused('this journal holds no reconciliation request; recover-legacy did not run in it')
+    if action == COMPLETE:
+        write_request(journal.path / COMPLETE_REQUEST, {
+            'deploy_dir': plan['deploy_dir'], 'instance': plan['instance'], 'data_volume': plan['caddy_volumes']['data'],
+            'config_volume': plan['caddy_volumes']['config'], 'token': token, 'public_base_url': plan['public_base_url'],
+            'timeout': ACCEPT_SECONDS, 'runtime_image': plan['images']['runtime'], 'revision': plan['source']['commit']})
 
 
 def recover(plan_path, journal_path, action, stop=None, tools=None):
@@ -687,6 +748,11 @@ def recover(plan_path, journal_path, action, stop=None, tools=None):
         say('recovery  %s: %s' % (step.name, step.title))
         if execute(step, journal, env, stop, **tools.get('process', {})) != 0:
             return 3
+    if action == COMPLETE:
+        # Not a recovery: the update itself is now complete, and the same journal goes on with phase 5.
+        journal.write({'event': 'completed', 'step': UPDATE, 'by': action})
+        say('completed with %s. Next: window_driver.py run PLAN JOURNAL, for verification and read-back.' % action)
+        return 0
     journal.write({'event': 'recovered', 'step': action})
     say('recovered with %s. A second attempt needs a new journal and a plan with new Caddy volume names.' % action)
     return 0
@@ -716,12 +782,15 @@ FAILURE_NOTES = [
     '`status` reads the journal and the tooling\'s records and names the one action that fits:', '',
     '| Where it stopped | Action |', '|---|---|',
     '| Before phase 2 | none: nothing that serves was stopped |',
-    '| After phase 2, and no update is pending | `%s` |' % ABANDON,
+    '| After phase 2, no update is pending and the proxy is stopped | `%s` |' % ABANDON,
     '| In phase 4, before the forward write | `%s`, then reconciliation |' % RECOVER,
-    '| In phase 4, after the forward write | none yet: the checkpoint restore runbook |',
+    '| In phase 4, after the forward write, the upgraded app runs, stopped at acceptance or release | `%s`, then `run` |' % COMPLETE,
+    '| In phase 4, after the forward write, anywhere else | none yet: the checkpoint restore runbook |',
     '| In phase 4, before a recovery baseline was armed, proxy still stopped | `%s`, then `%s` |' % (RETURN, ABANDON),
     '| The same, but the proxy is running or its state is unknown | none: an unrehearsed order, review first |',
-    '| A recovery ended between its two steps | the second step: `%s`, or `%s` |' % (ABANDON, AFTER), '',
+    '| A recovery ended between its two steps | the second step: `%s`, or `%s` |' % (ABANDON, AFTER),
+    '| No update is pending, and the proxy runs or its state is unknown | none: check what serves first |',
+    '| The update was completed outside the journal | none: verify it in a new journal with `--first 5` |', '',
     '`recover PLAN JOURNAL ACTION` runs that action only when ACTION is the one `status` names.',
     'A second attempt needs a new journal, a plan with new Caddy volume names, and `--first 2`.']
 

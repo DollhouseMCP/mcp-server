@@ -148,6 +148,8 @@ import {
   type AuditTelemetrySources,
 } from './setup/AuditTelemetryProbe.js';
 import type { SignInAllowlistAuthority } from '../auth/embedded-as/allowlistGate.js';
+import { hasNoCurrentCanaryResult, type CanaryMonitor, type CanaryStatus } from './canary/CanaryMonitor.js';
+import { createDatabaseCanaryMonitor, type DatabaseCanaryMonitorOptions } from './canary/DatabaseCanaryMonitor.js';
 import { createHealthModule, type HealthReadinessChecks } from './modules/health/index.js';
 import { createConsoleMetaModule } from './modules/console-meta/ConsoleMetaModule.js';
 import {
@@ -356,6 +358,11 @@ export interface WebConsoleRegistrarOptions {
   readonly securityInvalidationReadiness?: IConsoleSecurityInvalidationReadiness | null;
   /** Replaces the default migration-ledger monitor built over the console database. */
   readonly migrationLedgerMonitor?: MigrationLedgerMonitor;
+  /**
+   * How often the approvals and executions canary runs by itself. Absent or 0
+   * means never, which is the default: it then runs only when an admin asks.
+   */
+  readonly canaryIntervalMs?: number;
   readonly securityInvalidationReplicaId?: string;
   readonly securityInvalidationProcessorIntervalMs?: number;
   readonly securityInvalidationProcessorLeaseDurationMs?: number;
@@ -424,6 +431,8 @@ export interface WebConsoleComposition {
   readonly portfolioSyncWorker: IConsolePortfolioSyncWorker | null;
   readonly apiV1Mount: WebConsoleApiV1Mount | null;
   readonly cleanupScheduler: ConsoleStoreCleanupScheduler | null;
+  /** Null without a database: there are no per-session stores for the canary to exercise. */
+  readonly canaryMonitor: CanaryMonitor | null;
   readonly storageBackend: 'memory' | 'postgres';
   readonly routesMounted: boolean;
   /**
@@ -585,6 +594,12 @@ export class WebConsoleRegistrar {
     });
     const apiV1MountState = createApiV1MountState();
     const migrationLedgerMonitor = resolveMigrationLedgerMonitor(this.options, database);
+    const canaryMonitor = createCanaryMonitor(container, this.options, database, {
+      runtimeStore: stores.runtimeSessionControlStore,
+      approvalStore: sessionApprovalStore,
+      executionReader: sessionExecutionReader,
+      gatekeeperReader: sessionGatekeeperReader,
+    });
     const healthProbes = createConsoleHealthProbes({
       database,
       stores,
@@ -592,6 +607,7 @@ export class WebConsoleRegistrar {
       securityInvalidationReadiness,
       routesMounted: apiV1MountState.mounted,
       migrationLedgerMonitor,
+      canaryMonitor,
       signInAllowlistAuthority: resolveSignInAllowlistAuthority(container),
       auditTelemetrySources: auditTelemetrySourcesFrom({
         adminAuditQuery, approvalAuditQuery, authenticationAuditQuery, telemetryQuery,
@@ -635,6 +651,7 @@ export class WebConsoleRegistrar {
       httpMetrics: () => container.hasRegistration('HttpRuntimeMetricsSource')
         ? container.resolve<() => unknown>('HttpRuntimeMetricsSource')()
         : { available: false },
+      ...(canaryMonitor ? { canary: canaryMonitor } : {}),
       now: this.options.now,
     }));
     registerRouteModule(registry, this.options, SECURITY_ADMIN_MODULE_ID, () => createSecurityAdminModule({
@@ -900,6 +917,7 @@ export class WebConsoleRegistrar {
       portfolioSyncWorker,
       apiV1Mount,
       cleanupScheduler,
+      canaryMonitor,
       storageBackend: storageBackend,
       get routesMounted() {
         return apiV1MountState.mounted();
@@ -1359,6 +1377,9 @@ interface ConsoleHealthProbes {
   readonly allowlistParity: (() => Promise<AllowlistParityResult>) | null;
   // Read-only run of the audit and telemetry page queries, with the admin audit chain check.
   readonly auditTelemetry: () => Promise<AuditTelemetryResult>;
+  // What the last canary run on this server found. Reading it never starts a
+  // run. Null without a database: there are no per-session stores to exercise.
+  readonly approvalExecutionProjection: (() => CanaryStatus) | null;
 }
 
 // Single source for the dependency probes shared by both the public readiness surface
@@ -1370,9 +1391,11 @@ function createConsoleHealthProbes(options: {
   readonly securityInvalidationReadiness: IConsoleSecurityInvalidationReadiness;
   readonly routesMounted: () => boolean;
   readonly migrationLedgerMonitor: MigrationLedgerMonitor | null;
+  readonly canaryMonitor: CanaryMonitor | null;
   readonly signInAllowlistAuthority: SignInAllowlistAuthority | null;
   readonly auditTelemetrySources: AuditTelemetrySources;
 }): ConsoleHealthProbes {
+  const canary = options.canaryMonitor;
   const monitor = options.migrationLedgerMonitor;
   const { authStorage, signInAllowlistAuthority: authority } = options;
   return {
@@ -1389,6 +1412,7 @@ function createConsoleHealthProbes(options: {
       })
       : null,
     auditTelemetry: cacheProbe(() => probeAuditTelemetry(options.auditTelemetrySources), AUDIT_TELEMETRY_PROBE_TTL_MS),
+    approvalExecutionProjection: canary ? () => canary.status() : null,
   };
 }
 
@@ -1397,6 +1421,47 @@ function resolveSignInAllowlistAuthority(container: DiContainerFacade): SignInAl
   return container.hasRegistration('SignInAllowlistAuthority')
     ? container.resolve<SignInAllowlistAuthority>('SignInAllowlistAuthority')
     : null;
+}
+
+/**
+ * The approvals and executions canary, over the stores the console itself
+ * reads. Built only with a database. Building it runs nothing except one
+ * sweep for records an earlier server left behind; a run happens when an admin
+ * asks, or on the schedule if one is configured.
+ */
+function createCanaryMonitor(
+  container: DiContainerFacade,
+  options: WebConsoleRegistrarOptions,
+  database: DatabaseInstance | undefined,
+  stores: Pick<DatabaseCanaryMonitorOptions, 'runtimeStore' | 'approvalStore' | 'executionReader' | 'gatekeeperReader'>,
+): CanaryMonitor | null {
+  const intervalMs = options.canaryIntervalMs ?? 0;
+  // An approval request cannot be made without the audit key, and a database deployment always has one.
+  if (!database || !container.hasRegistration('AuditHmacResolver')) {
+    if (intervalMs > 0) {
+      logger.warn('[WebConsoleCanary] A canary schedule is configured, but there is no database for the canary to check. It will not run.');
+    }
+    return null;
+  }
+  const monitor = createDatabaseCanaryMonitor({
+    ...stores,
+    database,
+    auditHmacResolver: container.resolve<DatabaseCanaryMonitorOptions['auditHmacResolver']>('AuditHmacResolver'),
+    replicaId: resolveTelemetryReplicaId(container),
+    log: {
+      info: message => logger.info(message),
+      warn: message => logger.warn(message),
+    },
+    now: options.now,
+  });
+  void monitor.sweepLeftovers();
+  if (intervalMs > 0) {
+    if (!container.hasRegistration('LifecycleService')) {
+      throw new Error('Web console canary schedule registration requires LifecycleService');
+    }
+    monitor.register(container.resolve('LifecycleService'), intervalMs);
+  }
+  return monitor;
 }
 
 /** An injected monitor wins; otherwise one is built over the console database, if there is one. */
@@ -1476,6 +1541,9 @@ function createOperationHealthChecks(
       ? { allowlistParity: async () => operationHealthFromAllowlistParity(await probes.allowlistParity!()) }
       : {}),
     auditTelemetry: async () => operationHealthFromAuditTelemetry(await probes.auditTelemetry()),
+    ...(probes.approvalExecutionProjection
+      ? { approvalExecutionProjection: () => operationHealthFromCanary(probes.approvalExecutionProjection!()) }
+      : {}),
     apiMount: () => probes.apiV1Mounted()
       ? {
         component: 'api_mount',
@@ -1526,6 +1594,23 @@ function operationHealthFromAuditTelemetry(result: AuditTelemetryResult) {
     status: ({ passed: 'ok', failed: 'degraded', pending: 'degraded' } as const)[result.state],
     checked_at: new Date().toISOString(),
     failure_codes: result.state === 'passed' ? [] : [result.code],
+  };
+}
+
+/**
+ * The canary only runs when asked, so having no current result is not a fault
+ * and does not lower the overall status. A run that found a fault, or that
+ * could not finish, does.
+ */
+function operationHealthFromCanary(status: CanaryStatus) {
+  let health: 'ok' | 'not_run' | 'degraded' = 'degraded';
+  if (status.state === 'passed') health = 'ok';
+  else if (hasNoCurrentCanaryResult(status)) health = 'not_run';
+  return {
+    component: 'approval_execution_projection' as const,
+    status: health,
+    checked_at: new Date().toISOString(),
+    failure_codes: health === 'degraded' ? [status.code] : [],
   };
 }
 

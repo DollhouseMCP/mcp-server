@@ -221,12 +221,14 @@ def public_response(output):
 
 def public_probe(base, path, expected, allow_bootstrap, timeout, token):
     # timeout is the retry window; every attempt has its own bounded cleanup reserve.
+    # A plain GET: it reaches the proxy the same whether or not a CDN is in front. The probe must
+    # not depend on a header a hop may drop, as a CDN drops "Content-Length: 0" from a GET.
     deadline = time.monotonic() + timeout
     while True:
         remaining = max(0, deadline - time.monotonic())
         call_budget = min(15, max(1, remaining) + 3)
         command = [CURL, '--disable', '--noproxy', '*', '--proto', '=http,https', '--http1.1',
-                   '--header', 'Content-Length: 0', '--silent', '--show-error',
+                   '--silent', '--show-error',
                    '--max-time', str(min(10, call_budget - 3)), '--include', '--write-out', '\n%{http_code}', base + path]
         try:
             output = bounded_input(command, timeout=call_budget)
@@ -279,10 +281,11 @@ def certificate_ready_probe(command, deadline):
 def confirm_denials(base, token):
     base = public_origin(base)
     deadline = time.monotonic() + 120
-    for method, path, headers in (('POST', '/mcp', []),
+    # The GET differs from the acceptance probe by its Authorization header alone, so that header is what the fence refuses.
+    for method, path, headers in (('POST', '/mcp', ['--header', 'Content-Length: 0']),
                                   ('GET', '/healthz', ['--header', 'Authorization: Bearer verification-probe'])):
         command = [CURL, '--disable', '--noproxy', '*', '--proto', '=http,https', '--http1.1', '--request', method,
-                   '--header', 'Content-Length: 0', *headers, '--silent', '--show-error',
+                   *headers, '--silent', '--show-error',
                    '--include', '--write-out', '\n%{http_code}', base + path]
         output = certificate_ready_probe(command, deadline)
         _body, code, markers = public_response(output)

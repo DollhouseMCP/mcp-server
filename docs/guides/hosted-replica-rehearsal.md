@@ -170,3 +170,10 @@ pinned hashes. Only the read-only preflight on the live host does.
 The CDN in front of the public hostname, public DNS, certificates from a public
 authority, registry pulls of private images and delivery of mail. Name each one
 in the rehearsal receipt.
+
+A step that goes out through the public URL is not rehearsed while nothing
+stands where the CDN stands. The update's acceptance probe is such a step. For
+it, put a forwarding hop in front of the replica's proxy that changes a request
+the way the CDN does, at least by dropping `Content-Length: 0` from a GET, and
+point the public hostname at the hop. Say in the receipt whether the hop was
+there.

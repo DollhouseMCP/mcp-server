@@ -32,7 +32,14 @@ ORDER = ['preflight', 'prepare-legacy-reconciliation', 'reconcile-legacy', 'prep
          'verify', 'read-back']
 CHECKPOINT = '/srv/window/checkpoint'
 AFTER = 'reconcile-legacy-after-recovery'
-OPEN = {'pending': False, 'token': None, 'armed': False, 'forward_write': False, 'proxy_running': False}
+COMPLETE = 'complete-legacy-update'
+OPEN = {'pending': False, 'token': None, 'armed': False, 'forward_write': False, 'release_stage': None, 'proxy_running': False,
+        'app_upgraded': None, 'deployed': False}
+# The update wrote forward and started the upgraded app, and its public acceptance did not pass.
+UNRELEASED = dict(OPEN, pending=True, token='0' * 32, armed=True, forward_write=True, release_stage='probed',
+                  proxy_running=True, app_upgraded=True)
+# What the host says once the update is complete: nothing pending, the marker written, the new proxy serving.
+DEPLOYED = dict(OPEN, proxy_running=True, app_upgraded=True, deployed=True)
 
 
 class FakeProcess:
@@ -412,6 +419,21 @@ class DriverTests(unittest.TestCase):
             (ORDER[:4], ('failed', 'legacy-offline-update'), OPEN, 'closed', 'abandon-caddy-offline'),
             (ORDER[:4], ('unknown', 'legacy-offline-update'), dict(pending, armed=True), 'armed', 'recover-legacy'),
             (ORDER[:4], ('failed', 'legacy-offline-update'), dict(pending, armed=True, forward_write=True), 'forward', None),
+            # The fence is probed before the legacy stop: only an upgraded app that runs says the release alone is left.
+            (ORDER[:4], ('failed', 'legacy-offline-update'), dict(UNRELEASED, app_upgraded=False), 'forward', None),
+            (ORDER[:4], ('failed', 'legacy-offline-update'), dict(UNRELEASED, app_upgraded=None), 'forward', None),
+            (ORDER[:4], ('failed', 'legacy-offline-update'), dict(UNRELEASED, release_stage='releasing'), 'forward', None),
+            (ORDER[:4], ('failed', 'legacy-offline-update'), UNRELEASED, 'unreleased', COMPLETE),
+            (ORDER[:4], ('failed', 'legacy-offline-update'), dict(UNRELEASED, release_stage='accepted'), 'unreleased', COMPLETE),
+            (ORDER[:4], ('failed', 'legacy-offline-update'), dict(UNRELEASED, release_stage='released'), 'unreleased', COMPLETE),
+            (ORDER[:4], ('failed', COMPLETE), UNRELEASED, 'unreleased', COMPLETE),
+            # Completed outside this journal: the host says so, and the journal's last word does not count.
+            (ORDER[:4], ('failed', 'legacy-offline-update'), DEPLOYED, 'deployed', None),
+            (ORDER[:4], ('failed', COMPLETE), DEPLOYED, 'deployed', None),
+            # A proxy that runs is not brought back, whatever the journal remembers.
+            (ORDER[:4], ('failed', 'legacy-offline-update'), dict(OPEN, proxy_running=True), 'serving', None),
+            (ORDER[:4], None, dict(OPEN, proxy_running=None), 'serving', None),
+            (ORDER[:3], ('failed', 'prepare-caddy-offline'), dict(OPEN, proxy_running=True), 'serving', None),
             (ORDER[:4], ('failed', 'legacy-offline-update'), pending, 'unarmed', 'return-unarmed-update'),
             # recover-caddy-proxy may have been used: that order is unrehearsed, so nothing is named.
             (ORDER[:4], ('failed', 'legacy-offline-update'), dict(pending, proxy_running=True), 'started', None),
@@ -591,6 +613,96 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(driver.recover(self.plan, self.journal, 'recover-legacy', self.stop, self.tools), 0)
         self.assertEqual(self.names()[-3:], ['recover-legacy', 'recover-legacy', AFTER])
         self.assertTrue(window.is_dir())
+
+    def unreleased(self):
+        self.exits['legacy-offline-update'] = 1
+        self.assertEqual(self.drive(checkpoint=CHECKPOINT), 3)
+        self.markers = dict(UNRELEASED)
+
+    def test_an_update_that_stopped_at_its_acceptance_is_completed_and_the_run_goes_on(self):
+        self.unreleased()
+        report = self.status()
+        self.assertEqual((report['situation'], report['recovery_action']), ('unreleased', COMPLETE))
+        with self.assertRaisesRegex(driver.Refused, r'ended at legacy-offline-update \(failed\)'):
+            self.drive()
+        self.assertEqual(driver.recover(self.plan, self.journal, COMPLETE, self.stop, self.tools), 0)
+        name, argv, given = self.started[-1]
+        self.assertEqual(argv, ['python3', '/srv/window/source/scripts/hosted-deploy/legacy_update_completion.py', COMPLETE])
+        self.assertEqual(given['stdin'].name, str(self.journal / 'complete-request.json'))
+        self.assertEqual(json.loads((self.journal / 'complete-request.json').read_text()), {
+            'deploy_dir': '/opt/dollhousemcp', 'instance': 'site', 'data_volume': 'site_caddy_data_v2',
+            'config_volume': 'site_caddy_config_v2', 'token': '0' * 32, 'public_base_url': 'https://site.example.invalid',
+            'timeout': 60, 'runtime_image': PLAN['images']['runtime'], 'revision': '1' * 40})
+        # The source is checked before the request is written and again before the step.
+        self.assertEqual(self.source_checks[-2:], [len(self.started) - 1] * 2)
+        self.assertEqual(self.events()[-1]['event'], 'completed')
+        # The update has passed: the same journal goes on with phase 5, with the checkpoint it accepted.
+        self.markers = dict(DEPLOYED)
+        self.assertEqual(self.status()['situation'], 'done')
+        self.assertEqual(self.drive(), 0)
+        self.assertEqual(self.names()[-3:], [COMPLETE, 'verify', 'read-back'])
+        self.assertEqual(self.started[-1][1][-1], CHECKPOINT)
+        self.assertEqual(self.names().count('legacy-offline-update'), 1)
+
+    def test_a_completion_whose_acceptance_fails_again_can_be_named_again(self):
+        self.unreleased()
+        self.exits[COMPLETE] = 1
+        self.assertEqual(driver.recover(self.plan, self.journal, COMPLETE, self.stop, self.tools), 3)
+        report = self.status()
+        self.assertEqual((report['ended'], report['recovery_action']), (['failed', COMPLETE], COMPLETE))
+        self.exits.clear()
+        self.assertEqual(driver.recover(self.plan, self.journal, COMPLETE, self.stop, self.tools), 0)
+        self.assertEqual(self.names()[-2:], [COMPLETE, COMPLETE])
+        self.markers = dict(DEPLOYED)
+        self.assertEqual(self.status()['situation'], 'done')
+
+    def test_an_update_completed_outside_the_journal_is_complete_and_names_no_action(self):
+        self.unreleased()
+        self.markers = dict(DEPLOYED)
+        report = self.status()
+        self.assertEqual((report['situation'], report['recovery_action']), ('deployed', None))
+        self.assertIn('completed outside this journal', report['reason'])
+        for action in driver.RECOVERIES:
+            with self.assertRaisesRegex(driver.Refused, 'not the action that fits; status names: None'):
+                driver.recover(self.plan, self.journal, action, self.stop, self.tools)
+        self.assertEqual(self.names()[-1], 'legacy-offline-update')
+        # Its verification runs in a new journal that starts at phase 5.
+        self.journal = self.folder / 'journal-verify'
+        self.assertEqual(self.drive(first=5, checkpoint=CHECKPOINT), 0)
+        self.assertEqual(self.names()[-2:], ['verify', 'read-back'])
+
+    def test_a_proxy_that_runs_is_never_brought_back_from_the_journal_alone(self):
+        self.unreleased()
+        # Completed by hand as far as the completion record, without the marker: nothing says "deployed".
+        self.markers = dict(OPEN, proxy_running=True, app_upgraded=True)
+        report = self.status()
+        self.assertEqual((report['situation'], report['recovery_action']), ('serving', None))
+        with self.assertRaisesRegex(driver.Refused, 'not the action that fits'):
+            driver.recover(self.plan, self.journal, 'abandon-caddy-offline', self.stop, self.tools)
+
+    def test_the_host_says_deployed_only_with_a_completed_transition_nothing_pending_and_the_marker(self):
+        plan = driver.load_plan(self.plan)
+        complete = {'pending': None, 'completed': {'previous': '/x'}}
+        self.assertFalse(driver.deployed(plan, self.folder, complete))
+        (self.folder / 'DEPLOYED_REVISION').write_text('1' * 40 + '\n')
+        self.assertTrue(driver.deployed(plan, self.folder, complete))
+        self.assertFalse(driver.deployed(plan, self.folder, {'pending': {'token': 'x'}, 'completed': {'previous': '/x'}}))
+        self.assertFalse(driver.deployed(plan, self.folder, {'pending': None, 'completed': None}))
+        (self.folder / 'DEPLOYED_REVISION').write_text('3' * 40 + '\n')
+        self.assertFalse(driver.deployed(plan, self.folder, complete))
+        (self.folder / 'DEPLOYED_REVISION').write_bytes(b'\xff\xfe')
+        self.assertFalse(driver.deployed(plan, self.folder, complete))
+
+    def test_the_app_is_upgraded_only_when_it_runs_from_the_plans_runtime_image(self):
+        plan = driver.load_plan(self.plan)
+        runtime = PLAN['images']['runtime']
+        for output, code, expected in ((('true ' + runtime + '\n').encode(), 0, True), (('false ' + runtime).encode(), 0, False),
+                                       (b'true registry.example/app@sha256:' + b'd' * 64, 0, False), (b'', 1, None)):
+            done = subprocess.CompletedProcess([], code, output, b'')
+            self.assertIs(driver.app_upgraded(plan, lambda argv, **kwargs: done), expected)
+        seen = []
+        driver.app_upgraded(plan, lambda argv, **kwargs: seen.append(argv) or subprocess.CompletedProcess([], 0, b'', b''))
+        self.assertEqual(seen, [['docker', 'inspect', '--format', '{{.State.Running}} {{.Config.Image}}', 'site']])
 
     def test_a_running_proxy_beside_an_unarmed_update_names_no_action(self):
         self.exits['legacy-offline-update'] = 1

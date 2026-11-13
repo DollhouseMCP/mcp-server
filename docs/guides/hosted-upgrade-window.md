@@ -115,17 +115,33 @@ The driver stops. It retries nothing and recovers nothing by itself.
 | Where it stopped | `status` names |
 |---|---|
 | Before phase 2 | nothing: no step that stops the service has run |
-| After phase 2, and no update is pending | `abandon-caddy-offline` |
+| After phase 2, no update is pending and the proxy is stopped | `abandon-caddy-offline` |
 | In phase 4, before a recovery baseline was armed, proxy still stopped | `return-unarmed-update`, then `abandon-caddy-offline` |
 | The same, but the proxy is running or its state is unknown | nothing: an unrehearsed order, review first |
 | In phase 4, after arming, before the forward write | `recover-legacy`, then `reconcile-legacy` |
-| In phase 4, after the forward write | nothing yet: restore from the checkpoint by its runbook |
+| In phase 4, after the forward write, the upgraded app runs, stopped at acceptance or release | `complete-legacy-update`, then `run` again |
+| In phase 4, after the forward write, anywhere else | nothing yet: restore from the checkpoint by its runbook |
 | A recovery ended between its two steps | the second step: `abandon-caddy-offline`, or `reconcile-legacy-after-recovery` |
+| No update is pending, and the proxy runs or its state is unknown | nothing: check what serves first |
+| The update was completed outside the journal | nothing: verify it in a new journal with `--first 5` |
 
 A recovery of two steps can end between them: the first step failed its
 source check, a signal asked for a stop, or the second step did not pass.
 `status` then names the second step alone. An action that is named again reads
 the request file its first run wrote in the journal.
+
+`complete-legacy-update` is not a way back. After the upgraded app has started,
+the update has four steps left: the public acceptance probe, the release of
+the normal proxy profile, the completion record and the deployed markers. If
+it stops at one of them, the upgraded app runs on the migrated database and
+the proxy still answers 503. The action proves that only those steps are left
+and runs them. A failed acceptance changes nothing, so the action can be named
+again. When it passes, the update has passed: `run` with the same journal goes
+on with phase 5.
+
+`status` reads the host as well as the journal. A proxy that runs is never
+brought back on the journal's word alone, and an update that the host records
+as complete is reported as complete, whichever journal or hand completed it.
 
 A journal that ended in a failure or a recovery is closed. A second attempt
 needs a new journal, a plan with new Caddy volume names, and `--first 2`:

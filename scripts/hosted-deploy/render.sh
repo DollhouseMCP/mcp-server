@@ -260,12 +260,13 @@ $(caddy_access_log_block)
 	@verification {
 		protocol http/1.1
 		method GET
-		header Content-Length 0
 		header !Authorization
 		header !Cookie
 		header !Upgrade
 		header !Transfer-Encoding
-		expression \`{http.request.orig_uri} == "/healthz" || {http.request.orig_uri} == "/readyz" || {http.request.orig_uri} == "/mcp"\`
+		# No body: no Transfer-Encoding, and Content-Length absent or exactly 0. A CDN in front
+		# drops "Content-Length: 0" from a GET, so the matcher must not require the header.
+		expression \`({http.request.orig_uri} == "/healthz" || {http.request.orig_uri} == "/readyz" || {http.request.orig_uri} == "/mcp") && ({http.request.header.Content-Length} == "" || {http.request.header.Content-Length} == "0")\`
 	}
 	route {
 		header >X-Dollhouse-Verification ${token}
