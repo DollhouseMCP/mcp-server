@@ -5,12 +5,19 @@ import { modelPythonCommand } from '../../helpers/modelPythonCommand.js';
 
 // The actual helper executes in one synchronous, bounded Python process. Its
 // clock and CLI are faked; this creates no Docker/CLI/application descendants.
+// The bound keeps a hung helper from hanging the suite. It says nothing about
+// the helper's speed: the fixture needs well under a second, and a CI runner
+// has been seen to take more than five seconds only to start the interpreter.
+const PROCESS_LIMIT_MS = 30_000;
+
 describe('hosted graceful-stop observation cadence', () => {
   it('observes delayed clean closure and retains deadline, authority and inspect bounds', () => {
+    const started = Date.now();
     const result = spawnSync(modelPythonCommand(process.platform, process.arch, process.env), [
       fileURLToPath(new URL('./fixtures/hosted_graceful_stop_polling.py', import.meta.url)),
       fileURLToPath(new URL('../../../scripts/hosted-graceful-stop.py', import.meta.url)),
-    ], { encoding: 'utf8', timeout: 5000, maxBuffer: 64 * 1024 });
+    ], { encoding: 'utf8', timeout: PROCESS_LIMIT_MS, maxBuffer: 64 * 1024 });
+    const elapsedMs = Date.now() - started;
     try {
       expect(result.error).toBeUndefined();
       expect(result.signal).toBeNull();
@@ -47,11 +54,12 @@ describe('hosted graceful-stop observation cadence', () => {
           error: errorCategory(),
           status: statusCategory(),
           signal: signalCategory(),
+          elapsedMs, limitMs: PROCESS_LIMIT_MS,
           stdoutCodeUnitsCapped: count(result.stdout), stderrCodeUnitsCapped: count(result.stderr),
           unittest: unittestCategory(),
         }));
       } catch { /* Evidence failure cannot replace the original assertion failure. */ }
       throw error;
     }
-  });
+  }, PROCESS_LIMIT_MS + 5_000);
 });
