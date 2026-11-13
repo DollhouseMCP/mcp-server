@@ -1439,7 +1439,7 @@ function createCanaryMonitor(
   // An approval request cannot be made without the audit key, and a database deployment always has one.
   if (!database || !container.hasRegistration('AuditHmacResolver')) {
     if (intervalMs > 0) {
-      logger.warn('[WebConsoleCanary] A canary schedule is configured, but there is no database for the canary to check. It will not run.');
+      logger.warn('[WebConsoleCanary] A schedule for the canary synthetic check is configured, but there is no database for it to check. It will not run.');
     }
     return null;
   }

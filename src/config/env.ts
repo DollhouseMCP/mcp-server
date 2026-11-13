@@ -466,9 +466,9 @@ const envSchema = z.object({
    */
   DOLLHOUSE_WEB_CONSOLE_ALLOWLIST_ROUTES_ENABLED: envBool(true),
   /**
-   * How often, in minutes, the server runs the approvals and executions canary
-   * by itself. Defaults to 0, which is never: the canary then runs only when
-   * an admin asks for it in Operations. The canary writes and removes records
+   * How often, in minutes, the server runs the canary synthetic check (for
+   * approvals and executions) by itself. Defaults to 0, which is never: it then
+   * runs only when an admin asks for it in Operations. It writes and removes records
    * for its own reserved user, so a schedule is an operator's choice.
    */
   DOLLHOUSE_WEB_CONSOLE_CANARY_INTERVAL_MINUTES: z.coerce.number().int().min(0).max(720).default(0)
