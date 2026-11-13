@@ -116,8 +116,8 @@ export const WEB_CONSOLE_SETUP_CHECKS: Readonly<Record<WebConsoleSetupCheckId, W
     title: 'Portfolio sync works against a real repository',
     proves: 'A portfolio sync against a real GitHub repository finished successfully.',
     verification: 'usage-record',
-    verifiedBy: 'Shown once a portfolio sync job has succeeded, from the sync job records.',
-    remediation: 'Connect GitHub, then run a sync from Portfolio.',
+    verifiedBy: 'Shown once a portfolio sync job has succeeded with its repository answering, from the sync job records. A sync with nothing to transfer asks the repository nothing and does not count.',
+    remediation: 'Connect GitHub, then run a sync from Portfolio with at least one element to transfer.',
   },
   signing_key_auth_policy_multi_replica: {
     id: 'signing_key_auth_policy_multi_replica',
