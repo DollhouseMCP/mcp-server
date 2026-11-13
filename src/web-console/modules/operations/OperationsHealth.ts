@@ -12,6 +12,14 @@ export interface OperationsHealthChecks {
   readonly gatekeeper: OperationHealthCheck;
   readonly runtimeControl: OperationHealthCheck;
   readonly securityInvalidation: OperationHealthCheck;
+  /** Absent without a database: there is no migration ledger to compare. */
+  readonly databaseMigrations?: OperationHealthCheck;
+  /** Absent unless the console's allowlist is the sign-in authority: otherwise there is one list. */
+  readonly allowlistParity?: OperationHealthCheck;
+  /** Whether the audit and telemetry reads work and the admin audit chain verifies. */
+  readonly auditTelemetry?: OperationHealthCheck;
+  /** The last canary run on this server. Absent without a database: there are no per-session stores to exercise. */
+  readonly approvalExecutionProjection?: OperationHealthCheck;
   readonly apiMount: OperationHealthCheck;
 }
 
@@ -21,6 +29,10 @@ export const OPERATION_HEALTH_COMPONENTS: readonly OperationHealthComponent[] = 
   'gatekeeper',
   'runtime_control',
   'security_invalidation',
+  'database_migrations',
+  'allowlist_parity',
+  'audit_telemetry',
+  'approval_execution_projection',
   'api_mount',
 ];
 
@@ -66,5 +78,5 @@ function normalizeHealthComponent(
 }
 
 function normalizeStatus(status: OperationHealthStatus): OperationHealthStatus {
-  return ['ok', 'degraded', 'unavailable', 'not_ready'].includes(status) ? status : 'unavailable';
+  return ['ok', 'degraded', 'unavailable', 'not_ready', 'not_run'].includes(status) ? status : 'unavailable';
 }

@@ -34,6 +34,7 @@ import type {
   PerformanceMonitor,
 } from '../../utils/PerformanceMonitor.js';
 import type {
+  AuthClaims,
   AuthResult,
   IAuthProvider,
   IssueOptions,
@@ -408,13 +409,38 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
    *     omitting the kid header and bypass the kid match below.
    *   - crit allow-list is empty — refuses any unknown critical extension
    *     header rather than silently ignoring it.
+   *
+   * The signature only proves we issued the token. Account state and the
+   * issuing grant are read from storage on every call, never cached.
    */
   async validate(token: string): Promise<AuthResult> {
     const result = await this.tokens.validate(token);
-    if (result.ok && !await this.storage.isAccountAllowed(result.claims.sub)) {
+    if (!result.ok) return result;
+    if (!await this.storage.isAccountAllowed(result.claims.sub)) {
       return { ok: false, reason: 'Account is not available for authentication' };
     }
+    if (!await this.isIssuingGrantActive(result.claims)) {
+      return { ok: false, reason: 'token grant is no longer active' };
+    }
     return result;
+  }
+
+  /** The live half of validate(), for a credential whose signature was already verified. */
+  async isCredentialActive(claims: AuthClaims): Promise<boolean> {
+    return await this.storage.isAccountAllowed(claims.sub) && await this.isIssuingGrantActive(claims);
+  }
+
+  /**
+   * A flow-issued access token names its grant in the signed `grant_id`
+   * claim. The token is accepted only while that Grant record exists for the
+   * same account. Tokens minted by `issue()` carry no grant and are not
+   * subject to this check.
+   */
+  private async isIssuingGrantActive(claims: AuthClaims): Promise<boolean> {
+    const grantId = claims.credentialBinding?.grantId;
+    if (!grantId) return true;
+    const grant = await this.storage.genericGet('Grant', grantId) as { accountId?: unknown } | null | undefined;
+    return grant?.accountId === claims.sub;
   }
 
   /**

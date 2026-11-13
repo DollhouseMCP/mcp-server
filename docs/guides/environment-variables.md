@@ -90,6 +90,7 @@ That's it! The `.env` file already has all the defaults configured.
 | `DOLLHOUSE_HTTP_STREAM_KEEPALIVE_MS` | `15000` | SDK keepalive interval in milliseconds for all MCP SSE responses, and stall-detection sampling interval for standalone GET streams. `0` disables both; minimum nonzero interval is `1000` ms. Idle expiry and presence renewal remain independent of heartbeats. |
 | `DOLLHOUSE_HTTP_STREAM_MAX_LIFETIME_MS` | `0` | Optional standalone MCP stream lifetime cap in milliseconds; `0` disables the cap; minimum nonzero lifetime is `1000` ms. Positive values end streams gracefully so clients can reconnect within the idle window and retain their session. |
 | `DOLLHOUSE_HTTP_STREAM_EXPIRY_GRACE_MS` | `300000` | Milliseconds after credential expiry before gracefully ending an unrenewed standalone stream. Renewal cancels the close; `0` disables it. Minimum nonzero grace is `1000` ms. Credentials without expiry are unaffected. |
+| `DOLLHOUSE_HTTP_STREAM_CREDENTIAL_RECHECK_MS` | `30000` | How often an open standalone stream asks the embedded authorization server whether its credential is still good. A revoked grant or a disabled account stops MCP messages and ends the stream within one interval, so up to 30 seconds at the default. `0` disables rechecks and logs a warning at startup; minimum nonzero interval is `1000` ms. |
 
 An open accepted GET holds its existing MCP session alive. A reconnect from the
 same authenticated owner replaces the old standalone stream. Explicit DELETE,
@@ -138,6 +139,14 @@ gates MCP messages immediately while keepalive comments continue. The default
 credential from the same login to renew the stream before a graceful end. Renewal
 cancels that deadline; `0` disables expiry-based closure. Every POST and replacement
 GET still passes authentication and ownership checks.
+
+With the embedded authorization server, an open stream also rechecks its credential
+every `DOLLHOUSE_HTTP_STREAM_CREDENTIAL_RECHECK_MS` (default 30 seconds). If the grant
+was revoked or the account is no longer allowed, MCP messages stop and the stream ends.
+A recheck that cannot complete is logged and retried; it does not close the stream.
+New requests are refused as soon as the grant is revoked; the interval only bounds how
+long an already-open stream can keep delivering. Setting it to `0` turns the recheck off,
+and the server says so in a startup warning.
 
 Graceful stream closure waits up to one second for completion; a socket that cannot
 drain is then destroyed. A session normally ends after disconnect plus the idle

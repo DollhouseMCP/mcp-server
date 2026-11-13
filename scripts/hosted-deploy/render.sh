@@ -1,6 +1,22 @@
 # shellcheck shell=bash
 # Generated deployment file rendering for hosted-deploy.
 
+app_image_yaml() {
+  if [[ "${IMAGE_MODE}" == registry ]]; then
+    printf '    image: %s\n' "${RUNTIME_IMAGE}"
+  else
+    printf '    build:\n      context: ./server\n      dockerfile: docker/Dockerfile\n      target: production\n    image: %s\n' "${IMAGE_TAG}"
+  fi
+}
+
+migration_image_yaml() {
+  if [[ "${IMAGE_MODE}" == registry ]]; then
+    printf '    image: %s\n' "${MIGRATION_IMAGE}"
+  else
+    printf '    build:\n      context: ./server\n      dockerfile: docker/Dockerfile\n      target: migration\n    image: %s-migrate\n' "${IMAGE_TAG}"
+  fi
+}
+
 write_compose() {
   cat > "${COMPOSE_FILE}" <<EOF
 name: ${INSTANCE_NAME}
@@ -35,11 +51,7 @@ services:
       retries: 10
 
   dollhousemcp:
-    build:
-      context: ./server
-      dockerfile: docker/Dockerfile
-      target: production
-    image: ${IMAGE_TAG}
+$(app_image_yaml)
     container_name: ${APP_CONTAINER_NAME}
     restart: unless-stopped
     logging: *dollhouse-logging
@@ -96,11 +108,7 @@ services:
     cpus: ${CPU_LIMIT}
 
   dollhousemcp-migrate:
-    build:
-      context: ./server
-      dockerfile: docker/Dockerfile
-      target: builder
-    image: ${IMAGE_TAG}-migrate
+$(migration_image_yaml)
     profiles:
       - maintenance
     logging: *dollhouse-logging
@@ -115,13 +123,22 @@ services:
       DOLLHOUSE_DATABASE_ADMIN_URL: postgres://dollhouse:\${POSTGRES_ADMIN_PASSWORD}@postgres:5432/dollhousemcp
       DOLLHOUSE_DATABASE_SSL: disable
       DOLLHOUSE_AUTH_STORAGE_BACKEND: postgres
-    volumes:
-      - ./bootstrap-admin.sh:/usr/local/bin/dollhouse-bootstrap-admin:ro
-    command: ["npm", "run", "db:migrate"]
+    command: ["node", "dist/cli/migrate-database.js"]
 
   caddy:
-    # trusted_proxies_strict requires Caddy 2.8 or newer.
-    image: caddy:2.8
+    image: ${CADDY_IMAGE}
+    user: "1001:1001"
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "1024"
+    tmpfs:
+      - /tmp:noexec,nosuid,nodev,size=64M,mode=1777
     container_name: ${CADDY_CONTAINER_NAME}
     restart: unless-stopped
     logging: *dollhouse-logging
@@ -136,7 +153,11 @@ $(caddy_ports_yaml)
 
 volumes:
   caddy_data:
+    external: true
+    name: ${CADDY_DATA_VOLUME}
   caddy_config:
+    external: true
+    name: ${CADDY_CONFIG_VOLUME}
 EOF
 
   return 0
@@ -169,17 +190,14 @@ caddy_trusted_proxies_args() {
 }
 
 caddy_global_options_block() {
-  [[ -n "${CADDY_TRUSTED_PROXIES}" ]] || return 0
-
-  cat <<EOF
-{
-	servers {
-		trusted_proxies static $(caddy_trusted_proxies_args)
-		trusted_proxies_strict
-	}
-}
-
-EOF
+  local verification="${1:-false}"
+  [[ -n "${CADDY_TRUSTED_PROXIES}" || "${verification}" == true ]] || return 0
+  printf '{\n\tservers {\n'
+  if [[ "${verification}" == true ]]; then printf '\t\tprotocols h1\n'; fi
+  if [[ -n "${CADDY_TRUSTED_PROXIES}" ]]; then
+    printf '\t\ttrusted_proxies static %s\n\t\ttrusted_proxies_strict\n' "$(caddy_trusted_proxies_args)"
+  fi
+  printf '\t}\n}\n\n'
 
   return 0
 }
@@ -215,8 +233,8 @@ EOF
   return 0
 }
 
-write_caddyfile() {
-  local site_address forwarded_proto
+caddyfile_content() {
+  local site_address forwarded_proto verification="${1:-false}" token="${2:-}"
   case "${PROXY_MODE}" in
     caddy-tls)
       site_address="${HOSTNAME}"
@@ -231,7 +249,46 @@ write_caddyfile() {
       ;;
   esac
 
-  cat > "${CADDY_FILE}" <<EOF
+  if [[ "${verification}" == true ]]; then
+    [[ "${token}" =~ ^[0-9a-f]{32}$ ]] || die 'invalid Caddy verification token'
+    cat <<EOF
+$(caddy_global_options_block true)
+${site_address} {
+	encode gzip
+
+$(caddy_access_log_block)
+	@verification {
+		protocol http/1.1
+		method GET
+		header !Authorization
+		header !Cookie
+		header !Upgrade
+		header !Transfer-Encoding
+		# No body: no Transfer-Encoding, and Content-Length absent or exactly 0. A CDN in front
+		# drops "Content-Length: 0" from a GET, so the matcher must not require the header.
+		expression \`({http.request.orig_uri} == "/healthz" || {http.request.orig_uri} == "/readyz" || {http.request.orig_uri} == "/mcp") && ({http.request.header.Content-Length} == "" || {http.request.header.Content-Length} == "0")\`
+	}
+	route {
+		header >X-Dollhouse-Verification ${token}
+		reverse_proxy @verification dollhousemcp:${MCP_PORT} {
+			header_up Host {host}
+			header_up X-Forwarded-Proto ${forwarded_proto}
+			header_up X-Forwarded-For {client_ip}
+			header_up X-Real-IP {client_ip}
+			transport http {
+				read_timeout 1h
+				write_timeout 1h
+				dial_timeout 30s
+			}
+		}
+		respond 503
+	}
+}
+EOF
+    return 0
+  fi
+
+  cat <<EOF
 $(caddy_global_options_block)
 ${site_address} {
 	encode gzip
@@ -250,8 +307,34 @@ $(caddy_access_log_block)
 	}
 }
 EOF
+}
+
+write_caddyfile() {
+  local generated
+  [[ ! -L "${CADDY_FILE}" ]] || die "Caddyfile must not be a symlink"
+  generated="$(mktemp "${DEPLOY_DIR}/.Caddyfile.XXXXXXXX")" || die "cannot prepare Caddyfile"
+  caddyfile_content > "${generated}"
+  chmod 0644 "${generated}"
+  if [[ -f "${CADDY_FILE}" ]] && cmp -s "${generated}" "${CADDY_FILE}"; then
+    rm -f "${generated}"
+  else
+    mv "${generated}" "${CADDY_FILE}"
+  fi
+  chmod 0644 "${CADDY_FILE}"
 
   return 0
+}
+
+require_safe_caddyfile_change() {
+  if [[ "${CADDY_KEEP_PROXY:-false}" == true ]]; then
+    [[ -f "${CADDY_FILE}" && ! -L "${CADDY_FILE}" ]] || die "the running Caddyfile is unavailable"
+    caddyfile_content | cmp -s - "${CADDY_FILE}" || die "the unchanged Caddy proxy requires an unchanged Caddyfile"
+  fi
+  if [[ -d "${SERVER_DIR}" && -e "${CADDY_FILE}" && "${CADDY_RECOVERY_VERIFIED:-false}" != true ]]; then
+    [[ ! -L "${CADDY_FILE}" ]] || die "Caddyfile must not be a symlink"
+    caddyfile_content | cmp -s - "${CADDY_FILE}" || \
+      die "Caddyfile changes require a protected proxy recovery receipt; use the qualified update path"
+  fi
 }
 
 write_init_db() {
@@ -306,21 +389,6 @@ EOF
   return 0
 }
 
-write_bootstrap_admin_script() {
-  cat > "${BOOTSTRAP_ADMIN_SCRIPT_FILE}" <<'EOF'
-#!/bin/sh
-set -eu
-
-: "${DOLLHOUSE_DATABASE_ADMIN_URL:?DOLLHOUSE_DATABASE_ADMIN_URL is required}"
-
-export DOLLHOUSE_DATABASE_URL="${DOLLHOUSE_DATABASE_ADMIN_URL}"
-exec node dist/cli/admin-bootstrap.js "$@"
-EOF
-  chmod 0755 "${BOOTSTRAP_ADMIN_SCRIPT_FILE}"
-
-  return 0
-}
-
 validate_rendered_runtime_files() {
   [[ -r "${INIT_DB_FILE}" && -x "${INIT_DB_FILE}" ]] || \
     die "rendered ${INIT_DB_FILE} must be readable and executable by the Postgres entrypoint; expected mode 0755 or equivalent"
@@ -328,8 +396,6 @@ validate_rendered_runtime_files() {
     die "rendered ${POST_MIGRATION_GRANTS_FILE} must be readable for post-migration grants; expected mode 0644 or equivalent"
   [[ -r "${POST_MIGRATION_GRANTS_SCRIPT_FILE}" && -x "${POST_MIGRATION_GRANTS_SCRIPT_FILE}" ]] || \
     die "rendered ${POST_MIGRATION_GRANTS_SCRIPT_FILE} must be readable and executable in the Postgres container; expected mode 0755 or equivalent"
-  [[ -r "${BOOTSTRAP_ADMIN_SCRIPT_FILE}" && -x "${BOOTSTRAP_ADMIN_SCRIPT_FILE}" ]] || \
-    die "rendered ${BOOTSTRAP_ADMIN_SCRIPT_FILE} must be readable and executable in the maintenance container; expected mode 0755 or equivalent"
 
   return 0
 }
@@ -378,19 +444,31 @@ EOF
 }
 
 render_files() {
+  local expected_caddy_image expected_caddy_data expected_caddy_config
+  local expected_image_mode expected_runtime_image expected_migration_image
   resolve_public_base_url
   resolve_hostname
   resolve_allowed_hosts
   validate_render_inputs
+  ensure_supported_python
+  require_safe_caddyfile_change
+  expected_image_mode="${IMAGE_MODE}"; expected_runtime_image="${RUNTIME_IMAGE}"; expected_migration_image="${MIGRATION_IMAGE}"
+  expected_caddy_image="${CADDY_IMAGE}"; expected_caddy_data="${CADDY_DATA_VOLUME}"; expected_caddy_config="${CADDY_CONFIG_VOLUME}"
   ensure_layout
   write_env_defaults
   load_env_file
+  validate_registry_selection
+  [[ "${IMAGE_MODE}" == "${expected_image_mode}" && "${RUNTIME_IMAGE}" == "${expected_runtime_image}" && "${MIGRATION_IMAGE}" == "${expected_migration_image}" ]] ||
+    die "image selection changed while loading the deployment environment"
+  validate_caddy_selection "${CADDY_IMAGE}" "${CADDY_DATA_VOLUME}" "${CADDY_CONFIG_VOLUME}"
+  [[ "${CADDY_IMAGE}" == "${expected_caddy_image}" && "${CADDY_DATA_VOLUME}" == "${expected_caddy_data}" && "${CADDY_CONFIG_VOLUME}" == "${expected_caddy_config}" ]] ||
+    die "Caddy selection changed while loading the deployment environment"
+  require_safe_caddyfile_change
   write_compose
   write_caddyfile
   write_init_db
   write_post_migration_grants
   write_post_migration_grants_script
-  write_bootstrap_admin_script
   validate_rendered_runtime_files
   log "rendered deployment files in ${DEPLOY_DIR}"
 

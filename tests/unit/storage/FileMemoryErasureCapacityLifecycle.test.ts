@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { runErasureCapacityLifecycle, CAPACITY_OBSERVER_TIMEOUT_MS } from './fixtures/erasureCapacityLifecycle.js';
+import { runErasureCapacityLifecycle, CAPACITY_OBSERVER_TIMEOUT_MS, capacityObserverTimeoutMs } from './fixtures/erasureCapacityLifecycle.js';
 import { makeOwnedErasureFixture } from './fixtures/ownedErasureFixture.js';
 import { runOrdinaryErasureCase, registerOrdinaryErasureFixture } from './fixtures/ordinaryErasureFixtureScope.js';
 
@@ -74,21 +74,31 @@ describe('cleanup-inclusive erasure capacity test lifecycle', () => {
     await expect(fs.lstat(root)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it.each(['setup', 'cleanup', 'diagnostic failure'] as const)('terminates the actual isolated process on a %s hang without advancing', async phase => {
+  it.each([['setup', 10], ['cleanup', 10], ['diagnostic failure', 10], ['setup', 90_000]] as const)(
+    'terminates the actual isolated process on a %s hang with a %i ms case budget without advancing', async (phase, deadlineMs) => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'erasure-lifecycle-hang-'));
     const extension = import.meta.url.endsWith('.js') ? 'js' : 'ts';
     const moduleUrl = new URL(`./fixtures/erasureCapacityLifecycle.${extension}`, import.meta.url).href;
     const loader = extension === 'ts' ? ['--import', pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href] : [];
     const source = `
-const [moduleUrl,root,phase]=process.argv.slice(1);
+const [moduleUrl,root,phase,deadline]=process.argv.slice(1);
 const {openSync,writeSync:markerWriteSync,closeSync}=await import('node:fs');
+const {createRequire,syncBuiltinESMExports}=await import('node:module');
+// Observe the real selected watchdog, then accelerate only its wall-clock wait.
+// This exercises the large-case default without a 105-second hanging child.
+const timers=createRequire(moduleUrl)('node:timers');
+const nativeSetTimeout=timers.setTimeout;
+timers.setTimeout=(callback,ms,...args)=>{
+ process.stdout.write(String(ms));
+ return nativeSetTimeout(callback,100,...args);
+};
+syncBuiltinESMExports();
 if(phase==='diagnostic failure'){
- const {createRequire,syncBuiltinESMExports}=await import('node:module');
  createRequire(moduleUrl)('node:fs').writeSync=()=>{throw new Error('diagnostic refused');};syncBuiltinESMExports();
 }
 const {runErasureCapacityLifecycle}=await import(moduleUrl);
 const fs=await import('node:fs/promises');
-await runErasureCapacityLifecycle({deadlineMs:10,watchdogMs:100,label:'actual hanging child'},async scope=>{
+await runErasureCapacityLifecycle({deadlineMs:Number(deadline),...(Number(deadline)===10?{watchdogMs:100}:{}),label:'actual hanging child'},async scope=>{
  scope.registerCleanup(async()=>{if(phase==='cleanup')await new Promise(()=>{});await fs.rm(root,{recursive:true});},root);
  const markerFd=openSync(root+'/started','w');
  const marker=Buffer.from('actual child');
@@ -104,8 +114,10 @@ await runErasureCapacityLifecycle({deadlineMs:10,watchdogMs:100,label:'actual ha
 });
 await fs.writeFile(root+'/next-case','MUST NOT EXIST');
 `;
-    const child = spawn(process.execPath, [...loader, '--input-type=module', '-e', source, moduleUrl, root, phase], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [...loader, '--input-type=module', '-e', source, moduleUrl, root, phase, String(deadlineMs)], { stdio: ['ignore', 'pipe', 'pipe'] });
     let diagnostics = '';
+    let selectedWatchdog = '';
+    child.stdout.on('data', chunk => { selectedWatchdog = (selectedWatchdog + String(chunk)).slice(0, 100); });
     child.stderr.on('data', chunk => { diagnostics = (diagnostics + String(chunk)).slice(0, 4096); });
     let spawnError: Error | undefined;
     child.once('error', cause => { spawnError = cause; });
@@ -115,6 +127,10 @@ await fs.writeFile(root+'/next-case','MUST NOT EXIST');
       const code = await closed;
       if (spawnError) throw spawnError;
       expect(code).toBe(98);
+      if (deadlineMs > 10) {
+        expect(Number(selectedWatchdog)).toBeGreaterThan(deadlineMs);
+        expect(capacityObserverTimeoutMs(deadlineMs)).toBeGreaterThan(Number(selectedWatchdog));
+      } else expect(Number(selectedWatchdog)).toBe(100);
       if (phase !== 'diagnostic failure') {
         expect(diagnostics).toContain('ERASURE capacity terminal watchdog');
         expect(diagnostics).toContain('"cleanupCompleted":false');

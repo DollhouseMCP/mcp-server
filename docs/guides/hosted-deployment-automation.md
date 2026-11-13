@@ -5,6 +5,13 @@ Private-beta invitation enablement has additional qualification and rollback gat
 This guide tracks the executable deployment path for hosted DollhouseMCP.
 It is the automation companion to the manual [Production Hosting Runbook](./production-hosting-runbook.md).
 
+The source-built Caddy cutover described here is a future deployment path. It
+does not itself authorize a release or establish that a registry artifact has
+been published. Before using the examples, set the explicit Caddy image and two
+volume variables listed below to values qualified for the intended deployment.
+The image must be a registry digest reference whose native image config and
+ordered layer identities match the retained Caddy qualification evidence.
+
 The goal is to turn the alpha-tested Docker Compose + Caddy + Postgres shape into a repeatable install/update command for:
 
 - Dollhouse-operated alpha and demo servers
@@ -217,7 +224,7 @@ The remote wrapper additionally creates operator backups before it invokes the h
 
 Database readiness and `pg_dump` receive bounded retries before `update`, `migrate`, and `rollback` continue. Retry delays use exponential backoff from the configured base delay. If a dump attempt writes partial output and then fails, the wrapper moves that partial output to `backups/pre-remote-<action>-<timestamp>.sql.failed-attempt-<n>` with `0600` permissions before retrying or failing.
 
-Set `DOLLHOUSE_REMOTE_SKIP_BACKUP=true` or pass `--skip-backup` only when a separate backup already exists.
+Set `DOLLHOUSE_REMOTE_SKIP_BACKUP=true` or pass `--skip-backup` only when a separate backup already exists. For the explicit `legacy-offline-update` action, skipping is refused: the existing Compose file, `.env`, `.env.production`, successful database readiness and a nonempty dump are mandatory before invoking the helper. Set `DOLLHOUSE_HOSTED_LEGACY_CHECKPOINT` to the protected absolute checkpoint directory on the remote host; it is forwarded as one quoted argument only for that action, never persisted or inherited from stale remote state. These standard SQL/env backups supplement the independently verified VM dump and restore proof; see [the one-time handoff contract](legacy-maintenance-checkpoint.md).
 
 ## Configuration
 
@@ -238,6 +245,9 @@ Common environment variables:
 | `DOLLHOUSE_HOSTED_BIND_ADDRESS` | IPv4 host interface for Caddy ports, for example `127.0.0.1` or `0.0.0.0` | mode-specific |
 | `DOLLHOUSE_HOSTED_HTTP_BIND_PORT` | Host HTTP port for Caddy | `80` for `cloud`/`enterprise`, `3000` for `lan` |
 | `DOLLHOUSE_HOSTED_HTTPS_BIND_PORT` | Host HTTPS port for Caddy TLS mode | `443` |
+| `DOLLHOUSE_HOSTED_CADDY_IMAGE` | Qualified Caddy image as `registry/repository@sha256:<digest>` | required |
+| `DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME` | Explicit named Caddy data volume | required |
+| `DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME` | Explicit, distinct named Caddy config volume | required |
 | `DOLLHOUSE_HTTP_ALLOWED_HOSTS` | Comma-separated Host header allowlist passed to the app | `localhost,127.0.0.1,<hostname>` |
 | `DOLLHOUSE_TRUSTED_PROXIES` | Comma-separated trusted proxy CIDRs passed to the app | Docker bridge CIDR `172.16.0.0/12` |
 | `DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG` | Enable Caddy access logs with OAuth/token query values redacted | `true` for `cloud`/`enterprise`, `false` for `lan` |
@@ -318,7 +328,10 @@ retention are separate production/beta concerns.
 
 The generated Postgres init script is a shell script (`init-db.sh`) rather than a password-filled SQL file. It receives the app role password through `DOLLHOUSE_APP_DB_PASSWORD` at container init time and passes it to `psql` as a variable, so the generated init script itself does not contain the app database password.
 
-The generated Compose file pins the proxy service to `caddy:2.8` because edge proxy support uses Caddy's `trusted_proxies_strict` directive. The helper pulls that Caddy image before starting or recreating the proxy during install, update, and rollback so an older cached floating Caddy 2 image is not reused after edge CIDRs are enabled.
+The generated Compose file uses the explicitly selected, qualified Caddy
+digest. Before a proxy-changing start, the helper verifies the native image
+against retained source, config, and layer evidence; later Compose starts use
+`--pull never`. An unchanged, verified hardened proxy remains running.
 
 The helper rejects credential-bearing `DOLLHOUSE_HOSTED_GIT_URL` values by default because credentials embedded in command arguments can leak through process listings or logs. The remote wrapper applies the same check before opening SSH. Use a git credential helper, deploy key, or `DOLLHOUSE_HOSTED_SOURCE_DIR` instead. If an operator has an explicit reason to allow this, set `DOLLHOUSE_HOSTED_ALLOW_CREDENTIAL_GIT_URL=true`.
 
@@ -473,13 +486,144 @@ If no bootstrap identity is supplied and no admin has been claimed yet, `/readyz
 
 ### `update`
 
-Renders files, stages a new server bundle, rebuilds the `dollhousemcp` image, ensures Postgres is ready, runs migrations, restarts the `dollhousemcp` service, refreshes/recreates the pinned Caddy proxy, and verifies:
+Renders files, stages a new server bundle, rebuilds the `dollhousemcp` image, ensures Postgres is ready, runs migrations, restarts the `dollhousemcp` service, and verifies. An unchanged qualified hardened Caddy proxy and its volumes remain in place; a changed proxy requires an offline migration and its own recovery receipt.
 
 ```bash
 DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com npm run hosted:deploy -- update
 ```
 
-Both `install` and `update` build the app and pull Caddy before stopping an existing app. Preparation checks the immutable running PostgreSQL container without recreating it and rechecks that Compose still selects the same container. A running app with absent or stopped PostgreSQL refuses preparation; PostgreSQL may be initialized only when no app is running. Readiness is an availability check, not an authentication or grant test.
+Both `install` and a proxy-changing `update` qualify the selected Caddy image before stopping an existing app. Preparation checks the immutable running PostgreSQL container without recreating it and rechecks that Compose still selects the same container. A running app with absent or stopped PostgreSQL refuses preparation; PostgreSQL may be initialized only when no app is running. Readiness is an availability check, not an authentication or grant test.
+
+The hosted host requires Python 3.11 or newer, a local Linux Docker daemon,
+and `flock`. The private deployment environment file is a trusted-administrator
+shell input; protect it accordingly. The helper verifies the native daemon
+platform and Caddy image configuration, source labels, and ordered DiffIDs,
+then uses `--pull never` for the admitted proxy. A registry digest alone is
+not qualification of an arbitrary image. A first install creates only new,
+transaction-labeled volumes and checks the image's UID 1001 data/config layout;
+existing names require the matching protected creation receipt.
+Mutating `render`, migration, and bootstrap preparation also acquire the
+deployment lock before writing files; dry-run does not acquire it or mutate files.
+
+For a legacy proxy or a changed hardened proxy, select two **new**, explicit
+destination volume names and run `prepare-caddy-offline` in an approved offline
+window using the host-local helper; the remote wrapper does not accept this
+action. It checks the original running proxy, image, source, volume identities,
+other writers and selected replacement before issuing SIGTERM with an infinite
+daemon grace period. It then verifies the exact clean stop before cloning.
+The Docker client has a bounded wait: a timeout means the stop outcome is
+**unknown**, not that ingress is closed. See the [Docker stop reference](https://docs.docker.com/reference/cli/docker/container/stop/).
+The old proxy container, source, and data and config volumes remain in place.
+
+```bash
+DOLLHOUSE_HOSTED_CADDY_IMAGE='registry.example/caddy@sha256:<qualified-digest>' \
+DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME='new-caddy-data' \
+DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME='new-caddy-config' \
+  npm run hosted:deploy -- prepare-caddy-offline
+```
+
+After a successful preparation ingress is closed, and nothing has begun that
+`recover-caddy-proxy` could recover from. If the window is given up before the
+update starts, for example because the checkpoint that follows cannot be
+completed, bring the same proxy back with `abandon-caddy-offline`, using the
+same image and destination volume names:
+
+```bash
+DOLLHOUSE_HOSTED_CADDY_IMAGE='registry.example/caddy@sha256:<qualified-digest>' \
+DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME='new-caddy-data' \
+DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME='new-caddy-config' \
+  npm run hosted:deploy -- abandon-caddy-offline
+```
+
+It verifies the stopped proxy against the preparation's clone receipt (the same
+container, its full profile, a clean stop, free ports), starts that one
+container once, and requires its recorded Caddy configuration and the public
+legacy acceptance within bounded waits. If a check fails after the start, it
+stops the proxy once more without force and refuses: ingress is closed again.
+The clone, its receipt and the new volumes stay. A later preparation needs new
+destination volume names.
+
+A reconciled legacy proxy is bound to one boot. `abandon-caddy-offline` records
+the new boot in a write-once record beside the reconciled serving record, and
+later actions follow those records. If Docker or the host restarted that proxy,
+`accept-caddy-restart` checks that the running container is the same one, with
+the same profile, configuration and public acceptance, and records its new boot
+with the host's and the Docker daemon's start times. It starts and stops
+nothing. Without such a record, a proxy with another boot is refused. One
+reconciled proxy can have at most 32 recorded later boots. At that bound both
+actions refuse before they start or record anything.
+
+Before stopping ingress, preparation runs that same copier's full source
+validation in a source-only, read-only helper. It mounts only the two original
+volumes and its script; no destination volume is mounted or created. Source
+refusal or unconfirmed helper cleanup leaves the original proxy serving. Live
+content can change after this preliminary check, so the later stopped clone
+and verification still take their own authoritative inventory.
+
+Only root-owned (`0:0`), immediate `data/caddy` and `config/caddy` source
+directories with exact mode `01777` receive legacy compatibility treatment.
+Their originals stay unchanged; their destination copies become `0750`, owned
+by `1001:1001`. The receipt retains the raw source modes and inventory hash.
+Other unsafe paths, owners, modes, links and file types remain refused.
+Bounded Docker failures emit exit/UNKNOWN status, stderr, elapsed time and the
+time budget before owned helper cleanup; keep the operator log private.
+After any failed attempt, retain its partial volumes and receipts and select
+new, absent destination names for a separately approved window. Never reuse
+partial destinations or clear an unknown-outcome fence to retry.
+
+The clone uses the separately approved, locally available pinned Node helper,
+checks the full tree and certificate hashes, and writes a protected receipt
+binding the proxy, source bundle, config, and volume identities. No other
+container or host process may write either source or destination during this
+procedure. The deployment lock coordinates this helper only; Docker does not
+provide an atomic lease against other administrators. A protected stop-issued
+fence blocks subsequent deployment operations if the stop times out or the
+process crashes; it is not automatically cleared from a later stopped state.
+An operator must reconcile that uncertain operation before further mutation.
+Partial destination volumes remain for inspection and must not be reused.
+
+Successful preparation deliberately leaves ingress closed; it does not run
+the app handoff or an update. The receipt reserves a future previous-bundle
+path, but the bundle is not staged yet, so `recover-caddy-proxy` is not ready
+on that receipt alone. Complete the separately qualified legacy handoff first;
+the later guarded update stages that bundle, rechecks the clone, starts and
+verifies the normal serving profile, and completes its transition. Select the
+same qualified image and destination volume names for that update; preparation
+does not persist these inputs. Subsequent
+ordinary updates preserve an unchanged qualified proxy without another offline
+clone. Keep other writers stopped through the update. Unsupported
+container profiles, ambiguous receipts, unexpected files, and changed source
+or volume identities refuse the operation. Actual host and Docker-profile
+qualification remains a separate predeployment gate.
+
+`recover-caddy-proxy` is a proxy-only operation: it checks the selected prior
+bundle and protected receipt, verifies the prior image and original volumes,
+and restores their recorded supported proxy contract. It does not move source
+or change the app or database. Manual `rollback` also requires the matching
+proxy receipt and continues its existing app/source rollback; the operator
+must establish a compatible app and database recovery plan. A recovered proxy
+may use a protected config snapshot and original volumes rather than the
+current generated Compose selection, so do not recreate it from that selection
+without a separately reviewed cutover. There is no automatic app or schema
+rollback after a proxy failure.
+The protected transition state keeps the last completed source pointer while
+recording an in-progress replacement separately. It publishes the new pointer
+only after the existing public verification succeeds. An unfinished transition
+blocks app/source rollback instead of guessing from bundle names. Explicit
+proxy-only recovery can use the matching pending receipt when its source and
+proxy still validate. A first-install retry requires its own managed volume
+receipt, matching staged-source identity, no deployment markers, and no
+existing app, PostgreSQL, or Caddy container for the selected instance. Unreceipted volumes or an
+ambiguous interrupted transition remain for operator inspection.
+The replaced proxy container is retained stopped after a successful recovery.
+That can leave more than one container with the same Compose service labels;
+later Caddy automation refuses the ambiguous selection until an operator has
+reviewed and resolved it. The helper does not delete the retained container or
+its volumes automatically. A private `.caddy-transactions/success-*.json` record
+binds the retained container ID and its validated image and runtime profile to
+the prior source receipt. Inspect that exact stopped container and the active
+proxy before resolving duplicate labels. Preserve the record, images and both
+sets of volumes; do not remove volumes when resolving the container ambiguity.
 
 The non-force graceful-stop fence precedes migrations, grants, and optional admin bootstrap. Those writes cannot safely run alongside an old app without a separately established compatibility contract. Migration, grant, or bootstrap failure leaves the app stopped. Replacement or proxy failure can leave a partially replaced stack; inspect its actual state before deliberate recovery from a compatible image and database point. The helper does not automatically restart the old app against a possibly changed schema. Keep ingress closed during recovery and verify the selected recovery state before reopening it.
 
@@ -505,7 +649,7 @@ Renders files, rebuilds the current `dollhousemcp` image if needed, waits for Po
 docker compose --env-file .env.production run --rm dollhousemcp-migrate
 ```
 
-The `dollhousemcp-migrate` service is built from the Dockerfile `builder` target so `drizzle-kit` and the Drizzle config are available without adding migration tooling to the runtime production image.
+The `dollhousemcp-migrate` service uses the shell-free `migration` target. It requires `DOLLHOUSE_DATABASE_ADMIN_URL` and runs the compiled Drizzle ORM migrator against the same SQL journal and migration history table. The hosted bootstrap command also requires that administrator URL and runs directly with Node. The separate builder target remains available for development; it is not the hosted maintenance image. URL `sslmode` settings are preserved; conflicting explicit `DOLLHOUSE_DATABASE_SSL` settings and URL-specified certificate or key file paths are refused rather than silently ignored. A receipt-bound rollback builds only the selected application image and does not run migrations; assess schema compatibility before rolling back.
 
 Use this when the database needs to be brought current without staging new source:
 
@@ -525,9 +669,53 @@ DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME=octocat \
 
 Prefer `DOLLHOUSE_BOOTSTRAP_GITHUB_ID` when you already know the numeric GitHub ID, because it skips the GitHub API lookup. If neither bootstrap variable is set and the script has a TTY, it prompts for a GitHub username.
 
+#### How the first admin is claimed
+
+You name one GitHub account and that account becomes the admin by signing in. There is no setup code to copy, and nothing secret is printed or logged.
+
+1. `bootstrap-admin` resolves the username to GitHub's numeric account ID once and prints the ID it resolved. Check it is the account you meant. The server stores the ID, not the username.
+2. The first time that account signs in to the console at `/ui/` it is the admin. It is admitted even when the sign-in allowlist is required and still empty. Everyone else has to be on the allowlist or invited.
+3. Signing in does not elevate. Admin actions still need an authenticator app, set up under Security, and a step-up with its code.
+
+What to rely on:
+
+- **The match is on the account ID.** Renaming the GitHub account does not change who the admin is, and a different account that later takes the old username gets nothing.
+- **It can be claimed once.** Re-running `bootstrap-admin` for the same account is harmless. Running it for a different account is refused; transferring admin is a separate operation. Two claims made at the same moment settle on exactly one.
+- **It is audited.** The claim is recorded as `auth.bootstrap.completed` with the account and how it was designated.
+- **Until it is done, nobody can sign in.** Every sign-in is refused with `bootstrap_required` and `/readyz` reports not ready.
+
+An install done by hand, without this tooling, has to run the same command once inside the container, because the server does not read the bootstrap variables itself (#3235):
+
+```bash
+dollhouse-admin-bootstrap --method github --github-username octocat
+```
+
 ### `rollback`
 
-Restores the newest retained `server.prev-*` bundle, keeps the current bundle as `server.rollback-from-*`, rebuilds the app image, waits for PostgreSQL, and refreshes the pinned Caddy proxy image while the current app remains running. Only after that preparation succeeds does it require the non-force graceful-stop fence and replace `dollhousemcp` and Caddy, then verify:
+Validates the selected previous source bundle and its unique proxy receipt.
+Rollback proceeds only when that receipt matches the unchanged running proxy;
+a rollback requiring a different proxy is refused before source or proxy
+mutation. It retains the current source as `server.rollback-from-*`, rebuilds
+the app image, and checks PostgreSQL. It then verifies a restricted Caddy
+profile before the non-force app drain and replacement. Public acceptance runs
+behind that profile; only after it passes does the operation activate and
+read back the normal profile, finish the receipt, and write deployed markers.
+
+This control requires rootful Linux, fixed system `nsenter`, `curl`, and Docker
+tools, and permission to enter the selected proxy's network namespace. The
+temporary persisted profile permits only the three unauthenticated HTTP/1.1
+GET probes with an empty body; it binds their responses to the transition.
+A request has an empty body when it has no `Transfer-Encoding` and its
+`Content-Length` is absent or `0`. The acceptance probes are plain GETs sent
+to the public URL, so they pass through whatever fronts it. A CDN drops
+`Content-Length: 0` from a GET; neither the profile nor a probe may depend on
+a header that a hop in front can drop or add.
+Authenticated acceptance requires a separately qualified private probe before
+release. A failed or unacknowledged activation remains pending: a bounded stop
+is attempted, but an unknown stop can leave ingress active. Retain the
+recovery point and reconcile it explicitly; the pending marker is not itself
+a network fence. Normal operation restores the ordinary HTTP/1.1 and HTTP/2
+profile and does not require another clone for an unchanged proxy.
 
 The shared PostgreSQL preparation checks the pinned running container without recreation and refuses if a running app has no running PostgreSQL. It may start PostgreSQL only when no app is running.
 
@@ -536,6 +724,8 @@ DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com npm run hosted:deploy -- rollback
 ```
 
 Rollback restores the application source bundle only. It does not roll database schema backward; use it for ordinary failed app deploys, not for a migration that requires a planned database restore.
+
+After rolling back to a source bundle that predates slim maintenance, `migrate` and `bootstrap-admin` are unavailable until the server is rolled forward to a supported source and rendered again. Rollback builds only the application image and does not run migrations.
 
 A preparation failure leaves the running app and deployed revision/timestamp markers in place; `server` and image tags may already contain the prepared rollback candidate, while `server.rollback-from-*` retains the current source. The prepared source/tag may therefore differ from the running image; this is not a completed rollback or a restored active source pointer. Use the retained bundle for source recovery. Deployed markers change only after successful replacement. A drain refusal prevents replacement and retains the old process and its work. No forced stop follows that refusal.
 
@@ -635,3 +825,61 @@ This runs both the generated-file render test and a Docker-stubbed workflow test
 
 - Add a wrapper installer that can be served from a stable URL.
 - Add optional real-container integration coverage for Docker environments.
+
+### Digest-selected application images
+
+Set `DOLLHOUSE_HOSTED_IMAGE_MODE=registry` with independent immutable
+`DOLLHOUSE_HOSTED_RUNTIME_IMAGE` and `DOLLHOUSE_HOSTED_MIGRATION_IMAGE`
+references in `registry/repository@sha256:<digest>` form. These operands are
+persisted for subsequent local and remote operations. Registry mode renders no
+application or maintenance build sections. It pulls and checks both image roles
+and their native platform before draining the application, then rechecks the
+selected identities before maintenance and replacement. Their matching source
+labels express pair consistency only; separately qualify image provenance and
+security before selection.
+
+#### Publishing a pair
+
+The `Publish Hosted Images` workflow builds both images from one commit and
+publishes them to `ghcr.io/dollhousemcp/mcp-server-hosted`. Start it by pushing
+a tag named `hosted-images/<label>` at a commit on `beta` or `main`:
+
+```bash
+git tag hosted-images/2026-11-12-window <commit>
+git push origin hosted-images/2026-11-12-window
+```
+
+The tag only starts the run; nothing reads it afterwards, and release tags
+cannot start it. The run refuses a commit that is not on `beta` or `main`. For
+each of linux/amd64 and linux/arm64 it:
+
+1. builds the `production` and `migration` targets of `docker/Dockerfile`, with
+   the source label set to the commit it checked out;
+2. checks the pair against this tooling's admission rules, and that the
+   migrations in the migration image are exactly the list the runtime image
+   compares the database against;
+3. publishes the pair, then runs the same admission a host runs
+   (`registry_image_admission.py prepare`) on the published references.
+
+The run's summary gives the two references to deploy, ready to paste. The
+last job, "Report the references to deploy", prints the same lines to its log:
+
+```text
+DOLLHOUSE_HOSTED_IMAGE_MODE=registry
+DOLLHOUSE_HOSTED_RUNTIME_IMAGE=ghcr.io/dollhousemcp/mcp-server-hosted@sha256:<digest>
+DOLLHOUSE_HOSTED_MIGRATION_IMAGE=ghcr.io/dollhousemcp/mcp-server-hosted@sha256:<digest>
+```
+
+Each reference is an image index, so the same pair works on either
+architecture. Build provenance for both is recorded in GitHub's attestation
+store (`gh attestation verify oci://<reference> --repo DollhouseMCP/mcp-server`).
+The workflow does not scan the images: security qualification is still a
+separate step before selection. It does not build the Caddy image.
+
+After a successful drain, the application is always recreated with a fresh
+private control layer, even when both digest selections are unchanged. The
+unchanged qualified Caddy proxy is retained. Registry-mode rollback is refused
+before proxy recovery or source movement: select a separately qualified
+roll-forward plan instead. Switching an existing registry deployment back to
+build mode in place is also refused. Existing Caddy migration and one-time legacy offline
+handoff gates still apply; selecting application digests does not bypass them.

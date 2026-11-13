@@ -165,6 +165,19 @@ async function openMockOperations(page: Page): Promise<void> {
   await page.locator(OPERATIONS_TAB).click();
 }
 
+// The harness boots the real server with the console enabled and writes no
+// readiness evidence file. Before #3223 that start-up exited.
+test('a fresh install starts and serves the console with no readiness evidence file', async ({ request }) => {
+  expect(process.env.DOLLHOUSE_WEB_CONSOLE_REPLACEMENT_READINESS_EVIDENCE).toBeUndefined();
+
+  const shell = await request.get(`${BASE_URL}/ui/`);
+  expect(shell.status()).toBe(200);
+  expect(shell.headers()['content-type']).toContain('text/html');
+
+  const health = await request.get(`${BASE_URL}/api/v1/health`);
+  expect(health.status()).toBe(200);
+});
+
 test('console UI serves its asset graph and boots from server metadata', async ({ page }) => {
   const assetFailures: string[] = [];
   const loadedPaths = new Set<string>();

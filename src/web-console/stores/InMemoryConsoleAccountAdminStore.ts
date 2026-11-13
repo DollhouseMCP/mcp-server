@@ -1,7 +1,9 @@
+import { isInternalUserId } from '../../database/internalUsers.js';
 import { randomUUID } from 'node:crypto';
 
 import {
   ConsoleStoreConflictError,
+  ConsoleStoreValidationError,
   assertUuid,
 } from './ConsoleStoreValidation.js';
 import type {
@@ -87,6 +89,7 @@ export class InMemoryConsoleAccountAdminStore implements IConsoleAccountAdminSto
     const limit = query.limit ?? 100;
     const search = query.search?.toLowerCase();
     const filtered = [...this.principals.values()]
+      .filter(principal => !isInternalUserId(principal.userId))
       .map(principal => this.withCurrentRoles(principal))
       .filter(p => !query.sub || p.primarySub === query.sub)
       .filter(p => query.enabled === undefined || (p.disabledAt === null) === query.enabled)
@@ -121,6 +124,7 @@ export class InMemoryConsoleAccountAdminStore implements IConsoleAccountAdminSto
   async findPrincipal(userId: string): Promise<ConsolePrincipalSummary | null> {
     await Promise.resolve();
     assertUuid(userId, 'userId');
+    if (isInternalUserId(userId)) return null;
     const principal = this.principals.get(userId);
     return principal ? this.withCurrentRoles(principal) : null;
   }
@@ -129,7 +133,7 @@ export class InMemoryConsoleAccountAdminStore implements IConsoleAccountAdminSto
     await Promise.resolve();
     assertUuid(accountCorrelationId, 'accountCorrelationId');
     const principal = [...this.principals.values()]
-      .find(candidate => candidate.accountCorrelationId === accountCorrelationId);
+      .find(candidate => candidate.accountCorrelationId === accountCorrelationId && !isInternalUserId(candidate.userId));
     return principal ? this.withCurrentRoles(principal) : null;
   }
 
@@ -140,6 +144,7 @@ export class InMemoryConsoleAccountAdminStore implements IConsoleAccountAdminSto
   }
 
   async grantRole(input: RoleGrantInput): Promise<ConsoleRoleAssignment> {
+    if (isInternalUserId(input.userId)) throw new ConsoleStoreValidationError('internal users cannot hold roles');
     await Promise.resolve();
     validateRoleGrantInput(input);
     this.requirePrincipal(input.userId);
@@ -188,6 +193,7 @@ export class InMemoryConsoleAccountAdminStore implements IConsoleAccountAdminSto
   }
 
   async disablePrincipal(input: PrincipalDisableInput): Promise<PrincipalStateChange | null> {
+    if (isInternalUserId(input.userId)) return null;
     await Promise.resolve();
     validatePrincipalDisableInput(input);
     const principal = this.principals.get(input.userId);
@@ -203,6 +209,7 @@ export class InMemoryConsoleAccountAdminStore implements IConsoleAccountAdminSto
   }
 
   async enablePrincipal(input: PrincipalEnableInput): Promise<PrincipalStateChange | null> {
+    if (isInternalUserId(input.userId)) return null;
     await Promise.resolve();
     validatePrincipalEnableInput(input);
     const principal = this.principals.get(input.userId);
@@ -217,6 +224,7 @@ export class InMemoryConsoleAccountAdminStore implements IConsoleAccountAdminSto
   }
 
   async bumpPrincipalAuthzVersion(input: PrincipalAuthzVersionBumpInput): Promise<PrincipalStateChange | null> {
+    if (isInternalUserId(input.userId)) return null;
     await Promise.resolve();
     validatePrincipalAuthzVersionBumpInput(input);
     const principal = this.principals.get(input.userId);
@@ -230,6 +238,7 @@ export class InMemoryConsoleAccountAdminStore implements IConsoleAccountAdminSto
   }
 
   async updatePrincipalProfile(input: PrincipalProfileUpdateInput): Promise<ConsolePrincipalSummary | null> {
+    if (isInternalUserId(input.userId)) return null;
     await Promise.resolve();
     validatePrincipalProfileUpdateInput(input);
     const principal = this.principals.get(input.userId);
@@ -243,6 +252,7 @@ export class InMemoryConsoleAccountAdminStore implements IConsoleAccountAdminSto
   }
 
   async deletePrincipal(input: PrincipalDeletionInput): Promise<PrincipalDeletionOutcome | null> {
+    if (isInternalUserId(input.userId)) return null;
     await Promise.resolve();
     validatePrincipalDeletionInput(input);
     const principal = this.principals.get(input.userId);
@@ -274,6 +284,7 @@ export class InMemoryConsoleAccountAdminStore implements IConsoleAccountAdminSto
   }
 
   async linkIdentity(input: IdentityLinkInput): Promise<IdentityMutationResult | null> {
+    if (isInternalUserId(input.userId)) return null;
     await Promise.resolve();
     validateIdentityLinkInput(input);
     const identity = this.identities.get(input.sub);

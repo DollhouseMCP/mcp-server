@@ -1,20 +1,9 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import type { Router } from 'express';
 
 import {
-  assertWebConsoleReplacementEvidenceReady,
   resolveWebConsoleHttpBootstrapOptions,
   type WebConsoleHttpBootstrapEnv,
 } from '../../../src/web-console/WebConsoleHttpBootstrap.js';
-import { ConsoleModuleRegistry } from '../../../src/web-console/index.js';
-import {
-  WEB_CONSOLE_REPLACEMENT_LIVE_CHECK_IDS,
-  WEB_CONSOLE_REPLACEMENT_REQUIRED_ROUTE_MODULE_IDS,
-  type WebConsoleReplacementLiveCheckId,
-} from '../../../src/web-console/WebConsoleReplacementReadiness.js';
 import { logger } from '../../../src/utils/logger.js';
 
 const KEY_1 = Buffer.alloc(32, 1).toString('base64');
@@ -37,7 +26,7 @@ function env(overrides: Partial<WebConsoleHttpBootstrapEnv> = {}): WebConsoleHtt
     DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY: KEY_2,
     DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY_ID: 'console-key-v1',
     DOLLHOUSE_WEB_CONSOLE_PROTECTED_CORRELATION_HMAC_KEY: KEY_3,
-    DOLLHOUSE_WEB_CONSOLE_REPLACEMENT_READINESS_EVIDENCE: '/deployment/replacement-readiness.json',
+    DOLLHOUSE_WEB_CONSOLE_REPLACEMENT_READINESS_EVIDENCE: undefined,
     DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_ID: undefined,
     DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_SECRET: undefined,
     ...overrides,
@@ -50,6 +39,15 @@ describe('WebConsoleHttpBootstrap', () => {
       DOLLHOUSE_BETA_ONBOARDING_ENABLED: true,
       DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED: false,
     }))).toThrow('Private beta onboarding requires');
+  });
+
+  it('leaves the canary schedule off unless an interval is configured', () => {
+    expect(resolveWebConsoleHttpBootstrapOptions(env({
+      DOLLHOUSE_WEB_CONSOLE_CANARY_INTERVAL_MINUTES: 0,
+    }))?.canaryIntervalMs).toBe(0);
+    expect(resolveWebConsoleHttpBootstrapOptions(env({
+      DOLLHOUSE_WEB_CONSOLE_CANARY_INTERVAL_MINUTES: 30,
+    }))?.canaryIntervalMs).toBe(30 * 60_000);
   });
 
   it('passes validated private beta configuration only on explicit opt-in', () => {
@@ -120,10 +118,6 @@ describe('WebConsoleHttpBootstrap', () => {
     }))).toThrow('DOLLHOUSE_PUBLIC_BASE_URL');
 
     expect(() => resolveWebConsoleHttpBootstrapOptions(env({
-      DOLLHOUSE_WEB_CONSOLE_REPLACEMENT_READINESS_EVIDENCE: undefined,
-    }))).toThrow('DOLLHOUSE_WEB_CONSOLE_REPLACEMENT_READINESS_EVIDENCE');
-
-    expect(() => resolveWebConsoleHttpBootstrapOptions(env({
       DOLLHOUSE_WEB_CONSOLE_OPAQUE_HMAC_KEY: Buffer.alloc(31, 1).toString('base64'),
     }))).toThrow('DOLLHOUSE_WEB_CONSOLE_OPAQUE_HMAC_KEY must decode to exactly 32 bytes');
 
@@ -184,93 +178,44 @@ describe('WebConsoleHttpBootstrap', () => {
     });
   });
 
-  it('requires selected-deployment replacement evidence to pass before activation', async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), 'web-console-replacement-'));
-    try {
-      const evidencePath = join(tempDir, 'replacement-readiness.json');
-      await writeFile(evidencePath, JSON.stringify(evidence({
-        liveChecks: liveChecks({ fail: 'security_invalidation_multi_replica' }),
-      })));
+  describe('retired readiness evidence file', () => {
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
 
-      await expect(assertWebConsoleReplacementEvidenceReady(composition(), evidencePath))
-        .rejects.toThrow('security_invalidation_multi_replica: selected deployment check failed');
+    it('starts on a fresh install with no evidence file configured', () => {
+      const warn = jest.spyOn(logger, 'warn').mockImplementation(() => {});
 
-      await writeFile(evidencePath, JSON.stringify(evidence()));
+      const options = resolveWebConsoleHttpBootstrapOptions(env());
 
-      await expect(assertWebConsoleReplacementEvidenceReady(composition(), evidencePath))
-        .resolves.toBeUndefined();
-    } finally {
-      await rm(tempDir, { recursive: true, force: true });
-    }
-  });
+      expect(options).toMatchObject({ activationProfile: 'shared-hosted', enableApiV1Mount: true });
+      expect(warn).not.toHaveBeenCalled();
+    });
 
-  it('uses the runtime pre-replacement phase and includes the evidence path in read errors', async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), 'web-console-replacement-'));
-    try {
-      const evidencePath = join(tempDir, 'replacement-readiness.json');
-      await writeFile(evidencePath, JSON.stringify(evidence({
-        phase: 'active-replacement',
-      })));
+    it('ignores a still-configured evidence path and says so once', () => {
+      const warn = jest.spyOn(logger, 'warn').mockImplementation(() => {});
 
-      await expect(assertWebConsoleReplacementEvidenceReady(composition(), evidencePath))
-        .resolves.toBeUndefined();
+      // The path does not exist: the file is never opened, so nothing can fail on it.
+      const options = resolveWebConsoleHttpBootstrapOptions(env({
+        DOLLHOUSE_WEB_CONSOLE_REPLACEMENT_READINESS_EVIDENCE: '/nonexistent/replacement-readiness.json',
+      }));
 
-      await expect(assertWebConsoleReplacementEvidenceReady(composition(), join(tempDir, 'missing.json')))
-        .rejects.toThrow(`Failed to read web console replacement readiness evidence at ${join(tempDir, 'missing.json')}`);
-    } finally {
-      await rm(tempDir, { recursive: true, force: true });
-    }
+      expect(options).toMatchObject({ activationProfile: 'shared-hosted', enableApiV1Mount: true });
+      expect(warn).toHaveBeenCalledTimes(1);
+      const message = warn.mock.calls[0][0];
+      expect(message).toContain('DOLLHOUSE_WEB_CONSOLE_REPLACEMENT_READINESS_EVIDENCE is set but is no longer used');
+      expect(message).toContain('Remove the variable');
+      expect(message).not.toContain('/nonexistent/replacement-readiness.json');
+    });
+
+    it('does not warn about the evidence path while the console is disabled', () => {
+      const warn = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+
+      expect(resolveWebConsoleHttpBootstrapOptions(env({
+        DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED: false,
+        DOLLHOUSE_WEB_CONSOLE_REPLACEMENT_READINESS_EVIDENCE: '/deployment/replacement-readiness.json',
+      }))).toBeNull();
+      expect(warn).not.toHaveBeenCalled();
+    });
   });
 });
-
-function evidence(overrides: {
-  readonly phase?: 'pre-replacement' | 'active-replacement';
-  readonly liveChecks?: readonly Record<string, unknown>[];
-} = {}): Record<string, unknown> {
-  return {
-    phase: overrides.phase ?? 'pre-replacement',
-    composition: {
-      activationProfile: 'shared-hosted',
-      storageBackend: 'postgres',
-      apiV1MountCreated: true,
-      routesMounted: false,
-      registeredRouteModuleIds: WEB_CONSOLE_REPLACEMENT_REQUIRED_ROUTE_MODULE_IDS,
-    },
-    liveChecks: overrides.liveChecks ?? liveChecks(),
-  };
-}
-
-function liveChecks(options: {
-  readonly fail?: WebConsoleReplacementLiveCheckId;
-} = {}): readonly Record<string, unknown>[] {
-  return WEB_CONSOLE_REPLACEMENT_LIVE_CHECK_IDS.map(id => ({
-    id,
-    ready: id !== options.fail,
-    detail: id === options.fail
-      ? 'selected deployment check failed'
-      : 'selected deployment verification passed',
-  }));
-}
-
-function composition(): Parameters<typeof assertWebConsoleReplacementEvidenceReady>[0] {
-  const registry = new ConsoleModuleRegistry();
-  for (const moduleId of WEB_CONSOLE_REPLACEMENT_REQUIRED_ROUTE_MODULE_IDS) {
-    registry.register({
-      id: moduleId,
-      apiVersion: 'v1',
-      capabilities: ['console:self'],
-      routes: [],
-    });
-  }
-  return {
-    activationProfile: 'shared-hosted',
-    storageBackend: 'postgres',
-    apiV1Mount: {
-      router: {} as unknown as Router,
-      mounted: () => false,
-      markMounted: () => {},
-    },
-    routesMounted: false,
-    registry,
-  };
-}

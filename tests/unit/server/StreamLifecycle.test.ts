@@ -429,3 +429,111 @@ describe('graceful stream closure', () => {
     expect(onClose).toHaveBeenCalledTimes(1); expect(jest.getTimerCount()).toBe(0);
   });
 });
+
+describe('stream credential recheck', () => {
+  const binding = { sub: 'alice', clientId: 'client', grantId: 'grant' };
+  const PAYLOAD = 'event: message\ndata: {"method":"notifications/tools/list_changed"}\n\n';
+  function setup(recheckCredential: (() => Promise<boolean>) | undefined, credentialRecheckMs: number | undefined = 100) {
+    const { state, res } = response();
+    const writes = state.write; const onClose = jest.fn();
+    const onCredentialRevoked = jest.fn(); const onCredentialRecheckFailed = jest.fn(); const closeStream = jest.fn(() => { state.end(); });
+    const observation = observeStream(res, { isCurrent: () => true, onOpen: jest.fn(), onClose, binding, expiresAt: 10_000,
+      recheckCredential, credentialRecheckMs, onCredentialRevoked, onCredentialRecheckFailed, closeStream });
+    observation.inspect();
+    return { state, res, writes, onClose, observation, onCredentialRevoked, onCredentialRecheckFailed, closeStream };
+  }
+
+  it('keeps an active stream open and keeps asking at each interval', async () => {
+    const check = jest.fn(() => Promise.resolve(true));
+    const { state, res, writes, observation, onCredentialRevoked } = setup(check);
+    await jest.advanceTimersByTimeAsync(99); expect(check).not.toHaveBeenCalled();
+    await jest.advanceTimersByTimeAsync(1); expect(check).toHaveBeenCalledTimes(1);
+    await jest.advanceTimersByTimeAsync(200); expect(check).toHaveBeenCalledTimes(3);
+    res.write(PAYLOAD); expect(writes).toHaveBeenCalledTimes(1);
+    expect(onCredentialRevoked).not.toHaveBeenCalled(); expect(state.writableEnded).toBe(false);
+    observation.stop(); expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it('stops payloads, closes once and refuses renewal when the credential is no longer active', async () => {
+    const check = jest.fn(() => Promise.resolve(false));
+    const { state, res, writes, onClose, observation, onCredentialRevoked, closeStream } = setup(check);
+    res.write(PAYLOAD); expect(writes).toHaveBeenCalledTimes(1);
+    await jest.advanceTimersByTimeAsync(100);
+    expect(onCredentialRevoked).toHaveBeenCalledTimes(1); expect(closeStream).toHaveBeenCalledTimes(1);
+    expect(state.writableEnded).toBe(true); expect(onClose).toHaveBeenCalledTimes(1);
+    expect(observation.renewCredential(20_000, binding)).toBe(false);
+    await jest.advanceTimersByTimeAsync(1_000);
+    expect(check).toHaveBeenCalledTimes(1); expect(closeStream).toHaveBeenCalledTimes(1);
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it('drops payloads but passes heartbeats between revocation and a slow close', async () => {
+    const { state, res } = response(); const writes = state.write;
+    const observation = observeStream(res, { isCurrent: () => true, onOpen: jest.fn(), onClose: jest.fn(), binding, expiresAt: 10_000,
+      recheckCredential: () => Promise.resolve(false), credentialRecheckMs: 100, closeStream: jest.fn() });
+    observation.inspect();
+    await jest.advanceTimersByTimeAsync(100);
+    res.write(PAYLOAD); expect(writes).not.toHaveBeenCalled();
+    res.write(': keepalive\n\n'); expect(writes).toHaveBeenCalledTimes(1);
+    expect(observation.renewCredential(20_000, binding)).toBe(false);
+    jest.advanceTimersByTime(STREAM_CLOSE_FALLBACK_MS); expect(state.destroyed).toBe(true);
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it('reports a failed check, keeps the stream open and acts on the next answer', async () => {
+    const check = jest.fn<() => Promise<boolean>>()
+      .mockRejectedValueOnce(new Error('database unavailable')).mockResolvedValueOnce(false);
+    const { state, res, writes, onCredentialRevoked, onCredentialRecheckFailed } = setup(check);
+    await jest.advanceTimersByTimeAsync(100);
+    expect(onCredentialRecheckFailed).toHaveBeenCalledTimes(1);
+    expect(onCredentialRecheckFailed.mock.calls[0][0]).toEqual(new Error('database unavailable'));
+    expect(state.writableEnded).toBe(false); res.write(PAYLOAD); expect(writes).toHaveBeenCalledTimes(1);
+    await jest.advanceTimersByTimeAsync(100);
+    expect(onCredentialRevoked).toHaveBeenCalledTimes(1); expect(state.writableEnded).toBe(true);
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it('never runs two checks at once', async () => {
+    let answer!: (active: boolean) => void;
+    const check = jest.fn(() => new Promise<boolean>(resolve => { answer = resolve; }));
+    const { state, observation } = setup(check);
+    await jest.advanceTimersByTimeAsync(350); expect(check).toHaveBeenCalledTimes(1);
+    answer(true); await jest.advanceTimersByTimeAsync(50);
+    expect(check).toHaveBeenCalledTimes(2); expect(state.writableEnded).toBe(false);
+    observation.stop(); expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it('ignores an answer that arrives after the stream has stopped', async () => {
+    let answer!: (active: boolean) => void;
+    const check = jest.fn(() => new Promise<boolean>(resolve => { answer = resolve; }));
+    const { state, observation, onCredentialRevoked, closeStream } = setup(check);
+    await jest.advanceTimersByTimeAsync(100);
+    observation.stop(); answer(false); await jest.advanceTimersByTimeAsync(0);
+    expect(onCredentialRevoked).not.toHaveBeenCalled(); expect(closeStream).not.toHaveBeenCalled();
+    expect(state.writableEnded).toBe(false); expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it.each([
+    ['no interval', () => Promise.resolve(false), 0],
+    ['an omitted interval', () => Promise.resolve(false), undefined],
+  ] as const)('does not recheck with %s', async (_label, check, interval) => {
+    const { state, res } = response(); const spy = jest.fn(check);
+    const observation = observeStream(res, { isCurrent: () => true, onOpen: jest.fn(), onClose: jest.fn(), binding,
+      recheckCredential: spy, credentialRecheckMs: interval });
+    observation.inspect(); expect(jest.getTimerCount()).toBe(0);
+    await jest.advanceTimersByTimeAsync(1_000);
+    expect(spy).not.toHaveBeenCalled(); expect(state.writableEnded).toBe(false);
+    observation.stop();
+  });
+
+  it('does not recheck without a provider check or before the stream is accepted', async () => {
+    const withoutCheck = setup(undefined);
+    await jest.advanceTimersByTimeAsync(1_000);
+    expect(withoutCheck.state.writableEnded).toBe(false); withoutCheck.observation.stop();
+
+    const { state, res } = response(); state.statusCode = 401; const check = jest.fn(() => Promise.resolve(false));
+    observeStream(res, { isCurrent: () => true, onOpen: jest.fn(), onClose: jest.fn(), recheckCredential: check, credentialRecheckMs: 100 });
+    await jest.advanceTimersByTimeAsync(1_000);
+    expect(check).not.toHaveBeenCalled(); expect(jest.getTimerCount()).toBe(0);
+  });
+});

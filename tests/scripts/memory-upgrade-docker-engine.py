@@ -42,6 +42,7 @@ HELPER_DIAGNOSTICS = {
     'Graceful stop deadline reached; replacement refused',
     'Graceful stop refused or timed out; old process retained, replacement refused',
     'Container boot changed during drain; replacement refused',
+    'Stopped container has no live drain acknowledgement; replacement refused',
     'Verified memory drain or clean closure unavailable; replacement refused',
 }
 
@@ -213,6 +214,19 @@ try:
     if not stopped(cid) or inspect(cid)['RestartCount'] != count:
         raise RuntimeError('Successful manual stop restarted unexpectedly')
     observed.append({'case': 'known-drain-stable-stop', 'restartCount': count})
+    completed_cases.append(case)
+
+    case = 'stopped-container-refuses'
+    phase = 'actual-helper-stopped-refusal'
+    before = inspect(cid)
+    helper(cid, 1)
+    after = inspect(cid)
+    if helper_results[-1]['fixedDiagnostic'] != 'Stopped container has no live drain acknowledgement; replacement refused':
+        raise RuntimeError('Stopped container did not produce the required refusal')
+    if (before['Id'] != after['Id'] or before['State']['StartedAt'] != after['State']['StartedAt'] or
+            before['RestartCount'] != after['RestartCount'] or after['State']['Running']):
+        raise RuntimeError('Stopped container changed during refusal')
+    observed.append({'case': case, 'containerId': cid, 'running': False, 'restartCount': after['RestartCount']})
     completed_cases.append(case)
 
     case = 'lost-ack-drained-successor'

@@ -125,10 +125,10 @@ if a[0]=='inspect':
  stopped=Path(str(p)+'.stopped').exists() or mode in ['unclean','stopped-clean']
  changed_boot=mode=='changed-boot' and Path(str(p)+'.acked').exists()
  enabled='enabled'
- if mode=='disabled': enabled=''
+ if mode in ['disabled','legacy-profile']: enabled=''
  if mode=='wrong-dir': enabled='invalid'
  if mode=='duplicate-env': enabled='enabledenabled'
- print(json.dumps({'id':'b'*64 if mode=='changed' else '${target}','running':not stopped,'exitCode':1 if mode=='unclean' else 0,'oomKilled':False,'startedAt':'second' if changed_boot else 'first','restartCount':1 if changed_boot else 0,'restarting':False,'readonly':mode=='readonly','mounts':[{'Destination':'/app'}] if mode=='mounted' else [],'enabled':enabled,'capability':'v1' if mode=='unsupported' else 'v2'})); sys.exit(0)
+ print(json.dumps({'id':'b'*64 if mode=='changed' else '${target}','running':not stopped,'exitCode':1 if mode=='unclean' else 0,'oomKilled':False,'startedAt':'second' if changed_boot else 'first','restartCount':1 if changed_boot else 0,'restarting':False,'readonly':mode=='readonly','mounts':[{'Destination':'/app'}] if mode=='mounted' else [],'enabled':enabled,'capability':None if mode=='legacy-profile' else 'v1' if mode=='unsupported' else 'v2'})); sys.exit(0)
 if a[0]=='exec':
  assert a[:8]==['exec','--user','1001:1001','--workdir','/app','${target}','node','/app/dist/lifecycle/requestMemoryDrain.js']
  assert a[8]=='${target}' and len(a[9])==64 and 0<int(a[10])<=${seconds * 1000}
@@ -292,6 +292,11 @@ describe('non-force hosted graceful stop', () => {
     const outcome = await run('drain-timeout'); expect(outcome.result).toBe(1); expect(outcome.elapsed).toBeLessThan(2500);
     expect(outcome.commands.some(args => args[0] === 'exec')).toBe(true);
     expect(outcome.commands.some(args => args[0] === 'kill')).toBe(false);
+  });
+  it('refuses a legacy profile without a drain capability before exec or TERM', async () => {
+    const outcome = await run('legacy-profile');
+    expect(outcome.result).toBe(1);
+    expect(outcome.commands.map(args => args[0])).toEqual(['inspect']);
   });
   it.each(['unsupported', 'changed', 'unclean'])('refuses %s state before replacement', async mode => {
     const outcome = await run(mode); expect(outcome.result).toBe(1);

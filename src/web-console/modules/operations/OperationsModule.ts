@@ -2,6 +2,7 @@ import type {
   ConsoleHandlerResult,
   ConsoleModuleDescriptor,
   ConsoleRequest,
+  ConsoleRouteDefinition,
 } from '../../platform/ConsolePlatformTypes.js';
 import { projectConsoleStreamEndStatus } from '../../platform/ConsoleProjectorHelpers.js';
 import { offsetConsoleCursor, offsetFromConsoleCursor } from '../../platform/ConsoleCursor.js';
@@ -22,6 +23,7 @@ import type {
   OperationalMetricQuery,
 } from './OperationsTelemetry.js';
 import {
+  projectCanaryRun,
   projectOperatorConfigList,
   projectOperatorConfigSetting,
   projectOperationHealthComponent,
@@ -34,6 +36,7 @@ import {
   projectHttpRuntimeMetrics,
 } from './OperationsPrivacyProjectors.js';
 import type { ISystemMetricsSource } from './SystemMetricsSource.js';
+import type { CanaryRunRecord, CanaryTrigger } from '../../canary/CanaryMonitor.js';
 import type { MetricQueryOptions, MetricQueryResult } from '../../../metrics/types.js';
 
 const OPERATE_CAPABILITY = 'console:admin:operate';
@@ -52,6 +55,7 @@ const OPERATION_AUDIT_IDS = [
   'operate.metrics.system',
   'operate.metrics.http',
 ] as const;
+const CANARY_RUN_AUDIT_ID = 'operate.canary.run';
 
 const OPERATIONS_STREAM_POLICY = {
   lastEventId: 'unsupported',
@@ -72,7 +76,13 @@ export interface OperationsModuleOptions {
   readonly systemMetrics?: ISystemMetricsSource;
   /** Trusted transport snapshot, resolved only after admin authorization. */
   readonly httpMetrics?: () => unknown;
+  /** Absent without a database: the canary has no per-session stores to exercise, and its route is not offered. */
+  readonly canary?: OperationsCanary;
   readonly now?: () => Date;
+}
+
+export interface OperationsCanary {
+  run(trigger: CanaryTrigger): Promise<CanaryRunRecord>;
 }
 
 export function createOperationsModule(options: OperationsModuleOptions): ConsoleModuleDescriptor {
@@ -296,8 +306,41 @@ export function createOperationsModule(options: OperationsModuleOptions): Consol
         privacyProjector: projectSystemMetrics,
         handler: req => querySystemMetrics(options.systemMetrics, parseSystemMetricQuery(req), resolveNow),
       },
+      ...(options.canary ? [canaryRunRoute(options.canary)] : []),
     ],
-    auditOperations: OPERATION_AUDIT_IDS.map(id => ({ id })),
+    auditOperations: [...OPERATION_AUDIT_IDS, ...(options.canary ? [CANARY_RUN_AUDIT_ID] : [])].map(id => ({ id })),
+  };
+}
+
+// Runs the approvals and executions canary because an admin asked. The kernel
+// records the request in the admin audit with that admin as the actor. The
+// answer is 200 whatever the canary found: the request to run it succeeded,
+// and what it found is in the body.
+function canaryRunRoute(canary: OperationsCanary): ConsoleRouteDefinition {
+  return {
+    method: 'POST',
+    path: '/api/v1/admin/operate/canary/run',
+    audience: 'admin',
+    requiredCapability: OPERATE_CAPABILITY,
+    elevation: 'admin_30m',
+    privacyClass: 'operational_allowlist',
+    idempotency: 'required',
+    auditOperation: CANARY_RUN_AUDIT_ID,
+    privacyProjector: projectCanaryRun,
+    handler: async () => {
+      const record = await canary.run('admin');
+      return {
+        status: 200,
+        body: {
+          state: record.result.state,
+          code: record.result.code,
+          detail: record.result.detail,
+          trigger: record.trigger,
+          started_at: record.startedAt.toISOString(),
+          finished_at: record.finishedAt.toISOString(),
+        },
+      };
+    },
   };
 }
 

@@ -3,10 +3,21 @@ import { performance } from 'node:perf_hooks';
 import { setTimeout, clearTimeout } from 'node:timers';
 
 export const CAPACITY_OBSERVER_TIMEOUT_MS = 65_000;
+
+// The whole-case gate includes setup, assertions and awaited cleanup. Keep the
+// process watchdog beyond that gate, and Jest beyond the watchdog, so Jest
+// cannot advance to another case while this one still owns writes.
+function capacityWatchdogMs(deadlineMs: number): number {
+  return Math.max(60_000, deadlineMs + 15_000);
+}
+
+export function capacityObserverTimeoutMs(deadlineMs: number): number {
+  return capacityWatchdogMs(deadlineMs) + 5_000;
+}
 interface LifecycleOptions {
   deadlineMs: number;
   label: string;
-  /** Small isolated subprocess tests only; qualification uses the fixed default. */
+  /** Small isolated subprocess tests only; qualification derives it from the whole-case gate. */
   watchdogMs?: number;
   completed?: (timing: { cleanupMs: number; wholeMs: number; failed: boolean }) => void;
 }
@@ -34,7 +45,7 @@ export async function runErasureCapacityLifecycle(options: LifecycleOptions, bod
     } finally {
       process.exit(98);
     }
-  }, options.watchdogMs ?? 60_000);
+  }, options.watchdogMs ?? capacityWatchdogMs(options.deadlineMs));
   let cleanupMs = 0;
   try {
     try {

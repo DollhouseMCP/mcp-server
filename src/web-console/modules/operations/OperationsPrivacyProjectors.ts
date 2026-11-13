@@ -1,4 +1,5 @@
 import type {
+  CanaryRunDto,
   OperationHealthComponentDto,
   OperationHealthSummaryDto,
   OperatorConfigListDto,
@@ -41,6 +42,22 @@ export function projectOperationHealthComponent(value: unknown): OperationHealth
     status: healthStatusField(record, 'status'),
     checked_at: stringField(record, 'checked_at'),
     failure_codes: arrayValue(record.failure_codes).filter(isStableCode),
+  };
+}
+
+const MAX_CANARY_DETAIL_LENGTH = 500;
+
+/** One canary run. The detail is fixed wording written by the canary, never stored data. */
+export function projectCanaryRun(value: unknown): CanaryRunDto {
+  const record = objectValue(value);
+  return {
+    check: 'approval_execution_projection',
+    state: canaryStateField(record, 'state'),
+    code: stableCodeField(record, 'code'),
+    detail: stringField(record, 'detail').slice(0, MAX_CANARY_DETAIL_LENGTH),
+    trigger: record.trigger === 'schedule' ? 'schedule' : 'admin',
+    started_at: stringField(record, 'started_at'),
+    finished_at: stringField(record, 'finished_at'),
   };
 }
 
@@ -192,8 +209,15 @@ function componentField(record: UnknownRecord, key: string): OperationHealthComp
 
 function healthStatusField(record: UnknownRecord, key: string): OperationHealthComponentDto['status'] {
   const value = record[key];
-  if (value === 'ok' || value === 'degraded' || value === 'unavailable' || value === 'not_ready') return value;
+  if (value === 'ok' || value === 'degraded' || value === 'unavailable' || value === 'not_ready' || value === 'not_run') return value;
   return 'unavailable';
+}
+
+/** Anything unrecognised reads as pending: nothing is verified. */
+function canaryStateField(record: UnknownRecord, key: string): CanaryRunDto['state'] {
+  const value = record[key];
+  if (value === 'passed' || value === 'failed') return value;
+  return 'pending';
 }
 
 function logLevelField(record: UnknownRecord, key: string): OperationalLogDto['level'] {

@@ -28,6 +28,88 @@ npm test                  # Unit tests (~10-30s)
 
 ---
 
+## Full local unit qualification
+
+Argument-free `npm test` discovers the complete Jest inventory, runs the existing
+Core owner-erasure and serial-storage whole-file steps in fresh serial processes,
+then runs both ordinary native Jest shards in fresh processes. This matches the
+already mandatory schedule in `.github/workflows/core-build-test.yml`; ordinary
+worker settings, every case, operation workload, internal batch/concurrency,
+whole-case deadline and existing intentional skip stay unchanged. A missing,
+duplicate or extra file, nonzero subprocess exit, missing report or failed final
+assertion refuses the complete result. The runner retains private raw Jest JSON
+and a complete inventory/count/outcome receipt at the printed temporary path.
+Pending/todo cases remain visible separately and are never counted as passes.
+Catchable parent interruption is forwarded to the active direct Node/Jest child;
+the launcher awaits its close and refuses all subsequent subprocess admission.
+Cancellation remains failed even if that child later exits zero. Existing test
+fixture owners remain responsible for their own descendant/resource cleanup.
+
+The earlier default command put these capacity files in competition with unrelated
+suites across ordinary workers. On November 3 its corrected-Hono candidate still
+failed a populated nested RENAME final-durable case at the original 10-second
+limit: setup 1.482s, interrupted operation 7.876s and retry 1.235s, with owned
+settlement/cleanup complete at 10.889s. That result remains failed. Host evidence
+showed four logical CPUs saturated alongside WindowServer and the editor; no
+production inefficiency or arbitrary-host wall-clock guarantee was established.
+The local scheduler correction follows the existing CI isolation contract rather
+than changing the capacity limits. It needs its own complete qualifying run.
+
+The November 3 audit of all 101 discovered storage suites found 11 physical
+fanout files omitted from the original 13-file isolation schedule. Core, Extended
+and this local plan now require the same 24 whole files in 15 serial groups:
+inspection (including its real timeout ownership control), adoption-recovery
+capacity, volume-list capacity, and delete/archive collision capacity join the
+original groups. Ordinary worker settings and existing CI job limits are retained.
+Small filesystem cases and synthetic entry/byte/model vectors remain ordinary.
+The launcher refuses drift in either workflow's whole-file commands or exclusions,
+and still proves the serial/ordinary union against actual native Jest discovery.
+
+The first Extended macOS Node 22 inspection run failed its flat 4,095-entry case at
+its original 10-second limit; its slow phase was unobserved. Failure-only fixed-label
+phase output records future failures without paths or payloads. Independently,
+Core macOS RESERVED adoption recovery recorded a 13,982.790833ms setup hook before
+its body could run. Its fixture callback and admitted sibling I/O must settle
+before mocks or roots are removed; the existing 10-second setup/body and cleanup
+budgets, 4,096 simultaneous writes and all residual proofs remain intact. A timed-out
+hook stays failed even when cleanup drains safely. These corrections do not claim
+a production algorithm fix or erase either failed run. Full per-file evidence and
+unchanged-contract scope are recorded in issue #3172.
+
+Explicit Jest selections/options still pass through unchanged, for example
+`npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryOwnedRename.test.ts`.
+A selected passing file is focused evidence, not complete qualification.
+
+### Populated owner-erasure time limits
+
+Owner-erasure qualification uses workload tiers shared by both layouts and all
+platforms. The captured macOS runs in [#3090](https://github.com/DollhouseMCP/mcp-server/issues/3090#issuecomment-6481950643)
+and [#3146](https://github.com/DollhouseMCP/mcp-server/actions/runs/40775170691/job/123122484002)
+show the following whole-case costs, including setup, foreign-file verification
+and awaited cleanup. The limit allows 50% headroom above each observed maximum,
+rounded up to a 30-second increment:
+
+| Foreign owners | Volumes | Observed maximum | Whole-case limit |
+| --- | --- | --- | --- |
+| 100 or 250 | 2 | 8.50s | 30s |
+| 100 or 250 | 10 | 31.93s | 60s |
+| 1,000 | 2 | 39.37s | 60s |
+| 1,000 | 10 | 53.99s | 90s |
+
+These are finite completion limits for durable filesystem work on shared runners,
+not a throughput benchmark. All twelve workloads, directory-read and reservation
+bounds, foreign bytes and full identities, and awaited cleanup remain required.
+The older 30s/45s failures remain recorded as failures; this policy explicitly
+replaces those limits for future qualification rather than claiming a storage
+algorithm improvement. Raw phase/work timings remain available for regressions.
+
+The process watchdog is the greater of 60s or the whole-case limit plus 15s.
+Jest observes for five seconds longer than that watchdog. A late completion still
+fails after awaited cleanup; a hang terminates the dedicated process with exit 98
+before Jest can advance. Ordinary erasure cases retain their existing limits.
+
+---
+
 ## 2. Core Test Suites
 
 | Command | What it covers | When to run |

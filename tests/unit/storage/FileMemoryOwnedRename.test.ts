@@ -16,6 +16,7 @@ import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
 import { FileMemoryFence } from '../../../src/storage/FileMemoryFence.js';
 import { FileMemoryTransactionCoordinator } from '../../../src/storage/FileMemoryTransactionCoordinator.js';
 import { cleanupDirectoryReadObservers, observeDirectoryReads } from './fixtures/aggregateDirectoryReadObserver.js';
+import { populatedCaseTimeoutMs, THOUSAND_ITEM_CASE_TIMEOUT_MS } from './fixtures/populatedCaseTimeout.js';
 
 const lifecycle = new OwnedStorageCase();
 beforeEach(() => lifecycle.begin());
@@ -509,7 +510,8 @@ describe('dormant same-parent managed RENAME', () => {
     return { counts, restore: () => { spy.mockRestore(); captureSpy.mockRestore(); readSpy.mockRestore(); absenceSpy.mockRestore(); } };
 
   }
-  it.each([[false, 100], [false, 250], [false, 1000], [true, 100], [true, 250], [true, 1000]] as const)(
+  // One it.each per row keeps every title and gives only the 1,000-item rows the longer limit.
+  for (const row of [[false, 100], [false, 250], [false, 1000], [true, 100], [true, 250], [true, 1000]] as const) it.each([row])(
     'qualifies populated same-parent RENAME nested=%s owners=%i', lifecycle.own(async (nested, count) => {
       const diagnostic = renameDiagnostics({ nested, stop: 'fresh', count });
       const f = await fixture(nested), retained = await populated(f, count);
@@ -549,7 +551,7 @@ describe('dormant same-parent managed RENAME', () => {
       try { process.stderr.write(`RENAME capacity ${JSON.stringify({ nested, count, reads: directory!.measured.attemptedReads,
         completedCensuses: directory!.measured.completedCensuses })}\n`); }
       catch { /* Diagnostic output cannot replace completed preservation assertions. */ }
-    }));
+    }), populatedCaseTimeoutMs(row[1]));
   it.each([[false, 'prepared-durable'], [true, 'prepared-durable'], [false, 'linked-durable'], [true, 'linked-durable'], [false, 'final-durable'], [true, 'final-durable']] as const)(
     'qualifies populated 1000-owner fresh recovery nested=%s phase=%s', lifecycle.own(async (nested, stop) => {
       const diagnostic = renameDiagnostics({ nested, stop, count: 1000 });
@@ -576,7 +578,7 @@ describe('dormant same-parent managed RENAME', () => {
       expect((await f.store().readHeadSnapshot(f.request.destinationLocator)).token).toEqual(moved);
       diagnostic('head-verification-end');
       diagnostic('assertions-complete');
-    }));
+    }), THOUSAND_ITEM_CASE_TIMEOUT_MS);
   it.each(['symlink', 'hardlink'] as const)('preserves a foreign %s destination without publication', lifecycle.own(async kind => {
     const f = await fixture(), before = await evidence(f.source);
     if (kind === 'symlink') await fs.symlink(f.foreign, f.destination); else await fs.link(f.foreign, f.destination);
