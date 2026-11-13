@@ -47,7 +47,7 @@ If a check's source cannot answer, for example because a query fails, that check
 |---|---|---|
 | A migration in this release is newer than anything applied | `failed` | Takes this replica out of service: `/readyz` returns 503. |
 | Everything is applied, but an applied entry's content hash differs from this release | `failed` | Keeps serving. Logs one error naming the first entry that differs. |
-| The ledger cannot be read | `pending` | Keeps serving. Logs one warning with the grant that fixes it. |
+| The ledger, or this release's own list of migrations, cannot be read | `pending` | Keeps serving. Logs a warning with the reason, which the setup status also gives: the server's database role lacks a grant on the ledger (the warning names it), the database has no ledger, the build is incomplete, or the database did not answer. |
 
 **What to do.** If migrations are missing, run the migration job for this release. If the ledger does not match, a migration file was changed after a database had applied it: compare the schema with this release before relying on it. See [Updates](./production-hosting-runbook.md#updates) in the hosting runbook.
 
