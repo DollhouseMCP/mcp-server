@@ -9,7 +9,7 @@
 
 import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
-import { eq, inArray } from 'drizzle-orm';
+import { inArray } from 'drizzle-orm';
 
 import { accountInvitations } from '../../../src/database/schema/invitations.js';
 import { authIdentityEvents, portfolioSyncJobs, userIntegrations, users } from '../../../src/database/schema/index.js';
@@ -122,7 +122,7 @@ required('the setup status usage records on PostgreSQL', () => {
     expect(await records().credentialsRevoked()).toEqual({ happened: true, lastAt: revokedAt });
   });
 
-  it('finds a connected GitHub integration, and the repository a successful sync used', async () => {
+  it('finds a connected GitHub integration, and a successful sync only when its repository answered', async () => {
     const [connected] = await db().insert(userIntegrations)
       .values({ userId, provider: 'github' as never, status: 'connected', connectedAt: FUTURE }).returning();
     integrationIds.push(connected.id);
@@ -138,15 +138,18 @@ required('the setup status usage records on PostgreSQL', () => {
       jobIds.push(row.id);
       return row.id;
     };
-    await job('succeeded', FUTURE, { provider: 'github', repository: 'dollhouse-portfolio' });
-    // A failure, later, does not count and does not hide the success.
-    await job('failed', new Date(LATER.getTime() + 86_400_000), { provider: 'github', repository: 'other' });
+    await job('succeeded', FUTURE, { provider: 'github', repository: 'dollhouse-portfolio', repository_reached: true });
+    // None of these, all later, shows that sync works against a real repository:
+    // a failure; a success that asked the repository nothing; and a success
+    // from before the evidence was recorded.
+    const muchLater = new Date(LATER.getTime() + 86_400_000);
+    await job('failed', muchLater, { provider: 'github', repository: 'other', repository_reached: true });
+    await job('succeeded', muchLater, { provider: 'github', repository: 'other', repository_reached: false });
+    await job('succeeded', muchLater, { provider: 'github' });
     expect(await records().portfolioSyncSucceeded()).toEqual({ happened: true, lastAt: FUTURE, repositoryName: 'dollhouse-portfolio' });
 
-    // A summary from before the name was recorded, or one holding something that is not a name.
-    const odd = await job('succeeded', LATER, { provider: 'github', repository: '../../etc/passwd' });
-    expect(await records().portfolioSyncSucceeded()).toEqual({ happened: true, lastAt: LATER, repositoryName: null });
-    await db().update(portfolioSyncJobs).set({ resultSummary: { provider: 'github' } }).where(eq(portfolioSyncJobs.id, odd));
+    // A stored name that is not shaped like a repository name is not passed on.
+    await job('succeeded', LATER, { provider: 'github', repository: '../../etc/passwd', repository_reached: true });
     expect(await records().portfolioSyncSucceeded()).toEqual({ happened: true, lastAt: LATER, repositoryName: null });
   });
 });

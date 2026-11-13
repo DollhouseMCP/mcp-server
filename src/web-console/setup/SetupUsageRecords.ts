@@ -19,7 +19,10 @@ import {
   portfolioSyncJobs,
   userIntegrations,
 } from '../../database/schema/index.js';
-import { PORTFOLIO_SYNC_SUMMARY_REPOSITORY_KEY } from '../stores/IPortfolioSyncJobStore.js';
+import {
+  PORTFOLIO_SYNC_SUMMARY_REPOSITORY_KEY,
+  PORTFOLIO_SYNC_SUMMARY_REPOSITORY_REACHED_KEY,
+} from '../stores/IPortfolioSyncJobStore.js';
 
 /** The events the authorization server records when an admin's one-time code is accepted. */
 export const ADMIN_STEP_UP_EVENT_TYPES = ['auth.admin_step_up.succeeded', 'auth.admin_step_up.backup_code_consumed'] as const;
@@ -35,7 +38,7 @@ export interface UsageRecord {
 }
 
 export interface SyncUsageRecord extends UsageRecord {
-  /** The repository name the last successful sync used. It is the deployment's setting, the same for every account. */
+  /** The repository name the last such sync used. It is the deployment's setting, the same for every account. */
   readonly repositoryName: string | null;
 }
 
@@ -102,7 +105,13 @@ export class PostgresSetupUsageRecords implements SetupUsageRecords {
     const rows = await withSystemContext(this.db, tx => tx
       .select({ at: portfolioSyncJobs.completedAt, summary: portfolioSyncJobs.resultSummary })
       .from(portfolioSyncJobs)
-      .where(eq(portfolioSyncJobs.status, 'succeeded'))
+      // A job can succeed without asking the repository anything, for
+      // instance a push from an empty portfolio. Only one the repository
+      // answered shows that sync works against a real repository.
+      .where(and(
+        eq(portfolioSyncJobs.status, 'succeeded'),
+        sql`${portfolioSyncJobs.resultSummary}->>${PORTFOLIO_SYNC_SUMMARY_REPOSITORY_REACHED_KEY} = 'true'`,
+      ))
       .orderBy(desc(portfolioSyncJobs.completedAt))
       .limit(1));
     if (!rows[0]) return { ...NOT_YET, repositoryName: null };

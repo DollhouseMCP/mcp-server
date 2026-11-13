@@ -76,7 +76,9 @@ export async function buildSetupStatusReport(sources: SetupStatusSources, now: (
     used('github_integration_connect_callback', usage && (() => usage.githubConnected()),
       'An account has GitHub connected.', 'No account has GitHub connected.'),
     used('portfolio_sync_live_repository', usage && (() => usage.portfolioSyncSucceeded()),
-      describeSync, 'No portfolio sync has succeeded yet.'),
+      describeSync,
+      'No portfolio sync has yet succeeded with its repository answering. A sync with nothing to transfer, or one made on a version '
+        + 'from before this was recorded, does not count.'),
   ]);
   return { checkedAt: now(), checks: listWebConsoleSetupCheckStatuses(results) };
 }
@@ -132,8 +134,8 @@ function used<Record extends UsageRecord>(
 function describeSync(record: SyncUsageRecord): string {
   return record.repositoryName
     // Each account syncs with its own repository. Only the name is shared: it is this deployment's setting.
-    ? `A portfolio sync has succeeded, with a repository named ${record.repositoryName}, the name this deployment is set to use.`
-    : 'A portfolio sync has succeeded. Its repository name was not recorded, because the sync ran on a version from before that was added.';
+    ? `A portfolio sync has succeeded, and its repository answered. The repository is named ${record.repositoryName}, the name this deployment is set to use.`
+    : 'A portfolio sync has succeeded, and its repository answered.';
 }
 
 const INVALIDATION_REASONS: Readonly<Record<string, string>> = {

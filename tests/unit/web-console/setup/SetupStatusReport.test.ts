@@ -167,7 +167,11 @@ describe('buildSetupStatusReport', () => {
       expect(check('account_invite_redemption')).toMatchObject({ state: 'pending', detail: 'No invitation has been accepted yet.' });
       expect(check('oauth_grant_revocation')).toMatchObject({ state: 'pending', detail: 'No account\'s credentials have been revoked yet.' });
       expect(check('github_integration_connect_callback')).toMatchObject({ state: 'pending', detail: 'No account has GitHub connected.' });
-      expect(check('portfolio_sync_live_repository')).toMatchObject({ state: 'pending', detail: 'No portfolio sync has succeeded yet.' });
+      expect(check('portfolio_sync_live_repository')).toMatchObject({
+        state: 'pending',
+        detail: 'No portfolio sync has yet succeeded with its repository answering. A sync with nothing to transfer, or one made on a '
+          + 'version from before this was recorded, does not count.',
+      });
     });
 
     it('pass once the record exists, with when it last happened', async () => {
@@ -187,12 +191,13 @@ describe('buildSetupStatusReport', () => {
       }
       expect(check('portfolio_sync_live_repository')).toMatchObject({
         state: 'passed',
-        detail: 'A portfolio sync has succeeded, with a repository named dollhouse-portfolio, the name this deployment is set to use.',
+        detail: 'A portfolio sync has succeeded, and its repository answered. The repository is named dollhouse-portfolio, '
+          + 'the name this deployment is set to use.',
         observedAt: EARLIER,
       });
     });
 
-    it('says so when a sync succeeded before its repository name was recorded', async () => {
+    it('leaves the name out when the stored one is not usable', async () => {
       const { check } = await report({
         usage: usage({ portfolioSyncSucceeded: () => Promise.resolve({ happened: true, lastAt: null, repositoryName: null }) }),
       });
@@ -200,7 +205,7 @@ describe('buildSetupStatusReport', () => {
       const sync = check('portfolio_sync_live_repository');
       expect(sync).toMatchObject({
         state: 'passed',
-        detail: 'A portfolio sync has succeeded. Its repository name was not recorded, because the sync ran on a version from before that was added.',
+        detail: 'A portfolio sync has succeeded, and its repository answered.',
       });
       expect(sync).not.toHaveProperty('observedAt');
     });

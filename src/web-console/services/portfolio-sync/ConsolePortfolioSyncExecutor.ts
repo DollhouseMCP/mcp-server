@@ -13,7 +13,11 @@ import {
 } from '../../stores/IPortfolioElementStore.js';
 import { type IUserIntegrationStore, type UserIntegrationProvider, type UserIntegrationRecord, isIntegrationConnected } from '../../stores/IUserIntegrationStore.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
-import { PORTFOLIO_SYNC_SUMMARY_REPOSITORY_KEY, type PortfolioSyncJobRecord } from '../../stores/IPortfolioSyncJobStore.js';
+import {
+  PORTFOLIO_SYNC_SUMMARY_REPOSITORY_KEY,
+  PORTFOLIO_SYNC_SUMMARY_REPOSITORY_REACHED_KEY,
+  type PortfolioSyncJobRecord,
+} from '../../stores/IPortfolioSyncJobStore.js';
 import { integrationSecretContext } from '../../modules/integrations/IntegrationSecretContext.js';
 import {
   isBridgeOnlySessionActivationState,
@@ -137,8 +141,13 @@ export class ConsolePortfolioSyncExecutor implements IPortfolioSyncJobExecutor {
     return {
       status: 'succeeded',
       // The repository name is the deployment's setting, not the account's. It
-      // is kept so the setup status can say which repository a sync proved.
-      resultSummary: { ...summary(job, counters), [PORTFOLIO_SYNC_SUMMARY_REPOSITORY_KEY]: this.repositoryName },
+      // is kept, with whether the repository itself answered, so the setup
+      // status can say which repository a sync proved, and only when it did.
+      resultSummary: {
+        ...summary(job, counters),
+        [PORTFOLIO_SYNC_SUMMARY_REPOSITORY_KEY]: this.repositoryName,
+        [PORTFOLIO_SYNC_SUMMARY_REPOSITORY_REACHED_KEY]: client.reachedRepository,
+      },
     };
   }
 
@@ -319,6 +328,16 @@ class GitHubPortfolioContentsClient {
     }`;
   }
 
+  /**
+   * Whether the repository has answered a request with success. A "not found"
+   * does not count: it is what a missing repository answers, too.
+   */
+  get reachedRepository(): boolean {
+    return this.repositoryAnswered;
+  }
+
+  private repositoryAnswered = false;
+
   private async requestJson(
     path: string,
     method = 'GET',
@@ -341,6 +360,7 @@ class GitHubPortfolioContentsClient {
     if (!response.ok) {
       throw new GitHubPortfolioSyncApiError(mapGitHubStatusToCode(response.status));
     }
+    if (path.startsWith('/repos/')) this.repositoryAnswered = true;
     if (response.status === 204) return null;
     return response.json();
   }
