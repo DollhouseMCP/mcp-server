@@ -27,23 +27,20 @@
  *   - 'github_id' — GitHub numeric `id` as a string (stable across rename)
  *
  * Authority note:
- *   This table remains the authoritative sign-in gate. The web-console
- *   `account_allowlist_entries` table is a history-preserving replacement
- *   surface that is feature-gated off by default until the AS read path and
- *   data migration are cut over.
+ *   With the embedded authorization server on PostgreSQL, sign-in consults the
+ *   web console's `account_allowlist_entries` table, not this one, and
+ *   start-up refuses to run while this table holds an entry that one does not
+ *   carry. `dollhouse-allowlist` writes the console's table there, and its
+ *   `reconcile` sub-command empties this one. On any other configuration this
+ *   table (or its filesystem equivalent) is the sign-in gate.
  *
  * No RLS — system-internal AS infrastructure, operated only via
  * `withSystemContext` from the admin role. Same convention as auth_kv,
  * auth_signing_keys, auth_accounts.
  *
- * Writes flow through:
- *   - MCP-AQL admin commands (`mcp_aql_create/update/delete` with
- *     `entity: 'allowlist_entry'`), admin role required
- *   - Filesystem file editor (fsnotify-watched hot reload)
- *
- * Every write emits an `auth.allowlist_changed` event to
- * `auth_identity_events`; every denied sign-in emits
- * `auth.allowlist_denied`.
+ * Writes flow through the `dollhouse-allowlist` command, or the filesystem
+ * file editor (fsnotify-watched hot reload). Every denied sign-in emits
+ * `auth.allowlist_denied` to `auth_identity_events`.
  *
  * @since v2.2.x — sign-in allowlist
  */

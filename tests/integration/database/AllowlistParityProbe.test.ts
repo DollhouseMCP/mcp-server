@@ -37,7 +37,7 @@ required('probeAllowlistParity on PostgreSQL', () => {
     listAuthority: () => authority().listEntries(),
   });
   const addEarlier = async (kind: 'email' | 'github_username', value: string) => {
-    // The call `dollhouse-allowlist add` makes.
+    // The call `dollhouse-allowlist add` made on a hosted install before #3250 was fixed.
     earlierIds.push((await storage().allowlistAdd({ kind, value, note: null, createdBy: 'cli' })).id);
   };
   const addInConsole = async (kind: 'email' | 'github_username', value: string) => {

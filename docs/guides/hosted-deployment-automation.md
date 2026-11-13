@@ -803,7 +803,7 @@ For clients that require unauthenticated DCR in a private test, explicitly set `
 - The public `curl | sh` installer URL does not exist yet.
 - Local/LAN and enterprise modes currently cover generated deployment shape and docs; they still need real-container install/update validation in representative environments.
 - The helper assumes Docker Compose and Caddy for the first production-like shape.
-- Allowlist management still uses the existing `dollhouse-allowlist` CLI.
+- The sign-in allowlist is managed in the console's Accounts page, or with the `dollhouse-allowlist` CLI. On a hosted install both change the same list, the one sign-in uses. The CLI records each change against a console admin (`--as <username>` when there is more than one). If an earlier version left entries in the old `auth_allowlist` table, the server refuses to start and names them; `dollhouse-allowlist reconcile` clears them. See "Managing the list" in the [production hosting runbook](production-hosting-runbook.md).
 
 ## Validation
 

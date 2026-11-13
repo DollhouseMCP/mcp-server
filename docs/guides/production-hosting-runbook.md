@@ -116,7 +116,17 @@ DollhouseMCP ships an `auth_allowlist` table (DB mode) or `~/.dollhouse/auth/all
 
 When `REQUIRED=false` AND the server binds to a non-loopback host AND a social method (`github` / `magic-link`) is configured, a startup warning fires naming the open-sign-in risk. Set `REQUIRED=true` to silence it.
 
-**Managing the list:** the dedicated `dollhouse-allowlist` CLI. NOT exposed through MCP-AQL (security policy stays out of AI-mediated surfaces).
+**Managing the list:** the dedicated `dollhouse-allowlist` CLI, or the console's Accounts page on a hosted install. NOT exposed through MCP-AQL (security policy stays out of AI-mediated surfaces).
+
+**Which list the command changes.** On a hosted install (the embedded authorization server on PostgreSQL), sign-in uses the allowlist the console manages (`account_allowlist_entries`), and the command changes that one. It does not write the earlier `auth_allowlist` table there, which sign-in no longer reads. On any other install the command changes the storage layer's allowlist, as before.
+
+On a hosted install each change records which console admin made it:
+
+- with one console admin, that admin is recorded and nothing extra is needed;
+- with several, add `--as <username>` to say which one you are;
+- with none yet, designate the admin first with `dollhouse-admin-bootstrap`.
+
+Removing an entry there revokes it, as removing it in the console does: the identity is refused until it is added again.
 
 ```bash
 # Add by email
@@ -143,6 +153,30 @@ docker compose run --rm dollhousemcp \
 docker compose run --rm dollhousemcp \
   npx dollhouse-allowlist update --id <uuid> --note "new note"
 ```
+
+**If the server refuses to start with "Sign-in allowlist authority cutover refused".** The earlier `auth_allowlist` table holds entries that are not in the allowlist sign-in uses. Versions before this fix let `dollhouse-allowlist add` put them there on a hosted install. Sign-in does not honour them, and the server will not start while they remain. The message names the entries, by kind and value, in the server log; if your logs are shipped somewhere with stricter rules about personal data than the host itself, bear that in mind. Clear them with:
+
+```bash
+# Show what is left in the earlier allowlist. Changes nothing.
+docker compose run --rm dollhousemcp npx dollhouse-allowlist reconcile
+
+# Add the entries sign-in does not have to the allowlist it uses, then clear the earlier allowlist
+docker compose run --rm dollhousemcp npx dollhouse-allowlist reconcile --carry
+
+# Or clear the earlier allowlist without adding anything
+docker compose run --rm dollhousemcp npx dollhouse-allowlist reconcile --discard
+```
+
+`reconcile` never adds back an entry that an admin has since removed in the console; it reports it and clears it. Either flag normally leaves the earlier allowlist empty, after which the server starts.
+
+Two things can differ, because the earlier allowlist took any text and the console's does not:
+
+- **A value the console's allowlist does not accept** (a GitHub username with a character GitHub does not allow, an email with no domain) cannot be carried. `--carry` carries the rest, leaves that entry where it is, says why, and exits non-zero. Add a corrected entry with `dollhouse-allowlist add` if you still want it, then run `reconcile --discard` to clear what is left. The server does not start while such an entry remains.
+- **A note longer than 500 characters** is cut to fit when its entry is carried. The command prints the full note once, since the earlier copy is then cleared.
+
+While `--carry` or `--discard` runs, it holds off console changes to the identities it is working on, so a removal made in the console at the same moment is never overwritten. On a running server the same gap shows as `allowlist_parity` degraded in the console's Operations health, before a restart finds it.
+
+An install that is rolled back to a version from before the console managed the allowlist would read the earlier table again, which `reconcile` has emptied. Re-add the entries there after such a rollback.
 
 For **filesystem mode** (no DB), the same CLI works, OR you can edit `~/.dollhouse/auth/allowlist.json` directly — the server picks up changes within ~1 second via fsnotify, no restart needed.
 
