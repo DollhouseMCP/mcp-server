@@ -25,6 +25,7 @@ import { logger } from '../utils/logger.js';
 import { assertSafePublicBaseUrl, isLoopbackHost } from '../auth/oauth/url.js';
 import { createHttpOrHttpsServer } from './createHttpOrHttpsServer.js';
 import { loadVersionedConsoleUi } from './consoleUiAssets.js';
+import { createConsoleUiSecurityHeadersMiddleware } from '../web-console/middleware/ConsoleSecurityHeaders.js';
 import { TlsConfig } from './TlsConfig.js';
 
 export type RuntimeTransportName = 'stdio' | 'streamable-http';
@@ -1059,6 +1060,11 @@ export async function createStreamableHttpRuntime(
     // and CSS font URLs then stay in that same versioned module graph.
     const consoleUiDir = resolve(dirname(fileURLToPath(import.meta.url)), '../web-console/ui');
     const { assetBasePath, html } = await loadVersionedConsoleUi(consoleUiDir);
+    // Every /ui response carries the security headers: the page, its assets
+    // and the redirect. (A not-found page gets a stricter content policy from
+    // Express itself.) The API router sets its own headers, but it is mounted
+    // after these handlers, so without this the console's pages had none.
+    app.use('/ui', createConsoleUiSecurityHeadersMiddleware());
     app.use('/ui', (_req, res, next) => {
       res.setHeader('Cache-Control', 'no-store, max-age=0, must-revalidate');
       next();

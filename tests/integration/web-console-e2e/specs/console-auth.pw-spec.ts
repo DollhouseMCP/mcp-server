@@ -21,6 +21,20 @@ import {
 import { BASE_URL } from '../setup/provision.js';
 
 const USER = 'e2e_admin';
+
+// The console's pages are served with a content security policy. Chrome
+// reports anything the policy refuses on the console, so every test in this
+// file also proves the page did nothing the policy had to block.
+const policyViolations: string[] = [];
+test.beforeEach(({ page }) => {
+  policyViolations.length = 0;
+  page.on('console', message => {
+    if (/Content Security Policy/i.test(message.text())) policyViolations.push(message.text());
+  });
+});
+test.afterEach(() => {
+  expect(policyViolations).toEqual([]);
+});
 const OPERATE = '/api/v1/admin/operate/health';
 const MANIFEST_URL = '**/api/v1/me/manifest';
 const CONSOLE_SHELL = '#console-shell';
