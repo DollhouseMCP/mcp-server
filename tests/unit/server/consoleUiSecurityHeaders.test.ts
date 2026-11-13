@@ -84,13 +84,18 @@ describe('hosted console security headers', () => {
     it('has no inline script, and loads every script and stylesheet from its own files', async () => {
       const html = await readFile(join(UI_DIRECTORY, 'index.html'), 'utf8');
 
-      const scripts = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)];
+      // Tag and attribute names are matched in any letter case, and values in either kind of quote.
+      const scripts = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi)];
       expect(scripts.length).toBeGreaterThan(0);
+      expect(scripts.length).toBe((html.match(/<script\b/gi) ?? []).length);
       for (const [, attributes, body] of scripts) {
-        expect(attributes).toMatch(/\bsrc="[^":]+"/);
+        expect(attributes).toMatch(/\bsrc\s*=\s*(?:"[^":]+"|'[^':]+')/i);
         expect(body.trim()).toBe('');
       }
-      for (const [, url] of html.matchAll(/\b(?:src|href)="([^"]+)"/g)) {
+      const urls = [...html.matchAll(/\b(?:src|href)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/gi)]
+        .map(match => match[1] ?? match[2] ?? match[3]);
+      expect(urls.length).toBeGreaterThan(10);
+      for (const url of urls) {
         expect(url).not.toMatch(/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i);
       }
     });
@@ -108,12 +113,14 @@ describe('hosted console security headers', () => {
       expect(offenders).toEqual([]);
     });
 
-    it('uses eval nowhere in its own scripts', async () => {
-      const files = (await readdir(UI_DIRECTORY)).filter(name => name.endsWith('.js'));
+    it('uses eval nowhere, in its own scripts or the libraries it ships', async () => {
+      const own = (await readdir(UI_DIRECTORY)).filter(name => name.endsWith('.js'));
+      const vendored = (await readdir(join(UI_DIRECTORY, 'vendor'))).filter(name => name.endsWith('.js')).map(name => join('vendor', name));
+      expect(vendored.length).toBeGreaterThan(0);
       const offenders: string[] = [];
-      for (const name of files) {
+      for (const name of [...own, ...vendored]) {
         const source = await readFile(join(UI_DIRECTORY, name), 'utf8');
-        if (/\beval\s*\(|\bnew\s+Function\s*\(/.test(source)) offenders.push(name);
+        if (/\beval\s*\(|\bnew\s+Function\s*\(|\bFunction\s*\(\s*["'`]/.test(source)) offenders.push(name);
       }
       expect(offenders).toEqual([]);
     });
