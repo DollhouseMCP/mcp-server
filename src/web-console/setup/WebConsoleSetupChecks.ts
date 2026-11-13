@@ -77,7 +77,7 @@ export const WEB_CONSOLE_SETUP_CHECKS: Readonly<Record<WebConsoleSetupCheckId, W
     proves: 'Every entry in the earlier sign-in allowlist is present in the allowlist the console manages, so nobody loses access by accident.',
     verification: 'server-probe',
     verifiedBy: 'The server compares the two allowlists with the rule it enforces at start-up, where a gap stops it from starting.',
-    remediation: 'Add the entries reported as missing in the console, or remove them from the earlier list with dollhouse-allowlist.',
+    remediation: 'Run `dollhouse-allowlist reconcile` to list them, then `--carry` to add them to the allowlist sign-in uses or `--discard` to drop them.',
   },
   embedded_as_login_step_up: {
     id: 'embedded_as_login_step_up',

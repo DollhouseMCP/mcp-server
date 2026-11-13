@@ -205,6 +205,39 @@ export async function provisionAccountThroughAllowlistGate(
 }
 
 /**
+ * Whether sign-in consults the allowlist the console manages instead of the
+ * storage layer's own. The server and the `dollhouse-allowlist` command must
+ * agree on this, or the command changes a list sign-in does not read, so both
+ * ask here.
+ */
+export function consoleAllowlistIsSignInAuthority(settings: {
+  readonly hasDatabase: boolean;
+  readonly authProvider: string | undefined;
+  readonly authStorageBackend: string | undefined;
+}): boolean {
+  return settings.hasDatabase && settings.authProvider === 'embedded' && settings.authStorageBackend === 'postgres';
+}
+
+/** How many entries the start-up refusal names before it says "and N more". */
+const REFUSAL_ENTRY_LIMIT = 20;
+
+/**
+ * The start-up refusal, naming what differs and how to clear it. It goes to
+ * the operator's own server log, and they cannot fix what they cannot see.
+ */
+export function describeAllowlistCutoverRefusal(missing: readonly Pick<AuthAllowlistEntry, 'kind' | 'value'>[]): string {
+  const named = missing.slice(0, REFUSAL_ENTRY_LIMIT).map(entry => `${entry.kind} ${entry.value}`).join('; ');
+  const more = missing.length > REFUSAL_ENTRY_LIMIT ? `; and ${missing.length - REFUSAL_ENTRY_LIMIT} more` : '';
+  const one = missing.length === 1;
+  return 'Sign-in allowlist authority cutover refused: ' +
+    `${missing.length} ${one ? 'entry' : 'entries'} in the earlier allowlist (auth_allowlist) ${one ? 'is' : 'are'} not in the ` +
+    `allowlist sign-in uses (account_allowlist_entries): ${named}${more}. ` +
+    'Sign-in does not honour them, and the server will not start while they are there. ' +
+    'Run `dollhouse-allowlist reconcile` to list them, then `dollhouse-allowlist reconcile --carry` to add them to the ' +
+    'allowlist sign-in uses, or `dollhouse-allowlist reconcile --discard` to drop them. Either clears the earlier allowlist.';
+}
+
+/**
  * Entries in the earlier allowlist that the sign-in authority does not carry.
  *
  * Start-up refuses to run while there are any, because sign-in would quietly

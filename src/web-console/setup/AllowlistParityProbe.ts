@@ -21,7 +21,7 @@ export interface AllowlistParityResult extends WebConsoleSetupCheckResult {
 type AllowlistIdentity = Pick<AuthAllowlistEntry, 'kind' | 'value'>;
 
 export interface AllowlistParitySources {
-  /** The earlier sign-in allowlist, which `dollhouse-allowlist` still writes. */
+  /** The earlier sign-in allowlist. Sign-in no longer reads it; `dollhouse-allowlist reconcile` clears it. */
   readonly listEarlier: () => Promise<readonly AllowlistIdentity[]>;
   /** The allowlist sign-in consults: the one the console manages. */
   readonly listAuthority: () => Promise<readonly AllowlistIdentity[]>;
@@ -69,7 +69,7 @@ export function compareAllowlistParity(
     detail: `${missing.length} of ${earlier.length} ${earlier.length === 1 ? 'entry' : 'entries'} in the earlier sign-in allowlist ` +
       `${one ? 'is' : 'are'} not in the allowlist sign-in uses (${byKind}). Sign-in does not honour ${one ? 'it' : 'them'}, ` +
       'and this server will refuse to start at its next restart until the two lists agree. ' +
-      `Add ${one ? 'it' : 'them'} in the console, or remove ${one ? 'it' : 'them'} from the earlier list with dollhouse-allowlist.`,
+      'Run `dollhouse-allowlist reconcile` to list and clear what is left in the earlier list.',
   };
 }
 
