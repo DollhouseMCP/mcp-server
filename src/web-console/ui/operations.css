@@ -99,6 +99,7 @@
 .operations-health-card--degraded header,
 .operations-health-card--not-ready header { border-left-color: var(--accent); }
 .operations-health-card--unavailable header { border-left-color: #b42318; }
+.operations-health-card--not-run header { border-left-color: var(--line); }
 .operations-health-card > p,
 .operations-health-card > ul { margin: 1rem; }
 

@@ -53,9 +53,9 @@ describe('web console setup check catalog', () => {
       'production_database_migrations',
       'security_invalidation_multi_replica',
       'allowlist_authority_parity',
-      'approval_execution_projection',
       'audit_telemetry_projection',
     ]);
+    expect(idsVerifiedBy('server-canary')).toEqual(['approval_execution_projection']);
     expect(idsVerifiedBy('usage-record')).toEqual([
       'embedded_as_login_step_up',
       'account_invite_redemption',

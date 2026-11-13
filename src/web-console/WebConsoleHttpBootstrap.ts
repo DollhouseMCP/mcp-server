@@ -20,6 +20,7 @@ export type WebConsoleHttpBootstrapEnv = Pick<
   | 'DOLLHOUSE_WEB_CONSOLE_PORTFOLIO_WRITE_ROUTES_ENABLED'
   | 'DOLLHOUSE_WEB_CONSOLE_COLLECTION_ENABLED'
   | 'DOLLHOUSE_WEB_CONSOLE_ALLOWLIST_ROUTES_ENABLED'
+  | 'DOLLHOUSE_WEB_CONSOLE_CANARY_INTERVAL_MINUTES'
   | 'DOLLHOUSE_HTTP_WEB_CONSOLE'
   | 'DOLLHOUSE_PUBLIC_BASE_URL'
   | 'DOLLHOUSE_HTTP_HOST'
@@ -80,6 +81,7 @@ export function resolveWebConsoleHttpBootstrapOptions(
     enablePortfolioWriteRoutes: sourceEnv.DOLLHOUSE_WEB_CONSOLE_PORTFOLIO_WRITE_ROUTES_ENABLED,
     enableCollectionRoutes: sourceEnv.DOLLHOUSE_WEB_CONSOLE_COLLECTION_ENABLED,
     enableAccountAllowlistRoutes: sourceEnv.DOLLHOUSE_WEB_CONSOLE_ALLOWLIST_ROUTES_ENABLED,
+    canaryIntervalMs: sourceEnv.DOLLHOUSE_WEB_CONSOLE_CANARY_INTERVAL_MINUTES * 60_000,
     requireExplicitProductionAdapterMetadata: true,
     productionDatabaseVerification: resolveWebConsoleProductionDatabaseVerificationFromEnv(sourceEnv),
     publicBaseUrl: sourceEnv.DOLLHOUSE_PUBLIC_BASE_URL,

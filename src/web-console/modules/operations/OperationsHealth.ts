@@ -18,6 +18,8 @@ export interface OperationsHealthChecks {
   readonly allowlistParity?: OperationHealthCheck;
   /** Whether the audit and telemetry reads work and the admin audit chain verifies. */
   readonly auditTelemetry?: OperationHealthCheck;
+  /** The last canary run on this server. Absent without a database: there are no per-session stores to exercise. */
+  readonly approvalExecutionProjection?: OperationHealthCheck;
   readonly apiMount: OperationHealthCheck;
 }
 
@@ -30,6 +32,7 @@ export const OPERATION_HEALTH_COMPONENTS: readonly OperationHealthComponent[] = 
   'database_migrations',
   'allowlist_parity',
   'audit_telemetry',
+  'approval_execution_projection',
   'api_mount',
 ];
 
@@ -75,5 +78,5 @@ function normalizeHealthComponent(
 }
 
 function normalizeStatus(status: OperationHealthStatus): OperationHealthStatus {
-  return ['ok', 'degraded', 'unavailable', 'not_ready'].includes(status) ? status : 'unavailable';
+  return ['ok', 'degraded', 'unavailable', 'not_ready', 'not_run'].includes(status) ? status : 'unavailable';
 }
