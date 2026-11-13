@@ -1,5 +1,8 @@
 import type {
   CanaryRunDto,
+  SetupCheckStateDto,
+  SetupStatusCheckDto,
+  SetupStatusDto,
   OperationHealthComponentDto,
   OperationHealthSummaryDto,
   OperatorConfigListDto,
@@ -25,6 +28,7 @@ import {
   type UnknownRecord,
 } from '../../platform/ConsoleProjectorHelpers.js';
 import { OPERATION_HEALTH_COMPONENTS } from './OperationsHealth.js';
+import { WEB_CONSOLE_SETUP_CHECKS, isWebConsoleSetupCheckId } from '../../setup/WebConsoleSetupChecks.js';
 
 export function projectOperationHealthSummary(value: unknown): OperationHealthSummaryDto {
   const record = objectValue(value);
@@ -43,6 +47,48 @@ export function projectOperationHealthComponent(value: unknown): OperationHealth
     checked_at: stringField(record, 'checked_at'),
     failure_codes: arrayValue(record.failure_codes).filter(isStableCode),
   };
+}
+
+const MAX_SETUP_DETAIL_LENGTH = 500;
+const SETUP_CHECK_STATES: readonly SetupCheckStateDto[] = ['passed', 'pending', 'failed', 'not_applicable'];
+
+/**
+ * The setup status. A check's wording comes from the catalog, looked up by
+ * ID, never from the value being projected; only its state, detail and time
+ * are taken from the value. A check the catalog does not know is dropped.
+ */
+export function projectSetupStatus(value: unknown): SetupStatusDto {
+  const record = objectValue(value);
+  const checks = arrayValue(record.checks).flatMap(item => projectSetupCheck(item));
+  const counts: Record<SetupCheckStateDto, number> = { passed: 0, pending: 0, failed: 0, not_applicable: 0 };
+  for (const check of checks) counts[check.state] += 1;
+  return { checked_at: stringField(record, 'checked_at'), counts, checks };
+}
+
+function projectSetupCheck(value: unknown): SetupStatusCheckDto[] {
+  const record = objectValue(value);
+  const id = record.id;
+  if (!isWebConsoleSetupCheckId(id)) return [];
+  const definition = WEB_CONSOLE_SETUP_CHECKS[id];
+  const state = SETUP_CHECK_STATES.find(candidate => candidate === record.state);
+  return [{
+    id,
+    title: definition.title,
+    proves: definition.proves,
+    verification: definition.verification,
+    verified_by: definition.verifiedBy,
+    remediation: definition.remediation,
+    // Anything unrecognised reads as pending: nothing is verified.
+    state: state ?? 'pending',
+    detail: nullableStringField(record, 'detail')?.slice(0, MAX_SETUP_DETAIL_LENGTH) ?? null,
+    observed_at: isoTimestampOrNull(record.observed_at),
+  }];
+}
+
+function isoTimestampOrNull(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const time = Date.parse(value);
+  return Number.isNaN(time) ? null : new Date(time).toISOString();
 }
 
 const MAX_CANARY_DETAIL_LENGTH = 500;

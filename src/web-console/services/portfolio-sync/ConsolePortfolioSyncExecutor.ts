@@ -13,7 +13,7 @@ import {
 } from '../../stores/IPortfolioElementStore.js';
 import { type IUserIntegrationStore, type UserIntegrationProvider, type UserIntegrationRecord, isIntegrationConnected } from '../../stores/IUserIntegrationStore.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
-import type { PortfolioSyncJobRecord } from '../../stores/IPortfolioSyncJobStore.js';
+import { PORTFOLIO_SYNC_SUMMARY_REPOSITORY_KEY, type PortfolioSyncJobRecord } from '../../stores/IPortfolioSyncJobStore.js';
 import { integrationSecretContext } from '../../modules/integrations/IntegrationSecretContext.js';
 import {
   isBridgeOnlySessionActivationState,
@@ -136,7 +136,9 @@ export class ConsolePortfolioSyncExecutor implements IPortfolioSyncJobExecutor {
     }
     return {
       status: 'succeeded',
-      resultSummary: summary(job, counters),
+      // The repository name is the deployment's setting, not the account's. It
+      // is kept so the setup status can say which repository a sync proved.
+      resultSummary: { ...summary(job, counters), [PORTFOLIO_SYNC_SUMMARY_REPOSITORY_KEY]: this.repositoryName },
     };
   }
 

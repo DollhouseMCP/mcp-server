@@ -113,6 +113,8 @@ describe('ConsolePortfolioSyncExecutor', () => {
           updated: 0,
           skipped: 0,
           conflicts: 0,
+          // The deployment's repository name, so the setup status can say which repository a sync proved.
+          repository: 'custom-portfolio',
         },
       });
 

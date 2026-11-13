@@ -39,6 +39,30 @@ export interface CanaryRunDto {
   readonly finished_at: string;
 }
 
+export type SetupCheckStateDto = 'passed' | 'pending' | 'failed' | 'not_applicable';
+
+export interface SetupStatusCheckDto {
+  readonly id: string;
+  readonly title: string;
+  /** What a pass proves. */
+  readonly proves: string;
+  readonly verification: string;
+  /** How the system knows. */
+  readonly verified_by: string;
+  /** What to do when it has not passed. */
+  readonly remediation: string;
+  readonly state: SetupCheckStateDto;
+  readonly detail: string | null;
+  /** When the thing the state rests on last happened, where that is recorded. */
+  readonly observed_at: string | null;
+}
+
+export interface SetupStatusDto {
+  readonly checked_at: string;
+  readonly counts: Readonly<Record<SetupCheckStateDto, number>>;
+  readonly checks: readonly SetupStatusCheckDto[];
+}
+
 export type OperationLogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 export interface OperationalLogDto {

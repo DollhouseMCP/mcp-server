@@ -6,3 +6,5 @@ export * from './ReleaseMigrationLedgerMonitor.js';
 export * from './AllowlistParityProbe.js';
 export * from './AuditTelemetryProbe.js';
 export * from './cachedProbe.js';
+export * from './SetupUsageRecords.js';
+export * from './SetupStatusReport.js';
