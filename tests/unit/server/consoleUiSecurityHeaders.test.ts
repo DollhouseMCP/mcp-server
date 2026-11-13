@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import express from 'express';
+import { JSDOM } from 'jsdom';
 import request from 'supertest';
 import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
@@ -82,22 +83,26 @@ describe('hosted console security headers', () => {
   // own source, so a change that the policy would silently break fails here.
   describe('the page keeps to the policy', () => {
     it('has no inline script, and loads every script and stylesheet from its own files', async () => {
-      const html = await readFile(join(UI_DIRECTORY, 'index.html'), 'utf8');
+      // Parsed as a browser parses it, so nothing depends on how a tag happens to be written.
+      const page = new JSDOM(await readFile(join(UI_DIRECTORY, 'index.html'), 'utf8')).window.document;
 
-      // Tag and attribute names are matched in any letter case, and values in either kind of quote.
-      const scripts = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi)];
+      const scripts = [...page.querySelectorAll('script')];
       expect(scripts.length).toBeGreaterThan(0);
-      expect(scripts.length).toBe((html.match(/<script\b/gi) ?? []).length);
-      for (const [, attributes, body] of scripts) {
-        expect(attributes).toMatch(/\bsrc\s*=\s*(?:"[^":]+"|'[^':]+')/i);
-        expect(body.trim()).toBe('');
+      for (const script of scripts) {
+        expect(script.getAttribute('src')).toBeTruthy();
+        expect(script.textContent?.trim()).toBe('');
       }
-      const urls = [...html.matchAll(/\b(?:src|href)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/gi)]
-        .map(match => match[1] ?? match[2] ?? match[3]);
+      const urls = [...page.querySelectorAll('[src], [href]')]
+        .map(element => element.getAttribute('src') ?? element.getAttribute('href') ?? '');
       expect(urls.length).toBeGreaterThan(10);
       for (const url of urls) {
+        // Relative to the page: no scheme and no host.
         expect(url).not.toMatch(/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i);
       }
+      // Handlers written as attributes, on any element.
+      const handlers = [...page.querySelectorAll('*')]
+        .flatMap(element => element.getAttributeNames().filter(name => name.toLowerCase().startsWith('on')));
+      expect(handlers).toEqual([]);
     });
 
     it('attaches no handler in markup, in the page or in what its scripts write', async () => {
