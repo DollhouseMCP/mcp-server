@@ -89,7 +89,7 @@ describe('buildSetupStatusReport', () => {
     });
     expect(check('approval_execution_projection')).toMatchObject({
       state: 'not_applicable',
-      detail: 'This deployment has no database, so there are no per-session stores for the canary to check.',
+      detail: 'This deployment has no database, so there are no per-session stores for the canary synthetic check to use.',
     });
     expect(check('account_invite_redemption')).toMatchObject({
       state: 'not_applicable', detail: 'This deployment does not offer invitations that are recorded when accepted.',
