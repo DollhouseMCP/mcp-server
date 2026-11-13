@@ -705,6 +705,11 @@ This control requires rootful Linux, fixed system `nsenter`, `curl`, and Docker
 tools, and permission to enter the selected proxy's network namespace. The
 temporary persisted profile permits only the three unauthenticated HTTP/1.1
 GET probes with an empty body; it binds their responses to the transition.
+A request has an empty body when it has no `Transfer-Encoding` and its
+`Content-Length` is absent or `0`. The acceptance probes are plain GETs sent
+to the public URL, so they pass through whatever fronts it. A CDN drops
+`Content-Length: 0` from a GET; neither the profile nor a probe may depend on
+a header that a hop in front can drop or add.
 Authenticated acceptance requires a separately qualified private probe before
 release. A failed or unacknowledged activation remains pending: a bounded stop
 is attempted, but an unknown stop can leave ingress active. Retain the

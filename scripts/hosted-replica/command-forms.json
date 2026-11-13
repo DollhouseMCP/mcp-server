@@ -1,7 +1,7 @@
 [
- ["curl", "--disable", "--noproxy", "*", "--proto", "=http,https", "--http1.1", "--header", "Content-Length: 0", "--silent", "--show-error", "--max-time", null, "--include", "--write-out", "\n%{http_code}", null],
- ["curl", "--disable", "--noproxy", "*", "--proto", "=http,https", "--http1.1", "--request", null, "--header", "Content-Length: 0", [], "--silent", "--show-error", "--include", "--write-out", "\n%{http_code}", null],
+ ["curl", "--disable", "--noproxy", "*", "--proto", "=http,https", "--http1.1", "--request", null, [], "--silent", "--show-error", "--include", "--write-out", "\n%{http_code}", null],
  ["curl", "--disable", "--noproxy", "*", "--proto", "=http,https", "--http1.1", "--silent", "--show-error", "--max-time", "15", "--include", "--write-out", "\n%{http_code}", null],
+ ["curl", "--disable", "--noproxy", "*", "--proto", "=http,https", "--http1.1", "--silent", "--show-error", "--max-time", null, "--include", "--write-out", "\n%{http_code}", null],
  ["docker", "compose", "--project-name", null, "--project-directory", null, "--env-file", "/dev/null", "-f", null, "config", "--format", "json"],
  ["docker", "container", "inspect", null],
  ["docker", "context", "inspect"],
