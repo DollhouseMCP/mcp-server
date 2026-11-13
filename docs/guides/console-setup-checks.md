@@ -164,9 +164,11 @@ These are `pending` until the thing has been done once, and never `failed`. Each
 
 **A pass proves** that a portfolio sync against a real GitHub repository finished successfully.
 
-**The record.** A sync job that succeeded. The reason names the repository it used. That name is the deployment's setting, the same for every account; each account syncs with its own repository of that name. A sync that ran on a version from before the name was recorded passes without it, and the reason says so.
+**The record.** A sync job that succeeded and whose repository answered at least one request. A job can succeed without that: a push from an empty portfolio asks the repository nothing, and a repository that does not exist answers "not found", which reads as an empty folder. Neither counts. Nor does a sync made on a version from before this evidence was recorded, so on an existing deployment the check is pending until the next sync.
 
-**What to do.** Connect GitHub, then run a sync from Portfolio.
+The reason names the repository. That name is the deployment's setting, the same for every account; each account syncs with its own repository of that name.
+
+**What to do.** Connect GitHub, then run a sync from Portfolio with at least one element to transfer.
 
 ## Qualifying a deployment
 
