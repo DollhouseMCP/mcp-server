@@ -1,0 +1,117 @@
+{
+  "cve": "CVE-2026-95619",
+  "reviewed_on": "2026-11-08",
+  "next_review_due": "2026-11-09",
+  "purpose": "Retained independent bounded applicability proof; raw matches remain present, not a source-version fix, suppression or risk waiver.",
+  "upstream_fix": "https://github.com/gcc-mirror/gcc/commit/200183d4ab5d57575f3dfebc6af3baf649910b9e",
+  "original_peer_verdict_sha256": "dc7048a57b4e378daabec4750f6d4379e9433857c3690a662a9bd3756df987d2",
+  "original_peer_verdict": "# Independent technical peer review \u2014 CVE-2026-95619\n\n**PASS for the bounded conclusion: the aligned-new implementation in these two exact retained libstdc++ artifacts uses the unaffected POSIX backend.** This is an applicability conclusion for this implementation, not acceptance of vulnerable behavior, a package-version fix, or removal of the raw scanner match. No source/scan/disposition was changed.\n\nUpstream primary fix https://github.com/gcc-mirror/gcc/commit/200183d4ab5d57575f3dfebc6af3baf649910b9e explicitly distinguishes the posix_memalign implementation, which does not round size, from C11 aligned_alloc and fallback implementations where size-plus-alignment rounding can wrap. The diff adds overflow checks only to those affected allocation paths. The relevant condition can be decided from actual backend/dataflow; proving that application callers never invoke aligned new is unnecessary for this bounded result.\n\nIndependently rehashed actual files and reran read-only LLVM disassembly/relocation inspection. Inputs remain bound through intake SHA6fc51d4203750420a472db0817f27f33b532a0aebd763da67d7d75740a749d2a to exact fb20 archives/configs (binding.json).\n\n* AMD64 libstdc++ SHA972bb2a18b71140dab0240f8a1f68ab3fb1d56bcd4c4f824a91b70888faf5a00: incoming size rdi is selected unchanged when nonzero (zero becomes1) into rax at b3c4c, saved rbp at b3c50, copied directly to third POSIX argument rdx at b3c78. Alignment is separately validated and max(alignment,8) stored rbx, passed rsi. Call b3c81 targets PLT9d650; PLT jmp references GOT25f310, whose R_X86_64_JUMP_SLOT relocation is posix_memalign. There is NO size+alignment arithmetic on this allocation path. new-handler retries preserve rbp/rbx callee-saved values.\n* ARM64 libstdc++ SHAfff1f0050a33ddf29c44634c7639ac16e2573a61e3daab4fcc4c007b432ccf19: incoming size x0 becomes x20 unchanged when nonzero via csinc at aa1ec (zero becomes1). x20 copied to third POSIX argument x2 at aa20c. Alignment separately validated/max8 into x19, passed x1; local output pointer x21 passed x0. Call aa218 targets PLT9d1d0, whose GOT260658 R_AARCH64_JUMP_SLOT relocation is posix_memalign. No size-plus-alignment rounding. Callee-saved x19/x20 preserve retry values.\n* Both array and nothrow aligned allocation wrappers delegate through PLT to the same scalar/array operators without adding size-rounding logic; fresh complete wrapper disassemblies retained. Both symbol tables import posix_memalign and do not import aligned_alloc. Absence of aligned_alloc alone was NOT used as the proof: actual dataflow and relocation binding supply it.\n\nScope: these exact ELF hashes, loaded in the retained both-arch native hash/verify fixture, ordinary supplied dynamic-library resolution. Does not establish every library built from gcc-14 source is unaffected, does not cover injected/interposed/replaced libraries or unrelated bundled allocators, and does not change CVE-2026-102010 or the other five findings. A later image must retain the same verified libstdc++ bytes or be rechecked. Raw CVE/version matches remain unchanged; package-level records may still report vulnerable because they do not encode this build backend.\n\nNo artifact executed, no build/scan/ignore/suppression/waiver. Outputs and argv hashes: binding.json, amd64/arm64 aligned-and-wrappers/plt/relocations text files in this directory.\n",
+  "fb20_intake_sha256": "6fc51d4203750420a472db0817f27f33b532a0aebd763da67d7d75740a749d2a",
+  "architecture_evidence": [
+    {
+      "architecture": "amd64",
+      "elf_path": "usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.33",
+      "elf_sha256": "972bb2a18b71140dab0240f8a1f68ab3fb1d56bcd4c4f824a91b70888faf5a00",
+      "fb20_archive_sha256": "dd5dc5411705dee0375cfc516e71683d5a7529ede73141062f4563c355a298e5",
+      "fb20_config_digest": "sha256:adec458e433f407ea72c2152926217caa718bd34de8fa9417032cad33833129c",
+      "actual_disassembly_and_relocation_evidence": {
+        "aligned-and-wrappers": {
+          "sha256": "0ec6d093be9471921c2547b9a0907adcf98a0ac612b6b716e55236a104636cf9",
+          "argv": [
+            "/Library/Developer/CommandLineTools/usr/bin/llvm-objdump",
+            "-d",
+            "--demangle",
+            "--start-address=736288",
+            "--stop-address=736512",
+            "/private/tmp/beta3-fb20-elf-intake-3u2woyiv/amd64/972bb2a18b71140dab0240f8a1f68ab3fb1d56bcd4c4f824a91b70888faf5a00.elf"
+          ],
+          "text": "\n/private/tmp/beta3-fb20-elf-intake-3u2woyiv/amd64/972bb2a18b71140dab0240f8a1f68ab3fb1d56bcd4c4f824a91b70888faf5a00.elf:\tfile format elf64-x86-64\n\nDisassembly of section .text:\n\n00000000000b3c20 <operator new(unsigned long, std::align_val_t)>:\n   b3c20: f3 0f 1e fa                  \tendbr64\n   b3c24: 41 54                        \tpushq\t%r12\n   b3c26: 48 8d 46 ff                  \tleaq\t-0x1(%rsi), %rax\n   b3c2a: 48 89 f2                     \tmovq\t%rsi, %rdx\n   b3c2d: 55                           \tpushq\t%rbp\n   b3c2e: 48 31 c2                     \txorq\t%rax, %rdx\n   b3c31: 53                           \tpushq\t%rbx\n   b3c32: 48 83 ec 10                  \tsubq\t$0x10, %rsp\n   b3c36: 48 39 d0                     \tcmpq\t%rdx, %rax\n   b3c39: 0f 83 3c da fe ff            \tjae\t0xa167b <std::unexpected()+0x92>\n   b3c3f: 48 85 ff                     \ttestq\t%rdi, %rdi\n   b3c42: b8 01 00 00 00               \tmovl\t$0x1, %eax\n   b3c47: 4c 8d 64 24 08               \tleaq\t0x8(%rsp), %r12\n   b3c4c: 48 0f 45 c7                  \tcmovneq\t%rdi, %rax\n   b3c50: 48 89 c5                     \tmovq\t%rax, %rbp\n   b3c53: b8 08 00 00 00               \tmovl\t$0x8, %eax\n   b3c58: 48 39 c6                     \tcmpq\t%rax, %rsi\n   b3c5b: 48 0f 43 c6                  \tcmovaeq\t%rsi, %rax\n   b3c5f: 48 89 c3                     \tmovq\t%rax, %rbx\n   b3c62: eb 14                        \tjmp\t0xb3c78 <operator new(unsigned long, std::align_val_t)+0x58>\n   b3c64: 0f 1f 40 00                  \tnopl\t(%rax)\n   b3c68: e8 43 a2 fe ff               \tcallq\t0x9deb0 <_ZSt15get_new_handlerv@plt>\n   b3c6d: 48 85 c0                     \ttestq\t%rax, %rax\n   b3c70: 0f 84 33 da fe ff            \tje\t0xa16a9 <std::unexpected()+0xc0>\n   b3c76: ff d0                        \tcallq\t*%rax\n   b3c78: 48 89 ea                     \tmovq\t%rbp, %rdx\n   b3c7b: 48 89 de                     \tmovq\t%rbx, %rsi\n   b3c7e: 4c 89 e7                     \tmovq\t%r12, %rdi\n   b3c81: e8 ca 99 fe ff               \tcallq\t0x9d650 <posix_memalign@plt>\n   b3c86: 85 c0                        \ttestl\t%eax, %eax\n   b3c88: 75 de                        \tjne\t0xb3c68 <operator new(unsigned long, std::align_val_t)+0x48>\n   b3c8a: 48 8b 44 24 08               \tmovq\t0x8(%rsp), %rax\n   b3c8f: 48 85 c0                     \ttestq\t%rax, %rax\n   b3c92: 74 d4                        \tje\t0xb3c68 <operator new(unsigned long, std::align_val_t)+0x48>\n   b3c94: 48 83 c4 10                  \taddq\t$0x10, %rsp\n   b3c98: 5b                           \tpopq\t%rbx\n   b3c99: 5d                           \tpopq\t%rbp\n   b3c9a: 41 5c                        \tpopq\t%r12\n   b3c9c: c3                           \tretq\n   b3c9d: 0f 1f 00                     \tnopl\t(%rax)\n\n00000000000b3ca0 <operator new(unsigned long, std::align_val_t, std::nothrow_t const&)>:\n   b3ca0: f3 0f 1e fa                  \tendbr64\n   b3ca4: 48 83 ec 08                  \tsubq\t$0x8, %rsp\n   b3ca8: e8 a3 bd fe ff               \tcallq\t0x9fa50 <_ZnwmSt11align_val_t@plt>\n   b3cad: 48 83 c4 08                  \taddq\t$0x8, %rsp\n   b3cb1: c3                           \tretq\n   b3cb2: f3 0f 1e fa                  \tendbr64\n   b3cb6: 48 89 c7                     \tmovq\t%rax, %rdi\n   b3cb9: e9 19 da fe ff               \tjmp\t0xa16d7 <std::unexpected()+0xee>\n   b3cbe: 66 90                        \tnop\n\n00000000000b3cc0 <operator new[](unsigned long, std::align_val_t)>:\n   b3cc0: f3 0f 1e fa                  \tendbr64\n   b3cc4: e9 87 bd fe ff               \tjmp\t0x9fa50 <_ZnwmSt11align_val_t@plt>\n   b3cc9: 0f 1f 80 00 00 00 00         \tnopl\t(%rax)\n\n00000000000b3cd0 <operator new[](unsigned long, std::align_val_t, std::nothrow_t const&)>:\n   b3cd0: f3 0f 1e fa                  \tendbr64\n   b3cd4: 48 83 ec 08                  \tsubq\t$0x8, %rsp\n   b3cd8: e8 03 c2 fe ff               \tcallq\t0x9fee0 <_ZnamSt11align_val_t@plt>\n   b3cdd: 48 83 c4 08                  \taddq\t$0x8, %rsp\n   b3ce1: c3                           \tretq\n   b3ce2: f3 0f 1e fa                  \tendbr64\n   b3ce6: 48 89 c7                     \tmovq\t%rax, %rdi\n   b3ce9: e9 fa d9 fe ff               \tjmp\t0xa16e8 <std::unexpected()+0xff>\n   b3cee: 66 90                        \tnop\n\n00000000000b3cf0 <operator delete(void*, std::align_val_t)>:\n   b3cf0: f3 0f 1e fa                  \tendbr64\n   b3cf4: e9 97 ab fe ff               \tjmp\t0x9e890 <free@plt>\n   b3cf9: 0f 1f 80 00 00 00 00         \tnopl\t(%rax)\n",
+          "scope": "Complete retained range"
+        },
+        "plt": {
+          "sha256": "5b2d8f25b24e61551373854012350e1cc3e4c9e2e046f4fc0d11c10ed41cef39",
+          "argv": [
+            "/Library/Developer/CommandLineTools/usr/bin/llvm-objdump",
+            "-d",
+            "--start-address=644688",
+            "--stop-address=644704",
+            "/private/tmp/beta3-fb20-elf-intake-3u2woyiv/amd64/972bb2a18b71140dab0240f8a1f68ab3fb1d56bcd4c4f824a91b70888faf5a00.elf"
+          ],
+          "text": "\n/private/tmp/beta3-fb20-elf-intake-3u2woyiv/amd64/972bb2a18b71140dab0240f8a1f68ab3fb1d56bcd4c4f824a91b70888faf5a00.elf:\tfile format elf64-x86-64\n\nDisassembly of section .plt:\n\n000000000009d650 <posix_memalign@plt>:\n   9d650: ff 25 ba 1c 1c 00            \tjmpq\t*0x1c1cba(%rip)         # 0x25f310\n   9d656: 68 62 00 00 00               \tpushq\t$0x62\n   9d65b: e9 c0 f9 ff ff               \tjmp\t0x9d020 <.plt>\n",
+          "scope": "Complete retained range"
+        },
+        "relocations": {
+          "sha256": "8389ca7244a521b24076bdfc364f9bb0ce1bc6e0d63ee1848de895a9b8e0a6ba",
+          "argv": [
+            "/Library/Developer/CommandLineTools/usr/bin/llvm-objdump",
+            "-R",
+            "/private/tmp/beta3-fb20-elf-intake-3u2woyiv/amd64/972bb2a18b71140dab0240f8a1f68ab3fb1d56bcd4c4f824a91b70888faf5a00.elf"
+          ],
+          "text": "000000000025f310 R_X86_64_JUMP_SLOT       posix_memalign\n",
+          "scope": "Only posix_memalign relocation rows extracted from hashed complete retained output"
+        }
+      },
+      "identity_carry_forward_2a20": {
+        "archive_sha256": "b6db7e9240a1e7173d03b2a5992dbf94f4c6fcd3602f56b874ed16b7bddcfed6",
+        "config_digest": "sha256:b6e36fdd69b10d7f647994cc6bd62bf2717cf9580e3525b6fa9a19defcf712ac",
+        "payload_verification_sha256": "a909a7a86156b9a666bebcc712e37709989b9cc5cd1d8ea73a0aceff0251ee1f",
+        "elf_sha256": "972bb2a18b71140dab0240f8a1f68ab3fb1d56bcd4c4f824a91b70888faf5a00"
+      }
+    },
+    {
+      "architecture": "arm64",
+      "elf_path": "usr/lib/aarch64-linux-gnu/libstdc++.so.6.0.33",
+      "elf_sha256": "fff1f0050a33ddf29c44634c7639ac16e2573a61e3daab4fcc4c007b432ccf19",
+      "fb20_archive_sha256": "5c285a4e310722e5b44f7fe6680a6d955682fe35ad7a92c31fe8299911ac23d0",
+      "fb20_config_digest": "sha256:da5e8a4af5d6434f6d4ead4c9910f0181fc99ed74be060fc9e24024ab8f423cf",
+      "actual_disassembly_and_relocation_evidence": {
+        "aligned-and-wrappers": {
+          "sha256": "a45c8833701a5c04d7792a3da3a371acfaad7bcae92a1e48872bdaac23f4c53a",
+          "argv": [
+            "/Library/Developer/CommandLineTools/usr/bin/llvm-objdump",
+            "-d",
+            "--demangle",
+            "--start-address=696768",
+            "--stop-address=697112",
+            "/private/tmp/beta3-fb20-elf-intake-3u2woyiv/arm64/fff1f0050a33ddf29c44634c7639ac16e2573a61e3daab4fcc4c007b432ccf19.elf"
+          ],
+          "text": "\n/private/tmp/beta3-fb20-elf-intake-3u2woyiv/arm64/fff1f0050a33ddf29c44634c7639ac16e2573a61e3daab4fcc4c007b432ccf19.elf:\tfile format elf64-littleaarch64\n\nDisassembly of section .text:\n\n00000000000aa1c0 <operator new(unsigned long, std::align_val_t)>:\n   aa1c0: d503233f     \tpaciasp\n   aa1c4: a9bc7bfd     \tstp\tx29, x30, [sp, #-0x40]!\n   aa1c8: d1000422     \tsub\tx2, x1, #0x1\n   aa1cc: ca020023     \teor\tx3, x1, x2\n   aa1d0: 910003fd     \tmov\tx29, sp\n   aa1d4: a90153f3     \tstp\tx19, x20, [sp, #0x10]\n   aa1d8: f90013f5     \tstr\tx21, [sp, #0x20]\n   aa1dc: eb02007f     \tcmp\tx3, x2\n   aa1e0: 540002e9     \tb.ls\t0xaa23c <operator new(unsigned long, std::align_val_t)+0x7c>\n   aa1e4: f100001f     \tcmp\tx0, #0x0\n   aa1e8: d2800102     \tmov\tx2, #0x8                // =8\n   aa1ec: 9a9f1414     \tcsinc\tx20, x0, xzr, ne\n   aa1f0: eb02003f     \tcmp\tx1, x2\n   aa1f4: 9a822033     \tcsel\tx19, x1, x2, hs\n   aa1f8: 9100e3f5     \tadd\tx21, sp, #0x38\n   aa1fc: 14000004     \tb\t0xaa20c <operator new(unsigned long, std::align_val_t)+0x4c>\n   aa200: 97ffcc70     \tbl\t0x9d3c0 <_ZSt15get_new_handlerv@plt>\n   aa204: b40001c0     \tcbz\tx0, 0xaa23c <operator new(unsigned long, std::align_val_t)+0x7c>\n   aa208: d63f0000     \tblr\tx0\n   aa20c: aa1403e2     \tmov\tx2, x20\n   aa210: aa1303e1     \tmov\tx1, x19\n   aa214: aa1503e0     \tmov\tx0, x21\n   aa218: 97ffcbee     \tbl\t0x9d1d0 <posix_memalign@plt>\n   aa21c: 35ffff20     \tcbnz\tw0, 0xaa200 <operator new(unsigned long, std::align_val_t)+0x40>\n   aa220: f9401fe0     \tldr\tx0, [sp, #0x38]\n   aa224: b4fffee0     \tcbz\tx0, 0xaa200 <operator new(unsigned long, std::align_val_t)+0x40>\n   aa228: f94013f5     \tldr\tx21, [sp, #0x20]\n   aa22c: a94153f3     \tldp\tx19, x20, [sp, #0x10]\n   aa230: a8c47bfd     \tldp\tx29, x30, [sp], #0x40\n   aa234: d50323bf     \tautiasp\n   aa238: d65f03c0     \tret\n   aa23c: d2800100     \tmov\tx0, #0x8                // =8\n   aa240: 97ffcf08     \tbl\t0x9de60 <__cxa_allocate_exception@plt>\n   aa244: b0000da3     \tadrp\tx3, 0x25f000\n   aa248: f9428463     \tldr\tx3, [x3, #0x508]\n   aa24c: b0000da2     \tadrp\tx2, 0x25f000\n   aa250: f946f842     \tldr\tx2, [x2, #0xdf0]\n   aa254: 91004063     \tadd\tx3, x3, #0x10\n   aa258: 90000da1     \tadrp\tx1, 0x25e000 <vtable for std::moneypunct<wchar_t, true>+0x8>\n   aa25c: f947b821     \tldr\tx1, [x1, #0xf70]\n   aa260: f9000003     \tstr\tx3, [x0]\n   aa264: 97ffd0e3     \tbl\t0x9e5f0 <__cxa_throw@plt>\n   aa268: d503201f     \tnop\n   aa26c: d503201f     \tnop\n   aa270: d503201f     \tnop\n   aa274: d503201f     \tnop\n   aa278: d503201f     \tnop\n   aa27c: d503201f     \tnop\n\n00000000000aa280 <operator new(unsigned long, std::align_val_t, std::nothrow_t const&)>:\n   aa280: d503233f     \tpaciasp\n   aa284: a9bf7bfd     \tstp\tx29, x30, [sp, #-0x10]!\n   aa288: 910003fd     \tmov\tx29, sp\n   aa28c: 97ffd361     \tbl\t0x9f010 <_ZnwmSt11align_val_t@plt>\n   aa290: a8c17bfd     \tldp\tx29, x30, [sp], #0x10\n   aa294: d50323bf     \tautiasp\n   aa298: d65f03c0     \tret\n   aa29c: d503249f     \tbti\tj\n   aa2a0: 97ffc9e0     \tbl\t0x9ca20 <__cxa_begin_catch@plt>\n   aa2a4: 97ffd2b7     \tbl\t0x9ed80 <__cxa_end_catch@plt>\n   aa2a8: d2800000     \tmov\tx0, #0x0                // =0\n   aa2ac: 17fffff9     \tb\t0xaa290 <operator new(unsigned long, std::align_val_t, std::nothrow_t const&)+0x10>\n   aa2b0: d503201f     \tnop\n   aa2b4: d503201f     \tnop\n   aa2b8: d503201f     \tnop\n   aa2bc: d503201f     \tnop\n\n00000000000aa2c0 <operator new[](unsigned long, std::align_val_t)>:\n   aa2c0: d503245f     \tbti\tc\n   aa2c4: 17ffd353     \tb\t0x9f010 <_ZnwmSt11align_val_t@plt>\n   aa2c8: d503201f     \tnop\n   aa2cc: d503201f     \tnop\n   aa2d0: d503201f     \tnop\n   aa2d4: d503201f     \tnop\n   aa2d8: d503201f     \tnop\n   aa2dc: d503201f     \tnop\n\n00000000000aa2e0 <operator new[](unsigned long, std::align_val_t, std::nothrow_t const&)>:\n   aa2e0: d503233f     \tpaciasp\n   aa2e4: a9bf7bfd     \tstp\tx29, x30, [sp, #-0x10]!\n   aa2e8: 910003fd     \tmov\tx29, sp\n   aa2ec: 97ffd481     \tbl\t0x9f4f0 <_ZnamSt11align_val_t@plt>\n   aa2f0: a8c17bfd     \tldp\tx29, x30, [sp], #0x10\n   aa2f4: d50323bf     \tautiasp\n   aa2f8: d65f03c0     \tret\n   aa2fc: d503249f     \tbti\tj\n   aa300: 97ffc9c8     \tbl\t0x9ca20 <__cxa_begin_catch@plt>\n   aa304: 97ffd29f     \tbl\t0x9ed80 <__cxa_end_catch@plt>\n   aa308: d2800000     \tmov\tx0, #0x0                // =0\n   aa30c: 17fffff9     \tb\t0xaa2f0 <operator new[](unsigned long, std::align_val_t, std::nothrow_t const&)+0x10>\n   aa310: d503201f     \tnop\n   aa314: d503201f     \tnop\n",
+          "scope": "Complete retained range"
+        },
+        "plt": {
+          "sha256": "b36ef491358ab98bcecb634d195095b6c17ca50abc690064a15f1ee6ecb5c561",
+          "argv": [
+            "/Library/Developer/CommandLineTools/usr/bin/llvm-objdump",
+            "-d",
+            "--start-address=643536",
+            "--stop-address=643552",
+            "/private/tmp/beta3-fb20-elf-intake-3u2woyiv/arm64/fff1f0050a33ddf29c44634c7639ac16e2573a61e3daab4fcc4c007b432ccf19.elf"
+          ],
+          "text": "\n/private/tmp/beta3-fb20-elf-intake-3u2woyiv/arm64/fff1f0050a33ddf29c44634c7639ac16e2573a61e3daab4fcc4c007b432ccf19.elf:\tfile format elf64-littleaarch64\n\nDisassembly of section .plt:\n\n000000000009d1d0 <posix_memalign@plt>:\n   9d1d0: f0000e10     \tadrp\tx16, 0x260000\n   9d1d4: f9432e11     \tldr\tx17, [x16, #0x658]\n   9d1d8: 91196210     \tadd\tx16, x16, #0x658\n   9d1dc: d61f0220     \tbr\tx17\n",
+          "scope": "Complete retained range"
+        },
+        "relocations": {
+          "sha256": "f664cb4f0db39b70d22b984614d95b9085ef3b13adf178d0c2f23ef655c3cca1",
+          "argv": [
+            "/Library/Developer/CommandLineTools/usr/bin/llvm-objdump",
+            "-R",
+            "/private/tmp/beta3-fb20-elf-intake-3u2woyiv/arm64/fff1f0050a33ddf29c44634c7639ac16e2573a61e3daab4fcc4c007b432ccf19.elf"
+          ],
+          "text": "0000000000260658 R_AARCH64_JUMP_SLOT      posix_memalign\n",
+          "scope": "Only posix_memalign relocation rows extracted from hashed complete retained output"
+        }
+      },
+      "identity_carry_forward_2a20": {
+        "archive_sha256": "bc3a1193ae7744d44e1b088b47131513643b6d52539c62431d124b23875c8588",
+        "config_digest": "sha256:eaaa133379a33c629e603e972f11632903bb686d292645274a0fb33c2942a627",
+        "payload_verification_sha256": "60944dde64fa1a05fb16f804d4eb85c919e9d90424d2aae3bee58fd907ceb84e",
+        "elf_sha256": "fff1f0050a33ddf29c44634c7639ac16e2573a61e3daab4fcc4c007b432ccf19"
+      }
+    }
+  ],
+  "scope_limits": [
+    "Applies only to exact checked libstdc++ ELF bytes and ordinary supplied library resolution.",
+    "Does not establish every gcc-14 binary/source package is unaffected or cover injected/replaced libraries, unrelated allocation implementations or CVE-2026-102010.",
+    "A later image needs exact ELF hash identity or fresh review. No raw scanner result, ignore policy or disposition is changed."
+  ]
+}

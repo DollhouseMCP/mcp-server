@@ -10,6 +10,7 @@ import { FileMemoryTransactionCoordinator } from '../../../src/storage/FileMemor
 import { FileMemoryOwnerSnapshots, type OwnedFileMemoryToken, type UnownedFileMemoryToken } from '../../../src/storage/FileMemoryOwnerSnapshots.js';
 import { FileMemoryVolumeStore, type ArchiveCleanupPhase } from '../../../src/storage/FileMemoryVolumeStore.js';
 import { cleanupDirectoryReadObservers, observeDirectoryReads as observeReads } from './fixtures/aggregateDirectoryReadObserver.js';
+import { populatedCaseTimeoutMs, THOUSAND_ITEM_CASE_TIMEOUT_MS } from './fixtures/populatedCaseTimeout.js';
 
 const it = process.platform === 'win32' || !process.getuid ? jestIt.skip : jestIt;
 const USER = '11111111-1111-4111-8111-111111111111';
@@ -124,12 +125,13 @@ function diagnostics(caseDetails: object) {
 }
 
 describe('file protected cleanup populated portfolios', () => {
-  it.each([
+  // One it.each per row keeps every title and gives only the 1,000-item rows the longer limit.
+  for (const row of [
     [false, 100, false], [false, 250, false], [false, 1000, false],
     [true, 100, false], [true, 250, false], [true, 1000, false],
     [false, 100, true], [false, 250, true], [false, 1000, true],
     [true, 100, true], [true, 250, true], [true, 1000, true],
-  ] as const)('qualifies nested=%s owners=%i referenced=%s without altering foreign evidence', async (nested, count, referenced) => {
+  ] as const) it.each([row])('qualifies nested=%s owners=%i referenced=%s without altering foreign evidence', async (nested, count, referenced) => {
     const record = diagnostics({ nested, count, referenced });
     const f = await fixture(nested, count);
     let token = f.token;
@@ -168,7 +170,7 @@ describe('file protected cleanup populated portfolios', () => {
     record('assertion-complete');
     try { process.stderr.write(`Cleanup capacity ${JSON.stringify({ nested, count, referenced, operationMs, ...observed.measured })}\n`); }
     catch { /* Measurement output cannot replace completed preservation assertions. */ }
-  });
+  }, populatedCaseTimeoutMs(row[1]));
   it.each([[false, 'after-payload'], [true, 'after-payload'], [true, 'after-slot']] as const)(
     'retries nested=%s at %s with 1000 owners and fresh revision authority', async (nested, stop) => {
       const record = diagnostics({ nested, count: 1000, stop });
@@ -208,5 +210,5 @@ describe('file protected cleanup populated portfolios', () => {
       record('assertion-complete');
       try { process.stderr.write(`Cleanup populated retry ${JSON.stringify({ nested, stop, operationMs, ...observed.measured })}\n`); }
       catch { /* Measurement output cannot replace completed preservation assertions. */ }
-    });
+    }, THOUSAND_ITEM_CASE_TIMEOUT_MS);
 });

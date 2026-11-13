@@ -955,7 +955,13 @@ sudo systemctl restart dollhousemcp
 sudo journalctl -u dollhousemcp -f
 ```
 
-Migrations run automatically on startup. Watch `/readyz` — it returns 503 with `reason: "migrations_pending"` during a migration window and 200 once everything is current.
+The server does not apply database migrations when it starts. Run the migration job for the new release (`docker compose --env-file .env.production run --rm dollhousemcp-migrate`, or `npm run db:migrate` for the bare binary), then watch `/readyz`. With the web console enabled, it returns 503 while the database is missing any of this release's migrations, and 200 once they are all applied. The response gives no reason: the server log names the first missing migration, and the console's Operations health shows `database_migrations` as not ready.
+
+"Missing" is the migration job's own rule: this release has a migration newer than the newest one the database has applied. That is the only migration result that returns 503.
+
+If every migration is applied but the database's record of them does not match this release entry for entry, the server keeps serving. This happens when a migration file was changed after a database had already applied it: the migration job never re-applies, so the record keeps the old file's hash. The server logs one error, "Applied migrations do not match this release; the server keeps serving", naming the first entry that differs, and Operations health shows `database_migrations` as degraded with `migrations_mismatch`. It means the record cannot prove the schema is the one this release expects, not that the schema is wrong. Compare the schema before relying on it.
+
+If the server's database role cannot read the migration ledger (`drizzle.__drizzle_migrations`), the server cannot check and keeps serving. It logs one warning that migrations are not verified, with the grant that fixes it, and Operations health shows `database_migrations` as degraded.
 
 Migration `0048` marks a non-GitHub integration credential that cannot be attributed to a provider descriptor as `status='error'` with `error_reason='revocation_failed'`. The encrypted credential is retained so it can still be revoked through its provider, and account deletion remains blocked with HTTP 409 and code `integration_credential_cleanup_pending` until the credential is resolved. There are two exits: the user can open the console integrations page and click **Disconnect** for the provider in the error state, or an administrator can repeat the account-deletion request with `integration_credential_cleanup_override: "abandon_unrevoked_provider_credentials"` in the request body to record an audited abandonment.
 
@@ -967,6 +973,33 @@ The minimum-viable monitoring stack:
 - **Cert renewal alert.** Caddy renews automatically but log a daily check (`docker compose logs caddy | grep -i certificate`).
 - **Disk usage on the host.** Postgres growth + log retention can fill a disk fast. Alert at 80%.
 - **`/readyz`** is a stricter probe than `/healthz` — it returns 503 during bootstrap, mid-migration, or if Postgres is unreachable. Use this as the readiness gate in any load balancer.
+
+#### The approvals and executions canary
+
+Pending approvals and agent executions are stored per user and per session, so the server cannot check that the console displays them without a session to look at. It does not look at a real user's. It keeps one reserved user for the purpose, `dollhousemcp-canary`, which is disabled, holds no role, has no sign-in identity and does not appear in the console's account list.
+
+A canary run opens a session for that user, makes one approval request and one execution record the way a live session does, reads both back through the console's own handlers and privacy filters, and removes everything it made. A run is limited to 15 seconds.
+
+It runs only when asked:
+
+- **By an admin.** `POST /api/v1/admin/operate/canary/run` with the operator capability and admin elevation. The request is recorded in the admin audit as `operate.canary.run`. The answer is 200 whatever the canary found, with the finding in the body.
+- **On a schedule, if you switch one on.** Set `DOLLHOUSE_WEB_CONSOLE_CANARY_INTERVAL_MINUTES` to between 5 and 720. The default is 0, which is no schedule. The first scheduled run is one interval after start-up. Each scheduled run is recorded as a security event from `WebConsoleCanary`, because there is no admin to audit it as.
+
+Operations health shows the last result on that server as `approval_execution_projection`:
+
+| Status | Meaning |
+|---|---|
+| Healthy | The last run passed, within the last 24 hours. |
+| No current result (`not_run`) | The canary has not run on this server since it started, or its last pass is more than 24 hours old. This does not lower the overall status. |
+| Degraded | The last run found a fault or could not finish. The code says which: `canary_approval_not_readable`, `canary_execution_not_readable`, `canary_privacy_projection_failed`, `canary_user_not_inert`, `canary_cleanup_failed`, `canary_could_not_run` or `canary_timed_out`. It stays until a later run passes or the server restarts. |
+
+Things to know:
+
+- The result is held in memory by the server that ran it. With several replicas, each reports its own last run, and a restart goes back to no current result.
+- It never feeds `/readyz`. A failing canary does not take a replica out of service.
+- It does not go over the network. It says nothing about the HTTP layer, the MCP handshake or whether a real client can connect.
+- `canary_user_not_inert` means the canary account has been changed: enabled, given a role or given a sign-in identity. The canary refuses to run until the account is put back, because an account that can sign in must not be one the server writes to by itself.
+- If a server stops in the middle of a run, the records it made are removed at the next start-up or by the next run, once they are five minutes old. They belong to the canary user only.
 
 ### Logs
 

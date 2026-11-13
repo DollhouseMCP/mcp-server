@@ -1,0 +1,452 @@
+{
+  "source_commit": "e89e6a4456d70e9559f707009e5aa02d7055d628",
+  "source_tree": "1c0cb2eed20841326660cdde230097bab1e9c60f",
+  "run_url": "https://github.com/DollhouseMCP/mcp-server/actions/runs/42489482818",
+  "run_attempt": 1,
+  "scanner": "grype 0.120.1",
+  "scanner_sha256": "1de9d74fff477a652408406b45786ed5694e3030c89dc75805ffe9424c802d36",
+  "db_schema": "v6.1.10",
+  "db_built": "2026-11-06T06:21:59Z",
+  "db_sha256": "01a5143d2e74a83468632a846dcd9d9ad5a2329f99754c64e72fdc9683cf1ee5",
+  "archives": {
+    "amd64": {
+      "artifact_id": 13620633801,
+      "sha256": "ed00c737bfb53800e07129f69d8bd2d6634f3281fe3bd13a6ce7d9b2ecb3dfa9",
+      "config": "sha256:abe4ad0bd1a07fc57e54cafd8d17c1d37021acd7f8eb72e6a8a6123ee60df8c1"
+    },
+    "arm64": {
+      "artifact_id": 13620927890,
+      "sha256": "cce6ccfa8f06b3e9f1410a5ad3c586b0d9f708618ebd7320b25e7261334aae6d",
+      "config": "sha256:de13d3d1085e9d6ced29577e024b3e55f01adcc471c050dab88e7bd1d706b6e4"
+    }
+  },
+  "platform_results": {
+    "amd64": {
+      "report_sha256": "391c602c9be51aa359ad96ffbb9fc6ab7f2bd6a6255bebc634b0b4f30cbf4691",
+      "exit": 2,
+      "match_count": 183,
+      "high_count": 62,
+      "ignored_count": 0,
+      "high_by_cve": [
+        {
+          "id": "CVE-2025-69720",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "libtinfo6",
+            "ncurses-base",
+            "ncurses-bin"
+          ]
+        },
+        {
+          "id": "CVE-2026-102010",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "gcc-14-base",
+            "libgcc-s1",
+            "libstdc++6"
+          ]
+        },
+        {
+          "id": "CVE-2026-109518",
+          "fix_state": "fixed",
+          "fixed_versions": [
+            "3.0.4"
+          ],
+          "packages": [
+            "apt",
+            "libapt-pkg7.0"
+          ]
+        },
+        {
+          "id": "CVE-2026-119373",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "libsqlite3-0"
+          ]
+        },
+        {
+          "id": "CVE-2026-119374",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "libsqlite3-0"
+          ]
+        },
+        {
+          "id": "CVE-2026-119379",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "libsqlite3-0"
+          ]
+        },
+        {
+          "id": "CVE-2026-19499",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "libc-bin",
+            "libc6"
+          ]
+        },
+        {
+          "id": "CVE-2026-5435",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "libc-bin",
+            "libc6"
+          ]
+        },
+        {
+          "id": "CVE-2026-54369",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "libacl1"
+          ]
+        },
+        {
+          "id": "CVE-2026-54370",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "libacl1"
+          ]
+        },
+        {
+          "id": "CVE-2026-76642",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "bsdutils",
+            "libblkid1",
+            "liblastlog2-2",
+            "libmount1",
+            "libsmartcols1",
+            "libuuid1",
+            "login",
+            "mount",
+            "util-linux"
+          ]
+        },
+        {
+          "id": "CVE-2026-76844",
+          "fix_state": "not-fixed",
+          "fixed_versions": [],
+          "packages": [
+            "zlib1g"
+          ]
+        },
+        {
+          "id": "CVE-2026-78408",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "bsdutils",
+            "libblkid1",
+            "liblastlog2-2",
+            "libmount1",
+            "libsmartcols1",
+            "libuuid1",
+            "login",
+            "mount",
+            "util-linux"
+          ]
+        },
+        {
+          "id": "CVE-2026-78409",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "bsdutils",
+            "libblkid1",
+            "liblastlog2-2",
+            "libmount1",
+            "libsmartcols1",
+            "libuuid1",
+            "login",
+            "mount",
+            "util-linux"
+          ]
+        },
+        {
+          "id": "CVE-2026-78410",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "bsdutils",
+            "libblkid1",
+            "liblastlog2-2",
+            "libmount1",
+            "libsmartcols1",
+            "libuuid1",
+            "login",
+            "mount",
+            "util-linux"
+          ]
+        },
+        {
+          "id": "CVE-2026-82560",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "perl-base"
+          ]
+        },
+        {
+          "id": "CVE-2026-84243",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "libc-bin",
+            "libc6"
+          ]
+        },
+        {
+          "id": "CVE-2026-85091",
+          "fix_state": "not-fixed",
+          "fixed_versions": [],
+          "packages": [
+            "zlib1g"
+          ]
+        },
+        {
+          "id": "CVE-2026-9538",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "perl-base"
+          ]
+        },
+        {
+          "id": "CVE-2026-95619",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "gcc-14-base",
+            "libgcc-s1",
+            "libstdc++6"
+          ]
+        }
+      ]
+    },
+    "arm64": {
+      "report_sha256": "b116d2686bbfe2e5ebcb6fcf4b1b58053637e0117e751b668b41d49d652597aa",
+      "exit": 2,
+      "match_count": 183,
+      "high_count": 62,
+      "ignored_count": 0,
+      "high_by_cve": [
+        {
+          "id": "CVE-2025-69720",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "libtinfo6",
+            "ncurses-base",
+            "ncurses-bin"
+          ]
+        },
+        {
+          "id": "CVE-2026-102010",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "gcc-14-base",
+            "libgcc-s1",
+            "libstdc++6"
+          ]
+        },
+        {
+          "id": "CVE-2026-109518",
+          "fix_state": "fixed",
+          "fixed_versions": [
+            "3.0.4"
+          ],
+          "packages": [
+            "apt",
+            "libapt-pkg7.0"
+          ]
+        },
+        {
+          "id": "CVE-2026-119373",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "libsqlite3-0"
+          ]
+        },
+        {
+          "id": "CVE-2026-119374",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "libsqlite3-0"
+          ]
+        },
+        {
+          "id": "CVE-2026-119379",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "libsqlite3-0"
+          ]
+        },
+        {
+          "id": "CVE-2026-19499",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "libc-bin",
+            "libc6"
+          ]
+        },
+        {
+          "id": "CVE-2026-5435",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "libc-bin",
+            "libc6"
+          ]
+        },
+        {
+          "id": "CVE-2026-54369",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "libacl1"
+          ]
+        },
+        {
+          "id": "CVE-2026-54370",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "libacl1"
+          ]
+        },
+        {
+          "id": "CVE-2026-76642",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "bsdutils",
+            "libblkid1",
+            "liblastlog2-2",
+            "libmount1",
+            "libsmartcols1",
+            "libuuid1",
+            "login",
+            "mount",
+            "util-linux"
+          ]
+        },
+        {
+          "id": "CVE-2026-76844",
+          "fix_state": "not-fixed",
+          "fixed_versions": [],
+          "packages": [
+            "zlib1g"
+          ]
+        },
+        {
+          "id": "CVE-2026-78408",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "bsdutils",
+            "libblkid1",
+            "liblastlog2-2",
+            "libmount1",
+            "libsmartcols1",
+            "libuuid1",
+            "login",
+            "mount",
+            "util-linux"
+          ]
+        },
+        {
+          "id": "CVE-2026-78409",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "bsdutils",
+            "libblkid1",
+            "liblastlog2-2",
+            "libmount1",
+            "libsmartcols1",
+            "libuuid1",
+            "login",
+            "mount",
+            "util-linux"
+          ]
+        },
+        {
+          "id": "CVE-2026-78410",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "bsdutils",
+            "libblkid1",
+            "liblastlog2-2",
+            "libmount1",
+            "libsmartcols1",
+            "libuuid1",
+            "login",
+            "mount",
+            "util-linux"
+          ]
+        },
+        {
+          "id": "CVE-2026-82560",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "perl-base"
+          ]
+        },
+        {
+          "id": "CVE-2026-84243",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "libc-bin",
+            "libc6"
+          ]
+        },
+        {
+          "id": "CVE-2026-85091",
+          "fix_state": "not-fixed",
+          "fixed_versions": [],
+          "packages": [
+            "zlib1g"
+          ]
+        },
+        {
+          "id": "CVE-2026-9538",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "perl-base"
+          ]
+        },
+        {
+          "id": "CVE-2026-95619",
+          "fix_state": "wont-fix",
+          "fixed_versions": [],
+          "packages": [
+            "gcc-14-base",
+            "libgcc-s1",
+            "libstdc++6"
+          ]
+        }
+      ]
+    }
+  },
+  "scope": "Raw scanner snapshot; fix state is not an upstream disposition or exploitability decision."
+}

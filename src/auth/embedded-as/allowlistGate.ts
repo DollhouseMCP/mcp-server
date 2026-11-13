@@ -204,6 +204,25 @@ export async function provisionAccountThroughAllowlistGate(
   return gate;
 }
 
+/**
+ * Entries in the earlier allowlist that the sign-in authority does not carry.
+ *
+ * Start-up refuses to run while there are any, because sign-in would quietly
+ * stop honouring them. The console's setup check applies the same rule to a
+ * running server, so the gap is reported before the next restart finds it.
+ */
+export function findAllowlistEntriesMissingFromAuthority<Entry extends Pick<AuthAllowlistEntry, 'kind' | 'value'>>(
+  earlier: readonly Entry[],
+  authority: readonly Pick<AuthAllowlistEntry, 'kind' | 'value'>[],
+): Entry[] {
+  const carried = new Set(authority.map(entry => allowlistEntryKey(entry.kind, entry.value)));
+  return earlier.filter(entry => !carried.has(allowlistEntryKey(entry.kind, entry.value)));
+}
+
+function allowlistEntryKey(kind: string, value: string): string {
+  return `${kind}\0${kind === 'github_id' ? value.trim() : value.trim().toLowerCase()}`;
+}
+
 function legacyStorageAuthority(storage: IAuthStorageLayer): SignInAllowlistAuthority {
   return {
     matchesIdentity: values => storage.allowlistMatchesIdentity(values),

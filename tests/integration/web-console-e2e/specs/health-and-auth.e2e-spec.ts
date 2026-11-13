@@ -1,9 +1,25 @@
+import { getConfig } from '../harness/config.js';
 import { setupWorld, type World } from '../harness/world.js';
 
 let world: World;
 
 beforeAll(async () => {
   world = await setupWorld();
+});
+
+describe('fresh install', () => {
+  // The harness boots the real server with DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED=true
+  // and writes no readiness evidence file. Before #3223 that start-up exited.
+  it('starts and serves the console with no readiness evidence file', async () => {
+    expect(process.env.DOLLHOUSE_WEB_CONSOLE_REPLACEMENT_READINESS_EVIDENCE).toBeUndefined();
+
+    const shell = await fetch(`${getConfig().baseUrl}/ui/`);
+    expect(shell.status).toBe(200);
+    expect(shell.headers.get('content-type')).toContain('text/html');
+
+    const health = await world.clients.anon.get('/api/v1/health');
+    expect(health.status).toBe(200);
+  });
 });
 
 describe('health (public)', () => {

@@ -109,6 +109,13 @@ hosted_deploy_init_config() {
   # App trusted proxies describe the direct hop into the app container
   # (usually Caddy on Docker). Caddy trusted proxies describe the public edge
   # hop, such as Cloudflare, that Caddy may trust for real client IP headers.
+  LEGACY_CHECKPOINT="${DOLLHOUSE_HOSTED_LEGACY_CHECKPOINT:-}"
+  IMAGE_MODE="${DOLLHOUSE_HOSTED_IMAGE_MODE:-}"
+  RUNTIME_IMAGE="${DOLLHOUSE_HOSTED_RUNTIME_IMAGE:-}"
+  MIGRATION_IMAGE="${DOLLHOUSE_HOSTED_MIGRATION_IMAGE:-}"
+  CADDY_IMAGE="${DOLLHOUSE_HOSTED_CADDY_IMAGE:-}"
+  CADDY_DATA_VOLUME="${DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME:-}"
+  CADDY_CONFIG_VOLUME="${DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME:-}"
   CADDY_ACCESS_LOG="${DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG:-}"
   CADDY_ACCESS_LOG_SET="false"
   if hosted_deploy_nonempty_env DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG; then
@@ -140,11 +147,15 @@ hosted_deploy_init_config() {
   INIT_DB_FILE="${DEPLOY_DIR}/init-db.sh"
   POST_MIGRATION_GRANTS_FILE="${DEPLOY_DIR}/post-migration-grants.sql"
   POST_MIGRATION_GRANTS_SCRIPT_FILE="${DEPLOY_DIR}/apply-post-migration-grants.sh"
-  BOOTSTRAP_ADMIN_SCRIPT_FILE="${DEPLOY_DIR}/bootstrap-admin.sh"
   SERVER_DIR="${DEPLOY_DIR}/server"
   APP_CONTAINER_NAME=""
   POSTGRES_CONTAINER_NAME=""
   CADDY_CONTAINER_NAME=""
+  CADDY_RECOVERY_VERIFIED="false"
+  CADDY_KEEP_PROXY="false"
+  PREVIOUS_BUNDLE=""
+  CADDY_ADMISSION_RECEIPT=""
+  CADDY_TRANSITION_TOKEN=""
 
   return 0
 }
@@ -157,8 +168,14 @@ Usage:
   scripts/hosted-deploy.sh [--mode MODE] [--dry-run] [--quiet|--debug|--log-level LEVEL] render
   scripts/hosted-deploy.sh [--dry-run] [--quiet|--debug|--log-level LEVEL] install
   scripts/hosted-deploy.sh [--dry-run] [--quiet|--debug|--log-level LEVEL] update
+  scripts/hosted-deploy.sh [--dry-run] legacy-offline-update
   scripts/hosted-deploy.sh [--dry-run] [--quiet|--debug|--log-level LEVEL] migrate
   scripts/hosted-deploy.sh [--dry-run] [--quiet|--debug|--log-level LEVEL] bootstrap-admin
+  scripts/hosted-deploy.sh [--dry-run] [--quiet|--debug|--log-level LEVEL] prepare-caddy-offline
+  scripts/hosted-deploy.sh [--dry-run] [--quiet|--debug|--log-level LEVEL] abandon-caddy-offline
+  scripts/hosted-deploy.sh [--dry-run] [--quiet|--debug|--log-level LEVEL] accept-caddy-restart
+  scripts/hosted-deploy.sh [--dry-run] [--quiet|--debug|--log-level LEVEL] clone-caddy-volumes
+  scripts/hosted-deploy.sh [--dry-run] [--quiet|--debug|--log-level LEVEL] recover-caddy-proxy
   scripts/hosted-deploy.sh [--dry-run] [--quiet|--debug|--log-level LEVEL] rollback
   scripts/hosted-deploy.sh [--dry-run] [--quiet|--debug|--log-level LEVEL] verify
 
@@ -168,6 +185,11 @@ Actions:
   scripts/hosted-deploy.sh update
   scripts/hosted-deploy.sh migrate
   scripts/hosted-deploy.sh bootstrap-admin
+  scripts/hosted-deploy.sh prepare-caddy-offline
+  scripts/hosted-deploy.sh abandon-caddy-offline
+  scripts/hosted-deploy.sh accept-caddy-restart
+  scripts/hosted-deploy.sh clone-caddy-volumes
+  scripts/hosted-deploy.sh recover-caddy-proxy
   scripts/hosted-deploy.sh rollback
   scripts/hosted-deploy.sh verify
 
@@ -184,12 +206,19 @@ Common environment:
   DOLLHOUSE_HOSTED_BIND_ADDRESS=0.0.0.0
   DOLLHOUSE_HOSTED_HTTP_BIND_PORT=80
   DOLLHOUSE_HOSTED_HTTPS_BIND_PORT=443
+  DOLLHOUSE_HOSTED_CADDY_IMAGE=registry/repository@sha256:<64 lowercase hex>
+  DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME=<prequalified named volume>
+  DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME=<prequalified named volume>
   DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG=true|false
   DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES=173.245.48.0/20,2606:4700::/32
   DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_SIZE=25m
   DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_FILE=5
   DOLLHOUSE_HOSTED_SOURCE_DIR=/path/to/local/repo
   DOLLHOUSE_HOSTED_GIT_REF=codex/hosted-http-integration
+  DOLLHOUSE_HOSTED_LEGACY_CHECKPOINT=/protected/window-checkpoint-directory
+  DOLLHOUSE_HOSTED_IMAGE_MODE=build|registry
+  DOLLHOUSE_HOSTED_RUNTIME_IMAGE=registry/repository@sha256:<64 lowercase hex>
+  DOLLHOUSE_HOSTED_MIGRATION_IMAGE=registry/repository@sha256:<64 lowercase hex>
   DOLLHOUSE_HOSTED_IMAGE_TAG=dollhousemcp-hosted:alpha
   DOLLHOUSE_AUTH_PROVIDER=embedded|oidc|local
   DOLLHOUSE_AUTH_METHODS=github

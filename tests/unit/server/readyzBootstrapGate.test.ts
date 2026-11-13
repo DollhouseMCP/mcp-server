@@ -125,6 +125,61 @@ describe('/readyz — H3 bootstrap gate consultation', () => {
     }
   });
 
+  describe('console serve-safety check', () => {
+    const consoleMount = (isSafeToServe?: () => Promise<boolean>) =>
+      ({ router: express.Router(), markMounted: () => {}, isSafeToServe });
+
+    it('stays ready when the console supplies no safety check', async () => {
+      const runtime = await buildRuntime(() => Promise.resolve(true), consoleMount());
+      try {
+        expect((await request(runtime.app).get('/readyz')).status).toBe(200);
+      } finally {
+        await runtime.close();
+      }
+    });
+
+    it('reports not ready, with nothing but readiness and version, while the database is behind the release', async () => {
+      let safe = false;
+      const runtime = await buildRuntime(() => Promise.resolve(true), consoleMount(() => Promise.resolve(safe)));
+      try {
+        const behind = await request(runtime.app).get('/readyz');
+        expect(behind.status).toBe(503);
+        expect(behind.body).toEqual({ ready: false, version: PACKAGE_VERSION });
+        // Liveness is unaffected: the process is up, it just should not take traffic.
+        expect((await request(runtime.app).get('/healthz')).status).toBe(200);
+
+        safe = true;
+        const migrated = await request(runtime.app).get('/readyz');
+        expect(migrated.status).toBe(200);
+        expect(migrated.body).toEqual({ ready: true, version: PACKAGE_VERSION });
+      } finally {
+        await runtime.close();
+      }
+    });
+
+    it('fails closed when the safety check itself throws', async () => {
+      const runtime = await buildRuntime(undefined, consoleMount(() => Promise.reject(new Error('probe crashed'))));
+      try {
+        const res = await request(runtime.app).get('/readyz');
+        expect(res.status).toBe(503);
+        expect(res.body).toEqual({ ready: false, version: PACKAGE_VERSION });
+      } finally {
+        await runtime.close();
+      }
+    });
+
+    it('does not ask the console while the first admin is still unclaimed', async () => {
+      const isSafeToServe = jest.fn(() => Promise.resolve(true));
+      const runtime = await buildRuntime(() => Promise.resolve(false), consoleMount(isSafeToServe));
+      try {
+        expect((await request(runtime.app).get('/readyz')).status).toBe(503);
+        expect(isSafeToServe).not.toHaveBeenCalled();
+      } finally {
+        await runtime.close();
+      }
+    });
+  });
+
   it('mounts the descriptor web-console API router only when explicitly supplied', async () => {
     const router = express.Router();
     const markMounted = jest.fn();

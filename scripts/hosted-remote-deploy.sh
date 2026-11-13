@@ -56,6 +56,13 @@ ALLOWED_HOSTS="${DOLLHOUSE_HTTP_ALLOWED_HOSTS:-}"
 TRUSTED_PROXIES="${DOLLHOUSE_TRUSTED_PROXIES:-}"
 CADDY_ACCESS_LOG="${DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG:-}"
 CADDY_TRUSTED_PROXIES="${DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES:-}"
+CADDY_IMAGE="${DOLLHOUSE_HOSTED_CADDY_IMAGE:-}"
+IMAGE_MODE="${DOLLHOUSE_HOSTED_IMAGE_MODE:-}"
+RUNTIME_IMAGE="${DOLLHOUSE_HOSTED_RUNTIME_IMAGE:-}"
+MIGRATION_IMAGE="${DOLLHOUSE_HOSTED_MIGRATION_IMAGE:-}"
+CADDY_DATA_VOLUME="${DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME:-}"
+CADDY_CONFIG_VOLUME="${DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME:-}"
+LEGACY_CHECKPOINT="${DOLLHOUSE_HOSTED_LEGACY_CHECKPOINT:-}"
 BOOTSTRAP_GITHUB_USERNAME="${DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME:-}"
 BOOTSTRAP_GITHUB_ID="${DOLLHOUSE_BOOTSTRAP_GITHUB_ID:-}"
 HOSTNAME="${DOLLHOUSE_HOSTED_HOSTNAME:-}"
@@ -82,6 +89,7 @@ DollhouseMCP hosted remote deployment wrapper
 Usage:
   scripts/hosted-remote-deploy.sh [options] install
   scripts/hosted-remote-deploy.sh [options] update
+  scripts/hosted-remote-deploy.sh [options] legacy-offline-update
   scripts/hosted-remote-deploy.sh [options] migrate
   scripts/hosted-remote-deploy.sh [options] bootstrap-admin
   scripts/hosted-remote-deploy.sh [options] rollback
@@ -105,7 +113,7 @@ Options:
   --https-bind-port PORT    Host HTTPS port for Caddy
   --git-url URL             Repository URL cloned remotely. Env: DOLLHOUSE_HOSTED_GIT_URL
   --ref REF                 Branch/ref cloned remotely. Env: DOLLHOUSE_HOSTED_GIT_REF
-  --skip-backup             Skip DB/env backup before remote action
+  --skip-backup             Skip DB/env backup (refused for legacy-offline-update)
   --backup-retries N        Backup attempts before failing. Env: DOLLHOUSE_REMOTE_BACKUP_RETRIES
   --backup-retry-delay N    Base seconds for exponential backup retry backoff
   --skip-local-verify       Skip local public endpoint checks after remote action
@@ -432,7 +440,7 @@ parse_args() {
 
 validate_action() {
   case "${ACTION}" in
-    install|update|migrate|bootstrap-admin|rollback|verify|enroll-host)
+    install|update|legacy-offline-update|migrate|bootstrap-admin|rollback|verify|enroll-host)
       ;;
     *)
       die "unknown action: ${ACTION}"
@@ -804,6 +812,11 @@ validate_config() {
   validate_action
   validate_log_level
   validate_bool DOLLHOUSE_REMOTE_SKIP_BACKUP "${SKIP_BACKUP}"
+  if [[ "${ACTION}" == "legacy-offline-update" ]]; then
+    [[ "${SKIP_BACKUP}" == "false" ]] || die "legacy-offline-update requires the standard DB/env backups; --skip-backup is refused"
+    [[ "${LEGACY_CHECKPOINT}" == /* && "${LEGACY_CHECKPOINT}" != *$'\n'* && "${LEGACY_CHECKPOINT}" != *$'\r'* ]] || \
+      die "legacy-offline-update requires an explicit absolute DOLLHOUSE_HOSTED_LEGACY_CHECKPOINT on the remote host"
+  fi
   validate_bool DOLLHOUSE_REMOTE_SKIP_LOCAL_VERIFY "${SKIP_LOCAL_VERIFY}"
   validate_bool DOLLHOUSE_REMOTE_KEEP_WORKDIR "${KEEP_WORKDIR}"
   validate_bool DOLLHOUSE_REMOTE_DRY_RUN "${DRY_RUN}"
@@ -1057,6 +1070,13 @@ run_remote_action() {
     "${helper_bootstrap_github_username}"
     "${helper_bootstrap_github_id}"
     "${helper_auth_generation}"
+    "${CADDY_IMAGE}"
+    "${CADDY_DATA_VOLUME}"
+    "${CADDY_CONFIG_VOLUME}"
+    "${IMAGE_MODE}"
+    "${RUNTIME_IMAGE}"
+    "${MIGRATION_IMAGE}"
+    "${LEGACY_CHECKPOINT}"
   )
   remote_command="bash -s --"
   for remote_payload_arg in "${remote_payload_args[@]}"; do
@@ -1128,6 +1148,13 @@ caddy_trusted_proxies="${37}"
 bootstrap_github_username="${38}"
 bootstrap_github_id="${39}"
 auth_generation="${40}"
+caddy_image="${41}"
+caddy_data_volume="${42}"
+caddy_config_volume="${43}"
+image_mode="${44}"
+runtime_image="${45}"
+migration_image="${46}"
+legacy_checkpoint="${47}"
 workdir=""
 
 remote_log() {
@@ -1214,7 +1241,7 @@ sleep_between_backup_attempts() {
 
 backup_requires_database() {
   case "${action}" in
-    update|migrate|rollback)
+    update|legacy-offline-update|migrate|rollback)
       return 0
       ;;
   esac
@@ -1354,6 +1381,11 @@ backup_database() {
 backup_existing_deploy() {
   local stamp
 
+  if [[ "${action}" == "legacy-offline-update" ]]; then
+    [[ "${skip_backup}" == "false" ]] || remote_die "legacy-offline-update requires standard DB/env backups"
+    [[ -f "${deploy_dir}/compose.yml" && -f "${deploy_dir}/.env" && -f "${deploy_dir}/.env.production" ]] || \
+      remote_die "legacy-offline-update requires existing compose.yml, .env and .env.production for the standard backup"
+  fi
   if [[ "${skip_backup}" == "true" ]]; then
     remote_warn "remote backup skipped by operator request"
     return 0
@@ -1409,6 +1441,15 @@ run_hosted_helper() {
   [[ -z "${trusted_proxies}" ]] || helper_env+=("DOLLHOUSE_TRUSTED_PROXIES=${trusted_proxies}")
   [[ -z "${caddy_access_log}" ]] || helper_env+=("DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG=${caddy_access_log}")
   [[ -z "${caddy_trusted_proxies}" ]] || helper_env+=("DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES=${caddy_trusted_proxies}")
+  [[ -z "${caddy_image}" ]] || helper_env+=("DOLLHOUSE_HOSTED_CADDY_IMAGE=${caddy_image}")
+  [[ -z "${caddy_data_volume}" ]] || helper_env+=("DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME=${caddy_data_volume}")
+  [[ -z "${caddy_config_volume}" ]] || helper_env+=("DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME=${caddy_config_volume}")
+  [[ -z "${image_mode}" ]] || helper_env+=("DOLLHOUSE_HOSTED_IMAGE_MODE=${image_mode}")
+  [[ -z "${runtime_image}" ]] || helper_env+=("DOLLHOUSE_HOSTED_RUNTIME_IMAGE=${runtime_image}")
+  [[ -z "${migration_image}" ]] || helper_env+=("DOLLHOUSE_HOSTED_MIGRATION_IMAGE=${migration_image}")
+  if [[ "${action}" == "legacy-offline-update" ]]; then
+    helper_env+=("DOLLHOUSE_HOSTED_LEGACY_CHECKPOINT=${legacy_checkpoint}")
+  fi
   [[ -z "${bootstrap_github_username}" ]] || helper_env+=("DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME=${bootstrap_github_username}")
   [[ -z "${bootstrap_github_id}" ]] || helper_env+=("DOLLHOUSE_BOOTSTRAP_GITHUB_ID=${bootstrap_github_id}")
   [[ -z "${deploy_mode}" ]] || helper_env+=("DOLLHOUSE_HOSTED_MODE=${deploy_mode}")
@@ -1446,6 +1487,13 @@ run_hosted_helper() {
     unset DOLLHOUSE_TRUSTED_PROXIES
     unset DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG
     unset DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES
+    unset DOLLHOUSE_HOSTED_CADDY_IMAGE
+    unset DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME
+    unset DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME
+    unset DOLLHOUSE_HOSTED_IMAGE_MODE
+    unset DOLLHOUSE_HOSTED_RUNTIME_IMAGE
+    unset DOLLHOUSE_HOSTED_MIGRATION_IMAGE
+    unset DOLLHOUSE_HOSTED_LEGACY_CHECKPOINT
     unset DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME
     unset DOLLHOUSE_BOOTSTRAP_GITHUB_ID
     unset DOLLHOUSE_AUTH_PROVIDER

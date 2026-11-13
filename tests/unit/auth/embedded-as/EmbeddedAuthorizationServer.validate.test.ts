@@ -118,8 +118,75 @@ describe('EmbeddedAuthorizationServer.validate — RFC 9068 hardening', () => {
   }
 
   it('preserves verified OAuth client and grant bindings', async () => {
+    await storage.genericSet('Grant', 'grant', { accountId: LOCAL_USER_SUB, clientId: 'client' });
     const token = await mintToken({ bindingClaims: { client_id: 'client', azp: 'party', grant_id: 'grant', sid: 'login' } });
     expect(await as.validate(token)).toMatchObject({ ok: true, claims: { credentialBinding: { issuer: ISSUER, clientId: 'client', authorizedParty: 'party', grantId: 'grant', sessionId: 'login' } } });
+  });
+
+  describe('grant binding', () => {
+    const GRANT_INACTIVE = { ok: false, reason: 'token grant is no longer active' };
+
+    it('rejects a token whose grant record does not exist', async () => {
+      const token = await mintToken({ bindingClaims: { grant_id: 'never-stored' } });
+      expect(await as.validate(token)).toEqual(GRANT_INACTIVE);
+    });
+
+    it('rejects a token once its grant record is destroyed', async () => {
+      await storage.genericSet('Grant', 'destroyed', { accountId: LOCAL_USER_SUB });
+      const token = await mintToken({ bindingClaims: { grant_id: 'destroyed' } });
+      expect((await as.validate(token)).ok).toBe(true);
+      await storage.genericRevokeByGrantId('destroyed');
+      expect(await as.validate(token)).toEqual(GRANT_INACTIVE);
+    });
+
+    it('rejects a token once its grant record has expired', async () => {
+      await storage.genericSet('Grant', 'short-lived', { accountId: LOCAL_USER_SUB }, 60);
+      const token = await mintToken({ bindingClaims: { grant_id: 'short-lived' } });
+      expect((await as.validate(token)).ok).toBe(true);
+      const clock = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000);
+      try {
+        expect(await as.validate(token)).toEqual(GRANT_INACTIVE);
+      } finally {
+        clock.mockRestore();
+      }
+    });
+
+    it('rejects a token naming a grant that belongs to another account', async () => {
+      await storage.genericSet('Grant', 'someone-elses', { accountId: 'another-user' });
+      const token = await mintToken({ bindingClaims: { grant_id: 'someone-elses' } });
+      expect(await as.validate(token)).toEqual(GRANT_INACTIVE);
+    });
+
+    it('accepts a directly issued token, which carries no grant', async () => {
+      const token = await as.issue(LOCAL_USER_SUB);
+      expect((await as.validate(token)).ok).toBe(true);
+    });
+
+    it('answers the liveness question for an already-validated credential', async () => {
+      await storage.genericSet('Grant', 'live', { accountId: LOCAL_USER_SUB });
+      const bound = { sub: LOCAL_USER_SUB, credentialBinding: { grantId: 'live' } };
+      expect(await as.isCredentialActive(bound)).toBe(true);
+      expect(await as.isCredentialActive({ sub: LOCAL_USER_SUB })).toBe(true);
+      const allowed = jest.spyOn(storage, 'isAccountAllowed').mockResolvedValue(false);
+      try {
+        expect(await as.isCredentialActive(bound)).toBe(false);
+      } finally {
+        allowed.mockRestore();
+      }
+      await storage.genericRevokeByGrantId('live');
+      expect(await as.isCredentialActive(bound)).toBe(false);
+    });
+
+    it('surfaces a storage failure instead of accepting the token', async () => {
+      await storage.genericSet('Grant', 'unreadable', { accountId: LOCAL_USER_SUB });
+      const token = await mintToken({ bindingClaims: { grant_id: 'unreadable' } });
+      const read = jest.spyOn(storage, 'genericGet').mockRejectedValue(new Error('database unavailable'));
+      try {
+        await expect(as.validate(token)).rejects.toThrow('database unavailable');
+      } finally {
+        read.mockRestore();
+      }
+    });
   });
 
   it('rejects direct issuance and existing tokens when the account becomes pending', async () => {

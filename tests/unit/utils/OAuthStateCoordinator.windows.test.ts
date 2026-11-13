@@ -84,6 +84,7 @@ describe('OAuth state lock Windows probe budget', () => {
     expect(entered).toBe(true);
     expect(execFileSync.mock.calls.map(([command]) => path.win32.basename(command)))
       .toEqual(['WMIC.exe', 'pwsh.exe', 'powershell.exe']);
+    // 4,900 ms probe budget minus the simulated 164 ms and 783 ms probes.
     expect(execFileSync.mock.calls[2][2].timeout).toBe(3_953);
     expect(now).toBe(4_910); // 4.9 s total probe budget + one 10 ms retry.
     expect(now).toBeLessThan(5_000);
@@ -123,5 +124,23 @@ describe('OAuth state lock Windows probe budget', () => {
     expect(fs.existsSync(`${stateFile}.lock/1.slot`)).toBe(true);
     expect(fs.existsSync(`${stateFile}.lock/2.done`)).toBe(true);
     expect(fs.existsSync(`${stateFile}.lock.process-${process.pid}.identity`)).toBe(false);
+  });
+
+  it('does not spawn a fallback provider after the probe reserve is exhausted', () => {
+    execFileSync.mockImplementation(command => {
+      expect(path.win32.basename(command)).toBe('WMIC.exe');
+      now = 4_900;
+      throw new Error('provider unavailable at reserve');
+    });
+
+    expect(() => withOAuthStateLockSync(stateFile, () => { entered = true; }))
+      .toThrow('Timed out waiting for OAuth state lock');
+    expect(execFileSync).toHaveBeenCalledTimes(1);
+    expect(entered).toBe(false);
+    expect(now).toBeGreaterThanOrEqual(5_000);
+    expect(now).toBeLessThanOrEqual(5_001);
+    expect(fs.existsSync(ownerDone)).toBe(false);
+    expect(fs.existsSync(`${stateFile}.lock/1.slot`)).toBe(true);
+    expect(fs.existsSync(`${stateFile}.lock/2.done`)).toBe(true);
   });
 });

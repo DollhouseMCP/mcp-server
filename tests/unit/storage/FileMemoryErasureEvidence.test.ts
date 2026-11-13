@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@jest/globals';
-import { ERASURE_DOMAIN, ERASURE_NAMES_DOMAIN, ERASURE_NAMES_PROTOCOL, ERASURE_RECORD_LIMIT, erasureMaximumIdentity, erasurePack,
+import { ERASURE_DOMAIN, ERASURE_NAMES_DOMAIN, ERASURE_NAMES_PROTOCOL, ERASURE_RECORD_LIMIT, erasureBasename, erasureMaximumIdentity, erasurePack,
   erasureParseRecord, erasureParseSegment, erasureSegmentName, erasureSerialize, erasureInventoryDigest,
   erasureValidateRecord, erasureValidateSegment,
   type ErasureAnchor, type ErasureArtifact, type ErasureBinding, type ErasureNamespace,
@@ -36,6 +36,29 @@ function segment(nodes = [node(0)]): ErasureSegment {
   return { schema: 1, domain: ERASURE_DOMAIN, ...binding, ordinal: 0, total: 1, first: 0, nodes, successor: null };
 }
 function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
+
+describe('erasure basename UTF-8 grammar', () => {
+  it.each(['uuid-11111111-1111-4111-8111-111111111111', 'journal-00000001.json', '...', ' ', 'a\nb', '\u0001', '\u007f',
+    'café', 'e\u0301', '😀', '\uff0f', '\uff3c', '\ufffe'])('retains accepted name bytes: %p', value => {
+    expect(erasureBasename(value)).toBe(true);
+  });
+  it.each(['', '.', '..', 'a/b', 'a\\b', 'a\0b', '\ud800', '\udfff', 'a\ud800z', '\udc00😀'])('refuses invalid names: %p', value => {
+    expect(erasureBasename(value)).toBe(false);
+    const valueSegment = segment([node(0, value)]);
+    expect(() => erasureValidateSegment(valueSegment)).toThrow();
+  });
+  it.each([['a'.repeat(255), true], ['a'.repeat(256), false], ['é'.repeat(127) + 'a', true], ['é'.repeat(128), false],
+    ['€'.repeat(85), true], ['€'.repeat(85) + 'a', false], ['😀'.repeat(63) + 'abc', true], ['😀'.repeat(64), false]] as const)(
+    'preserves the 255-byte UTF-8 boundary: %p', (value, accepted) => {
+      expect(erasureBasename(value)).toBe(accepted);
+      const validate = () => erasureValidateSegment(segment([node(0, value)]));
+      if (accepted) expect(validate).not.toThrow(); else expect(validate).toThrow();
+    });
+  it('refuses nonstring values without invoking conversion hooks', () => {
+    const refusing = { toString() { throw new Error('conversion forbidden'); }, [Symbol.toPrimitive]() { throw new Error('conversion forbidden'); } };
+    for (const value of [undefined, null, false, 1, 1n, Symbol('name'), [], refusing]) expect(erasureBasename(value)).toBe(false);
+  });
+});
 
 describe('owner-erasure authority records', () => {
   it('round-trips explicit V2 shared names and full owner-root commitments without changing V1 grammar', () => {
