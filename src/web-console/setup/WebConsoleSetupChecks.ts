@@ -132,8 +132,8 @@ export const WEB_CONSOLE_SETUP_CHECKS: Readonly<Record<WebConsoleSetupCheckId, W
     title: 'Approvals and executions display correctly',
     proves: 'A pending approval and an agent execution, made the way a live session makes them, can be read through the console, which shows only the fields it is allowed to.',
     verification: 'server-canary',
-    verifiedBy: 'The server opens a session for its reserved canary user, makes one approval request and one execution with the classes a live session uses, reads both back through the console\'s own handlers and privacy filters, and removes them. No other user\'s data is read. It runs when an admin asks in Operations, or on a schedule that is off unless configured. It does not go over the network, so it says nothing about the HTTP layer or about a real client connecting.',
-    remediation: 'Run the check from Operations. If it fails, the result names what the console did not show; check the server log and confirm the database is fully migrated. If it says the canary user is not inert, that account has been changed and must be disabled again, with no role and no sign-in identity.',
+    verifiedBy: 'By the canary synthetic check. The server opens a session for its reserved canary user, makes one approval request and one execution with the classes a live session uses, reads both back through the console\'s own handlers and privacy filters, and removes them. No other user\'s data is read. It runs when an admin asks in Operations, or on a schedule that is off unless configured. It does not go over the network, so it says nothing about the HTTP layer or about a real client connecting.',
+    remediation: 'Run the canary synthetic check from Operations. If it fails, the result names what the console did not show; check the server log and confirm the database is fully migrated. If it says the canary user is not inert, that account has been changed and must be disabled again, with no role and no sign-in identity.',
   },
   audit_telemetry_projection: {
     id: 'audit_telemetry_projection',
