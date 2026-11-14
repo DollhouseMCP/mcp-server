@@ -24,7 +24,7 @@ describe('the console setup checks guide', () => {
 
     const described = [...guide.matchAll(/^### .+\n\n`([a-z_]+)`/gm)].map(match => match[1]);
 
-    expect(described.length).toBe(ids.size);
+    expect(described).toHaveLength(ids.size);
     expect(described.filter(id => !ids.has(id))).toEqual([]);
   });
 
