@@ -150,6 +150,8 @@ import {
 import type { SignInAllowlistAuthority } from '../auth/embedded-as/allowlistGate.js';
 import { hasNoCurrentCanaryResult, type CanaryMonitor, type CanaryStatus } from './canary/CanaryMonitor.js';
 import { createDatabaseCanaryMonitor, type DatabaseCanaryMonitorOptions } from './canary/DatabaseCanaryMonitor.js';
+import { buildSetupStatusReport } from './setup/SetupStatusReport.js';
+import { PostgresSetupUsageRecords } from './setup/SetupUsageRecords.js';
 import { createHealthModule, type HealthReadinessChecks } from './modules/health/index.js';
 import { createConsoleMetaModule } from './modules/console-meta/ConsoleMetaModule.js';
 import {
@@ -652,6 +654,16 @@ export class WebConsoleRegistrar {
         ? container.resolve<() => unknown>('HttpRuntimeMetricsSource')()
         : { available: false },
       ...(canaryMonitor ? { canary: canaryMonitor } : {}),
+      // Asked by one page, not polled, but bounded all the same: it runs several reads.
+      setupStatus: cacheProbe(() => buildSetupStatusReport({
+        databaseMigrations: healthProbes.databaseMigrations,
+        securityInvalidation: healthProbes.securityInvalidationReadiness,
+        allowlistParity: healthProbes.allowlistParity,
+        auditTelemetry: healthProbes.auditTelemetry,
+        canary: healthProbes.approvalExecutionProjection,
+        usage: database ? new PostgresSetupUsageRecords(database) : null,
+        invitationsOffered: onboarding !== null,
+      }, this.options.now), SETUP_STATUS_TTL_MS),
       now: this.options.now,
     }));
     registerRouteModule(registry, this.options, SECURITY_ADMIN_MODULE_ID, () => createSecurityAdminModule({
@@ -1381,6 +1393,9 @@ interface ConsoleHealthProbes {
   // run. Null without a database: there are no per-session stores to exercise.
   readonly approvalExecutionProjection: (() => CanaryStatus) | null;
 }
+
+/** How long one reading of the setup status is reused. */
+const SETUP_STATUS_TTL_MS = 10_000;
 
 // Single source for the dependency probes shared by both the public readiness surface
 // and the admin operations health surface, so a new or changed probe is defined once.

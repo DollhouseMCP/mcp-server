@@ -74,6 +74,38 @@ describe('ConsolePortfolioSyncExecutor', () => {
     expect(restored?.content).toContain('Reference body');
   });
 
+  it('does not claim to have reached the repository when a push had nothing to push', async () => {
+    const fetchMock = createFetchMock([]);
+    const executor = new ConsolePortfolioSyncExecutor({
+      integrationStore: new InMemoryUserIntegrationStore([integrationRecord()]),
+      portfolioStore: new InMemoryPortfolioElementStore([]),
+      secretEncryption,
+      repositoryName: 'custom-portfolio',
+      fetch: fetchMock,
+      now: () => NOW,
+    });
+
+    // The job succeeds, having asked the repository nothing. That is no evidence the repository exists.
+    await expect(executor.execute(syncJob({ direction: 'push', conflictPolicy: 'prefer_local' })))
+      .resolves.toMatchObject({ status: 'succeeded', resultSummary: { pushed: 0, repository: 'custom-portfolio', repository_reached: false } });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('does not claim to have reached a repository that answers "not found" to everything', async () => {
+    const executor = new ConsolePortfolioSyncExecutor({
+      integrationStore: new InMemoryUserIntegrationStore([integrationRecord()]),
+      portfolioStore: new InMemoryPortfolioElementStore([]),
+      secretEncryption,
+      repositoryName: 'no-such-repository',
+      // What GitHub answers for every path in a repository that does not exist.
+      fetch: jest.fn<typeof fetch>(async () => jsonResponse(404, { message: 'Not Found' })),
+      now: () => NOW,
+    });
+
+    await expect(executor.execute(syncJob({ direction: 'pull', conflictPolicy: 'prefer_remote' })))
+      .resolves.toMatchObject({ status: 'succeeded', resultSummary: { pulled: 0, repository_reached: false } });
+  });
+
   it('pushes local portfolio elements with decrypted GitHub credentials', async () => {
     const portfolioStore = new InMemoryPortfolioElementStore([{
       userId: USER_ID,
@@ -113,6 +145,10 @@ describe('ConsolePortfolioSyncExecutor', () => {
           updated: 0,
           skipped: 0,
           conflicts: 0,
+          // The deployment's repository name, and that the repository answered,
+          // so the setup status can say which repository a sync proved.
+          repository: 'custom-portfolio',
+          repository_reached: true,
         },
       });
 

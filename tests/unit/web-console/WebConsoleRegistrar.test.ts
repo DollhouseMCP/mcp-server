@@ -1810,6 +1810,19 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.authenticationAuditQuery.constructor.name).toBe('PostgresAuthenticationAuditQuery');
   });
 
+  it('offers the setup status with or without a database', async () => {
+    const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+
+    const composition = await new WebConsoleRegistrar({
+      opaqueValueHmacKey: Buffer.alloc(32, 25),
+      registerCleanup: false,
+    }).bootstrapAndRegister(new TestContainer());
+
+    expect(composition.registry.createRouteManifest().routes).toContainEqual(expect.objectContaining({
+      method: 'GET', path: '/api/v1/admin/operate/setup-status',
+    }));
+  });
+
   describe('the approvals and executions canary', () => {
     const CANARY_RUN_ROUTE = { method: 'POST', path: '/api/v1/admin/operate/canary/run' };
 
