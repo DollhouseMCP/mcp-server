@@ -1272,4 +1272,5 @@ docker compose --env-file .env.production restart dollhousemcp
 - [Deployment Configuration](./deployment-configuration.md) — full env-var reference
 - [Secret Rotation Runbook](./secret-rotation-runbook.md) — per-secret rotation procedures
 - [Logging](./logging.md) — log queries, redaction, and the operational-logging section
+- [Console setup checks](./console-setup-checks.md) — what each check proves, how to read the status, how to qualify a deployment
 - [Console Authentication](./console-auth.md) — web console token, TOTP, rotation
