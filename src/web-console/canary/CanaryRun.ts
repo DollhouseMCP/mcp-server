@@ -29,7 +29,7 @@ export const CANARY_TOOL_NAME = 'dollhouse_canary_check';
 export const CANARY_AGENT_PREFIX = 'dollhouse-canary-agent-';
 
 const CANARY_RISK_LEVEL = 'low';
-const CANARY_GOAL_DESCRIPTION = 'Canary check: not a real execution.';
+const CANARY_GOAL_DESCRIPTION = 'Canary synthetic check: not a real execution.';
 const SESSION_LEASE_MS = 60_000;
 export const DEFAULT_CANARY_TIMEOUT_MS = 15_000;
 /** Canary records older than this were left by a run that did not finish. */
@@ -103,7 +103,7 @@ export async function runCanary(deps: CanaryRunDependencies): Promise<CanaryResu
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<CanaryResult>(resolve => {
     timer = setTimeout(
-      () => resolve(result('pending', 'canary_timed_out', `The canary did not finish within ${timeoutMs / 1000} seconds, so nothing is verified.`)),
+      () => resolve(result('pending', 'canary_timed_out', `The canary synthetic check did not finish within ${timeoutMs / 1000} seconds, so nothing is verified.`)),
       timeoutMs,
     );
     timer.unref?.();
@@ -131,7 +131,7 @@ async function check(deps: CanaryRunDependencies, sessionId: string, now: () => 
     const canary = await ensureCanaryUser(deps.db, now);
     await exercise(deps, canary, sessionId, now);
     return result('passed', 'canary_passed',
-      'A canary approval request and a canary execution were created, read back through the console and removed.');
+      'The canary synthetic check created an approval request and an execution, read both back through the console and removed them.');
   } catch (error) {
     return describeFailure(error);
   }
@@ -148,11 +148,11 @@ function errorReason(error: unknown): string {
  * back: the result must not say the records were removed when they were not.
  */
 function withCleanupFailure(checked: CanaryResult, error: unknown): CanaryResult {
-  const leftBehind = `The canary could not remove the records it made (${errorReason(error)}). `
+  const leftBehind = `The canary synthetic check could not remove the records it made (${errorReason(error)}). `
     + 'They belong to the canary user only, and a later run removes them.';
   if (checked.state === 'passed') {
     return result('failed', 'canary_cleanup_failed',
-      `The canary's approval request and execution were read back through the console, but the run did not clean up. ${leftBehind}`);
+      `The canary synthetic check read its approval request and execution back through the console, but did not clean up. ${leftBehind}`);
   }
   return result(checked.state, checked.code, `${checked.detail} ${leftBehind}`);
 }
@@ -160,9 +160,9 @@ function withCleanupFailure(checked: CanaryResult, error: unknown): CanaryResult
 function describeFailure(error: unknown): CanaryResult {
   if (error instanceof CanaryFinding) return result('failed', error.code, error.message);
   if (error instanceof CanaryUserStateError) {
-    return result('failed', 'canary_user_not_inert', `${error.message} The canary will not run until it is put right.`);
+    return result('failed', 'canary_user_not_inert', `${error.message} The canary synthetic check will not run until it is put right.`);
   }
-  return result('pending', 'canary_could_not_run', `The canary could not complete its run (${errorReason(error)}), so nothing is verified.`);
+  return result('pending', 'canary_could_not_run', `The canary synthetic check could not complete its run (${errorReason(error)}), so nothing is verified.`);
 }
 
 async function exercise(
@@ -205,7 +205,7 @@ async function createApprovalRequest(deps: CanaryRunDependencies, userId: string
     riskLevel: CANARY_RISK_LEVEL,
     riskScore: 0,
     irreversible: false,
-    denyReason: 'Canary check: not a real request.',
+    denyReason: 'Canary synthetic check: not a real request.',
     policySource: 'canary',
     ttlMs: SESSION_LEASE_MS,
   });
@@ -282,18 +282,18 @@ async function readApprovalBack(deps: CanaryRunDependencies, request: ConsoleReq
   try {
     body = await readThroughConsole(module, '/api/v1/me/sessions/:session_id/approvals', request);
   } catch (error) {
-    if (error instanceof CanaryFinding) throw new CanaryFinding('canary_approval_not_readable', `The canary's approval request could not be read through the console. ${error.message}`);
+    if (error instanceof CanaryFinding) throw new CanaryFinding('canary_approval_not_readable', `The canary synthetic check's approval request could not be read through the console. ${error.message}`);
     throw error;
   }
   const approvals = (body as { approvals?: Record<string, unknown>[] }).approvals ?? [];
   const found = approvals.find(approval => approval.approval_id === approvalId);
   if (!found) {
     throw new CanaryFinding('canary_approval_not_readable',
-      'The canary made an approval request, but the console did not list it. Pending approvals may not be displaying.');
+      'The canary synthetic check made an approval request, but the console did not list it. Pending approvals may not be displaying.');
   }
   if (found.status !== 'pending' || found.tool_name !== CANARY_TOOL_NAME || found.risk_level !== CANARY_RISK_LEVEL) {
     throw new CanaryFinding('canary_approval_not_readable',
-      'The console listed the canary\'s approval request with a different status, tool or risk than it was made with.');
+      'The console listed the canary synthetic check\'s approval request with a different status, tool or risk than it was made with.');
   }
   // What the privacy projector exists to keep out of the console.
   const leaked = ['toolInputHash', 'tool_input_hash', 'consumed', 'ttlMs', 'ttl_ms'].filter(field => field in found);
@@ -323,7 +323,7 @@ const EXECUTION_DETAIL_FIELDS: ReadonlySet<string> = new Set([...EXECUTION_SUMMA
 function checkShownExecution(shown: Record<string, unknown>, made: { goalId: string; sessionId: string }, where: 'listing' | 'detail'): void {
   if (shown.session_id !== made.sessionId || shown.agent_name !== canaryAgentName(made.sessionId) || shown.status !== 'succeeded') {
     throw new CanaryFinding('canary_execution_not_readable',
-      `The console's execution ${where} showed the canary's execution with a different session, agent or status than it was recorded with.`);
+      `The console's execution ${where} showed the canary synthetic check's execution with a different session, agent or status than it was recorded with.`);
   }
   const allowed = where === 'listing' ? EXECUTION_SUMMARY_FIELDS : EXECUTION_DETAIL_FIELDS;
   const unexpected = Object.keys(shown).filter(field => !allowed.has(field));
@@ -350,20 +350,20 @@ async function readExecutionBack(
     detail = await readThroughConsole(module, '/api/v1/me/sessions/:session_id/executions/:goal_id',
       { ...request, params: { ...request.params, goal_id: goalId } } as unknown as ConsoleRequest);
   } catch (error) {
-    if (error instanceof CanaryFinding) throw new CanaryFinding('canary_execution_not_readable', `The canary's execution could not be read through the console. ${error.message}`);
+    if (error instanceof CanaryFinding) throw new CanaryFinding('canary_execution_not_readable', `The canary synthetic check's execution could not be read through the console. ${error.message}`);
     throw error;
   }
   const executions = (listed as { executions?: Record<string, unknown>[] }).executions ?? [];
   const found = executions.find(execution => execution.goal_id === goalId);
   if (!found) {
     throw new CanaryFinding('canary_execution_not_readable',
-      'The canary recorded an execution, but the console did not list it. Executions may not be displaying.');
+      'The canary synthetic check recorded an execution, but the console did not list it. Executions may not be displaying.');
   }
   checkShownExecution(found, made, 'listing');
   const shown = (detail ?? {}) as Record<string, unknown>;
   if (shown.goal_id !== goalId || !Array.isArray(shown.output)) {
     throw new CanaryFinding('canary_execution_not_readable',
-      'The console listed the canary\'s execution but could not show its detail.');
+      'The console listed the canary synthetic check\'s execution but could not show its detail.');
   }
   checkShownExecution(shown, made, 'detail');
 }

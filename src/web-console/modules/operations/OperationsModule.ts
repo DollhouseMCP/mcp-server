@@ -24,6 +24,7 @@ import type {
 } from './OperationsTelemetry.js';
 import {
   projectCanaryRun,
+  projectSetupStatus,
   projectOperatorConfigList,
   projectOperatorConfigSetting,
   projectOperationHealthComponent,
@@ -37,6 +38,7 @@ import {
 } from './OperationsPrivacyProjectors.js';
 import type { ISystemMetricsSource } from './SystemMetricsSource.js';
 import type { CanaryRunRecord, CanaryTrigger } from '../../canary/CanaryMonitor.js';
+import type { SetupStatusReport } from '../../setup/SetupStatusReport.js';
 import type { MetricQueryOptions, MetricQueryResult } from '../../../metrics/types.js';
 
 const OPERATE_CAPABILITY = 'console:admin:operate';
@@ -56,6 +58,7 @@ const OPERATION_AUDIT_IDS = [
   'operate.metrics.http',
 ] as const;
 const CANARY_RUN_AUDIT_ID = 'operate.canary.run';
+const SETUP_STATUS_AUDIT_ID = 'operate.setup_status.show';
 
 const OPERATIONS_STREAM_POLICY = {
   lastEventId: 'unsupported',
@@ -78,6 +81,8 @@ export interface OperationsModuleOptions {
   readonly httpMetrics?: () => unknown;
   /** Absent without a database: the canary has no per-session stores to exercise, and its route is not offered. */
   readonly canary?: OperationsCanary;
+  /** Every setup check with what is known about it now. Reading it tests nothing and starts nothing. */
+  readonly setupStatus?: () => Promise<SetupStatusReport>;
   readonly now?: () => Date;
 }
 
@@ -307,8 +312,13 @@ export function createOperationsModule(options: OperationsModuleOptions): Consol
         handler: req => querySystemMetrics(options.systemMetrics, parseSystemMetricQuery(req), resolveNow),
       },
       ...(options.canary ? [canaryRunRoute(options.canary)] : []),
+      ...(options.setupStatus ? [setupStatusRoute(options.setupStatus)] : []),
     ],
-    auditOperations: [...OPERATION_AUDIT_IDS, ...(options.canary ? [CANARY_RUN_AUDIT_ID] : [])].map(id => ({ id })),
+    auditOperations: [
+      ...OPERATION_AUDIT_IDS,
+      ...(options.canary ? [CANARY_RUN_AUDIT_ID] : []),
+      ...(options.setupStatus ? [SETUP_STATUS_AUDIT_ID] : []),
+    ].map(id => ({ id })),
   };
 }
 
@@ -338,6 +348,38 @@ function canaryRunRoute(canary: OperationsCanary): ConsoleRouteDefinition {
           trigger: record.trigger,
           started_at: record.startedAt.toISOString(),
           finished_at: record.finishedAt.toISOString(),
+        },
+      };
+    },
+  };
+}
+
+// The setup status view: each check in the catalog with its state and the
+// reason for it. Admins only. The projector supplies each check's wording
+// from the catalog, so the handler passes only what was found.
+function setupStatusRoute(setupStatus: () => Promise<SetupStatusReport>): ConsoleRouteDefinition {
+  return {
+    method: 'GET',
+    path: '/api/v1/admin/operate/setup-status',
+    audience: 'admin',
+    requiredCapability: OPERATE_CAPABILITY,
+    elevation: 'admin_30m',
+    privacyClass: 'operational_allowlist',
+    idempotency: 'not_applicable',
+    auditOperation: SETUP_STATUS_AUDIT_ID,
+    privacyProjector: projectSetupStatus,
+    handler: async () => {
+      const report = await setupStatus();
+      return {
+        status: 200,
+        body: {
+          checked_at: report.checkedAt.toISOString(),
+          checks: report.checks.map(check => ({
+            id: check.definition.id,
+            state: check.state,
+            detail: check.detail ?? null,
+            observed_at: check.observedAt?.toISOString() ?? null,
+          })),
         },
       };
     },

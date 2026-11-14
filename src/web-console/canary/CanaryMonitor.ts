@@ -86,7 +86,7 @@ export class CanaryMonitor {
       return {
         state: 'pending',
         code: 'canary_not_run',
-        detail: 'The canary has not run on this server since it started. Run it from Operations, or switch the schedule on.',
+        detail: 'The canary synthetic check has not run on this server since it started. Run it from Operations, or switch the schedule on.',
         lastRun: null,
       };
     }
@@ -95,7 +95,7 @@ export class CanaryMonitor {
       return {
         state: 'pending',
         code: 'canary_result_stale',
-        detail: 'The canary last passed more than 24 hours ago, so that result is no longer current. Run it again, or switch the schedule on.',
+        detail: 'The canary synthetic check last passed more than 24 hours ago, so that result is no longer current. Run it again, or switch the schedule on.',
         lastRun: this.last,
       };
     }
@@ -121,7 +121,7 @@ export class CanaryMonitor {
       if (removed > 0) this.options.log.info(`[WebConsoleCanary] Removed ${removed} canary session(s) left by an unfinished run`);
     } catch {
       // The driver's message can carry connection details, so it is not logged.
-      this.options.log.warn('[WebConsoleCanary] Could not sweep canary leftovers at start-up; the next run sweeps again');
+      this.options.log.warn('[WebConsoleCanary] Could not sweep what an unfinished canary synthetic check left behind at start-up; the next run sweeps again');
     }
   }
 
@@ -130,7 +130,7 @@ export class CanaryMonitor {
     const result = await this.options.run();
     const record: CanaryRunRecord = { result, trigger, startedAt, finishedAt: this.now() };
     this.last = record;
-    const line = `[WebConsoleCanary] ${trigger} run: ${result.code}. ${result.detail}`;
+    const line = `[WebConsoleCanary] Canary synthetic check, ${trigger} run: ${result.code}. ${result.detail}`;
     if (result.state === 'passed') this.options.log.info(line);
     else this.options.log.warn(line);
     // An admin's run is in the admin audit, with the admin as the actor. A
@@ -147,7 +147,7 @@ function recordScheduledRun(record: CanaryRunRecord): void {
     severity: result.state === 'failed' ? 'MEDIUM' : 'LOW',
     source: 'WebConsoleCanary',
     // The time keeps each run a separate event: identical events are otherwise merged.
-    details: `Scheduled canary run finished at ${finishedAt.toISOString()}: ${result.code}`,
+    details: `Scheduled canary synthetic check finished at ${finishedAt.toISOString()}: ${result.code}`,
     additionalData: { check: result.id, trigger: 'schedule', state: result.state, code: result.code },
   });
 }

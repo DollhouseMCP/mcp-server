@@ -85,7 +85,7 @@ required('the canary behind the Operations route, on PostgreSQL', () => {
       check: 'approval_execution_projection',
       state: 'passed',
       code: 'canary_passed',
-      detail: 'A canary approval request and a canary execution were created, read back through the console and removed.',
+      detail: 'The canary synthetic check created an approval request and an execution, read both back through the console and removed them.',
       trigger: 'admin',
     });
     expect(canary.status()).toMatchObject({ state: 'passed', code: 'canary_passed' });

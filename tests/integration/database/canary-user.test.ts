@@ -77,7 +77,7 @@ required('the canary user on PostgreSQL', () => {
     // Still there, still inert, still unrenamed.
     await expect(ensureCanaryUser(db())).resolves.toMatchObject({ created: false });
     const [row] = await db().select().from(users).where(eq(users.id, CANARY_USER_UUID));
-    expect(row.displayName).toBe('DollhouseMCP canary (automated check, not a person)');
+    expect(row.displayName).toBe('DollhouseMCP canary synthetic check (automated, not a person)');
   });
 
   describe('refuses to be used once it is no longer inert', () => {
