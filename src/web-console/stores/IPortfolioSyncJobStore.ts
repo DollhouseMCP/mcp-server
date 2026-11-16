@@ -82,6 +82,18 @@ export class PortfolioSyncAlreadyPendingError extends Error {
 }
 
 export const PORTFOLIO_SYNC_RESULT_SUMMARY_MAX_BYTES = 4_096;
+/**
+ * The key a successful job's summary carries its repository name under. The
+ * name is the deployment's setting, the same for every account. Jobs from
+ * before it was recorded have none.
+ */
+export const PORTFOLIO_SYNC_SUMMARY_REPOSITORY_KEY = 'repository';
+/**
+ * The key a successful job's summary records under whether the repository
+ * itself answered at least one request. A job can succeed without that: a
+ * push with nothing to push asks the repository nothing.
+ */
+export const PORTFOLIO_SYNC_SUMMARY_REPOSITORY_REACHED_KEY = 'repository_reached';
 export const PORTFOLIO_SYNC_WORKER_ID_MAX_LENGTH = 128;
 export const PORTFOLIO_SYNC_ERROR_CODE_MAX_LENGTH = 100;
 

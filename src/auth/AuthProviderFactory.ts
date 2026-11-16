@@ -35,7 +35,11 @@ import type {
 } from './embedded-as/AuthMethodFactory.js';
 import type { IAuthStorageLayer } from './embedded-as/storage/IAuthStorageLayer.js';
 import type { IRateLimitStore } from './embedded-as/storage/IRateLimitStore.js';
-import { findAllowlistEntriesMissingFromAuthority, type SignInAllowlistAuthority } from './embedded-as/allowlistGate.js';
+import {
+  describeAllowlistCutoverRefusal,
+  findAllowlistEntriesMissingFromAuthority,
+  type SignInAllowlistAuthority,
+} from './embedded-as/allowlistGate.js';
 import type { IAuthMethod } from './embedded-as/IAuthMethod.js';
 import type { InviteTokenStore } from './embedded-as/inviteTokens.js';
 import type { DatabaseInstance } from '../database/connection.js';
@@ -601,9 +605,5 @@ async function verifySignInAllowlistAuthorityCutover(
   if (legacyEntries.length === 0) return;
 
   const missing = findAllowlistEntriesMissingFromAuthority(legacyEntries, await authority.listEntries());
-  if (missing.length > 0) {
-    throw new Error(
-      'Sign-in allowlist authority cutover refused: legacy auth_allowlist entries are not fully represented in account_allowlist_entries.',
-    );
-  }
+  if (missing.length > 0) throw new Error(describeAllowlistCutoverRefusal(missing));
 }

@@ -84,7 +84,7 @@ required('the canary run on PostgreSQL', () => {
   it('creates an approval request and an execution, reads both through the console, and leaves nothing behind', async () => {
     expect(await runCanary(dependencies())).toEqual({
       id: 'approval_execution_projection', state: 'passed', code: 'canary_passed',
-      detail: 'A canary approval request and a canary execution were created, read back through the console and removed.',
+      detail: 'The canary synthetic check created an approval request and an execution, read both back through the console and removed them.',
     });
     expect(await canaryRows()).toEqual(nothingLeft);
   });
@@ -100,7 +100,7 @@ required('the canary run on PostgreSQL', () => {
     blind.list = () => Promise.resolve([]);
     expect(await runCanary(dependencies({ approvalStore: blind }))).toMatchObject({
       state: 'failed', code: 'canary_approval_not_readable',
-      detail: 'The canary made an approval request, but the console did not list it. Pending approvals may not be displaying.',
+      detail: 'The canary synthetic check made an approval request, but the console did not list it. Pending approvals may not be displaying.',
     });
     expect(await canaryRows()).toEqual(nothingLeft);
   });
@@ -120,7 +120,7 @@ required('the canary run on PostgreSQL', () => {
     wrong.list = async (...args) => (await list(...args)).map(execution => ({ ...execution, status: 'failed' as const }));
     expect(await runCanary(dependencies({ executionReader: wrong }))).toMatchObject({
       state: 'failed', code: 'canary_execution_not_readable',
-      detail: 'The console\'s execution listing showed the canary\'s execution with a different session, agent or status than it was recorded with.',
+      detail: 'The console\'s execution listing showed the canary synthetic check\'s execution with a different session, agent or status than it was recorded with.',
     });
     expect(await canaryRows()).toEqual(nothingLeft);
   });
@@ -131,8 +131,8 @@ required('the canary run on PostgreSQL', () => {
     ));
     expect(outcome).toEqual({
       id: 'approval_execution_projection', state: 'failed', code: 'canary_cleanup_failed',
-      detail: 'The canary\'s approval request and execution were read back through the console, but the run did not clean up. '
-        + 'The canary could not remove the records it made (an unexpected error). '
+      detail: 'The canary synthetic check read its approval request and execution back through the console, but did not clean up. '
+        + 'The canary synthetic check could not remove the records it made (an unexpected error). '
         + 'They belong to the canary user only, and a later run removes them.',
     });
     const left = await canaryRows();
@@ -193,7 +193,7 @@ required('the canary run on PostgreSQL', () => {
     const outcome = await runCanary(dependencies({ runtimeStore: broken }));
     expect(outcome).toEqual({
       id: 'approval_execution_projection', state: 'pending', code: 'canary_could_not_run',
-      detail: 'The canary could not complete its run (an unexpected error), so nothing is verified.',
+      detail: 'The canary synthetic check could not complete its run (an unexpected error), so nothing is verified.',
     });
     expect(await canaryRows()).toEqual(nothingLeft);
   });
@@ -205,7 +205,7 @@ required('the canary run on PostgreSQL', () => {
     const outcome = await runCanary(dependencies({ runtimeStore: stuck, timeoutMs: 200 }));
     expect(outcome).toEqual({
       id: 'approval_execution_projection', state: 'pending', code: 'canary_timed_out',
-      detail: 'The canary did not finish within 0.2 seconds, so nothing is verified.',
+      detail: 'The canary synthetic check did not finish within 0.2 seconds, so nothing is verified.',
     });
     expect(Date.now() - started).toBeLessThan(5000);
     expect(await canaryRows()).toEqual(nothingLeft);
@@ -226,7 +226,7 @@ required('the canary run on PostgreSQL', () => {
     try {
       expect(await runCanary(dependencies())).toMatchObject({
         state: 'failed', code: 'canary_user_not_inert',
-        detail: 'The canary user has been enabled. It must stay disabled. The canary will not run until it is put right.',
+        detail: 'The canary user has been enabled. It must stay disabled. The canary synthetic check will not run until it is put right.',
       });
       expect(await canaryRows()).toEqual(nothingLeft);
     } finally {

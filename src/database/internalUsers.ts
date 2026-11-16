@@ -26,7 +26,7 @@ export const CANARY_USER_UUID = '00000000-0000-4000-8000-000000000002';
  */
 export const CANARY_USERNAME = 'dollhousemcp-canary';
 
-export const CANARY_DISPLAY_NAME = 'DollhouseMCP canary (automated check, not a person)';
+export const CANARY_DISPLAY_NAME = 'DollhouseMCP canary synthetic check (automated, not a person)';
 
 /** Every reserved internal user. The shared-pool system user owns shared elements; the canary is above. */
 export const INTERNAL_USER_IDS: readonly string[] = Object.freeze([SYSTEM_USER_UUID, CANARY_USER_UUID]);

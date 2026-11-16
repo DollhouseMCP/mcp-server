@@ -225,7 +225,13 @@ function healthComponent(component) {
   </article>`;
 }
 
+// A component whose name in the API says little to an operator gets its own label.
+const COMPONENT_LABELS = Object.freeze({
+  approval_execution_projection: 'Canary synthetic check',
+});
+
 function componentLabel(value) {
+  if (Object.hasOwn(COMPONENT_LABELS, value)) return COMPONENT_LABELS[value];
   return String(value || 'component').replaceAll('_', ' ').replaceAll(/\b\w/g, character => character.toUpperCase());
 }
 

@@ -32,7 +32,7 @@ describe('compareAllowlistParity', () => {
     expect(compareAllowlistParity([email('alice@example.com')], []).detail).toBe(
       '1 of 1 entry in the earlier sign-in allowlist is not in the allowlist sign-in uses (1 by email). ' +
       'Sign-in does not honour it, and this server will refuse to start at its next restart until the two lists agree. ' +
-      'Add it in the console, or remove it from the earlier list with dollhouse-allowlist.',
+      'Run `dollhouse-allowlist reconcile` to list and clear what is left in the earlier list.',
     );
   });
 
@@ -57,7 +57,7 @@ describe('compareAllowlistParity', () => {
       detail: '4 of 5 entries in the earlier sign-in allowlist are not in the allowlist sign-in uses ' +
         '(2 by email, 1 by GitHub username, 1 by GitHub ID). Sign-in does not honour them, and this server will ' +
         'refuse to start at its next restart until the two lists agree. ' +
-        'Add them in the console, or remove them from the earlier list with dollhouse-allowlist.',
+        'Run `dollhouse-allowlist reconcile` to list and clear what is left in the earlier list.',
     });
   });
 

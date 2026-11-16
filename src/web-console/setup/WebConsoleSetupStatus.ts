@@ -18,12 +18,15 @@ export interface WebConsoleSetupCheckResult {
   readonly id: WebConsoleSetupCheckId;
   readonly state: WebConsoleSetupCheckState;
   readonly detail?: string;
+  /** When the thing the state rests on last happened, where the source records a time. */
+  readonly observedAt?: Date;
 }
 
 export interface WebConsoleSetupCheckStatus {
   readonly definition: WebConsoleSetupCheckDefinition;
   readonly state: WebConsoleSetupCheckState;
   readonly detail?: string;
+  readonly observedAt?: Date;
 }
 
 /**
@@ -40,6 +43,7 @@ export function listWebConsoleSetupCheckStatuses(
       definition: WEB_CONSOLE_SETUP_CHECKS[id],
       state: result?.state ?? 'pending',
       ...(result?.detail === undefined ? {} : { detail: result.detail }),
+      ...(result?.observedAt === undefined ? {} : { observedAt: result.observedAt }),
     };
   });
 }

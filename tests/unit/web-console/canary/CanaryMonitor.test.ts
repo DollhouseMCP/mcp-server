@@ -50,7 +50,7 @@ describe('CanaryMonitor', () => {
     expect(status).toEqual({
       state: 'pending',
       code: 'canary_not_run',
-      detail: 'The canary has not run on this server since it started. Run it from Operations, or switch the schedule on.',
+      detail: 'The canary synthetic check has not run on this server since it started. Run it from Operations, or switch the schedule on.',
       lastRun: null,
     });
     expect(hasNoCurrentCanaryResult(status)).toBe(true);
@@ -71,7 +71,7 @@ describe('CanaryMonitor', () => {
     });
     expect(monitor.status()).toEqual({ state: 'passed', code: 'canary_passed', detail: PASSED.detail, lastRun: record });
     expect(hasNoCurrentCanaryResult(monitor.status())).toBe(false);
-    expect(log.info).toHaveBeenCalledWith('[WebConsoleCanary] admin run: canary_passed. Created, read back and removed.');
+    expect(log.info).toHaveBeenCalledWith('[WebConsoleCanary] Canary synthetic check, admin run: canary_passed. Created, read back and removed.');
   });
 
   it('warns in the log when a run does not pass', async () => {
@@ -79,7 +79,7 @@ describe('CanaryMonitor', () => {
 
     await monitor.run('admin');
 
-    expect(log.warn).toHaveBeenCalledWith('[WebConsoleCanary] admin run: canary_approval_not_readable. The console did not list it.');
+    expect(log.warn).toHaveBeenCalledWith('[WebConsoleCanary] Canary synthetic check, admin run: canary_approval_not_readable. The console did not list it.');
     expect(monitor.status()).toMatchObject({ state: 'failed', code: 'canary_approval_not_readable' });
   });
 
@@ -121,7 +121,7 @@ describe('CanaryMonitor', () => {
       type: 'OPERATION_COMPLETED',
       severity: 'LOW',
       source: 'WebConsoleCanary',
-      details: 'Scheduled canary run finished at 2026-11-12T09:00:00.000Z: canary_passed',
+      details: 'Scheduled canary synthetic check finished at 2026-11-12T09:00:00.000Z: canary_passed',
       additionalData: { check: 'approval_execution_projection', trigger: 'schedule', state: 'passed', code: 'canary_passed' },
     });
   });
@@ -159,7 +159,7 @@ describe('CanaryMonitor', () => {
     expect(status).toEqual({
       state: 'pending',
       code: 'canary_result_stale',
-      detail: 'The canary last passed more than 24 hours ago, so that result is no longer current. Run it again, or switch the schedule on.',
+      detail: 'The canary synthetic check last passed more than 24 hours ago, so that result is no longer current. Run it again, or switch the schedule on.',
       lastRun: record,
     });
     expect(hasNoCurrentCanaryResult(status)).toBe(true);
@@ -231,7 +231,7 @@ describe('CanaryMonitor', () => {
       await expect(monitor.sweepLeftovers()).resolves.toBeUndefined();
 
       expect(log.warn).toHaveBeenCalledWith(
-        '[WebConsoleCanary] Could not sweep canary leftovers at start-up; the next run sweeps again',
+        '[WebConsoleCanary] Could not sweep what an unfinished canary synthetic check left behind at start-up; the next run sweeps again',
       );
     });
   });

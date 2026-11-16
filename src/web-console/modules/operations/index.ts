@@ -16,6 +16,7 @@ export { InMemoryConsoleTelemetryQuery, PostgresConsoleTelemetryQuery } from './
 export type { OperationsHealthChecks, OperationHealthCheck } from './OperationsHealth.js';
 export {
   projectCanaryRun,
+  projectSetupStatus,
   projectOperationHealthComponent,
   projectOperationHealthSummary,
   projectOperatorConfigList,
@@ -29,6 +30,8 @@ export {
 export type { ISystemMetricsSource } from './SystemMetricsSource.js';
 export type {
   CanaryRunDto,
+  SetupStatusCheckDto,
+  SetupStatusDto,
   OperatorConfigListDto,
   OperatorConfigSettingDto,
   OperatorConfigValueSchemaDto,

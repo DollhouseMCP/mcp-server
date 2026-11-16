@@ -13,6 +13,7 @@ import {
   projectOperationHealthSummary,
   projectOperationalLogs,
   projectOperationalMetrics,
+  projectSetupStatus,
   projectSystemMetrics,
   type ConsoleRouteDefinition,
   type ISystemMetricsSource,
@@ -37,6 +38,7 @@ const OPERATE_CONFIG_PATH = '/api/v1/admin/operate/config';
 const LICENSE_KEY_PATH = '/api/v1/admin/operate/config/:key';
 const CONSOLE_PORT_KEY = 'console.port';
 const CANARY_RUN_PATH = '/api/v1/admin/operate/canary/run';
+const SETUP_STATUS_PATH = '/api/v1/admin/operate/setup-status';
 type ConsoleRouteRequest = Parameters<ConsoleRouteDefinition['handler']>[0];
 
 class RacingOperatorConfigStore extends InMemoryOperatorConfigStore {
@@ -524,6 +526,102 @@ describe('OperationsModule', () => {
     })).toEqual({
       component: 'approval_execution_projection', status: 'not_run', checked_at: NOW.toISOString(), failure_codes: [],
     });
+  });
+
+  it('does not offer the setup status where nothing reports on it', () => {
+    const module = createModule();
+
+    expect(module.routes.some(route => route.path === SETUP_STATUS_PATH)).toBe(false);
+    expect(module.auditOperations).not.toContainEqual({ id: 'operate.setup_status.show' });
+  });
+
+  it('offers the setup status to elevated operators only, as an audited read', async () => {
+    const { WEB_CONSOLE_SETUP_CHECKS, listWebConsoleSetupCheckStatuses } = await import('../../../../src/web-console/setup/index.js');
+    const observedAt = new Date(NOW.getTime() - 60_000);
+    const module = createOperationsModule({
+      healthChecks: HEALTH_CHECKS,
+      telemetry: createTelemetry(),
+      operatorConfigStore: new InMemoryOperatorConfigStore(),
+      setupStatus: () => Promise.resolve({
+        checkedAt: NOW,
+        checks: listWebConsoleSetupCheckStatuses([
+          { id: 'production_database_migrations', state: 'failed', detail: 'Migration 0061 is missing.' },
+          { id: 'embedded_as_login_step_up', state: 'passed', detail: 'An administrator has elevated.', observedAt },
+          { id: 'account_invite_redemption', state: 'not_applicable' },
+        ]),
+      }),
+      now: () => NOW,
+    });
+    const route = findRoute(module.routes, 'GET', SETUP_STATUS_PATH);
+
+    expect(route).toMatchObject({
+      audience: 'admin',
+      requiredCapability: OPERATE_CAPABILITY,
+      elevation: 'admin_30m',
+      privacyClass: OPERATIONAL_PRIVACY,
+      idempotency: 'not_applicable',
+      auditOperation: 'operate.setup_status.show',
+    });
+    expect(module.auditOperations).toContainEqual({ id: 'operate.setup_status.show' });
+
+    const result = await executeConsoleRoute(route, { query: {}, params: {}, headers: {} } as unknown as ConsoleRouteRequest);
+    const body = result.body as ReturnType<typeof projectSetupStatus>;
+
+    expect(result.status).toBe(200);
+    expect(body.checked_at).toBe(NOW.toISOString());
+    expect(body.checks).toHaveLength(11);
+    expect(body.counts).toEqual({ passed: 1, pending: 8, failed: 1, not_applicable: 1 });
+    const migrations = WEB_CONSOLE_SETUP_CHECKS.production_database_migrations;
+    expect(body.checks[0]).toEqual({
+      id: 'production_database_migrations',
+      title: migrations.title,
+      proves: migrations.proves,
+      verification: 'server-probe',
+      verified_by: migrations.verifiedBy,
+      remediation: migrations.remediation,
+      state: 'failed',
+      detail: 'Migration 0061 is missing.',
+      observed_at: null,
+    });
+    expect(body.checks.find(check => check.id === 'embedded_as_login_step_up')).toMatchObject({
+      state: 'passed', detail: 'An administrator has elevated.', observed_at: observedAt.toISOString(),
+    });
+    // A check nothing reported on is pending, with no detail.
+    expect(body.checks.find(check => check.id === 'oauth_grant_revocation')).toMatchObject({ state: 'pending', detail: null });
+  });
+
+  it('projects the setup status by allowlist, taking each check\'s wording from the catalog and not from the value', async () => {
+    const { WEB_CONSOLE_SETUP_CHECKS } = await import('../../../../src/web-console/setup/index.js');
+
+    const projected = projectSetupStatus({
+      checked_at: NOW.toISOString(),
+      connection_string: MUST_NOT_LEAK,
+      checks: [
+        {
+          id: 'github_integration_connect_callback',
+          title: MUST_NOT_LEAK,
+          remediation: MUST_NOT_LEAK,
+          state: 'passed',
+          detail: 'd'.repeat(600),
+          observed_at: 'not a time',
+          user_id: MUST_NOT_LEAK,
+        },
+        { id: 'not_a_check', state: 'passed', detail: MUST_NOT_LEAK },
+        { id: 'oauth_grant_revocation', state: 'verified', detail: 42 },
+      ],
+    });
+
+    expect(JSON.stringify(projected)).not.toContain(MUST_NOT_LEAK);
+    expect(projected.checks.map(check => check.id)).toEqual(['github_integration_connect_callback', 'oauth_grant_revocation']);
+    expect(projected.checks[0]).toMatchObject({
+      title: WEB_CONSOLE_SETUP_CHECKS.github_integration_connect_callback.title,
+      remediation: WEB_CONSOLE_SETUP_CHECKS.github_integration_connect_callback.remediation,
+      detail: 'd'.repeat(500),
+      observed_at: null,
+    });
+    // A state the console does not know reads as pending, never as passed.
+    expect(projected.checks[1]).toMatchObject({ state: 'pending', detail: null });
+    expect(projected.counts).toEqual({ passed: 1, pending: 1, failed: 0, not_applicable: 0 });
   });
 
   it('reports a migration check that throws as unavailable rather than failing the whole summary', async () => {

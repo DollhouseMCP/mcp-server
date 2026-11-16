@@ -80,6 +80,34 @@ Explicit Jest selections/options still pass through unchanged, for example
 `npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryOwnedRename.test.ts`.
 A selected passing file is focused evidence, not complete qualification.
 
+### Populated owner-erasure time limits
+
+Owner-erasure qualification uses workload tiers shared by both layouts and all
+platforms. The captured macOS runs in [#3090](https://github.com/DollhouseMCP/mcp-server/issues/3090#issuecomment-6481950643)
+and [#3146](https://github.com/DollhouseMCP/mcp-server/actions/runs/40775170691/job/123122484002)
+show the following whole-case costs, including setup, foreign-file verification
+and awaited cleanup. The limit allows 50% headroom above each observed maximum,
+rounded up to a 30-second increment:
+
+| Foreign owners | Volumes | Observed maximum | Whole-case limit |
+| --- | --- | --- | --- |
+| 100 or 250 | 2 | 8.50s | 30s |
+| 100 or 250 | 10 | 31.93s | 60s |
+| 1,000 | 2 | 39.37s | 60s |
+| 1,000 | 10 | 53.99s | 90s |
+
+These are finite completion limits for durable filesystem work on shared runners,
+not a throughput benchmark. All twelve workloads, directory-read and reservation
+bounds, foreign bytes and full identities, and awaited cleanup remain required.
+The older 30s/45s failures remain recorded as failures; this policy explicitly
+replaces those limits for future qualification rather than claiming a storage
+algorithm improvement. Raw phase/work timings remain available for regressions.
+
+The process watchdog is the greater of 60s or the whole-case limit plus 15s.
+Jest observes for five seconds longer than that watchdog. A late completion still
+fails after awaited cleanup; a hang terminates the dedicated process with exit 98
+before Jest can advance. Ordinary erasure cases retain their existing limits.
+
 ---
 
 ## 2. Core Test Suites
