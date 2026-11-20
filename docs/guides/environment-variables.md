@@ -489,6 +489,8 @@ These variables control the Gatekeeper policy enforcement engine that protects a
 | `DOLLHOUSE_DANGER_ZONE_ADMIN_TOKEN` | _(none)_ | Admin token for DangerZone operations. When set, provides an alternative authentication path for danger zone verification. |
 | `DOLLHOUSE_SECURITY_ALERTS` | `false` | When `true`, enables security alert notifications in the security monitor. |
 
+Ownership checks run before built-in read-only command patterns can allow a call. For example, `gh pr checks 5 && gh pr merge 5` still requires confirmation when PR 5 belongs to someone else. A static deny remains final.
+
 ### Permission Prompt Configuration
 
 These variables tune the permission prompt system introduced in v2.0.0 (Issue #625) for headless session approval workflows.

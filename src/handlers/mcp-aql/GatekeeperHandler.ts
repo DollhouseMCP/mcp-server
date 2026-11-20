@@ -473,7 +473,7 @@ export class GatekeeperHandler {
 
     const classification = classifyTool(toolName, toolInput.input);
     const staticResponse = this.resolveStaticClassification(toolName, toolInput.input, classification, agentIdentity);
-    if (staticResponse) {
+    if (staticResponse && classification.behavior === 'deny') {
       return staticResponse;
     }
 
@@ -485,6 +485,11 @@ export class GatekeeperHandler {
     });
     if (ownership?.behavior === 'deny') {
       return this.buildOwnershipDeny(toolName, classification, ownership, agentIdentity);
+    }
+    // A safe-command glob can include a chained GitHub mutation. Ownership
+    // confirmation must reach element denies and the approval flow first.
+    if (staticResponse && ownership?.behavior !== 'confirm') {
+      return staticResponse;
     }
 
     let activeElements: ActiveElement[];

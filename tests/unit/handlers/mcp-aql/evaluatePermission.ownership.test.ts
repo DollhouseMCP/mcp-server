@@ -7,6 +7,9 @@
 
 import { jest } from '@jest/globals';
 import { evaluatePermission, type EvaluatePermissionDeps } from '../../../../src/handlers/mcp-aql/evaluatePermission.js';
+import { classifyTool } from '../../../../src/handlers/mcp-aql/policies/ToolClassification.js';
+import { OwnershipPolicyService } from '../../../../src/handlers/mcp-aql/policies/OwnershipPolicyService.js';
+import { OwnershipCache, type OwnershipResolver } from '../../../../src/handlers/mcp-aql/policies/OwnershipLookup.js';
 import type { OwnershipDecision } from '../../../../src/handlers/mcp-aql/policies/OwnershipPolicy.js';
 
 function deps(overrides: Partial<EvaluatePermissionDeps> = {}): EvaluatePermissionDeps {
@@ -71,17 +74,48 @@ describe('evaluatePermission ownership policy stage', () => {
     expect(policy.evaluate).toHaveBeenCalledWith('Bash', { command: 'gh pr merge 42' }, { sessionId: 'sess-1', cwd: '/work/repo' });
   });
 
-  it('does not consult the policy for statically allowed or denied tools', async () => {
+  it('keeps a static deny final without consulting ownership', async () => {
     const policy = ownership({ behavior: 'deny', reason: 'x', policySource: 'ownership_policy' });
-    await evaluatePermission(MERGE, deps({
-      ownershipPolicy: policy,
-      classifyTool: () => ({ behavior: 'allow' as const, riskLevel: 'safe' as const, reason: 'safe' }),
-    }));
     await evaluatePermission(MERGE, deps({
       ownershipPolicy: policy,
       classifyTool: () => ({ behavior: 'deny' as const, riskLevel: 'dangerous' as const, reason: 'dangerous' }),
     }));
     expect(policy.evaluate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'gh pr checks 5 && gh pr merge 5 --squash',
+    'gh pr view 5; gh pr merge 5',
+    'git status && git push origin someone-elses-branch',
+  ])('asks for a chained mutation even when the static glob allows it: %s', async (command) => {
+    const input = { command };
+    expect(classifyTool('Bash', input).behavior).toBe('allow');
+    const lookup = jest.fn<OwnershipResolver['lookup']>().mockResolvedValue({ status: 'resolved', authorLogin: 'stranger' });
+    const policy = new OwnershipPolicyService({
+      config: { mode: 'confirm', ownerLogin: 'mickdarling', teammates: [] },
+      resolver: { lookup, resolveOwnerLogin: async () => 'mickdarling' },
+      cache: new OwnershipCache(),
+    });
+    const response = await evaluatePermission({ ...MERGE, input }, deps({ ownershipPolicy: policy, classifyTool }));
+    expect(decisionOf(response)).toBe('ask');
+    expect(lookup).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves a static allow for a read with no ownership intent', async () => {
+    const policy = ownership(undefined);
+    const getActiveElements = jest.fn(async () => []);
+    const response = await evaluatePermission({ ...MERGE, input: { command: 'gh pr view 5' } },
+      deps({ ownershipPolicy: policy, classifyTool, getActiveElements }));
+    expect(decisionOf(response)).toBe('allow');
+    expect(policy.evaluate).toHaveBeenCalledTimes(1);
+    expect(getActiveElements).not.toHaveBeenCalled();
+  });
+
+  it('lets ownership deny override a static allow', async () => {
+    const policy = ownership({ behavior: 'deny', reason: 'foreign PR', policySource: 'ownership_policy' });
+    const response = await evaluatePermission({ ...MERGE, input: { command: 'gh pr view 5; gh pr merge 5' } },
+      deps({ ownershipPolicy: policy, classifyTool }));
+    expect(decisionOf(response)).toBe('deny');
   });
 
   it('fails closed (ask) when the policy itself throws', async () => {

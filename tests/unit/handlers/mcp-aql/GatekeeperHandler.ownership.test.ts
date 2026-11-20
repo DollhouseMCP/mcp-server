@@ -13,9 +13,12 @@ import { Gatekeeper } from '../../../../src/handlers/mcp-aql/Gatekeeper.js';
 import { OperationRegistry } from '../../../../src/handlers/mcp-aql/OperationRegistry.js';
 import { RateLimiterFactory } from '../../../../src/utils/RateLimiter.js';
 import type { HandlerRegistry } from '../../../../src/handlers/mcp-aql/MCPAQLHandler.js';
+import { classifyTool } from '../../../../src/handlers/mcp-aql/policies/ToolClassification.js';
+import { OwnershipPolicyService } from '../../../../src/handlers/mcp-aql/policies/OwnershipPolicyService.js';
+import { OwnershipCache, type OwnershipResolver } from '../../../../src/handlers/mcp-aql/policies/OwnershipLookup.js';
 import type { OwnershipDecision } from '../../../../src/handlers/mcp-aql/policies/OwnershipPolicy.js';
 
-function fixture(decision: OwnershipDecision | undefined | Error) {
+function fixture(decision: OwnershipDecision | undefined | Error, policy?: GatekeeperHandlerDeps['ownershipPolicy']) {
   const collect = jest.fn<GatekeeperHandlerDeps['getActiveElements']>().mockResolvedValue([]);
   const gatekeeper = new Gatekeeper(undefined, { enableAuditLogging: false });
   const createApproval = jest.spyOn(gatekeeper, 'createCliApprovalRequest').mockResolvedValue('cli-00000000-0000-4000-8000-000000000000');
@@ -35,7 +38,7 @@ function fixture(decision: OwnershipDecision | undefined | Error) {
     verificationMetrics: { recordAttempt() {}, recordSuccess() {}, recordFailure() {}, recordExpired() {}, recordInvalidFormat() {}, recordRateLimited() {} },
     issueDeadlockReliefChallenge: () => undefined, completeDeadlockRelief: async () => undefined,
     buildRateLimitDeny: () => ({ behavior: 'deny' }),
-    ownershipPolicy: { evaluate },
+    ownershipPolicy: policy ?? { evaluate },
   });
   return { handler, collect, createApproval, checkApproval, evaluate };
 }
@@ -119,10 +122,45 @@ describe('GatekeeperHandler permission_prompt ownership policy', () => {
     })).resolves.toMatchObject({ hookSpecificOutput: { permissionDecision: 'ask', permissionDecisionReason: 'lookup failed' } });
   });
 
-  it('is skipped for statically classified tools', async () => {
-    const f = fixture({ behavior: 'deny', reason: 'x', policySource: 'ownership_policy' });
+  it('preserves a static read allow when ownership has no intent', async () => {
+    const f = fixture(undefined);
     await expect(f.handler.dispatch('permissionPrompt', { tool_name: 'Bash', input: { command: 'gh pr view 42' } }))
       .resolves.toMatchObject({ behavior: 'allow', classification: { stage: 'static_classification' } });
+    expect(f.evaluate).toHaveBeenCalledTimes(1);
+    expect(f.collect).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'gh pr checks 5 && gh pr merge 5 --squash',
+    'gh pr view 5; gh pr merge 5',
+    'git status && git push origin someone-elses-branch',
+  ])('gates statically allowed chained mutations in both entry points: %s', async (command) => {
+    const input = { command };
+    expect(classifyTool('Bash', input).behavior).toBe('allow');
+    const lookup = jest.fn<OwnershipResolver['lookup']>().mockResolvedValue({ status: 'resolved', authorLogin: 'stranger' });
+    const policy = new OwnershipPolicyService({
+      config: { mode: 'confirm', ownerLogin: 'mickdarling', teammates: [] },
+      resolver: { lookup, resolveOwnerLogin: async () => 'mickdarling' },
+      cache: new OwnershipCache(),
+    });
+    const f = fixture(undefined, policy);
+    await expect(f.handler.dispatch('permissionPrompt', { ...MERGE, input })).resolves.toMatchObject({
+      behavior: 'deny', classification: { stage: 'approval_required' },
+    });
+    expect(f.createApproval).toHaveBeenCalledWith(expect.objectContaining({ policySource: 'ownership_policy' }));
+    await expect(f.handler.dispatch('evaluatePermission', { ...MERGE, input, platform: 'claude_code' }))
+      .resolves.toMatchObject({ hookSpecificOutput: { permissionDecision: 'ask' } });
+    expect(lookup).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a static deny final and skips ownership', async () => {
+    const f = fixture({ behavior: 'allow', reason: 'own PR', policySource: 'ownership_policy' });
+    const input = { command: 'rm -rf /' };
+    expect(classifyTool('Bash', input).behavior).toBe('deny');
+    await expect(f.handler.dispatch('permissionPrompt', { ...MERGE, input })).resolves.toMatchObject({
+      behavior: 'deny', classification: { stage: 'static_classification' },
+    });
     expect(f.evaluate).not.toHaveBeenCalled();
   });
+
 });

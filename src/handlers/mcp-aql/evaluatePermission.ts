@@ -7,7 +7,7 @@
  *
  * Four-stage evaluation pipeline:
  * 1. Rate limiting — prevents abuse
- * 2. Static tool classification — built-in allow/deny rules
+ * 2. Static tool classification — built-in denies are final; allows await ownership
  * 3. Ownership policy — who authored the PR/issue a GitHub mutation targets (Issue #3153)
  * 4. Element policy evaluation — active element gatekeeper policies
  *
@@ -235,11 +235,13 @@ async function decidePermission(
   deps: EvaluatePermissionDeps,
 ): Promise<PermissionOutcome> {
   const classification = deps.classifyTool(toolName, input);
-  if (classification.behavior === 'allow') return { decision: 'allow' };
   if (classification.behavior === 'deny') return { decision: 'deny', reason: classification.reason };
 
   const ownership = await evaluateOwnershipStage(deps.ownershipPolicy, toolName, input, context);
   if (ownership?.behavior === 'deny') return { decision: 'deny', reason: ownership.reason };
+  // Safe-command globs can also match chained mutations; ownership must run
+  // before their allow short-circuit. Keep static denies final above.
+  if (classification.behavior === 'allow' && ownership?.behavior !== 'confirm') return { decision: 'allow' };
 
   const elements = await fetchActiveElements(deps, toolName, context.sessionId);
   const decision = deps.evaluateCliToolPolicy(toolName, input, elements);
