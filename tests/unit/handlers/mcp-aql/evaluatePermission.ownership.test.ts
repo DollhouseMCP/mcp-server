@@ -101,6 +101,23 @@ describe('evaluatePermission ownership policy stage', () => {
     expect(lookup).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    { name: 'commit message heredoc', command: "git commit -m \"$(cat <<'EOF'\nSubject\nBody\nEOF\n)\"" },
+    { name: 'PR creation heredoc', command: "gh pr create --title t --body \"$(cat <<'EOF'\nSummary\nEOF\n)\"" },
+    { name: 'long Python script', command: "python - <<'EOF'\n" + 'print(1)\n'.repeat(600) + 'EOF\n' },
+    { name: 'long local file write', command: 'cat > example.txt <<"EOF"\n' + 'local data\n'.repeat(600) + 'EOF\n' },
+  ])('allows $name through ownership without an auth or author lookup', async ({ command }) => {
+    const lookup = jest.fn<OwnershipResolver['lookup']>().mockResolvedValue({ status: 'error', message: 'unexpected lookup' });
+    const resolveOwnerLogin = jest.fn<OwnershipResolver['resolveOwnerLogin']>().mockResolvedValue(undefined);
+    const policy = new OwnershipPolicyService({
+      config: { mode: 'confirm', teammates: [] }, resolver: { lookup, resolveOwnerLogin }, cache: new OwnershipCache(),
+    });
+    const response = await evaluatePermission({ ...MERGE, input: { command } }, deps({ ownershipPolicy: policy }));
+    expect(decisionOf(response)).toBe('allow');
+    expect(lookup).not.toHaveBeenCalled();
+    expect(resolveOwnerLogin).not.toHaveBeenCalled();
+  });
+
   it('preserves a static allow for a read with no ownership intent', async () => {
     const policy = ownership(undefined);
     const getActiveElements = jest.fn(async () => []);

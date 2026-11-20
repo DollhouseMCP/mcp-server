@@ -905,13 +905,54 @@ function changesShellRepository(tokens: string[], prefixedRepository: boolean): 
     (executable === 'export' && tokens.slice(1).some(token => REPOSITORY_ENV_ASSIGNMENT.test(token)));
 }
 
+/** Existing-object ownership does not gate reads, comments, reviews or creation. */
+const OWNERSHIP_EXEMPT_GH_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  'view', 'diff', 'checks', 'list', 'status', 'comment', 'review', 'create', 'checkout', 'develop',
+]);
+
+/** A linear, conservative fallback; do not associate a commit message's "push" with git commit. */
+function couldContainGitPush(command: string): boolean {
+  for (const segment of command.split(/[\r\n;&|]/)) {
+    let lastPush = -1;
+    for (const match of segment.matchAll(/\bpush\b/g)) lastPush = match.index;
+    if (lastPush < 0) continue;
+    for (const match of segment.matchAll(/\bgit\b/g)) {
+      if (match.index >= lastPush) break;
+      if (/^(?:["'])?\s+(?:push\b|-|["'`$])/.test(segment.slice(match.index + 3))) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Incomplete inspection only concerns ownership when the unexamined text could
+ * contain a protected mutation. This scans the full raw input, never a prefix.
+ * A signal may over-report quoted data; absence of any signal leaves local
+ * scripts and ordinary heredoc commit/PR-create messages outside this policy.
+ */
+function couldContainGitHubMutation(command: string): boolean {
+  const raw = command.replace(/\\\r?\n/g, '');
+  if (/\bapi\.github\.com\b/i.test(raw) || couldContainGitPush(raw) || /\bgh\s+["'`$]/.test(raw)) return true;
+  for (const match of raw.matchAll(/\bgh\s+(pr|issue|api)\b(?:\s+([\w-]+))?/g)) {
+    if (match[1] === 'api') return true;
+    if (!match[2] || !OWNERSHIP_EXEMPT_GH_SUBCOMMANDS.has(match[2])) return true;
+  }
+  return false;
+}
+
+function incompleteCommandIntents(command: string, action: string): GitHubMutationIntent[] {
+  return couldContainGitHubMutation(command)
+    ? [{ kind: 'unresolvable', action, source: 'Bash' }]
+    : [];
+}
+
 function detectBashMutations(command: string): GitHubMutationIntent[] {
   if (command.length > MAX_COMMAND_LENGTH) {
-    return [{ kind: 'unresolvable', action: 'Bash command exceeds ownership inspection length limit', source: 'Bash' }];
+    return incompleteCommandIntents(command, 'Bash command exceeds ownership inspection length limit');
   }
   const inspection = inspectShellSegments(command);
   if (!inspection.complete) {
-    return [{ kind: 'unresolvable', action: 'Bash command cannot be fully inspected', source: 'Bash' }];
+    return incompleteCommandIntents(command, 'Bash command cannot be fully inspected');
   }
   const intents: GitHubMutationIntent[] = [];
   // Deliberately retain uncertainty across segments, including subshells: the

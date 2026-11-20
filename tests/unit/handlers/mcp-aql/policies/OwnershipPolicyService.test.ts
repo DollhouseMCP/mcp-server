@@ -138,6 +138,25 @@ describe('OwnershipPolicyService', () => {
       expect(lookup).not.toHaveBeenCalled();
     });
 
+    it.each([
+      { name: 'commit heredoc', command: "git commit -m \"$(cat <<'EOF'\nSubject\nBody\nEOF\n)\"" },
+      { name: 'PR-create heredoc', command: "gh pr create --title t --body \"$(cat <<'EOF'\nSummary\nEOF\n)\"" },
+      { name: 'long local script', command: "python - <<'EOF'\n" + 'print(1)\n'.repeat(600) + 'EOF\n' },
+      { name: 'long local file write', command: 'cat > example.txt <<"EOF"\n' + 'local data\n'.repeat(600) + 'EOF\n' },
+    ])('does not request ownership confirmation for $name', async ({ command }) => {
+      const { resolver, lookup, resolveOwnerLogin } = fakeResolver({});
+      const service = new OwnershipPolicyService({ config: { mode: 'confirm', teammates: [] }, resolver, cache: new OwnershipCache() });
+      expect(await service.evaluate('Bash', { command })).toBeUndefined();
+      expect(lookup).not.toHaveBeenCalled();
+      expect(resolveOwnerLogin).not.toHaveBeenCalled();
+    });
+
+    it('still confirms executable mutation contents of an unquoted heredoc', async () => {
+      const { resolver } = fakeResolver({ '7': resolved('stranger') });
+      const service = new OwnershipPolicyService({ config: { ...CONFIG, mode: 'confirm' }, resolver, cache: new OwnershipCache() });
+      expect((await service.evaluate('Bash', { command: 'echo "$(cat <<EOF\n$(gh pr close 7)\nEOF\n)"' }))?.behavior).toBe('confirm');
+    });
+
     it('does not guess the repository inherited by a substitution under a repository prefix', async () => {
       const { resolver, lookup } = fakeResolver({ '7': resolved('mickdarling') });
       const service = new OwnershipPolicyService({ config: { ...CONFIG, mode: 'confirm' }, resolver, cache: new OwnershipCache() });

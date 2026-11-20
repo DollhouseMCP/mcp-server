@@ -147,6 +147,36 @@ describe('OwnershipPolicy', () => {
       expect(bash(command)).toEqual([]);
     });
 
+    it.each([
+      { name: 'commit message heredoc', command: "git commit -m \"$(cat <<'EOF'\nSubject\n\nBody about push notifications\nEOF\n)\"" },
+      { name: 'PR creation heredoc', command: "gh pr create --title t --body \"$(cat <<'EOF'\nSummary\n\nTest plan\nEOF\n)\"" },
+      { name: 'double-quoted delimiter', command: 'git commit -m "$(cat <<"EOF"\nSubject\nBody\nEOF\n)"' },
+      { name: 'long Python heredoc', command: "python - <<'EOF'\n" + 'print(1)\n'.repeat(600) + 'EOF\n' },
+      { name: 'long local file write', command: 'cat > example.txt <<"EOF"\n' + 'local data\n'.repeat(600) + 'EOF\n' },
+      { name: 'long PR creation body', command: 'gh pr create --title t --body "' + 'summary '.repeat(700) + '"' },
+      { name: 'read-only parameter expansion', command: 'echo "$(printf "%s" "${value:-fallback}")"' },
+      { name: 'read-only case expression', command: 'echo "$(case x in x) printf hello;; esac)"' },
+    ])('does not gate $name without a GitHub mutation signal', ({ command }) => {
+      expect(bash(command)).toEqual([]);
+    });
+
+    it.each([
+      { name: 'plain heredoc', command: 'cat <<EOF\n$(gh pr close 7)\nEOF\n' },
+      { name: 'heredoc in a substitution', command: 'echo "$(cat <<EOF\n$(gh pr close 7)\nEOF\n)"' },
+      { name: 'PR creation body with an executable mutation', command: 'gh pr create --title t --body "$(cat <<EOF\n$(gh pr close 7)\nEOF\n)"' },
+    ])('still inspects or fails closed for a mutation in an unquoted $name', ({ command }) => {
+      expect(bash(command).length).toBeGreaterThan(0);
+    });
+
+    it.each([
+      'git -C ../other push origin feature/x',
+      'gh api repos/o/r/pulls/7/merge -X PUT',
+      'curl -X PUT https://api.github.com/repos/o/r/pulls/7/merge',
+      'gh "$(printf pr)" close 7',
+    ])('retains fail-closed inspection for oversized mutation signals: %s', (mutation) => {
+      expect(bash(' '.repeat(4000) + mutation)).toEqual([expect.objectContaining({ kind: 'unresolvable' })]);
+    });
+
     it('keeps outer arguments intact while separately exposing substitution bodies', () => {
       const command = 'gh pr edit 5 --body "$(gh pr close 7)" --repo o/r';
       expect(splitShellSegments(command)).toEqual([command, 'gh pr close 7']);
