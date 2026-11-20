@@ -39,3 +39,22 @@ export {
   type CliToolPolicyResult,
   type ToolRiskLevel,
 } from './ToolClassification.js';
+
+// Authorship-aware GitHub ownership policy (Issue #3153)
+export {
+  decideOwnership,
+  detectGitHubMutations,
+  isTrustedAuthor,
+  parseOwnershipPolicyConfig,
+  parseTeammateList,
+  DEFAULT_OWNERSHIP_POLICY_MODE,
+  OWNERSHIP_POLICY_MODES,
+  type GitHubMutationIntent,
+  type GitHubRepoRef,
+  type GitHubTargetKind,
+  type OwnershipDecision,
+  type OwnershipLookupResult,
+  type OwnershipPolicyConfig,
+  type OwnershipPolicyMode,
+  type RawOwnershipPolicyConfig,
+} from './OwnershipPolicy.js';

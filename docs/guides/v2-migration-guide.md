@@ -315,6 +315,9 @@ New configuration options in v2.0:
 | `MCP_AQL_ENDPOINT_MODE` | `crude` | MCP-AQL mode (`crude` or `single`) |
 | `DOLLHOUSE_GATEKEEPER_ENABLED` | `true` | Enable/disable gatekeeper |
 | `DOLLHOUSE_GATEKEEPER_ELEMENT_POLICY_OVERRIDES` | `true` | Enable/disable element policy layer |
+| `DOLLHOUSE_GITHUB_OWNERSHIP_POLICY` | `confirm` | Authorship-aware GitHub ownership policy for CLI permission hooks (#3153): agents may comment on or review any PR/issue, but merging, editing, closing, marking ready, updating the branch, pushing to a PR head branch or editing/closing an issue is gated on who authored it. `off` disables, `confirm` asks the human, `deny` blocks. Fails closed (asks) when the lookup fails. |
+| `DOLLHOUSE_GITHUB_OWNER_LOGIN` | *(unset)* | GitHub login of the human who owns this session. When unset, resolved from the authenticated `gh` user. |
+| `DOLLHOUSE_GITHUB_TEAMMATES` | *(unset)* | Comma-separated GitHub logins whose PRs and issues the agent may also modify. |
 | `DOLLHOUSE_MAX_BACKUPS_PER_ELEMENT` | `3` | Max backups per element per day (1-50) |
 | `DOLLHOUSE_SESSION_ID` | auto | Session identifier for activation persistence |
 | `DOLLHOUSE_USER` | OS username | Author attribution for created elements |
