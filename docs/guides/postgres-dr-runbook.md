@@ -52,7 +52,8 @@ Tables this captures (the ones that matter for DR):
 | Table | Contains | Reconstructable? |
 |---|---|---|
 | `auth_accounts` | User identities (sub, email, github_username, displayName) | No — would have to re-register everyone |
-| `auth_allowlist` | Sign-in allowlist entries | Recreatable from `dollhouse-allowlist add` if you have the source list |
+| `auth_allowlist` | Earlier sign-in allowlist. Empty on a hosted install, where sign-in uses `account_allowlist_entries` | Nothing to recreate on a hosted install |
+| `account_allowlist_entries` | The sign-in allowlist on a hosted install, with its history | Recreatable from `dollhouse-allowlist add` if you have the source list |
 | `auth_kv` | Interactions, grants, refresh tokens, sessions, bootstrap state | Tokens / sessions expire naturally; not critical for DR but users have to re-auth |
 | `auth_identity_events` | Audit log (append-only) | Lost = lost — audit gap |
 | `signing_keys` | Active + rotated JWKS keys (encrypted at rest if cookie-secret rotation is on) | No — every outstanding access token becomes unverifiable |

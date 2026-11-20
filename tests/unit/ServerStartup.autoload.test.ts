@@ -8,7 +8,7 @@
  * 4. Activation persists across restarts via metadata
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from '@jest/globals';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, jest } from '@jest/globals';
 import { ServerStartup } from '../../src/server/startup.js';
 import { PortfolioManager } from '../../src/portfolio/PortfolioManager.js';
 import { FileLockManager } from '../../src/security/fileLockManager.js';
@@ -124,6 +124,21 @@ describe('ServerStartup - Auto-Load Integration (Issue #1430)', () => {
     }
   });
 
+  it('does not initialize over an unreadable portfolio base', async () => {
+    const denied = Object.assign(new Error('access denied'), { code: 'EACCES' });
+    const directoryExists = jest.spyOn(portfolioManager['fileOperations'], 'directoryExists').mockRejectedValue(denied);
+    const initialize = jest.spyOn(portfolioManager, 'initialize');
+    try {
+      await expect(serverStartup.initialize({ skipMigration: true })).rejects.toMatchObject({
+        message: expect.not.stringContaining(testDir), code: 'EACCES', cause: denied,
+      });
+      expect(initialize).not.toHaveBeenCalled();
+    } finally {
+      initialize.mockRestore();
+      directoryExists.mockRestore();
+    }
+  });
+
   describe('End-to-End Auto-Load Flow', () => {
     it('should install seed memories on initialize (Issue #1430)', async () => {
       // Initialize server (installs seeds)
@@ -221,11 +236,11 @@ describe('ServerStartup - Auto-Load Integration (Issue #1430)', () => {
       // Verify seed still exists and wasn't duplicated
       memories = await memoryManager.list();
       const seeds = memories.filter(m => m.metadata.name === 'dollhousemcp-baseline-knowledge');
-      expect(seeds.length).toBe(1);
+      expect(seeds).toHaveLength(1);
 
       // No backups should be created
       const backups = memories.filter(m => m.metadata.name?.startsWith('dollhousemcp-baseline-knowledge.backup-'));
-      expect(backups.length).toBe(0);
+      expect(backups).toHaveLength(0);
     });
 
     it('should handle missing seed file gracefully (Issue #1430)', async () => {

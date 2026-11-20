@@ -4,10 +4,13 @@ import { readFile, writeFile, readdir, lstat, readlink, mkdir, rm, rename, realp
 import { createHash } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
 import { createRequire } from 'node:module';
-import { join, resolve, posix } from 'node:path';
+import { join, resolve, posix, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { stageVendorPatches, inSequence } from './stage-global-npm-vendor-patches.mjs';
 
-const NAMES = ['brace-expansion', 'ip-address', 'postcss-selector-parser', 'tar', 'undici'];
+const NAMES = ['brace-expansion', 'http-cache-semantics', 'ip-address', 'postcss-selector-parser', 'undici'];
+const CACHE_INDEX = 'node_modules/http-cache-semantics/index.js';
+const CALLERS = new Set(['node_modules/make-fetch-happen/lib/cache/index.js', 'node_modules/make-fetch-happen/lib/cache/policy.js']);
 const MAX_DOWNLOAD = 2 * 1024 * 1024;
 const MAX_EXPANDED = 8 * 1024 * 1024;
 const MAX_FILE = 1024 * 1024;
@@ -112,7 +115,7 @@ async function download(patch) {
 }
 
 function validateManifest(manifest) {
-  if (manifest.npmVersion !== '11.19.0' || JSON.stringify(manifest.patches.map(patch => patch.name).sort()) !== JSON.stringify(NAMES)) throw new Error('Unexpected npm patch manifest');
+  if (manifest.npmVersion !== '11.19.1' || JSON.stringify(manifest.patches.map(patch => patch.name).sort()) !== JSON.stringify(NAMES)) throw new Error('Unexpected npm patch manifest');
   for (const patch of manifest.patches) {
     if (patch.url !== `https://registry.npmjs.org/${patch.name}/-/${patch.name}-${patch.to}.tgz` || !/^sha512-[A-Za-z0-9+/]+=*$/u.test(patch.integrity)) throw new Error('Unexpected fixed package source');
   }
@@ -158,7 +161,7 @@ async function validateOccurrences(root, records, patches) {
 }
 
 function unchangedOutside(before, after, patches) {
-  const keep = name => !patches.some(patch => within(name, `node_modules/${patch.name}`));
+  const keep = name => !CALLERS.has(name) && !patches.some(patch => within(name, `node_modules/${patch.name}`));
   const select = map => Object.fromEntries(Object.entries(map).filter(([name]) => keep(name)));
   if (JSON.stringify(select(before)) !== JSON.stringify(select(after))) throw new Error('Unexpected npm core/bundle change');
 }
@@ -179,41 +182,99 @@ async function writePayload(root, patch, files) {
   await rename(stage, target);
 }
 
-export async function prepareGlobalNpm(root, manifest, getPayload = download) {
-  validateManifest(manifest);
-  root = await realpath(root);
+async function callerSource(root, path, before) {
+  if (!CALLERS.has(path) || before[path]?.kind !== 'file' || before[path].mode !== 0o644) throw new Error('Unexpected npm caller inventory');
+  const target = join(root, path);
+  const stat = await lstat(target);
+  if (!stat.isFile() || stat.nlink !== 1 || await realpath(target) !== target) throw new Error('Unexpected npm caller path');
+  const bytes = await readFile(target);
+  if (hash(bytes) !== before[path].sha256) throw new Error('npm caller changed during staging');
+  return bytes;
+}
+
+async function readBundleContract(root, manifest, vendorManifest) {
   const core = await json(join(root, 'package.json'));
   if (core.name !== 'npm' || core.version !== manifest.npmVersion) throw new Error('Unexpected original npm core');
+  if (core.dependencies?.tar !== '^7.5.22') throw new Error('Unexpected npm tar baseline');
+  if (vendorManifest?.npmVersion !== core.version || vendorManifest.callerPackage?.path !== 'node_modules/make-fetch-happen/package.json' ||
+      vendorManifest.callerPackage.name !== 'make-fetch-happen' || vendorManifest.callerPackage.version !== '15.0.6') throw new Error('Unexpected npm vendor manifest');
+  const callerPackage = await json(join(root, vendorManifest.callerPackage.path));
+  if (callerPackage.name !== 'make-fetch-happen' || callerPackage.version !== '15.0.6') throw new Error('Unexpected npm caller package');
   const require = createRequire(join(root, 'package.json'));
   const { Parser } = require('tar');
   const semver = require('semver');
+  if (require('tar/package.json').version !== '7.5.22') throw new Error('Unexpected original npm tar');
+  return { core, Parser, semver };
+}
+
+async function verifyPublication(root, before, manifest, vendor, cacheIndex) {
+  const after = await inventory(root);
+  await validateOccurrences(root, after, manifest.patches);
+  await inSequence(manifest.patches, async patch => {
+    const installed = await json(join(root, 'node_modules', patch.name, 'package.json'));
+    if (installed.version !== patch.to) throw new Error('Patched package publication mismatch');
+  });
+  unchangedOutside(before, after, manifest.patches);
+  for (const patch of vendor) {
+    const entry = after[patch.path];
+    const mode = patch.path === CACHE_INDEX ? cacheIndex.mode : before[patch.path].mode;
+    if (entry?.kind !== 'file' || entry.mode !== mode || entry.sha256 !== patch.afterSha256) throw new Error('Local npm patch publication mismatch');
+  }
+  return after;
+}
+
+export async function prepareGlobalNpm(root, manifest, vendorManifest, getPayload = download) {
+  validateManifest(manifest);
+  root = await realpath(root);
+  const { core, Parser, semver } = await readBundleContract(root, manifest, vendorManifest);
   const before = await inventory(root);
   await validateOccurrences(root, before, manifest.patches);
   for (const patch of manifest.patches) {
     if (Object.hasOwn(before, `node_modules/.dollhouse-${patch.name}`)) throw new Error('Existing npm patch staging path');
   }
+  for (const path of CALLERS) {
+    const stage = `${posix.dirname(path)}/.dollhouse-${posix.basename(path)}`;
+    if (Object.hasOwn(before, stage)) throw new Error('Existing npm caller staging path');
+  }
   if (Object.hasOwn(before, '.dollhouse-security-patches.json')) throw new Error('npm bundle already patched');
   // One download/parser at a time; validate ALL payloads before ANY replacement.
   const payloads = [];
-  for (const patch of manifest.patches) {
+  await inSequence(manifest.patches, async patch => {
     await originalPackage(root, patch, semver);
     payloads.push(await stagePayload(patch, getPayload, Parser));
-  }
+  });
+  const cacheFiles = payloads[manifest.patches.findIndex(patch => patch.name === 'http-cache-semantics')];
+  const cacheIndex = cacheFiles.find(file => file.path === 'index.js' && file.type === 'File');
+  if (!cacheIndex) throw new Error('Missing qualified cache policy source');
+  const vendor = await stageVendorPatches(path => path === CACHE_INDEX ? cacheIndex.bytes : callerSource(root, path, before), vendorManifest.patches);
+  const patchedIndex = vendor.find(patch => patch.path === CACHE_INDEX);
+  cacheIndex.bytes = patchedIndex.bytes;
+  const callers = vendor.filter(patch => CALLERS.has(patch.path));
+  // Prepare BOTH caller files before replacing any leaf. No source is evaluated.
+  await inSequence(callers, patch => {
+    const target = join(root, patch.path);
+    const stage = join(dirname(target), `.dollhouse-${basename(target)}`);
+    return writeFile(stage, patch.bytes, { flag: 'wx', mode: before[patch.path].mode });
+  });
   // Publish sequentially so no concurrent mutation remains on a failure.
-  for (let i = 0; i < manifest.patches.length; i++) await writePayload(root, manifest.patches[i], payloads[i]);
-  const after = await inventory(root);
-  await validateOccurrences(root, after, manifest.patches);
-  for (const patch of manifest.patches) {
-    const installed = await json(join(root, 'node_modules', patch.name, 'package.json'));
-    if (installed.version !== patch.to) throw new Error('Patched package publication mismatch');
-  }
-  unchangedOutside(before, after, manifest.patches);
-  const receipt = { npmCore: core.version, locallyPatched: true, patches: manifest.patches, before, after };
+  await inSequence(manifest.patches.map((patch, index) => ({ patch, files: payloads[index] })),
+    item => writePayload(root, item.patch, item.files));
+  await inSequence(callers, async patch => {
+    await callerSource(root, patch.path, before);
+    const target = join(root, patch.path);
+    await rename(join(dirname(target), `.dollhouse-${basename(target)}`), target);
+  });
+  const after = await verifyPublication(root, before, manifest, vendor, cacheIndex);
+  const receipt = { npmCore: core.version, locallyPatched: true, patches: manifest.patches,
+    vendorPatches: { upstreamReference: vendorManifest.upstreamReference, upstreamHead: vendorManifest.upstreamHead,
+      licenses: vendorManifest.licenses, scope: vendorManifest.scope,
+      patches: vendor.map(({ path, beforeSha256, afterSha256 }) => ({ path, beforeSha256, afterSha256 })) }, before, after };
   await writeFile(join(root, '.dollhouse-security-patches.json'), `${JSON.stringify(receipt, null, 2)}\n`, { flag: 'wx', mode: 0o644 });
   return receipt;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const manifest = await json(new URL('./global-npm-security-patches.json', import.meta.url));
-  await prepareGlobalNpm('/usr/local/lib/node_modules/npm', manifest);
+  const vendorManifest = await json(new URL('./global-npm-vendor-patches.json', import.meta.url));
+  await prepareGlobalNpm('/usr/local/lib/node_modules/npm', manifest, vendorManifest);
 }

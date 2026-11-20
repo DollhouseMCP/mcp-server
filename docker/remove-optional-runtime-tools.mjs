@@ -3,8 +3,10 @@ import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 const tools = [
-  { path: '/usr/bin/infocmp', owner: '/var/lib/dpkg/info/ncurses-bin.list' },
-  { path: '/usr/bin/nsenter', owner: '/var/lib/dpkg/info/util-linux.list' },
+  { path: '/usr/bin/infocmp', owner: '/var/lib/dpkg/info/ncurses-bin.list', mode: 0o755 },
+  { path: '/usr/bin/nsenter', owner: '/var/lib/dpkg/info/util-linux.list', mode: 0o755 },
+  { path: '/usr/bin/mount', owner: '/var/lib/dpkg/info/mount.list', mode: 0o4755 },
+  { path: '/usr/bin/umount', owner: '/var/lib/dpkg/info/mount.list', mode: 0o4755 },
 ];
 
 function requireOwnedFile(io, path, mode) {
@@ -18,9 +20,9 @@ function requireOwnedFile(io, path, mode) {
 // The injectable filesystem lets offline tests exercise the exact production
 // guards against owned fixtures without writing to the host's /usr directory.
 export function removeOptionalRuntimeTools(io = fs) {
-  // Validate BOTH tools and package ownership before deleting either path.
+  // Validate ALL four tools and package ownership before deleting any path.
   for (const tool of tools) {
-    requireOwnedFile(io, tool.path, 0o755);
+    requireOwnedFile(io, tool.path, tool.mode);
     requireOwnedFile(io, tool.owner, 0o644);
     const entries = io.readFileSync(tool.owner, 'utf8').split('\n');
     if (entries.filter(entry => entry === tool.path).length !== 1) {

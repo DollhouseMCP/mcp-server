@@ -62,6 +62,18 @@ async function loaded() {
 }
 
 describe('dormant same-transaction admitted UPDATE', () => {
+  it('maps rejected candidate extraction to an invalid head inside admitted preparation', async () => {
+    const f = fixture(); const userId = f.binding().tenant; const ownerId = randomUUID();
+    const token: MemoryHeadToken = { backend: 'database', userId, ownerId,
+      locator: ownerId, name: candidate.name, revision: '1' };
+    const capture = await f.gate.capture();
+    const outcome = await f.gate.withAdmittedWrite(capture, authority =>
+      f.store.prepareHeadWriteInAdmission(authority, token, candidate.name, 'entries: [', candidate.metadata));
+    expect(outcome).toMatchObject({ status: 'refused', cause: {
+      code: 'EINVALIDHEAD', cause: { name: 'MemoryMetadataExtractionError' },
+    } });
+  });
+
   it('refuses an unavailable configured admission gate before reading a snapshot', async () => {
     const f = fixture();
     const adapter = new MemoryHeadUpdateAdapter({ backend: 'database', store: f.store }, () => f.binding().tenant,

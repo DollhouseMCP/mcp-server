@@ -3,7 +3,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { FileMemoryOwnerSnapshots, type OwnedErasureWorkReport } from '../../../src/storage/FileMemoryOwnerSnapshots.js';
-import { runErasureCapacityLifecycle, CAPACITY_OBSERVER_TIMEOUT_MS } from './fixtures/erasureCapacityLifecycle.js';
+import { runErasureCapacityLifecycle, capacityObserverTimeoutMs } from './fixtures/erasureCapacityLifecycle.js';
 import { captureErasureFiles, makeOwnedErasureFixture } from './fixtures/ownedErasureFixture.js';
 
 const it = process.platform === 'win32' || !process.getuid ? jestIt.skip : jestIt;
@@ -12,8 +12,14 @@ const cases = ([100, 250, 1000] as const).flatMap(foreignOwners =>
 
 describe('dormant owner erasure populated portfolios', () => {
   for (const options of cases) {
+    // Measured whole-case maxima: 8.50s for small/two-volume, 31.93s for
+    // small/ten-volume, 39.37s for 1,000-owner/two-volume, 53.99s for the
+    // largest tier (#3090, #3146). Allow 50% runner variance, rounded up to
+    // 30s: 30/60/60/90s. Both layouts use the same workload tier. The work
+    // counters and every foreign-file preservation assertion remain gates.
+    const deadlineMs = 30_000 + (options.foreignOwners === 1000 ? 30_000 : 0)
+      + (options.volumes === 10 ? 30_000 : 0);
     it(`erases ${options.volumes} volumes with ${options.foreignOwners} foreign owners, nested=${options.nested}`, async () => {
-      const deadlineMs = options.foreignOwners === 1000 && options.volumes === 10 ? 45_000 : 30_000;
       let report: OwnedErasureWorkReport | undefined;
       let operationMs: number | undefined;
       let verificationMs: number | undefined;
@@ -60,6 +66,6 @@ describe('dormant owner erasure populated portfolios', () => {
           preCleanupMs: performance.now() - started, discoveryReads: report!.discovery,
           reservedDirectoryReads: report!.reservedDirectoryReads, actual: report!.actual, head: report!.head }));
       });
-    }, CAPACITY_OBSERVER_TIMEOUT_MS);
+    }, capacityObserverTimeoutMs(deadlineMs));
   }
 });

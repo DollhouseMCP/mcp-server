@@ -78,6 +78,28 @@ export function normalizeElementType(input: string | null | undefined): ElementT
   return ELEMENT_TYPE_MAP[input.trim().toLowerCase()] ?? null;
 }
 
+/** Normalize known types while preserving unknown strings for caller validation. */
+export function normalizeElementTypeLenient(type: string | undefined | null): string {
+  // Issue #501: Guard against null/undefined to match shared utility pattern
+  if (type == null || typeof type !== 'string' || type.trim() === '') {
+    return '';
+  }
+
+  // If it's already a valid ElementType value, return as-is
+  if (Object.values(ElementType).includes(type as ElementType)) {
+    return type;
+  }
+
+  // Use shared normalization map (Issue #433)
+  const normalized = ELEMENT_TYPE_MAP[type.trim().toLowerCase()];
+  if (normalized) {
+    return normalized;
+  }
+
+  // Unknown type - return as-is and let validation handle it
+  return type;
+}
+
 /**
  * Format a human-readable list of valid element types for error messages.
  */

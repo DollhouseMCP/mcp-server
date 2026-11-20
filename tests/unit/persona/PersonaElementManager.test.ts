@@ -619,7 +619,7 @@ Content`;
       );
     });
 
-    it('should properly dispose and clean up resources', () => {
+    it('should properly dispose and clean up resources', async () => {
       // Add some cached elements
       const metadata: PersonaMetadata = {
         name: 'Disposable',
@@ -635,7 +635,7 @@ Content`;
       expect(cacheStats.elementCount).toBe(1);
 
       // Dispose
-      personaManager.dispose();
+      await personaManager.dispose();
 
       // Verify cleanup
       cacheStats = (personaManager as any).getCacheStats();

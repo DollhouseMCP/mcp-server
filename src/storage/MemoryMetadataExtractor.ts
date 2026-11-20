@@ -8,12 +8,22 @@
  * a full Memory object.
  */
 
-import { SecureYamlParser } from '../security/secureYamlParser.js';
+import { SecureYamlParser, matchFrontmatterFrame, hasFrontmatterFraming } from '../security/secureYamlParser.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
-import { MEMORY_CONSTANTS } from '../elements/memories/constants.js';
+import { MEMORY_CONSTANTS, DEFAULT_MEMORY_NAME } from '../elements/memories/constants.js';
 import { validateMemoryControlFields } from '../elements/memories/memoryYamlValidation.js';
 import type { ElementIndexEntry } from './types.js';
-import { logger } from '../utils/logger.js';
+import { YAMLException } from 'js-yaml';
+import { SecurityError } from '../errors/SecurityError.js';
+
+/** Metadata rejected by parsing or validation must not be indexed with defaults. */
+export class MemoryMetadataExtractionError extends Error {
+  constructor(relativePath: string, cause: unknown) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    super(`Cannot extract memory metadata from ${relativePath}: ${reason}`, { cause });
+    this.name = 'MemoryMetadataExtractionError';
+  }
+}
 
 export class MemoryMetadataExtractor {
   /**
@@ -32,12 +42,12 @@ export class MemoryMetadataExtractor {
    * @returns Partial ElementIndexEntry with extracted fields
    */
   static extractMetadata(rawContent: string, relativePath: string): Partial<ElementIndexEntry> {
+    // Empty documents have no metadata yet; parser rejections are never defaults.
     if (!rawContent || typeof rawContent !== 'string' || rawContent.trim().length === 0) {
       return MemoryMetadataExtractor.defaultEntry(relativePath);
     }
 
     const yamlData = MemoryMetadataExtractor.parseMetadataYaml(rawContent, relativePath);
-    if (!yamlData) return MemoryMetadataExtractor.defaultEntry(relativePath);
 
     // Memory files store metadata under a top-level `metadata` key or directly as top-level keys
     const metadataSource = MemoryMetadataExtractor.getMetadataSource(yamlData);
@@ -46,7 +56,7 @@ export class MemoryMetadataExtractor {
 
     const entry: Partial<ElementIndexEntry> = {
       filePath: relativePath,
-      name: MemoryMetadataExtractor.normalizedString(metadataSource.name) || 'unnamed',
+      name: MemoryMetadataExtractor.normalizedString(metadataSource.name) || DEFAULT_MEMORY_NAME,
       description: MemoryMetadataExtractor.normalizedString(metadataSource.description),
       version: MemoryMetadataExtractor.normalizedString(metadataSource.version) || '1.0.0',
       author: MemoryMetadataExtractor.normalizedString(metadataSource.author),
@@ -64,35 +74,32 @@ export class MemoryMetadataExtractor {
     return entry;
   }
 
-  private static parseMetadataYaml(
-    rawContent: string,
-    relativePath: string
-  ): Record<string, unknown> | undefined {
-    const primaryParse = MemoryMetadataExtractor.tryParseYamlObject(rawContent);
-    if (primaryParse.data) return primaryParse.data;
-
-    // Multi-document streams (frontmatter + content) fail single-doc parsing.
-    const frontmatter = MemoryMetadataExtractor.extractFrontmatter(rawContent);
-    if (!frontmatter) {
-      if (primaryParse.errorMessage) {
-        logger.debug('MemoryMetadataExtractor: failed to parse YAML, returning default metadata', {
-          relativePath,
-          stage: 'primary',
-          error: primaryParse.errorMessage,
-        });
+  private static parseMetadataYaml(rawContent: string, relativePath: string): Record<string, unknown> {
+    try {
+      // After empty input, bound the whole file before selecting its framing.
+      // No frame means default metadata; only parsed metadata gets Unicode validation.
+      // Framed prose is not metadata, matching the loader content policy.
+      if (rawContent.length > MemoryMetadataExtractor.MAX_YAML_SIZE) {
+        throw SecurityError.contentValidation('Memory document exceeds size limits');
       }
-      return undefined;
+      let yamlContent = rawContent;
+      if (hasFrontmatterFraming(rawContent)) {
+        const frame = matchFrontmatterFrame(rawContent);
+        if (!frame) return {};
+        yamlContent = frame.frontmatter;
+      }
+      const data = SecureYamlParser.parseRawYaml(yamlContent, {
+        maxSize: MemoryMetadataExtractor.MAX_YAML_SIZE,
+        contentPolicy: 'structure-only',
+      });
+      if (!validateMemoryControlFields(data)) {
+        throw SecurityError.contentValidation('Malicious memory control content detected');
+      }
+      return data;
+    } catch (error) {
+      if (!(error instanceof SecurityError) && !(error instanceof YAMLException)) throw error;
+      throw new MemoryMetadataExtractionError(relativePath, error);
     }
-
-    const fallbackParse = MemoryMetadataExtractor.tryParseYamlObject(frontmatter);
-    if (fallbackParse.data) return fallbackParse.data;
-
-    logger.debug('MemoryMetadataExtractor: failed to parse YAML (primary + frontmatter fallback), returning default metadata', {
-      relativePath,
-      primaryError: primaryParse.errorMessage,
-      fallbackError: fallbackParse.errorMessage,
-    });
-    return undefined;
   }
 
   private static getMetadataSource(yamlData: Record<string, unknown>): Record<string, unknown> {
@@ -145,46 +152,11 @@ export class MemoryMetadataExtractor {
     return 'user';
   }
 
-  /**
-   * Extract YAML content between --- frontmatter markers.
-   * Returns null if no valid frontmatter block found.
-   */
-  private static extractFrontmatter(rawContent: string): string | null {
-    const trimmed = rawContent.trim();
-    if (!trimmed.startsWith('---')) return null;
-
-    const endIndex = trimmed.indexOf('\n---', 3);
-    if (endIndex === -1) return null;
-
-    return trimmed.substring(3, endIndex).trim();
-  }
-
-  /**
-   * Parse raw YAML using the centralized secure parser.
-   * Returns parse diagnostics so callers can fail closed while preserving error context.
-   */
-  private static tryParseYamlObject(content: string): { data?: Record<string, unknown>; errorMessage?: string } {
-    try {
-      const data = SecureYamlParser.parseRawYaml(content, {
-        maxSize: MemoryMetadataExtractor.MAX_YAML_SIZE,
-        contentPolicy: 'structure-only',
-      });
-      if (!validateMemoryControlFields(data)) {
-        return { errorMessage: 'Malicious memory control content detected' };
-      }
-      return { data };
-    } catch (error) {
-      return {
-        errorMessage: error instanceof Error ? error.message : String(error),
-      };
-    }
-  }
-
-  /** Return a minimal default entry for empty/corrupt content. */
+  /** Return a minimal default entry for an empty document. */
   private static defaultEntry(relativePath: string): Partial<ElementIndexEntry> {
     return {
       filePath: relativePath,
-      name: 'unnamed',
+      name: DEFAULT_MEMORY_NAME,
       description: '',
       version: '1.0.0',
       author: '',

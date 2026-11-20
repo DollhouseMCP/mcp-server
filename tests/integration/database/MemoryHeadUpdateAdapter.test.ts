@@ -57,7 +57,7 @@ async function isolated(body: (f: EquivalentFixture, makeManager: (getUser?: () 
   } catch (cause) { primary = { cause }; }
   const cleanupFailures: unknown[] = [];
   for (const manager of managers) {
-    try { manager.dispose(); } catch (cause) { cleanupFailures.push(cause); }
+    try { await manager.dispose(); } catch (cause) { cleanupFailures.push(cause); }
   }
   try { await f.cleanup(); } catch (cause) { cleanupFailures.push(cause); }
   for (const directory of directories) {

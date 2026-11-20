@@ -36,6 +36,13 @@ describe('BackupService', () => {
     service = new BackupService(fileOps as unknown as IFileOperationsService, createConfig());
   });
 
+  it.each(['backupBeforeSave', 'backupBeforeDelete'] as const)('reports a denied probe from %s without copying or moving', async method => {
+    fileOps.exists.mockRejectedValue(Object.assign(new Error('access denied'), { code: 'EACCES' }));
+    await expect(service[method]('/portfolio/personas/writer.md', 'personas')).resolves.toMatchObject({ success: false, error: 'access denied' });
+    expect(fileOps.copyFile).not.toHaveBeenCalled();
+    expect(fileOps.renameFile).not.toHaveBeenCalled();
+  });
+
   describe('backupBeforeSave', () => {
     it('copies the file when it exists', async () => {
       fileOps.exists.mockResolvedValue(true);

@@ -8,14 +8,8 @@
  * This file is kept for backwards compatibility but timing-sensitive tests
  * are skipped here to avoid flakiness. Run the decomposed files for full coverage.
  *
- * Tests error handling in Container.preparePortfolio() which uses Promise.all()
- * These tests cover the CURRENT behavior (Promise.all - fail fast on first error)
- * and document FUTURE behavior (Promise.allSettled - continue despite failures)
- *
- * Current implementation: src/di/Container.ts:342 - await Promise.all([
- *   migrationManager.needsMigration(),
- *   portfolioManager.exists()
- * ])
+ * Portfolio checks observe both results and reject when either check fails.
+ * Migration and initialization begin only after both checks succeed.
  *
  * Test Coverage:
  * 1. All parallel checks succeed (happy path)
@@ -132,7 +126,7 @@ describe('Container Startup - Error Scenarios', () => {
   });
 
   describe('Error Scenario 1 - Migration Check Fails', () => {
-    it('IMPROVED BEHAVIOR: should log warning and continue when migration check throws', async () => {
+    it('should stop when migration check throws', async () => {
       const migrationManager = container.resolve<any>('MigrationManager');
       const portfolioManager = container.resolve<any>('PortfolioManager');
 
@@ -140,12 +134,10 @@ describe('Container Startup - Error Scenarios', () => {
       jest.spyOn(migrationManager, 'needsMigration').mockRejectedValue(migrationError);
       jest.spyOn(portfolioManager, 'exists').mockResolvedValue(true);
 
-      // IMPROVED: Promise.allSettled captures both results
-      // With portfolio check succeeding, can continue (logs warning for migration check failure)
-      await expect(container.preparePortfolio()).resolves.not.toThrow();
+      await expect(container.preparePortfolio()).rejects.toThrow('migration:');
     });
 
-    it('IMPROVED BEHAVIOR: should handle migration service unavailable and continue', async () => {
+    it('should stop when migration service is unavailable', async () => {
       const migrationManager = container.resolve<any>('MigrationManager');
       const portfolioManager = container.resolve<any>('PortfolioManager');
 
@@ -153,11 +145,10 @@ describe('Container Startup - Error Scenarios', () => {
         .mockRejectedValue(new Error('Migration service not initialized'));
       jest.spyOn(portfolioManager, 'exists').mockResolvedValue(true);
 
-      // IMPROVED: Logs warning but continues since portfolio check succeeded
-      await expect(container.preparePortfolio()).resolves.not.toThrow();
+      await expect(container.preparePortfolio()).rejects.toThrow('migration:');
     });
 
-    it('IMPROVED BEHAVIOR: should handle permission errors during migration check and continue', async () => {
+    it('should stop on permission errors during migration check', async () => {
       const migrationManager = container.resolve<any>('MigrationManager');
       const portfolioManager = container.resolve<any>('PortfolioManager');
 
@@ -167,8 +158,7 @@ describe('Container Startup - Error Scenarios', () => {
       jest.spyOn(migrationManager, 'needsMigration').mockRejectedValue(permissionError);
       jest.spyOn(portfolioManager, 'exists').mockResolvedValue(true);
 
-      // IMPROVED: Logs warning but continues since portfolio check succeeded
-      await expect(container.preparePortfolio()).resolves.not.toThrow();
+      await expect(container.preparePortfolio()).rejects.toThrow('migration:');
     });
   });
 
@@ -383,7 +373,7 @@ describe('Container Startup - Error Scenarios', () => {
       });
 
       // Should not throw, but logs errors
-      await container.preparePortfolio();
+      await expect(container.preparePortfolio()).resolves.toBeUndefined();
     });
 
     it('should handle partial migration success', async () => {

@@ -161,6 +161,7 @@ const CONTRACT_ROUTES = [
   'GET /api/v1/admin/accounts/identities/unlinked',
   'GET /api/v1/me/sessions/commands/:command_id',
   'GET /api/v1/admin/operate/sessions/commands/:command_id',
+  'GET /api/v1/admin/operate/setup-status',
   'GET /api/v1/me/integrations/descriptors/:id/spec/operations',
   'GET /api/v1/health',
   'GET /api/v1/health/ready',

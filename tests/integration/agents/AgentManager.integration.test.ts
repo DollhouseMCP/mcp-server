@@ -59,7 +59,7 @@ describe('AgentManager integration', () => {
 
   afterAll(async () => {
     // Dispose manager to stop file watchers and prevent open handles
-    manager.dispose();
+    await manager.dispose();
     await env.cleanup();
   });
 

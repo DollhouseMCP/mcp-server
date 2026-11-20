@@ -926,7 +926,7 @@ describe('BaseElementManager - Requirements & Contract', () => {
       await expect(dbManager.findByStorageIdentity('stable-element.md')).resolves.toBeUndefined();
       expect(load).not.toHaveBeenCalled();
       load.mockRestore();
-      dbManager.dispose();
+      await dbManager.dispose();
     });
 
     it('findByStorageIdentity() reuses a stable path when the display name has changed', async () => {

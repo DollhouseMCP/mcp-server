@@ -2,6 +2,7 @@ import type {
   ConsoleHandlerResult,
   ConsoleModuleDescriptor,
   ConsoleRequest,
+  ConsoleRouteDefinition,
 } from '../../platform/ConsolePlatformTypes.js';
 import { projectConsoleStreamEndStatus } from '../../platform/ConsoleProjectorHelpers.js';
 import { offsetConsoleCursor, offsetFromConsoleCursor } from '../../platform/ConsoleCursor.js';
@@ -22,6 +23,8 @@ import type {
   OperationalMetricQuery,
 } from './OperationsTelemetry.js';
 import {
+  projectCanaryRun,
+  projectSetupStatus,
   projectOperatorConfigList,
   projectOperatorConfigSetting,
   projectOperationHealthComponent,
@@ -34,6 +37,8 @@ import {
   projectHttpRuntimeMetrics,
 } from './OperationsPrivacyProjectors.js';
 import type { ISystemMetricsSource } from './SystemMetricsSource.js';
+import type { CanaryRunRecord, CanaryTrigger } from '../../canary/CanaryMonitor.js';
+import type { SetupStatusReport } from '../../setup/SetupStatusReport.js';
 import type { MetricQueryOptions, MetricQueryResult } from '../../../metrics/types.js';
 
 const OPERATE_CAPABILITY = 'console:admin:operate';
@@ -52,6 +57,8 @@ const OPERATION_AUDIT_IDS = [
   'operate.metrics.system',
   'operate.metrics.http',
 ] as const;
+const CANARY_RUN_AUDIT_ID = 'operate.canary.run';
+const SETUP_STATUS_AUDIT_ID = 'operate.setup_status.show';
 
 const OPERATIONS_STREAM_POLICY = {
   lastEventId: 'unsupported',
@@ -72,7 +79,15 @@ export interface OperationsModuleOptions {
   readonly systemMetrics?: ISystemMetricsSource;
   /** Trusted transport snapshot, resolved only after admin authorization. */
   readonly httpMetrics?: () => unknown;
+  /** Absent without a database: the canary has no per-session stores to exercise, and its route is not offered. */
+  readonly canary?: OperationsCanary;
+  /** Every setup check with what is known about it now. Reading it tests nothing and starts nothing. */
+  readonly setupStatus?: () => Promise<SetupStatusReport>;
   readonly now?: () => Date;
+}
+
+export interface OperationsCanary {
+  run(trigger: CanaryTrigger): Promise<CanaryRunRecord>;
 }
 
 export function createOperationsModule(options: OperationsModuleOptions): ConsoleModuleDescriptor {
@@ -296,8 +311,78 @@ export function createOperationsModule(options: OperationsModuleOptions): Consol
         privacyProjector: projectSystemMetrics,
         handler: req => querySystemMetrics(options.systemMetrics, parseSystemMetricQuery(req), resolveNow),
       },
+      ...(options.canary ? [canaryRunRoute(options.canary)] : []),
+      ...(options.setupStatus ? [setupStatusRoute(options.setupStatus)] : []),
     ],
-    auditOperations: OPERATION_AUDIT_IDS.map(id => ({ id })),
+    auditOperations: [
+      ...OPERATION_AUDIT_IDS,
+      ...(options.canary ? [CANARY_RUN_AUDIT_ID] : []),
+      ...(options.setupStatus ? [SETUP_STATUS_AUDIT_ID] : []),
+    ].map(id => ({ id })),
+  };
+}
+
+// Runs the approvals and executions canary because an admin asked. The kernel
+// records the request in the admin audit with that admin as the actor. The
+// answer is 200 whatever the canary found: the request to run it succeeded,
+// and what it found is in the body.
+function canaryRunRoute(canary: OperationsCanary): ConsoleRouteDefinition {
+  return {
+    method: 'POST',
+    path: '/api/v1/admin/operate/canary/run',
+    audience: 'admin',
+    requiredCapability: OPERATE_CAPABILITY,
+    elevation: 'admin_30m',
+    privacyClass: 'operational_allowlist',
+    idempotency: 'required',
+    auditOperation: CANARY_RUN_AUDIT_ID,
+    privacyProjector: projectCanaryRun,
+    handler: async () => {
+      const record = await canary.run('admin');
+      return {
+        status: 200,
+        body: {
+          state: record.result.state,
+          code: record.result.code,
+          detail: record.result.detail,
+          trigger: record.trigger,
+          started_at: record.startedAt.toISOString(),
+          finished_at: record.finishedAt.toISOString(),
+        },
+      };
+    },
+  };
+}
+
+// The setup status view: each check in the catalog with its state and the
+// reason for it. Admins only. The projector supplies each check's wording
+// from the catalog, so the handler passes only what was found.
+function setupStatusRoute(setupStatus: () => Promise<SetupStatusReport>): ConsoleRouteDefinition {
+  return {
+    method: 'GET',
+    path: '/api/v1/admin/operate/setup-status',
+    audience: 'admin',
+    requiredCapability: OPERATE_CAPABILITY,
+    elevation: 'admin_30m',
+    privacyClass: 'operational_allowlist',
+    idempotency: 'not_applicable',
+    auditOperation: SETUP_STATUS_AUDIT_ID,
+    privacyProjector: projectSetupStatus,
+    handler: async () => {
+      const report = await setupStatus();
+      return {
+        status: 200,
+        body: {
+          checked_at: report.checkedAt.toISOString(),
+          checks: report.checks.map(check => ({
+            id: check.definition.id,
+            state: check.state,
+            detail: check.detail ?? null,
+            observed_at: check.observedAt?.toISOString() ?? null,
+          })),
+        },
+      };
+    },
   };
 }
 

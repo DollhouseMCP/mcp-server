@@ -8,6 +8,7 @@
  * See docs/LOGGING-DESIGN.md §4.2 for the full design.
  */
 
+import { BestEffortDelivery } from './BestEffortDelivery.js';
 import { EvictingQueue } from '../utils/EvictingQueue.js';
 import {
   type UnifiedLogEntry,
@@ -18,13 +19,13 @@ import {
 } from './types.js';
 
 export class LogManager {
-  private readonly sinks: ILogSink[] = [];
+  private readonly sinks: { sink: ILogSink; write: BestEffortDelivery; flush: BestEffortDelivery; close: BestEffortDelivery }[] = [];
+  private readonly serialization = new BestEffortDelivery('LogManager serialization');
   private readonly buffer: EvictingQueue<UnifiedLogEntry>;
   private readonly config: LogManagerConfig;
   private flushTimer: ReturnType<typeof setInterval> | null = null;
   private entryCounter = 0;
   private dropCount = 0;
-  private previousBufferSize = 0;
 
   // Sliding-window rate limiter for immediate flushes (per-second window)
   private immediateFlushWindowStart = 0;
@@ -58,9 +59,7 @@ export class LogManager {
     const enforced = this.enforceEntrySize(entry);
 
     // Route to every registered sink
-    for (const sink of this.sinks) {
-      sink.write(enforced);
-    }
+    this.writeToSinks(enforced);
 
     // Determine flush strategy
     const needsImmediateFlush =
@@ -90,7 +89,12 @@ export class LogManager {
 
   /** Register an output sink. */
   registerSink(sink: ILogSink): void {
-    this.sinks.push(sink);
+    this.sinks.push({
+      sink,
+      write: new BestEffortDelivery('LogManager write'),
+      flush: new BestEffortDelivery('LogManager flush'),
+      close: new BestEffortDelivery('LogManager close'),
+    });
   }
 
   /** Flush all registered sinks and report drops if any occurred. */
@@ -105,13 +109,11 @@ export class LogManager {
         `Backpressure: ${this.dropCount} buffered entries evicted since last flush`,
         { droppedCount: this.dropCount },
       );
-      for (const sink of this.sinks) {
-        sink.write(dropEntry);
-      }
+      this.writeToSinks(dropEntry);
       this.dropCount = 0;
     }
 
-    const flushPromises = this.sinks.map((sink) => sink.flush());
+    const flushPromises = this.sinks.map(({ sink, flush }) => flush.runAsync(() => sink.flush()));
     await Promise.allSettled(flushPromises);
   }
 
@@ -119,7 +121,7 @@ export class LogManager {
   async close(): Promise<void> {
     this.stopFlushTimer();
     await this.flush();
-    const closePromises = this.sinks.map((sink) => sink.close());
+    const closePromises = this.sinks.map(({ sink, close }) => close.runAsync(() => sink.close()));
     await Promise.allSettled(closePromises);
   }
 
@@ -187,10 +189,11 @@ export class LogManager {
   private enforceEntrySize(entry: UnifiedLogEntry): UnifiedLogEntry {
     if (!entry.data) return entry;
 
-    const serialized = JSON.stringify(entry);
-    if (serialized.length <= this.config.maxEntrySize) return entry;
+    const serialized = this.serialization.run(() => JSON.stringify(entry));
+    if (!serialized.delivered) return { ...entry, data: { _unavailable: true } };
+    if (serialized.value.length <= this.config.maxEntrySize) return entry;
 
-    const originalSize = serialized.length;
+    const originalSize = serialized.value.length;
 
     // Emit a warn meta-entry about the truncation
     const truncationNotice = this.createMetaEntry(
@@ -198,15 +201,17 @@ export class LogManager {
       `Entry truncated: original size ${originalSize} bytes exceeds limit ${this.config.maxEntrySize}`,
       { originalSize, maxSize: this.config.maxEntrySize, entryId: entry.id },
     );
-    for (const sink of this.sinks) {
-      sink.write(truncationNotice);
-    }
+    this.writeToSinks(truncationNotice);
 
     // Return a copy with data replaced by a truncation marker
     return {
       ...entry,
       data: { _truncated: true, _originalSize: originalSize },
     };
+  }
+
+  private writeToSinks(entry: UnifiedLogEntry): void {
+    for (const { sink, write } of this.sinks) write.run(() => sink.write(entry));
   }
 
   /** Create a meta/system log entry from the LogManager itself. */

@@ -199,8 +199,49 @@ describe('Linux authorization refusal evidence without OS resources', () => {
     }
   });
 
+  it.each([
+    ['100ms census slice', undefined, 1100],
+    ['earlier cleanup deadline', 1050, 1050],
+  ] as const)('refuses signal and cleanup when the mocked clock reaches the %s', async (_bound, cleanupDeadline, expiredAt) => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    const now = jest.spyOn(performance, 'now').mockReturnValue(1000);
+    const kill = jest.spyOn(process, 'kill').mockReturnValue(true);
+    const directory = directories.getMockImplementation()!;
+    const readDirectory = jest.fn<() => { name: string } | null>();
+    const closeDirectory = jest.fn();
+    directories.mockImplementationOnce(path => {
+      const handle = directory(path);
+      readDirectory.mockImplementation(() => handle.readSync());
+      closeDirectory.mockImplementation(() => handle.closeSync());
+      now.mockReturnValue(expiredAt);
+      return { readSync: readDirectory, closeSync: closeDirectory };
+    });
+    try {
+      Object.defineProperty(process, 'platform', { ...platform, value: 'linux' });
+      const group = new LinuxOwnedGroup(123);
+      const owner = new OwnedFixtureProcess();
+      Object.assign(owner, { child: { pid: 123 }, closed: false, linuxGroup: group, cleanupDeadline });
+      let refusal!: Error;
+      try { owner.cancel(); } catch (error) { refusal = error as Error; }
+      expect(refusal.message).toBe('Owned Linux group identity is unproved; refusing signal and cleanup');
+      const detail = { mode: 'first', stage: 'census', reason: 'observation-error', retained: null, observed: null, code: null };
+      expect(group.refusalDetail()).toEqual(detail);
+      expect((refusal.cause as Error).message).toBe(`Owned Linux capture refusal ${JSON.stringify(detail)}`);
+      expect(readDirectory).not.toHaveBeenCalled();
+      expect(closeDirectory).toHaveBeenCalledTimes(1);
+      expect(open).toHaveBeenCalledTimes(2);
+      expect(kill.mock.calls).toEqual([[-123, 0]]); // Presence query only; expired evidence cannot authorize a signal.
+      await expect(owner.finish()).rejects.toBe(refusal);
+      expect(owner.cleaned).toBe(false);
+    } finally {
+      Object.defineProperty(process, 'platform', platform); kill.mockRestore(); now.mockRestore();
+    }
+  });
+
   it('settles an issued request through fresh absence after an empty census without another signal', async () => {
     const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    // This fully mocked protocol case does not measure host scheduling or census expiry.
+    const now = jest.spyOn(performance, 'now').mockReturnValue(1000);
     const registry = new OwnedFixtureRegistry();
     let owner!: InstanceType<typeof OwnedFixtureProcess>, release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
@@ -230,7 +271,7 @@ describe('Linux authorization refusal evidence without OS resources', () => {
       await expect(registry.run(async () => 'next admission')).resolves.toBe('next admission');
     } finally {
       release(); await result;
-      Object.defineProperty(process, 'platform', platform); kill.mockRestore();
+      Object.defineProperty(process, 'platform', platform); kill.mockRestore(); now.mockRestore();
     }
   });
 

@@ -10,6 +10,7 @@ if [[ "${1:-}" == --case ]]; then
   DEPLOY_DIR="$4"
   SERVICE="$5"
   SERVER_DIR="${DEPLOY_DIR}/server"
+  HOSTED_DEPLOY_LIB_DIR="${REPO_ROOT}/scripts/hosted-deploy"
   SOURCE_DIR="${DEPLOY_DIR}/source"
   POST_MIGRATION_GRANTS_FILE="${DEPLOY_DIR}/grants.sql"
   POSTGRES_READY_TIMEOUT=1
@@ -27,15 +28,105 @@ if [[ "${1:-}" == --case ]]; then
   ensure_prerequisites() { :; }
   ensure_runtime_prerequisites() { :; }
   validate_git_url_for_clone() { :; }
-  render_files() { :; }
+  resolve_public_base_url() { :; }
+  resolve_hostname() { :; }
+  resolve_allowed_hosts() { :; }
+  validate_render_inputs() { :; }
+  validate_persisted_caddy_fields() { :; }
+  resolve_mode_defaults() { :; }
+  validate_caddy_selection() { :; }
+  validate_registry_selection() { :; }
+  acquire_caddy_deployment_lock() { :; }
+  legacy_handoff() {
+    local action="$1"
+    printf 'legacy-%s\n' "${action}" >> "${EVENTS}"
+    [[ "${MODE}" != "registry-legacy-${action}-refusal" ]] || return 1
+    if [[ "${action}" == stop ]]; then
+      printf 'graceful-stop\n' >> "${EVENTS}"
+      touch "${DEPLOY_DIR}/stopped"
+    fi
+  }
+  legacy_recovery_boundary() {
+    local action="$1"
+    printf 'recovery-%s\n' "${action}" >> "${EVENTS}"
+    [[ "${MODE}" != "registry-recovery-${action}-refusal" ]]
+  }
+  IMAGE_MODE=build
+  if [[ "${MODE}" == registry-* ]]; then IMAGE_MODE=registry; fi
+  RUNTIME_IMAGE=fixture-runtime MIGRATION_IMAGE=fixture-migration
+  CADDY_IMAGE=fixture CADDY_DATA_VOLUME=fixture_data CADDY_CONFIG_VOLUME=fixture_config
+  verify_prepared_caddy() {
+    printf 'prepared-clone\n' >> "${EVENTS}"
+    [[ "${MODE}" != clone-refusal ]] || return 1
+    PREVIOUS_BUNDLE="${DEPLOY_DIR}/server.prev-fixture"
+  }
+  CADDY_CONTAINER_NAME=fixture-caddy HOSTED_CADDY_LOCK_FD=9
+  caddy_transition() {
+    local action="$1"
+    case "${action}" in
+      status) if [[ "${MODE}" == fresh-retry ]]; then printf 'fresh\n'; else printf 'none\n'; fi ;;
+      begin-update|begin-fresh|begin-rollback) printf 'transition-pending\n' >> "${EVENTS}"; printf '%032d\n' 0 ;;
+      retry-fresh) printf 'transition-retry\n' >> "${EVENTS}"; printf '%032d\n' 0 ;;
+      start-proxy) printf 'compose\n' ;;
+      retain-unstarted) mv "${SERVER_DIR}" "${DEPLOY_DIR}/server.unstarted-fixture" ;;
+      select-rollback) printf '%s/server.prev-20000101\n' "${DEPLOY_DIR}" ;;
+      stage) printf 'transition-staged\n' >> "${EVENTS}" ;;
+      bind-admission) printf 'admission-bound\n' >> "${EVENTS}" ;;
+      *) die "unexpected transition action: ${action}" ;;
+    esac
+  }
+  caddy_unchanged_request_json() { printf '{}\n'; }
+  caddy_recovery_request_json() { printf '{}\n'; }
+  python3() {
+    local command_path="$1"
+    if [[ "${command_path}" == */caddy_clone_action.py || "${command_path}" == */caddy_offline_prepare.py ]]; then
+      printf 'unexpected-offline-stop\n' >> "${EVENTS}"
+      return 1
+    elif [[ "${command_path}" == */registry_image_admission.py ]]; then
+      local registry_operation="${2:-}"
+      printf 'registry-%s\n' "${registry_operation}" >> "${EVENTS}"
+      [[ "${MODE}" != registry-pull-failure || "${registry_operation}" != prepare ]] || return 1
+      if [[ "${MODE}" == registry-drift && "${registry_operation}" == inspect && -f "${DEPLOY_DIR}/stopped" ]]; then
+        printf 'changed-pair\n'
+      else
+        printf 'fixture-pair\n'
+      fi
+    elif [[ "${command_path}" == */caddy_unchanged_action.py ]]; then
+      cat >/dev/null
+      printf 'unchanged-proxy-receipt\n' >> "${EVENTS}"
+      printf '%s\n' "${DEPLOY_DIR}/server.prev-fixture"
+    elif [[ "${command_path}" == */caddy_verify_noop_action.py ]]; then
+      cat >/dev/null
+      printf 'hardened-recheck\n' >> "${EVENTS}"
+    elif [[ "${command_path}" == */caddy_rollback_guard.py ]]; then
+      cat >/dev/null
+      printf 'rollback-guard\n' >> "${EVENTS}"
+    else
+      command python3 "$@"
+    fi
+  }
+  refresh_caddy_image() { compose pull caddy; }
+  prepare_fresh_caddy_volumes() { printf 'fresh-volumes\n' >> "${EVENTS}"; }
+  recheck_caddy_image() { printf 'caddy-rechecked\n' >> "${EVENTS}"; }
+  recheck_caddy_transition() { printf 'caddy-transition-rechecked\n' >> "${EVENTS}"; }
+  render_files() { printf 'render\n' >> "${EVENTS}"; }
+  caddy_release() {
+    local action="$1"
+    printf 'release-%s\n' "${action}" >> "${EVENTS}"
+    [[ "${MODE}" != "release-${action}-failure" ]]
+  }
+  finish_caddy_transition() { printf 'transition-finished\n' >> "${EVENTS}"; }
   sleep() { :; }
   stage_from_source_dir() {
     local incoming="$1"
+    mkdir -p "${incoming}/docker" "${incoming}/src/cli"
+    printf 'FROM production AS migration\n' > "${incoming}/docker/Dockerfile"
+    : > "${incoming}/src/cli/migrate-database.ts"
     printf 'new\n' > "${incoming}/version"
     printf 'new-revision\n'
   }
   selected_postgres() {
-    if [[ "${MODE}" == missing-pg || "${MODE}" == fresh-install ]]; then
+    if [[ "${MODE}" == missing-pg || "${MODE}" == stopped-missing-pg || "${MODE}" == fresh-install || "${MODE}" == fresh-retry ]]; then
       [[ -f "${DEPLOY_DIR}/pg-started" ]] || return 0
     fi
     if [[ -f "${DEPLOY_DIR}/selection-changed" ]]; then
@@ -46,16 +137,16 @@ if [[ "${1:-}" == --case ]]; then
   }
   record_replacement() {
     printf 'replacement\n' >> "${EVENTS}"
-    [[ -f "${DEPLOY_DIR}/stopped" || "${MODE}" == fresh-install ]] || die "replacement without drain"
+    [[ -f "${DEPLOY_DIR}/stopped" || "${MODE}" == fresh-install || "${MODE}" == fresh-retry ]] || die "replacement without drain"
     [[ "${MODE}" != replacement-failure ]]
   }
   maintenance_command() {
-    if [[ "$*" == *dollhouse-bootstrap-admin* ]]; then
+    if [[ "$*" == *dist/cli/admin-bootstrap.js* ]]; then
       printf 'bootstrap\n' >> "${EVENTS}"
       [[ "${MODE}" != bootstrap-failure ]]
     else
       printf 'migration\n' >> "${EVENTS}"
-      [[ -f "${DEPLOY_DIR}/stopped" ]] || die "migration before drain"
+      [[ -f "${DEPLOY_DIR}/stopped" || "${ACTION}" == migrate || "${ACTION}" == bootstrap ]] || die "migration before drain"
       [[ "${MODE}" != migration-failure ]]
     fi
   }
@@ -64,17 +155,18 @@ if [[ "${1:-}" == --case ]]; then
     printf 'compose:%s\n' "$*" >> "${EVENTS}"
     case "${operation}" in
       ps)
-        local service="$3"
+        local service="${*: -1}"
         if [[ "${service}" == postgres ]]; then selected_postgres
-        elif [[ "${MODE}" != fresh-install ]]; then printf '%s\n' "${APP_ID}"
+        elif [[ "${MODE}" != fresh-install && "${MODE}" != fresh-retry ]]; then printf '%s\n' "${APP_ID}"
         fi
         ;;
       build) [[ "${MODE}" != build-failure ]] ;;
       pull) [[ "${MODE}" != pull-failure ]] ;;
       up)
-        if [[ "$*" == 'up -d postgres' ]]; then
-          [[ "${MODE}" == fresh-install ]] || die "existing PG recreation"
+        if [[ "$*" == 'up -d --pull never postgres' ]]; then
+          [[ "${MODE}" == fresh-install || "${MODE}" == fresh-retry ]] || die "existing PG recreation"
           touch "${DEPLOY_DIR}/pg-started"
+        elif [[ "$*" == *' caddy' ]]; then :
         else record_replacement
         fi
         ;;
@@ -89,10 +181,14 @@ if [[ "${1:-}" == --case ]]; then
     if [[ "${operation}" == inspect ]]; then
       [[ "${MODE}" != inspect-failure ]] || return 1
       local format="$3" inspect_target="$4"
-      if [[ "${format}" == '{{.Id}}' ]]; then printf '%s\n' "${inspect_target}"
+      if [[ "${format}" == '{{.Config.User}}|{{.State.Running}}' ]]; then
+        if [[ "${MODE}" == hardened ]]; then printf '1001:1001|true\n'; else printf '|false\n'; fi
+      elif [[ "${format}" == '{{.Id}}' ]]; then printf '%s\n' "${inspect_target}"
       elif [[ "${inspect_target}" == "${PG_ID}" && "${MODE}" == stopped-pg ]]; then printf 'false\n'
       else printf 'true\n'
       fi
+    elif [[ "${operation}" == image && "${2:-}" == inspect ]]; then
+      return 0
     elif [[ "${operation}" == exec ]]; then
       local exec_target="$2"
       [[ "${exec_target}" == "${PG_ID}" ]] || die "unexpected docker operation"
@@ -101,20 +197,60 @@ if [[ "${1:-}" == --case ]]; then
     else die "unexpected docker operation"
     fi
   }
-  gracefully_stop_existing_app() {
-    printf 'graceful-stop\n' >> "${EVENTS}"
-    [[ "${MODE}" != drain-refusal ]] || return 1
-    touch "${DEPLOY_DIR}/stopped"
-  }
-  if [[ "${ACTION}" == rollback ]]; then rollback_server
-  else start_or_update "${SERVICE}"
+  if [[ "${MODE}" == stopped-existing ]]; then
+    HOSTED_DEPLOY_SCRIPT_DIR="${REPO_ROOT}/scripts"
+    mkdir -p "${DEPLOY_DIR}/fake-bin"
+    export FIXTURE_APP_ID="${APP_ID}" FIXTURE_DOCKER_EVENTS="${DEPLOY_DIR}/strict-docker-events"
+    cat > "${DEPLOY_DIR}/fake-bin/docker" <<'DOCKER'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$1" >> "${FIXTURE_DOCKER_EVENTS}"
+[[ "$1" == inspect ]] || exit 1
+printf '{"id":"%s","running":false,"exitCode":0,"oomKilled":false,"startedAt":"2026-01-01T00:00:00Z","restartCount":0,"restarting":false,"readonly":false,"mounts":[],"enabled":"enabled","capability":"v2"}\n' "${FIXTURE_APP_ID}"
+DOCKER
+    chmod 0755 "${DEPLOY_DIR}/fake-bin/docker"
+    export PATH="${DEPLOY_DIR}/fake-bin:${PATH}"
+  elif [[ "${ACTION}" != legacy-offline-update ]]; then
+    gracefully_stop_existing_app() {
+      printf 'graceful-stop\n' >> "${EVENTS}"
+      [[ "${MODE}" != drain-refusal ]] || return 1
+      touch "${DEPLOY_DIR}/stopped"
+    }
   fi
+  case "${ACTION}" in
+    rollback) rollback_server; caddy_release accept; caddy_release release; finish_caddy_transition; write_deployed_markers ;;
+    migrate) run_migrations ;;
+    bootstrap) bootstrap_admin ;;
+    *) start_or_update "${SERVICE}"; caddy_release accept; caddy_release release; finish_caddy_transition; write_deployed_markers ;;
+  esac
   exit 0
 fi
 
 TMP_ROOT="$(mktemp -d)"
+TMP_ROOT="$(cd "${TMP_ROOT}" && pwd -P)"
 trap 'rm -rf -- "${TMP_ROOT}"' EXIT
 fail() { printf 'preparation-order test: %s\n' "$*" >&2; exit 1; }
+check_prepared_proxy_route() (
+  local mode="$1"
+  source "${REPO_ROOT}/scripts/hosted-deploy/runtime.sh"
+  caddy_transition() {
+    local action="$1"
+    [[ "${action}" == start-proxy ]] || fail 'wrong transition request'
+    if [[ "${mode}" == refused ]]; then return 1; fi
+    printf '%s\n' "${mode}"
+  }
+  die() { printf '%s\n' "$*" >&2; exit 1; }
+  compose() { fail 'native or refused replacement reached Compose'; }
+  start_prepared_caddy_proxy
+)
+check_prepared_proxy_route native || fail 'qualified native replacement was refused'
+for refused_route in refused unknown; do
+  route_output="${TMP_ROOT}/route-${refused_route}.log"
+  if check_prepared_proxy_route "${refused_route}" > "${route_output}" 2>&1; then
+    fail 'refused or unknown replacement fell through'
+  fi
+  if grep -q 'reached Compose' "${route_output}"; then fail 'failed native replacement reached Compose'; fi
+done
 assert_order() {
   local events="$1"
   local first="$2"
@@ -134,6 +270,7 @@ check_fixture() {
   mkdir -p "${fixture}/server" "${fixture}/server.prev-20000101" "${fixture}/source"
   printf 'current\n' > "${fixture}/server/version"
   printf 'previous\n' > "${fixture}/server.prev-20000101/version"
+  if [[ "${mode}" == fresh-install ]]; then rm -rf "${fixture}/server"; fi
   printf 'SELECT 1;\n' > "${fixture}/grants.sql"
   printf 'old-revision\n' > "${fixture}/DEPLOYED_REVISION"
   printf '2000-01-01T00:00:00Z\n' > "${fixture}/DEPLOYED_AT"
@@ -141,12 +278,52 @@ check_fixture() {
   bash "$0" --case "${action}" "${mode}" "${fixture}" "${service}" > "${fixture}/stdout" 2> "${fixture}/stderr"
   status=$?
   set -e
-  if [[ "${mode}" == success || "${mode}" == fresh-install ]]; then
+  if [[ "${mode}" == success || "${mode}" == fresh-install || "${mode}" == fresh-retry || "${mode}" == hardened || "${mode}" == registry-success ]]; then
     [[ "${status}" == 0 ]] || fail "${action}/${service}/${mode} exited ${status}"
-    assert_order "${fixture}/events" 'compose:pull caddy' graceful-stop
+    if [[ "${mode}" == fresh-retry ]]; then
+      assert_order "${fixture}/events" transition-retry render
+    else
+      assert_order "${fixture}/events" transition-pending render
+    fi
+    if [[ "${mode}" == hardened ]]; then
+      assert_order "${fixture}/events" unchanged-proxy-receipt graceful-stop
+      assert_order "${fixture}/events" hardened-recheck graceful-stop
+      if grep -Eq '^(unexpected-clone|unexpected-offline-stop|compose:(pull|stop|up).*caddy)' "${fixture}/events"; then
+        fail "unchanged proxy was stopped, cloned, pulled, or recreated"
+      fi
+    elif [[ "${action}" == rollback ]]; then
+      assert_order "${fixture}/events" rollback-guard graceful-stop
+    else
+      assert_order "${fixture}/events" 'compose:pull caddy' graceful-stop
+    fi
+    if [[ "${mode}" == registry-success ]]; then
+      assert_order "${fixture}/events" registry-prepare graceful-stop
+      assert_order "${fixture}/events" graceful-stop replacement
+      grep -q "^compose:run --rm --pull never --no-deps dollhousemcp-migrate$" "${fixture}/events" || fail "registry migration flags missing"
+      if grep -q "^compose:build " "${fixture}/events"; then fail "registry mode built an image"; fi
+    fi
     assert_order "${fixture}/events" graceful-stop replacement
+    assert_order "${fixture}/events" release-probe-fence graceful-stop
+    assert_order "${fixture}/events" replacement release-accept
+    assert_order "${fixture}/events" release-accept release-release
+    assert_order "${fixture}/events" release-release transition-finished
+    if [[ "${action}" == update ]]; then
+      grep -q '^compose:run --rm --pull never --no-deps dollhousemcp-migrate$' "${fixture}/events" || fail "migration omitted no-pull/no-deps flags"
+      grep -q '^compose:run --rm --pull never --no-deps dollhousemcp-migrate node dist/cli/admin-bootstrap.js' "${fixture}/events" || fail "bootstrap omitted no-pull/no-deps flags"
+    fi
     if [[ "${action}" == rollback ]]; then expected_revision='rollback:server.prev-20000101'
     else expected_revision=new-revision; assert_order "${fixture}/events" graceful-stop migration
+    fi
+    if [[ "${action}" == legacy-offline-update ]]; then
+      assert_order "${fixture}/events" legacy-preflight transition-pending
+      assert_order "${fixture}/events" recovery-check transition-pending
+      assert_order "${fixture}/events" recovery-arm render
+      assert_order "${fixture}/events" legacy-stop recovery-write-intent
+      assert_order "${fixture}/events" recovery-write-intent migration
+      assert_order "${fixture}/events" registry-prepare legacy-stop
+      assert_order "${fixture}/events" release-probe-fence legacy-stop
+      assert_order "${fixture}/events" legacy-stop migration
+      [[ "$(grep -c '^legacy-verify$' "${fixture}/events")" == 3 ]] || fail "legacy forward phases skipped stopped/fence verification"
     fi
     [[ "$(cat "${fixture}/DEPLOYED_REVISION")" == "${expected_revision}" ]] || fail "successful marker missing"
   else
@@ -154,13 +331,24 @@ check_fixture() {
     [[ "$(cat "${fixture}/DEPLOYED_REVISION")" == old-revision ]] || fail "failed operation changed deployed revision"
     [[ "$(cat "${fixture}/DEPLOYED_AT")" == '2000-01-01T00:00:00Z' ]] || fail "failed operation changed deployed time"
     case "${mode}" in
-      migration-failure|bootstrap-failure|replacement-failure) [[ -f "${fixture}/stopped" ]] || fail "missing strict drain" ;;
+      migration-failure|bootstrap-failure|replacement-failure|registry-drift|release-accept-failure|release-release-failure) [[ -f "${fixture}/stopped" ]] || fail "missing strict drain" ;;
       drain-refusal) grep -q '^graceful-stop$' "${fixture}/events" || fail "missing refusal" ;;
+      stopped-missing-pg)
+        grep -q '^compose:ps --all -q dollhousemcp$' "${fixture}/events" || fail "stopped app was not selected before database preparation"
+        grep -q 'existing application has no running postgres; refusing database recreation' "${fixture}/stderr" || fail "missing database refusal not reported"
+        if grep -Eq '^compose:up |^(migration|bootstrap|replacement)$' "${fixture}/events"; then fail "stopped app advanced to database or app mutation"; fi
+        ;;
+      stopped-existing)
+        grep -q '^compose:ps --all -q dollhousemcp$' "${fixture}/events" || fail "stopped app was not selected"
+        grep -q 'Stopped container has no live drain acknowledgement; replacement refused' "${fixture}/stderr" || fail "strict stopped-app refusal missing"
+        [[ "$(cat "${fixture}/strict-docker-events")" == inspect ]] || fail "stopped app received exec or signal"
+        if grep -Eq '^(migration|bootstrap|replacement)$' "${fixture}/events"; then fail "stopped app advanced to mutation"; fi
+        ;;
       *) if grep -q '^graceful-stop$' "${fixture}/events"; then fail "healthy app stopped on preparation failure"; fi ;;
     esac
-    if [[ "${mode}" != replacement-failure ]] && grep -q '^replacement$' "${fixture}/events"; then fail "replacement after failure"; fi
+    if [[ "${mode}" != replacement-failure && "${mode}" != release-accept-failure && "${mode}" != release-release-failure ]] && grep -q '^replacement$' "${fixture}/events"; then fail "replacement after failure"; fi
   fi
-  if [[ "${mode}" != fresh-install ]] && grep -q '^compose:up -d postgres$' "${fixture}/events"; then fail "existing database recreated"; fi
+  if [[ "${mode}" != fresh-install && "${mode}" != fresh-retry ]] && grep -q '^compose:up -d --pull never postgres$' "${fixture}/events"; then fail "existing database recreated"; fi
   # Stage/move real bundles: the prior running source is recoverable even when
   # prepared source and image tags differ from the unchanged running image.
   if [[ "${action}" == rollback ]]; then
@@ -169,17 +357,143 @@ check_fixture() {
     prior=("${fixture}"/server.prev-*)
     prior=("${prior[@]:1}")
   fi
-  [[ "${#prior[@]}" == 1 && "$(cat "${prior[0]}/version")" == current ]] || fail "prior source not recoverable"
+  if [[ "${mode}" == fresh-retry ]]; then
+    [[ "$(cat "${fixture}/server.unstarted-fixture/version")" == current ]] || fail "unstarted source was not retained"
+  elif [[ "${mode}" == pull-failure || ( "${action}" == update && "${mode}" == inspect-failure ) ]]; then
+    [[ "$(cat "${fixture}/server/version")" == current ]] || fail "preparation failure changed current source"
+  elif [[ "${mode}" != fresh-install ]]; then
+    [[ "${#prior[@]}" == 1 && "$(cat "${prior[0]}/version")" == current ]] || fail "prior source not recoverable"
+  fi
   printf 'preparation-order PASS %s/%s/%s\n' "${action}" "${service}" "${mode}"
 }
 
 for action in update rollback; do
-  for mode in build-failure readiness-failure pull-failure drain-refusal missing-pg stopped-pg identity-change inspect-failure success; do
+  for mode in build-failure readiness-failure drain-refusal missing-pg stopped-pg identity-change inspect-failure success; do
     check_fixture "${action}" "${mode}" app
   done
 done
+for phase in check arm write-intent; do
+  fixture="$(mktemp -d "${TMP_ROOT}/recovery-${phase}.XXXXXX")"
+  mkdir -p "${fixture}/server" "${fixture}/source"
+  printf 'current\n' > "${fixture}/server/version"
+  printf 'SELECT 1;\n' > "${fixture}/grants.sql"
+  printf 'old-revision\n' > "${fixture}/DEPLOYED_REVISION"
+  if bash "$0" --case legacy-offline-update "registry-recovery-${phase}-refusal" "${fixture}" app > "${fixture}/stdout" 2> "${fixture}/stderr"; then
+    fail "recovery ${phase} refusal advanced"
+  fi
+  if grep -Eq '^(migration|bootstrap|replacement)$' "${fixture}/events"; then fail "recovery refusal reached forward writes"; fi
+  # A refused check must leave nothing pending: the transition begins only after it.
+  if [[ "${phase}" == check ]] && grep -q '^transition-pending$' "${fixture}/events"; then fail "recovery check refusal began a transition"; fi
+  printf 'preparation-order PASS recovery-%s-refusal\n' "${phase}"
+done
+for mode in release-prepare-failure release-confirm-failure release-probe-fence-failure release-accept-failure release-release-failure; do
+  check_fixture update "${mode}" app
+done
+check_fixture update pull-failure app
+check_fixture update hardened app
+check_fixture update fresh-retry app
 for service in app all; do
   for mode in migration-failure bootstrap-failure replacement-failure success fresh-install; do
     check_fixture update "${mode}" "${service}"
   done
+done
+
+# Exercise the real root creation and lock validation before any transition.
+for mode in fresh-000 fresh-002 existing-unsafe; do
+  root="${TMP_ROOT}/${mode}"
+  if [[ "${mode}" == existing-unsafe ]]; then mkdir "${root}"; chmod 0777 "${root}"; fi
+  mask="${mode#fresh-}"
+  [[ "${mode}" != existing-unsafe ]] || mask=077
+  if (umask "${mask}"; bash -c '
+    source "$1"
+    DEPLOY_DIR="$2"; SERVER_DIR="$2/server"; HOSTED_DEPLOY_LIB_DIR="$(dirname "$1")"
+    ensure_prerequisites() { :; }; validate_git_url_for_clone() { :; }
+    resolve_public_base_url() { :; }; resolve_hostname() { :; }
+    resolve_allowed_hosts() { :; }; validate_render_inputs() { :; }
+    need_command() { :; }; flock() { :; }; die() { exit 1; }
+    caddy_transition() { return 1; }
+    start_or_update
+  ' _ "${REPO_ROOT}/scripts/hosted-deploy/runtime.sh" "${root}"); then
+    fail "root fixture unexpectedly advanced past transition"
+  fi
+  if [[ "${mode}" == existing-unsafe ]]; then
+    [[ ! -e "${root}/.caddy-deploy.lock" ]] || fail "unsafe existing root was modified"
+  else
+    [[ -f "${root}/.caddy-deploy.lock" ]] || fail "fresh root did not reach lock"
+    python3 -c 'import os,stat,sys; sys.exit(0 if stat.S_IMODE(os.stat(sys.argv[1]).st_mode)==0o700 else 1)' "${root}" || fail "fresh root is not private"
+  fi
+  printf 'preparation-order PASS root/%s\n' "${mode}"
+done
+
+check_fixture update registry-success app
+check_fixture update registry-pull-failure app
+check_fixture update registry-drift app
+
+for action in migrate bootstrap; do
+  fixture="$(mktemp -d "${TMP_ROOT}/registry-${action}.XXXXXX")"
+  mkdir -p "${fixture}/server"
+  printf 'SELECT 1;\n' > "${fixture}/grants.sql"
+  bash "$0" --case "${action}" registry-success "${fixture}" app > "${fixture}/stdout" 2> "${fixture}/stderr" || fail "registry ${action} failed"
+  grep -q '^registry-prepare$' "${fixture}/events" || fail "registry ${action} skipped image preparation"
+  grep -q '^compose:run --rm --pull never --no-deps dollhousemcp-migrate' "${fixture}/events" || fail "registry ${action} has unsafe execution flags"
+  if grep -q '^compose:build ' "${fixture}/events"; then fail "registry ${action} built an image"; fi
+  if grep -q '^graceful-stop$' "${fixture}/events"; then fail "registry ${action} unexpectedly stopped app"; fi
+  printf 'preparation-order PASS registry %s\n' "${action}"
+done
+
+check_fixture update stopped-existing app
+check_fixture update stopped-missing-pg app
+
+# A previous uncertain stop must block an otherwise ordinary hardened update
+# before it can inspect a transition, stage source, or preserve the live proxy.
+root="${TMP_ROOT}/unknown-stop"
+mkdir -m 700 "${root}" "${root}/server"
+printf 'unknown\n' > "${root}/.caddy-offline-stop-issued"
+if bash -c '
+  source "$1"
+  DEPLOY_DIR="$2"; SERVER_DIR="$2/server"
+  ensure_prerequisites() { :; }; validate_git_url_for_clone() { :; }
+  resolve_public_base_url() { :; }; resolve_hostname() { :; }
+  resolve_allowed_hosts() { :; }; validate_render_inputs() { :; }
+  need_command() { :; }; flock() { :; }; die() { exit 1; }
+  caddy_transition() { touch "$DEPLOY_DIR/transition-reached"; }
+  start_or_update
+' _ "${REPO_ROOT}/scripts/hosted-deploy/runtime.sh" "${root}"; then
+  fail "unknown stop allowed an ordinary update"
+fi
+[[ ! -e "${root}/transition-reached" ]] || fail "unknown stop reached transition"
+printf 'preparation-order PASS unknown-stop-fence\n'
+
+for action in render migrate bootstrap-admin; do
+  if bash -c '
+    source "$1"; source "$2"
+    DEPLOY_DIR="$3"; SERVER_DIR="$3/server"; ACTION="$4"
+    need_command() { :; }; flock() { :; }; die() { exit 1; }
+    ensure_runtime_prerequisites() { :; }; ensure_server_source() { :; }
+    resolve_public_base_url() { :; }; resolve_hostname() { :; }; resolve_allowed_hosts() { :; }
+    validate_render_inputs() { :; }; ensure_supported_python() { :; }
+    render_files() { touch "$DEPLOY_DIR/render-reached"; }
+    run_action
+  ' _ "${REPO_ROOT}/scripts/hosted-deploy/runtime.sh" "${REPO_ROOT}/scripts/hosted-deploy/actions.sh" "${root}" "${action}"; then
+    fail "unknown stop allowed ${action}"
+  fi
+  [[ ! -e "${root}/render-reached" ]] || fail "unknown stop reached ${action} rendering"
+  printf 'preparation-order PASS unknown-stop/%s\n' "${action}"
+done
+
+# The explicit one-time action alone uses the receipt bridge; ordinary update
+# above still requires the unchanged v2 drain and rejects a stopped legacy app.
+check_fixture legacy-offline-update registry-success app
+for phase in preflight stop verify; do
+  fixture="$(mktemp -d "${TMP_ROOT}/legacy-${phase}.XXXXXX")"
+  mkdir -p "${fixture}/server" "${fixture}/source"
+  printf 'current\n' > "${fixture}/server/version"
+  printf 'SELECT 1;\n' > "${fixture}/grants.sql"
+  printf 'old-revision\n' > "${fixture}/DEPLOYED_REVISION"
+  if bash "$0" --case legacy-offline-update "registry-legacy-${phase}-refusal" "${fixture}" app > "${fixture}/stdout" 2> "${fixture}/stderr"; then
+    fail "legacy ${phase} refusal advanced"
+  fi
+  if grep -Eq '^(migration|bootstrap|replacement)$' "${fixture}/events"; then fail "legacy ${phase} refusal reached forward writes"; fi
+  [[ "$(cat "${fixture}/DEPLOYED_REVISION")" == old-revision ]] || fail "legacy failure changed revision"
+  printf 'preparation-order PASS legacy-%s-refusal\n' "${phase}"
 done

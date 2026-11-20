@@ -4,10 +4,10 @@
     {
       "file": "purify.min.js",
       "package": "dompurify",
-      "packageVersion": "3.4.16",
+      "packageVersion": "3.4.17",
       "license": "Apache-2.0 OR MPL-2.0",
-      "source": "https://registry.npmjs.org/dompurify/-/dompurify-3.4.16.tgz",
-      "sha256": "2c90a9b46d6463f26038a29b686e82bc91de01fdac9d5229e7cfe3b360134ea2"
+      "source": "https://registry.npmjs.org/dompurify/-/dompurify-3.4.17.tgz",
+      "sha256": "cd37898f9782adf54820c413191b5691803f0f137c799d6edcfd38523b4c2c31"
     },
     {
       "file": "marked.min.js",

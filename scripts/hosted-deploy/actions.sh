@@ -8,15 +8,30 @@ run_action() {
       ;;
     render)
       need_command openssl
+      resolve_public_base_url
+      resolve_hostname
+      resolve_allowed_hosts
+      validate_render_inputs
+      ensure_supported_python
+      if [[ ! -d "${DEPLOY_DIR}" ]]; then
+        (umask 077; mkdir -p "${DEPLOY_DIR}")
+      fi
+      acquire_caddy_deployment_lock
       render_files
       ;;
     install)
       start_or_update all
-      verify_deploy allow-bootstrap-required
+      caddy_release accept
+      caddy_release release
+      finish_caddy_transition
+      write_deployed_markers
       ;;
-    update)
+    legacy-offline-update|update)
       start_or_update app
-      verify_deploy allow-bootstrap-required
+      caddy_release accept
+      caddy_release release
+      finish_caddy_transition
+      write_deployed_markers
       ;;
     migrate)
       run_migrations
@@ -24,9 +39,24 @@ run_action() {
     bootstrap-admin)
       bootstrap_admin
       ;;
+    prepare-caddy-offline)
+      prepare_caddy_offline
+      ;;
+    abandon-caddy-offline|accept-caddy-restart)
+      caddy_serving_boot "${ACTION}"
+      ;;
+    clone-caddy-volumes)
+      clone_caddy_volumes
+      ;;
+    recover-caddy-proxy)
+      recover_caddy_proxy
+      ;;
     rollback)
       rollback_server
-      verify_deploy allow-bootstrap-required
+      caddy_release accept
+      caddy_release release
+      finish_caddy_transition
+      write_deployed_markers
       ;;
     verify)
       verify_deploy

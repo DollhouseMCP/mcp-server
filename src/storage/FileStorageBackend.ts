@@ -5,17 +5,39 @@
  * ensuring path validation, atomic reads, and audit logging are preserved.
  */
 
-import * as path from 'path';
-import type { IStorageBackend } from './IStorageBackend.js';
+import { mapStorageItems } from './mapStorageItems.js';
+import * as path from 'node:path';
+import type { IStorageBackend, StorageStatResult } from './IStorageBackend.js';
 import type { StorageItemMetadata } from './types.js';
-import type { FileOperationsService } from '../services/FileOperationsService.js';
+import { type FileOperationsService, isAbsentPathError } from '../services/FileOperationsService.js';
 
 export class FileStorageBackend implements IStorageBackend {
   constructor(private readonly fileOps: FileOperationsService) {}
 
-  async listFiles(directory: string, extension: string): Promise<string[]> {
-    const entries = await this.fileOps.listDirectory(directory);
-    return entries.filter(name => name.endsWith(extension));
+  listFiles(directory: string, extension: string): Promise<string[]> {
+    return this.listEntriesOfType(directory, 'isFile', extension);
+  }
+
+  listDirectories(directory: string): Promise<string[]> {
+    return this.listEntriesOfType(directory, 'isDirectory');
+  }
+
+  private async listEntriesOfType(directory: string, type: 'isFile' | 'isDirectory', extension = ''): Promise<string[]> {
+    const entries = await this.fileOps.listDirectoryWithTypes(directory);
+    const candidates = entries.filter(entry => entry.name.endsWith(extension));
+    const matches = await mapStorageItems(candidates, entry => this.matchesEntryType(directory, entry, type));
+    return candidates.filter((_entry, index) => matches[index]).map(entry => entry.name);
+  }
+
+  private async matchesEntryType(directory: string, entry: { name: string; isFile: boolean; isDirectory: boolean },
+    type: 'isFile' | 'isDirectory'): Promise<boolean> {
+    if (entry.isFile || entry.isDirectory) return entry[type];
+    // Dirents do not follow symlinks; preserve the existing stat/read target policy.
+    try { return (await this.fileOps.stat(path.join(directory, entry.name)))[type](); }
+    catch (error) {
+      // Keep uncertain targets so the subsequent file stat or directory listing reports them.
+      return !isAbsentPathError(error);
+    }
   }
 
   async stat(absolutePath: string): Promise<StorageItemMetadata> {
@@ -28,31 +50,27 @@ export class FileStorageBackend implements IStorageBackend {
     };
   }
 
-  async statMany(directory: string, relativePaths: string[]): Promise<Map<string, StorageItemMetadata>> {
+  async statMany(directory: string, relativePaths: string[]): Promise<StorageStatResult> {
     const results = new Map<string, StorageItemMetadata>();
 
-    const settled = await Promise.allSettled(
-      relativePaths.map(async (relPath) => {
-        const absPath = path.join(directory, relPath);
-        const stats = await this.fileOps.stat(absPath);
-        return {
-          relativePath: relPath,
-          absolutePath: absPath,
-          mtimeMs: stats.mtimeMs,
-          sizeBytes: stats.size,
-        } satisfies StorageItemMetadata;
-      })
-    );
+    const settled = await mapStorageItems(relativePaths, async relPath => {
+      try {
+        return { status: 'fulfilled', value: await this.stat(path.join(directory, relPath)) } as const;
+      } catch (reason) { return { status: 'rejected', reason } as const; }
+    });
 
+    const failures = new Map<string, Error>();
     for (let i = 0; i < settled.length; i++) {
       const result = settled[i];
       if (result.status === 'fulfilled') {
-        results.set(relativePaths[i], result.value);
+        results.set(relativePaths[i], { ...result.value, relativePath: relativePaths[i] });
+      } else if (!isAbsentPathError(result.reason)) {
+        failures.set(relativePaths[i], result.reason instanceof Error ? result.reason : new Error(String(result.reason)));
       }
-      // Rejected entries (e.g. file deleted between list and stat) are silently skipped
+      // An absent path disappeared between enumeration and stat.
     }
 
-    return results;
+    return { stats: results, failures };
   }
 
   async readFile(absolutePath: string): Promise<string> {
@@ -60,6 +78,6 @@ export class FileStorageBackend implements IStorageBackend {
   }
 
   async directoryExists(directory: string): Promise<boolean> {
-    return this.fileOps.exists(directory);
+    return this.fileOps.directoryExists(directory);
   }
 }

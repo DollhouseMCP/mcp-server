@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { LinuxOwnedGroup } from '../../helpers/linuxOwnedGroup.js';
-import { OwnedFixtureRegistry, type OwnedFixtureProcess } from '../../helpers/ownedFixtureProcess.js';
+import { OwnedFixtureRegistry, OwnedFixtureProcess } from '../../helpers/ownedFixtureProcess.js';
 
 const windowsIt = process.platform === 'win32' ? it : it.skip;
 const python = process.platform === 'win32' ? 'python' : 'python3';
@@ -86,6 +86,30 @@ function deferred() {
 }
 
 describe('owned fixture teardown', () => {
+  (process.platform === 'darwin' ? it : it.skip)('preserves a denied group probe and emits bounded identity evidence', () => {
+    const owner = new OwnedFixtureProcess();
+    const fake = owner as unknown as { child: { pid: number }; groupExists(): boolean };
+    fake.child = { pid: process.pid };
+    const denial = Object.assign(new Error('synthetic denial'), { code: 'EPERM' });
+    const originalKill = process.kill;
+    const kill = jest.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      if (pid === -process.pid && signal === 0) throw denial;
+      return originalKill(pid, signal);
+    });
+    const evidence = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      let caught: unknown;
+      try { fake.groupExists(); } catch (error) { caught = error; }
+      expect(caught).toBe(denial);
+      expect(kill).toHaveBeenCalledTimes(1);
+      expect(kill).toHaveBeenCalledWith(-process.pid, 0);
+      expect(evidence).toHaveBeenCalledTimes(1);
+      expect(evidence.mock.calls[0][0]).toBe('OWNED_FIXTURE_DARWIN_GROUP_DENIAL');
+      const report = JSON.parse(String(evidence.mock.calls[0][1])) as { pgid: number; members: unknown[] };
+      expect(report.pgid).toBe(process.pid);
+      expect(report.members.length).toBeLessThanOrEqual(16);
+    } finally { evidence.mockRestore(); kill.mockRestore(); }
+  });
   it('keeps a bound Windows failure sticky after an earlier ACK (synthetic protocol only)', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'owned-protocol-'));
     try {

@@ -20,7 +20,7 @@ import type { AuthConfig } from '../../auth/AuthProviderFactory.js';
 import type { IAuthProvider } from '../../auth/IAuthProvider.js';
 import type { DatabaseInstance } from '../../database/connection.js';
 import type { PerformanceMonitor } from '../../utils/PerformanceMonitor.js';
-import type { SignInAllowlistAuthority } from '../../auth/embedded-as/allowlistGate.js';
+import { consoleAllowlistIsSignInAuthority, type SignInAllowlistAuthority } from '../../auth/embedded-as/allowlistGate.js';
 import type { IRateLimitStore } from '../../auth/embedded-as/storage/IRateLimitStore.js';
 import type { IAuthStorageLayer } from '../../auth/embedded-as/storage/IAuthStorageLayer.js';
 import type { AdminTotpService } from '../../auth/embedded-as/totp/AdminTotpService.js';
@@ -191,7 +191,11 @@ export class AuthServiceRegistrar {
   private async createSignInAllowlistAuthority(
     database: DatabaseInstance | undefined,
   ): Promise<SignInAllowlistAuthority | undefined> {
-    if (!database || env.DOLLHOUSE_AUTH_PROVIDER !== 'embedded' || env.DOLLHOUSE_AUTH_STORAGE_BACKEND !== 'postgres') {
+    if (!database || !consoleAllowlistIsSignInAuthority({
+      hasDatabase: true,
+      authProvider: env.DOLLHOUSE_AUTH_PROVIDER,
+      authStorageBackend: env.DOLLHOUSE_AUTH_STORAGE_BACKEND,
+    })) {
       return undefined;
     }
     const { PostgresConsoleAccountAllowlistStore } = await import(

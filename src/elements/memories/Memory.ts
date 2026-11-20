@@ -433,7 +433,7 @@ export class Memory extends BaseElement implements IElement {
     const sanitizedSource = sanitizeInput(source, 50);
 
     if (this.entriesSize >= this.maxEntries) {
-      await this.enforceRetentionPolicy();
+      this.enforceRetentionPolicySync({ makeRoomForOne: true });
     }
 
     // FIX #1315: Sanitize content but don't validate for threats (non-blocking)
@@ -1080,14 +1080,16 @@ export class Memory extends BaseElement implements IElement {
   }
 
   /**
-   * Enforce retention policy by removing expired entries
+   * Enforce retention policy by removing expired entries and excess entries.
+   * Load, manual, and scheduled enforcement keep a memory at exactly capacity.
+   * Only the add path reserves space for one incoming entry.
    * SECURITY: Ensures memory doesn't grow unbounded
    */
   public async enforceRetentionPolicy(): Promise<number> {
     return this.enforceRetentionPolicySync();
   }
 
-  private enforceRetentionPolicySync(): number {
+  private enforceRetentionPolicySync(options: { makeRoomForOne?: boolean } = {}): number {
     const now = new Date();
     let deletedCount = 0;
 
@@ -1101,11 +1103,12 @@ export class Memory extends BaseElement implements IElement {
     }
     this.policyRemovedCount += deletedCount;
 
-    // If still at or over capacity, remove oldest entries to make room for one
-    // more. Issue #2859: only for memories with onFull 'evict_oldest'; a
+    // Issue #3136: only reserve space when an entry is about to be added.
+    // Issue #2859: only for memories with onFull 'evict_oldest'; a
     // permanent memory keeps every entry and addEntry() rejects instead.
-    if (this.getOnFullPolicy() === 'evict_oldest' && this.entriesSize >= this.maxEntries) {
-      const toDelete = Math.max(1, this.entriesSize - this.maxEntries + 1);
+    const targetSize = this.maxEntries - (options.makeRoomForOne ? 1 : 0);
+    if (this.getOnFullPolicy() === 'evict_oldest' && this.entriesSize > targetSize) {
+      const toDelete = this.entriesSize - targetSize;
       const evicted = this.removeOldestEntries(toDelete);
       this.logEviction(evicted, 'Memory.enforceRetentionPolicy');
       deletedCount += evicted;

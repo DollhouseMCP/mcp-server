@@ -34,7 +34,7 @@
 import * as yaml from 'js-yaml';
 import matter from '../security/frontmatter.js';
 import { assertSupportedFrontmatterLanguage } from '../security/frontmatterLanguage.js';
-import { SecureYamlParser } from '../security/secureYamlParser.js';
+import { SecureYamlParser, hasFrontmatterFraming } from '../security/secureYamlParser.js';
 import { SecurityMonitor, SecurityEvent } from '../security/securityMonitor.js';
 import { logger } from '../utils/logger.js';
 
@@ -311,10 +311,6 @@ export class SerializationService {
   private static readonly DEFAULT_MAX_CONTENT_SIZE = 1024 * 1024; // 1MB
   private static readonly MAX_FRONTMATTER_NODES = 10000;
   private static readonly MAX_FRONTMATTER_DEPTH = 40;
-
-  constructor() {
-    // No configuration needed - stateless service
-  }
 
   // ========================================================================
   // YAML PARSING
@@ -837,18 +833,7 @@ export class SerializationService {
 
     // Handle arrays
     if (Array.isArray(metadata)) {
-      // Filter out null/undefined based on strategy
-      let cleaned = metadata.map(item => this.cleanMetadata(item, options));
-
-      if (strategy === 'remove-undefined') {
-        cleaned = cleaned.filter(item => item !== undefined);
-      } else if (strategy === 'remove-null') {
-        cleaned = cleaned.filter(item => item !== null);
-      } else if (strategy === 'remove-both') {
-        cleaned = cleaned.filter(item => item !== undefined && item !== null);
-      }
-
-      return cleaned;
+      return this.cleanMetadataArray(metadata, options, strategy);
     }
 
     // Clean object based on strategy
@@ -865,29 +850,51 @@ export class SerializationService {
         (strategy === 'remove-both' && (value === undefined || value === null));
 
       if (!shouldRemove) {
-        // Recursively clean nested objects/arrays
-        if (typeof value === 'object' && value !== null) {
-          const cleanedValue = this.cleanMetadata(value, options);
-
-          // Check if we should remove empty arrays/objects
-          if (removeEmpty) {
-            const isEmpty = Array.isArray(cleanedValue)
-              ? cleanedValue.length === 0
-              : Object.keys(cleanedValue).length === 0;
-
-            if (!isEmpty) {
-              cleaned[key] = cleanedValue;
-            }
-          } else {
-            cleaned[key] = cleanedValue;
-          }
-        } else {
-          cleaned[key] = value;
-        }
+        this.copyCleanMetadataField(cleaned, key, value, options, removeEmpty);
       }
     }
 
     return cleaned;
+  }
+
+  private cleanMetadataArray(metadata: unknown[], options: MetadataCleanOptions, strategy: CleaningStrategy): unknown[] {
+    // Filter out null/undefined based on strategy
+    let cleaned = metadata.map(item => this.cleanMetadata(item, options));
+
+    if (strategy === 'remove-undefined') {
+      cleaned = cleaned.filter(item => item !== undefined);
+    } else if (strategy === 'remove-null') {
+      cleaned = cleaned.filter(item => item !== null);
+    } else if (strategy === 'remove-both') {
+      cleaned = cleaned.filter(item => item !== undefined && item !== null);
+    }
+
+    return cleaned;
+  }
+
+  private copyCleanMetadataField(
+    cleaned: Record<string, unknown>, key: string, value: unknown,
+    options: MetadataCleanOptions, removeEmpty: boolean,
+  ): void {
+    // Recursively clean nested objects/arrays
+    if (typeof value === 'object' && value !== null) {
+      const cleanedValue = this.cleanMetadata(value, options);
+
+      // Check if we should remove empty arrays/objects
+      if (removeEmpty) {
+        const isEmpty = Array.isArray(cleanedValue)
+          ? cleanedValue.length === 0
+          : Object.keys(cleanedValue).length === 0;
+
+        if (!isEmpty) {
+          cleaned[key] = cleanedValue;
+        }
+      } else {
+        cleaned[key] = cleanedValue;
+      }
+    } else {
+      cleaned[key] = value;
+    }
   }
 
   // ========================================================================
@@ -964,8 +971,7 @@ export class SerializationService {
    * ```
    */
   hasFrontmatter(data: string): boolean {
-    const trimmed = data.trim();
-    return trimmed.startsWith('---');
+    return hasFrontmatterFraming(data);
   }
 
   // ========================================================================

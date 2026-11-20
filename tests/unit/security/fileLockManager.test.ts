@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from '@jest/globals';
 import { FileLockManager } from '../../../src/security/fileLockManager.js';
 import { assertTiming } from '../../helpers/timing-thresholds.js';
+import * as path from 'node:path';
 
 describe('FileLockManager', () => {
   let fileLockManager: FileLockManager;
@@ -14,6 +15,20 @@ describe('FileLockManager', () => {
   });
 
   describe('withLock', () => {
+    test.each([true, false])('classifies timeout errors for a file resource: %s', async fileResource => {
+      const filePath = path.resolve('locked.yaml');
+      const resource = fileResource ? `file:${filePath}` : 'logical-resource';
+      let finish!: () => void;
+      const operation = new Promise<void>(resolve => { finish = resolve; });
+      try {
+        const error = await fileLockManager.withLock(resource, () => operation, { timeout: 1 }).catch((cause: unknown) => cause);
+        expect(error).toBeInstanceOf(Error);
+        expect(error).toMatchObject({ name: 'Error', code: 'ETIMEDOUT', message: `Lock operation timeout for resource: ${resource}` });
+        if (fileResource) expect(error).toHaveProperty('path', filePath);
+        else expect(error).not.toHaveProperty('path');
+      } finally { finish(); await operation; }
+    });
+
     test('should execute operations sequentially for same resource', async () => {
       const results: number[] = [];
       const delays = [50, 30, 40]; // Different delays to test ordering
