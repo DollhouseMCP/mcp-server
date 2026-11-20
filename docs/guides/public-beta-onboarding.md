@@ -381,6 +381,6 @@ For a detailed operation reference written for the AI itself, see the [LLM Quick
 | **MCP** | Model Context Protocol — the standard that lets AI clients communicate with tool servers. DollhouseMCP is an MCP server. |
 | **MCP-AQL** | A protocol layer on top of MCP, created by Dollhouse Research, that routes Dollhouse operations through 5 CRUDE endpoints (Create, Read, Update, Delete, Execute). |
 | **CRUDE** | The 5 endpoint categories: **C**reate, **R**ead, **U**pdate, **D**elete, **E**xecute. Each has a default permission level. |
-| **Gatekeeper** | The three-layer permission system that checks every operation server-side. Enforces route policies, element policies, and session confirmations. |
+| **Gatekeeper** | The three-layer permission system that checks every operation server-side. Enforces route policies, element policies, and session confirmations. For CLI permission hooks it also enforces an authorship-aware GitHub ownership policy (`DOLLHOUSE_GITHUB_OWNERSHIP_POLICY`): agents may comment on or review others' PRs and issues but are asked or blocked before modifying them. |
 | **Activation** | Turning on an element for the current session. Changes the AI's behavior and may change the permission surface. |
 | **Introspection** | The server's self-describing API — lets the AI discover available operations, parameters, formats, and categories at runtime. |

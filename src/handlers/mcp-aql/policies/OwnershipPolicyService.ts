@@ -14,16 +14,18 @@
  * @module
  */
 
+import { env } from '../../../config/env.js';
 import { logger } from '../../../utils/logger.js';
 import {
   decideOwnership,
   detectGitHubMutations,
+  parseOwnershipPolicyConfig,
   type GitHubMutationIntent,
   type OwnershipDecision,
   type OwnershipLookupResult,
   type OwnershipPolicyConfig,
 } from './OwnershipPolicy.js';
-import type { OwnershipCache, OwnershipResolver } from './OwnershipLookup.js';
+import { GhOwnershipResolver, OwnershipCache, type OwnershipResolver } from './OwnershipLookup.js';
 
 export interface OwnershipEvaluationContext {
   /** Session the lookup cache is scoped to. */
@@ -42,6 +44,31 @@ export interface OwnershipPolicyServiceOptions {
 }
 
 const BEHAVIOR_RANK: Record<OwnershipDecision['behavior'], number> = { allow: 0, confirm: 1, deny: 2 };
+
+/**
+ * Build the service from `DOLLHOUSE_GITHUB_OWNERSHIP_POLICY`,
+ * `DOLLHOUSE_GITHUB_OWNER_LOGIN` and `DOLLHOUSE_GITHUB_TEAMMATES`.
+ * Config problems are logged, never thrown: a bad value falls back to the
+ * fail-closed defaults rather than taking the server down.
+ */
+export function createOwnershipPolicyServiceFromEnv(
+  source: Pick<typeof env, 'DOLLHOUSE_GITHUB_OWNERSHIP_POLICY' | 'DOLLHOUSE_GITHUB_OWNER_LOGIN' | 'DOLLHOUSE_GITHUB_TEAMMATES'> = env,
+): OwnershipPolicyService {
+  const { config, warnings } = parseOwnershipPolicyConfig({
+    mode: source.DOLLHOUSE_GITHUB_OWNERSHIP_POLICY,
+    ownerLogin: source.DOLLHOUSE_GITHUB_OWNER_LOGIN,
+    teammates: source.DOLLHOUSE_GITHUB_TEAMMATES,
+  });
+  for (const warning of warnings) {
+    logger.warn(`[OwnershipPolicy] ${warning}`);
+  }
+  logger.debug('[OwnershipPolicy] configured', {
+    mode: config.mode,
+    ownerConfigured: Boolean(config.ownerLogin),
+    teammates: config.teammates.length,
+  });
+  return new OwnershipPolicyService({ config, resolver: new GhOwnershipResolver(), cache: new OwnershipCache() });
+}
 const DEFAULT_SESSION_KEY = 'default';
 
 export class OwnershipPolicyService {

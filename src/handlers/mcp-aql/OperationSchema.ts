@@ -1501,6 +1501,8 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
       tool_name: { type: 'string', required: true, description: 'The tool requesting permission (e.g., "Bash", "Edit", "Write", "mcp__server__tool")' },
       input: { type: 'object', required: true, description: 'The tool input parameters to evaluate (e.g., { command: "git push" } for Bash)' },
       agent_identity: { type: 'string', description: 'Optional: identity of the sub-agent making the request (from Claude Code --permission-prompt-tool)' },
+      session_id: { type: 'string', description: 'Optional: session identifier used to scope ownership lookup caching (Issue #3153)' },
+      cwd: { type: 'string', description: 'Optional: working directory of the agent, used by the ownership policy to infer the repository and current branch (Issue #3153)' },
     },
     returns: { name: 'PermissionDecision', kind: 'object', description: '{ behavior: "allow"|"deny", updatedInput?, message?, classification?: { riskLevel, reason, stage, riskScore?, irreversible? }, policyContext?: { evaluatedElements, decisionChain }, approvalRequest?: { requestId, toolName, riskLevel, riskScore, irreversible, reason } }. Risk scores: 0=safe, 40=moderate, 80=dangerous, 100=blocked; adjustments: irreversible(+10), network(+10), out-of-scope read(+10), file creation(+5). Stages: static_allow, static_deny, element_deny, element_allow, cli_approval, approval_required, default_allow.' },
     examples: [
@@ -1520,6 +1522,7 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
       input: { type: 'object', description: 'The tool input parameters to evaluate' },
       platform: { type: 'string', description: 'Target platform for response formatting (default: "claude_code"). Options: claude_code, gemini, cursor, windsurf, codex' },
       session_id: { type: 'string', description: 'Optional persisted activation session ID to evaluate against when hooks run in a separate leader process' },
+      cwd: { type: 'string', description: 'Optional working directory of the agent. Lets the ownership policy (Issue #3153) infer the repository and current branch for gh/git mutations.' },
     },
     returns: { name: 'PlatformPermissionDecision', kind: 'object', description: 'Platform-formatted permission decision. Claude Code: { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow"|"deny"|"ask", permissionDecisionReason? } }. Gemini: { decision: "allow"|"deny", reason? }. Cursor: { permission: "allow"|"deny"|"ask", reason? }. Windsurf: { allowed: boolean, reason? }. Codex PreToolUse: allow becomes zero stdout bytes (`{}` at the API layer), deny returns { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason? } }.' },
     examples: [

@@ -124,6 +124,32 @@ describe('permissionRoutes', () => {
       });
     });
 
+    it('should pass cwd through to evaluate_permission for the ownership policy (Issue #3153)', async () => {
+      const handler = createMockHandler();
+      const app = createApp(handler);
+
+      await request(app)
+        .post('/api/evaluate_permission')
+        .send({
+          tool_name: 'Bash',
+          input: { command: 'gh pr merge 42' },
+          platform: 'claude_code',
+          session_id: 'session-follower-1',
+          cwd: '/work/repo',
+        });
+
+      expect(handler.handleRead).toHaveBeenCalledWith({
+        operation: 'evaluate_permission',
+        params: {
+          tool_name: 'Bash',
+          input: { command: 'gh pr merge 42' },
+          platform: 'claude_code',
+          session_id: 'session-follower-1',
+          cwd: '/work/repo',
+        },
+      });
+    });
+
     it('should fail open when tool_name is missing', async () => {
       const handler = createMockHandler();
       const app = createApp(handler);

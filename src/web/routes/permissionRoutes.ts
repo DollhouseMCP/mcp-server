@@ -487,6 +487,7 @@ export function registerPermissionRoutes(
           input: input || {},
           platform,
           ...(context.session_id ? { session_id: context.session_id } : {}),
+          ...(context.cwd ? { cwd: context.cwd } : {}),
         },
       }));
       const elapsedMs = Date.now() - startMs;

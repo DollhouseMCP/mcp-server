@@ -57,6 +57,14 @@ describe('GhOwnershipResolver', () => {
       expect(calls[0][0]).toEqual(['pr', 'view', '9', '--json', 'author,number', '--repo', 'DollhouseMCP/mcp-server']);
     });
 
+    it('uses a PR URL repository even when --repo names a different repository', async () => {
+      const { run, calls } = runner(ok('{"author":{"login":"stranger"},"number":12}'));
+      await new GhOwnershipResolver(run).lookup({
+        ...PR, selector: 'https://github.com/actual/target/pull/12', repo: { owner: 'decoy', name: 'repo' },
+      });
+      expect(calls[0][0]).toEqual(['pr', 'view', '12', '--json', 'author,number', '--repo', 'actual/target']);
+    });
+
     it('passes branch selectors and explicit repos through', async () => {
       const { run, calls } = runner(ok('{"author":{"login":"a"},"number":1}'));
       await new GhOwnershipResolver(run).lookup({ ...PR, selector: 'feature/y', repo: { owner: 'o', name: 'r' } });
@@ -116,6 +124,14 @@ describe('GhOwnershipResolver', () => {
       expect(calls[1][0][1]).toBe('repos/o/r/issues/5');
     });
 
+    it('uses an issue URL repository even when --repo names a different repository', async () => {
+      const { run, calls } = runner(ok('{"number":12,"user":{"login":"stranger"}}'));
+      await new GhOwnershipResolver(run).lookup({
+        ...ISSUE, selector: 'https://github.com/actual/target/issues/12', repo: { owner: 'decoy', name: 'repo' },
+      });
+      expect(calls[0][0][1]).toBe('repos/actual/target/issues/12');
+    });
+
     it('does not treat a "no pull requests found" message as a missing issue', async () => {
       expect(await new GhOwnershipResolver(runner(fail('no pull requests found')).run).lookup(ISSUE)).toMatchObject({ status: 'error' });
     });
@@ -141,6 +157,18 @@ describe('GhOwnershipResolver', () => {
     it('resolves when several open PRs on the branch share one author', async () => {
       const payload = '[{"author":{"login":"Teammate"},"number":1},{"author":{"login":"teammate"},"number":2}]';
       expect(await new GhOwnershipResolver(runner(ok(payload)).run).lookup(BRANCH)).toEqual({ status: 'resolved', authorLogin: 'Teammate', number: 1 });
+    });
+
+    it.each([5, 6])('fails closed when %i matching PRs may hide another author beyond the limit', async (count) => {
+      const payload = JSON.stringify(Array.from({ length: count }, (_, number) => ({ author: { login: 'owner' }, number })));
+      expect(await new GhOwnershipResolver(runner(ok(payload)).run).lookup(BRANCH)).toMatchObject({
+        status: 'error', message: expect.stringMatching(/limit|truncat/i),
+      });
+    });
+
+    it('resolves a complete result below the branch lookup limit', async () => {
+      const payload = JSON.stringify(Array.from({ length: 4 }, (_, number) => ({ author: { login: 'owner' }, number })));
+      expect(await new GhOwnershipResolver(runner(ok(payload)).run).lookup(BRANCH)).toMatchObject({ status: 'resolved', authorLogin: 'owner' });
     });
 
     it('fails closed when several open PRs on the branch have different authors', async () => {
@@ -192,14 +220,33 @@ describe('GhOwnershipResolver', () => {
 });
 
 describe('working directory sanitising', () => {
-  it('passes an existing absolute directory through and drops anything else', async () => {
+  it('passes an existing absolute directory through', async () => {
     const { run, calls } = runner(ok('{"author":{"login":"a"},"number":1}'));
-    const resolver = new GhOwnershipResolver(run);
-    await resolver.lookup(PR, { cwd: tmpdir() });
-    await resolver.lookup(PR, { cwd: 'relative/dir' });
-    await resolver.lookup(PR, { cwd: join(tmpdir(), 'does-not-exist-ownership-test') });
-    expect(calls.map(call => (call[1] as { cwd?: string }).cwd)).toEqual([tmpdir(), undefined, undefined]);
+    await new GhOwnershipResolver(run).lookup(PR, { cwd: tmpdir() });
+    expect(calls[0][1]).toMatchObject({ cwd: tmpdir() });
     expect(sanitizeWorkingDirectory(undefined)).toBeUndefined();
+    expect(sanitizeWorkingDirectory('relative/dir')).toBeUndefined();
+  });
+
+  it.each(['relative/dir', join(tmpdir(), 'does-not-exist-ownership-test')])(
+    'does not inherit the server repo when supplied cwd is invalid: %s', async (cwd) => {
+      const { run, calls } = runner(ok('{"author":{"login":"owner"},"number":1}'));
+      const resolver = new GhOwnershipResolver(run);
+      const dependentIntents = [PR, { ...ISSUE, repo: undefined }, BRANCH,
+        { ...PR, selector: undefined, repo: { owner: 'o', name: 'r' } },
+        { ...BRANCH, branch: undefined, repo: { owner: 'o', name: 'r' } }];
+      for (const intent of dependentIntents) {
+        expect(await resolver.lookup(intent, { cwd })).toMatchObject({ status: 'error', message: expect.stringMatching(/working directory/i) });
+      }
+      expect(calls).toHaveLength(0);
+    },
+  );
+
+  it('can resolve a pinned repository and selector without an invalid supplied cwd', async () => {
+    const { run, calls } = runner(ok('{"author":{"login":"owner"},"number":1}'));
+    await new GhOwnershipResolver(run).lookup({ ...PR, repo: { owner: 'o', name: 'r' } }, { cwd: 'relative/dir' });
+    expect(calls[0][0]).toContain('o/r');
+    expect(calls[0][1]).toMatchObject({ cwd: undefined });
   });
 });
 

@@ -37,14 +37,44 @@ The wrappers normalize each client's native payload into the shared `/api/evalua
   "tool_name": "Bash",
   "input": { "command": "git status" },
   "platform": "cursor",
-  "session_id": "optional"
+  "session_id": "optional",
+  "cwd": "optional"
 }
 ```
+
+`cwd` is forwarded verbatim when the client supplies it. The ownership policy
+(below) uses it so `gh` can infer the repository and current branch.
 
 Client-specific normalization includes:
 - VS Code: converts `runTerminalCommand` and related names into `Bash`
 - Windsurf: converts `pre_run_command` and `pre_mcp_tool_use` events into standard `tool_name` + `input`
 - Codex/Cursor/Gemini wrappers: primarily set the platform id and delegate to the shared shell bridge
+
+## Ownership Policy Stage
+
+Issue #3153 adds an authorship-aware stage between static classification and
+element policies, applied identically to `evaluate_permission` (hooks) and
+`permission_prompt` (`--permission-prompt-tool`):
+
+- Detected mutations: `gh pr merge|update-branch|edit|close|ready|reopen|lock|unlock`,
+  `gh issue edit|close|reopen|delete|transfer|lock|unlock|pin|unpin`, mutating
+  `gh api` calls on `repos/*/pulls/N` or `repos/*/issues/N`, `git push` to a
+  branch that is the head of an open PR, GitHub MCP write tools
+  (`merge_pull_request`, `update_pull_request`, `update_pull_request_branch`,
+  `update_issue`, `push_files`, ...) and Dollhouse `integration_request`
+  writes to the same REST paths.
+- Not detected (always pass this stage): views, diffs, checks, comments and
+  reviews on any PR or issue.
+- Ownership is resolved once per explicit target per session through the
+  operator's own `gh` authentication and cached; current-branch lookups are
+  never cached because a checkout can change what "current" means.
+- Decision: author is the configured owner or a listed teammate → pass;
+  otherwise `DOLLHOUSE_GITHUB_OWNERSHIP_POLICY` decides (`confirm` → `ask`,
+  `deny` → `deny`). A failed lookup, an unknown owner identity or an
+  unidentifiable target always yields `ask` (fail closed). An element
+  `denyPatterns` match still wins over an ownership `ask`.
+- The hook wrappers' fail-open rules below are unchanged: they describe
+  transport failures, not policy decisions.
 
 ## Fail-Open Rules
 

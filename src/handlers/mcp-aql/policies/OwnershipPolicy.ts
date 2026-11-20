@@ -319,6 +319,117 @@ interface ShellScanHandlers {
   onPlain: (ch: string, index: number) => number;
   /** Called when a quote opens or an escape is seen, so the tokenizer can start an (possibly empty) token. */
   onQuoteBoundary?: () => void;
+  /** Executable substitution body; its enclosing word remains intact. */
+  onSubstitution?: (body: string, complete: boolean) => void;
+}
+
+interface SubstitutionOpener {
+  closing: ')' | '`';
+  width: number;
+}
+
+function substitutionOpener(text: string, index: number): SubstitutionOpener | undefined {
+  if (text[index] === '$' && text[index + 1] === '(') return { closing: ')', width: 2 };
+  if (text[index] === '`') return { closing: '`', width: 1 };
+  return undefined;
+}
+
+interface SubstitutionFrame {
+  closing: ')' | '`';
+  quote: QuoteChar | null;
+  parentheses: number;
+}
+
+/** Match executable substitutions without borrowing the surrounding quote state. */
+class SubstitutionReader {
+  private readonly frames: SubstitutionFrame[];
+  private complexSyntax = false;
+
+  constructor(private readonly text: string, private readonly start: number, private readonly opener: SubstitutionOpener) {
+    this.frames = [this.frame(opener)];
+  }
+
+  read(): { body: string; end: number; complete: boolean } {
+    const bodyStart = this.start + this.opener.width;
+    let cursor = bodyStart;
+    while (cursor < this.text.length && this.frames.length > 0) {
+      cursor = this.advance(cursor);
+    }
+    const complete = this.frames.length === 0;
+    const end = complete ? cursor - 1 : this.text.length;
+    const body = this.text.slice(bodyStart, end);
+    // Escaped legacy backtick nesting needs another escaping layer. Refuse
+    // partial interpretation rather than treating executable text as literal.
+    const legacyNesting = this.opener.closing === '`' && body.includes('\\`');
+    // These constructs can contain ')' that is not a substitution terminator.
+    // They need a full shell grammar; conservatively refuse partial matching.
+    return { body, end: Math.min(end, this.text.length - 1), complete: complete && !legacyNesting && !this.complexSyntax };
+  }
+
+  private frame(opener: SubstitutionOpener): SubstitutionFrame {
+    return { closing: opener.closing, quote: null, parentheses: 1 };
+  }
+
+  private advance(index: number): number {
+    // read() only advances while a substitution frame exists.
+    const frame = this.frames.at(-1)!;
+    const ch = this.text[index];
+    if (frame.quote !== "'" && ch === '\\') return index + 2;
+    if (this.consumeQuote(frame, ch)) return index + 1;
+    const commentEnd = this.skipComment(frame, index);
+    if (commentEnd !== undefined) return commentEnd;
+    this.complexSyntax ||= this.needsShellGrammar(frame, index);
+    if (ch === '`' && frame.closing === '`') {
+      this.frames.pop();
+      return index + 1;
+    }
+    const opener = substitutionOpener(this.text, index);
+    if (opener) {
+      this.frames.push(this.frame(opener));
+      return index + opener.width;
+    }
+    if (frame.quote === null && frame.closing === ')') this.consumeParenthesis(frame, ch);
+    return index + 1;
+  }
+
+  private needsShellGrammar(frame: SubstitutionFrame, index: number): boolean {
+    if (this.text.startsWith('${', index)) return true;
+    if (frame.quote !== null) return false;
+    if (this.text.startsWith('<<', index)) return true;
+    return this.text.startsWith('case', index) &&
+      /[\s;&|()`]/.test(this.text[index - 1] ?? ' ') &&
+      /[\s;&|()]/.test(this.text[index + 4] ?? ' ');
+  }
+
+  private skipComment(frame: SubstitutionFrame, index: number): number | undefined {
+    if (frame.quote !== null || this.text[index] !== '#') return undefined;
+    const previous = this.text[index - 1] ?? ' ';
+    if (!/[\s;&|()]/.test(previous)) return undefined;
+    const newline = this.text.indexOf('\n', index);
+    return newline === -1 ? this.text.length : newline;
+  }
+
+  private consumeQuote(frame: SubstitutionFrame, ch: string): boolean {
+    if (frame.quote === "'") {
+      if (ch === "'") frame.quote = null;
+      return true;
+    }
+    if (ch === "'" && frame.quote === null) {
+      frame.quote = "'";
+      return true;
+    }
+    if (ch === '"') {
+      frame.quote = frame.quote === null ? '"' : null;
+      return true;
+    }
+    return false;
+  }
+
+  private consumeParenthesis(frame: SubstitutionFrame, ch: string): void {
+    if (ch === '(') frame.parentheses++;
+    if (ch === ')') frame.parentheses--;
+    if (frame.parentheses === 0) this.frames.pop();
+  }
 }
 
 class ShellScanner {
@@ -333,6 +444,11 @@ class ShellScanner {
   scan(handlers: ShellScanHandlers): void {
     for (let i = 0; i < this.text.length; i++) {
       const ch = this.text[i];
+      const substitution = this.consumeSubstitution(i, handlers);
+      if (substitution !== null) {
+        i += substitution;
+        continue;
+      }
       if (this.quote) {
         i += this.consumeQuoted(ch, i, handlers);
         continue;
@@ -340,6 +456,16 @@ class ShellScanner {
       const special = this.consumeSpecial(ch, i, handlers);
       i += special ?? handlers.onPlain(ch, i);
     }
+  }
+
+  private consumeSubstitution(index: number, handlers: ShellScanHandlers): number | null {
+    if (!handlers.onSubstitution || this.quote === "'") return null;
+    const opener = substitutionOpener(this.text, index);
+    if (!opener) return null;
+    const substitution = new SubstitutionReader(this.text, index, opener).read();
+    handlers.onSubstitution(substitution.body, substitution.complete);
+    handlers.onLiteral(this.text.slice(index, substitution.end + 1));
+    return substitution.end - index;
   }
 
   /** Quote openers and escapes outside quotes. Returns extra characters consumed, or null when `ch` is plain. */
@@ -352,6 +478,7 @@ class ShellScanner {
     }
     if (ch === '\\' && index + 1 < this.text.length) {
       if (handlers.keepQuotes) handlers.onLiteral(ch);
+      if (!handlers.keepQuotes && this.text[index + 1] === '\n') return 1;
       handlers.onLiteral(this.text[index + 1]);
       handlers.onQuoteBoundary?.();
       return 1;
@@ -368,6 +495,7 @@ class ShellScanner {
     }
     if (ch === '\\' && this.quote === '"' && index + 1 < this.text.length) {
       if (handlers.keepQuotes) handlers.onLiteral(ch);
+      if (!handlers.keepQuotes && this.text[index + 1] === '\n') return 1;
       handlers.onLiteral(this.text[index + 1]);
       return 1;
     }
@@ -376,42 +504,56 @@ class ShellScanner {
   }
 }
 
+interface ShellSegment {
+  text: string;
+  dynamic: boolean;
+}
+
+/** Each byte may be revisited for substitutions, but total inspection stays bounded. */
+function inspectShellSegments(command: string): { segments: ShellSegment[]; complete: boolean } {
+  const pending = [command];
+  const segments: ShellSegment[] = [];
+  let remaining = 2 * MAX_COMMAND_LENGTH;
+  let complete = true;
+  for (const text of pending) {
+    remaining -= text.length;
+    if (remaining < 0) return { segments, complete: false };
+    let current = '';
+    let dynamic = false;
+    const flush = (): void => {
+      if (current.trim()) segments.push({ text: current.trim(), dynamic });
+      current = '';
+      dynamic = false;
+    };
+    new ShellScanner(text).scan({
+      keepQuotes: true,
+      onLiteral: ch => { current += ch; },
+      onSubstitution: (body, balanced) => {
+        dynamic = true;
+        complete &&= balanced;
+        pending.push(body);
+      },
+      onPlain: (ch) => {
+        if (SEGMENT_SEPARATORS.has(ch)) flush();
+        else current += ch;
+        return 0;
+      },
+    });
+    flush();
+  }
+  return { segments, complete };
+}
+
 /**
- * Split a shell command line into simple-command segments, honouring quotes.
- * Separators: `;`, newline, `&&`, `||`, `|`, `&`, parentheses, backticks and
- * `$(`. Splitting on sub-shell openers means `echo $(gh pr merge 1)` yields a
- * `gh pr merge 1` segment — over-splitting can only add intents, never hide one.
+ * Preserve outer commands and inspect executable substitution bodies separately,
+ * including substitutions inside double quotes. Single-quoted/escaped text is
+ * literal. Refuse partial inspection instead of silently discarding input.
  */
 export function splitShellSegments(command: string): string[] {
-  const text = command.slice(0, MAX_COMMAND_LENGTH);
-  const segments: string[] = [];
-  let current = '';
-  const flush = (): void => {
-    if (current.trim()) segments.push(current.trim());
-    current = '';
-  };
-  const append = (ch: string): void => {
-    current += ch;
-  };
-
-  new ShellScanner(text).scan({
-    keepQuotes: true,
-    onLiteral: append,
-    onPlain: (ch, i) => {
-      if (ch === '$' && text[i + 1] === '(') {
-        flush();
-        return 1;
-      }
-      if (SEGMENT_SEPARATORS.has(ch)) {
-        flush();
-        return 0;
-      }
-      current += ch;
-      return 0;
-    },
-  });
-  flush();
-  return segments;
+  if (command.length > MAX_COMMAND_LENGTH) throw new RangeError('Command exceeds shell inspection length limit');
+  const result = inspectShellSegments(command);
+  if (!result.complete) throw new RangeError('Command cannot be fully inspected within the shell inspection budget');
+  return result.segments.map(segment => segment.text);
 }
 
 /** Tokenize one simple command, removing quotes and honouring backslash escapes. */
@@ -431,6 +573,7 @@ export function tokenizeShellWords(segment: string): string[] {
     keepQuotes: false,
     onLiteral: append,
     onQuoteBoundary: markToken,
+    onSubstitution: markToken,
     onPlain: (ch) => {
       if (/\s/.test(ch)) {
         if (inToken) tokens.push(current);
@@ -552,6 +695,9 @@ function detectGhPrOrIssue(group: 'pr' | 'issue', rest: string[], source: string
   const kind: GitHubTargetKind = group === 'pr' ? 'pull_request' : 'issue';
   // A PR mutation without a selector targets the current branch's PR; an issue
   // mutation always needs a selector, so nothing can be protected without one.
+  if (group === 'issue' && sub === 'edit' && positionals.length > 1) {
+    return { kind: 'unresolvable', action: 'gh issue edit multiple targets', repo, source };
+  }
   const selector = positionals[0];
   if (group === 'issue' && !selector) {
     return undefined;
@@ -740,6 +886,18 @@ function detectBashSegment(tokens: string[], segment: string): GitHubMutationInt
   return [];
 }
 
+function detectInspectedSegment(tokens: string[], segment: ShellSegment): GitHubMutationIntent[] {
+  const intents = detectBashSegment(tokens, segment.text);
+  if (!segment.dynamic) return intents;
+  const executable = basename(tokens[0] ?? '');
+  const dispatchEnd = executable === 'git' ? findGitSubcommandIndex(tokens) + 1 : 3;
+  const dynamicDispatch = tokens.slice(0, dispatchEnd).some(token => token.includes('$(') || token.includes('`'));
+  if ((executable === 'gh' || executable === 'git') && dynamicDispatch) {
+    return [{ kind: 'unresolvable', action: `${executable} with computed command arguments`, source: segment.text }];
+  }
+  return intents.map(intent => ({ ...intent, kind: 'unresolvable' }));
+}
+
 function changesShellRepository(tokens: string[], prefixedRepository: boolean): boolean {
   const executable = basename(tokens[0] ?? '');
   return SHELL_DIRECTORY_COMMANDS.has(executable) ||
@@ -747,21 +905,73 @@ function changesShellRepository(tokens: string[], prefixedRepository: boolean): 
     (executable === 'export' && tokens.slice(1).some(token => REPOSITORY_ENV_ASSIGNMENT.test(token)));
 }
 
+/** Existing-object ownership does not gate reads, comments, reviews or creation. */
+const OWNERSHIP_EXEMPT_GH_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  'view', 'diff', 'checks', 'list', 'status', 'comment', 'review', 'create', 'checkout', 'develop',
+]);
+
+/** A linear, conservative fallback; do not associate a commit message's "push" with git commit. */
+function couldContainGitPush(command: string): boolean {
+  for (const segment of command.split(/[\r\n;&|]/)) {
+    let lastPush = -1;
+    for (const match of segment.matchAll(/\bpush\b/g)) lastPush = match.index;
+    if (lastPush < 0) continue;
+    for (const match of segment.matchAll(/\bgit\b/g)) {
+      if (match.index >= lastPush) break;
+      if (/^(?:["'])?\s+(?:push\b|-|["'`$])/.test(segment.slice(match.index + 3))) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Incomplete inspection only concerns ownership when the unexamined text could
+ * contain a protected mutation. This scans the full raw input, never a prefix.
+ * A signal may over-report quoted data; absence of any signal leaves local
+ * scripts and ordinary heredoc commit/PR-create messages outside this policy.
+ */
+function couldContainGitHubMutation(command: string): boolean {
+  const raw = command.replace(/\\\r?\n/g, '');
+  if (/\b(?:gh|git)["']?\s+["'`$]/.test(raw)) return true;
+  // Over-approximate shell word spelling: quoted/escaped command names and
+  // subcommands still signal mutations when structured inspection is incomplete.
+  const words = raw.replace(/["'\\]/g, '');
+  if (/\bapi\.github\.com\b/i.test(words) || couldContainGitPush(words)) return true;
+  for (const match of words.matchAll(/\bgh\s+(pr|issue|api)\b(?:\s+([\w-]+))?/g)) {
+    if (match[1] === 'api') return true;
+    if (!match[2] || !OWNERSHIP_EXEMPT_GH_SUBCOMMANDS.has(match[2])) return true;
+  }
+  return false;
+}
+
+function incompleteCommandIntents(command: string, action: string): GitHubMutationIntent[] {
+  return couldContainGitHubMutation(command)
+    ? [{ kind: 'unresolvable', action, source: 'Bash' }]
+    : [];
+}
+
 function detectBashMutations(command: string): GitHubMutationIntent[] {
+  if (command.length > MAX_COMMAND_LENGTH) {
+    return incompleteCommandIntents(command, 'Bash command exceeds ownership inspection length limit');
+  }
+  const inspection = inspectShellSegments(command);
+  if (!inspection.complete) {
+    return incompleteCommandIntents(command, 'Bash command cannot be fully inspected');
+  }
   const intents: GitHubMutationIntent[] = [];
   // Deliberately retain uncertainty across segments, including subshells: the
   // scanner does not model shell scope or restore cwd after popd/cd-back.
   let repositoryChanged = false;
-  for (const segment of splitShellSegments(command)) {
-    const rawTokens = tokenizeShellWords(segment);
+  for (const segment of inspection.segments) {
+    const rawTokens = tokenizeShellWords(segment.text);
     const tokens = stripLeadingWrappers(rawTokens);
     const executable = basename(tokens[0] ?? '');
     const prefixedRepository = rawTokens.slice(0, rawTokens.length - tokens.length)
       .some(token => REPOSITORY_ENV_ASSIGNMENT.test(token));
-    repositoryChanged ||= changesShellRepository(tokens, prefixedRepository);
+    repositoryChanged ||= changesShellRepository(tokens, prefixedRepository) || (segment.dynamic && prefixedRepository);
     const contextChanged = repositoryChanged || prefixedRepository ||
       (executable === 'git' && gitChangesRepository(tokens));
-    for (const intent of detectBashSegment(tokens, segment)) {
+    for (const intent of detectInspectedSegment(tokens, segment)) {
       intents.push(contextChanged && !hasPinnedTarget(intent)
         ? { ...intent, kind: 'unresolvable' }
         : intent);
