@@ -93,6 +93,11 @@ remote_command="${command_args[*]}"
 if [[ "${DOLLHOUSE_FAKE_REMOTE_STALE_CADDY_ENV:-false}" == "true" ]]; then
   export DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG=stale
   export DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES=198.51.100.0/24
+  export DOLLHOUSE_HOSTED_CADDY_IMAGE=stale DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME=stale_data DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME=stale_config
+  export DOLLHOUSE_HOSTED_LEGACY_CHECKPOINT=/stale-checkpoint
+fi
+if [[ "${DOLLHOUSE_FAKE_REMOTE_STALE_REGISTRY_ENV:-false}" == true ]]; then
+  export DOLLHOUSE_HOSTED_IMAGE_MODE=registry DOLLHOUSE_HOSTED_RUNTIME_IMAGE=stale DOLLHOUSE_HOSTED_MIGRATION_IMAGE=stale
 fi
 bash -c "${remote_command}"
 EOF
@@ -207,6 +212,28 @@ if [[ "${1:-}" == "clone" ]]; then
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${DOLLHOUSE_FAKE_VALIDATE_CADDY:-false}" == true ]]; then
+  source "${DOLLHOUSE_FAKE_VALIDATION:?}"
+  die() { printf '%s\n' "$*" >&2; exit 1; }
+  env_file="${DOLLHOUSE_HOSTED_DEPLOY_DIR}/.env.production"
+  persisted() { local key="$1"; if [[ -f "${env_file}" ]]; then sed -n "s/^${key}=//p" "${env_file}"; fi; }
+  validate_caddy_selection "${DOLLHOUSE_HOSTED_CADDY_IMAGE:-$(persisted DOLLHOUSE_HOSTED_CADDY_IMAGE)}" \
+    "${DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME:-$(persisted DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME)}" \
+    "${DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME:-$(persisted DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME)}"
+fi
+
+
+if [[ "${DOLLHOUSE_FAKE_VALIDATE_REGISTRY:-false}" == true ]]; then
+  source "${DOLLHOUSE_FAKE_VALIDATION:?}"
+  die() { printf '%s\n' "$*" >&2; exit 1; }
+  env_file="${DOLLHOUSE_HOSTED_DEPLOY_DIR}/.env.production"
+  persisted() { local key="$1"; if [[ -f "${env_file}" ]]; then sed -n "s/^${key}=//p" "${env_file}"; fi; }
+  IMAGE_MODE="${DOLLHOUSE_HOSTED_IMAGE_MODE:-$(persisted DOLLHOUSE_HOSTED_IMAGE_MODE)}"
+  RUNTIME_IMAGE="${DOLLHOUSE_HOSTED_RUNTIME_IMAGE:-$(persisted DOLLHOUSE_HOSTED_RUNTIME_IMAGE)}"
+  MIGRATION_IMAGE="${DOLLHOUSE_HOSTED_MIGRATION_IMAGE:-$(persisted DOLLHOUSE_HOSTED_MIGRATION_IMAGE)}"
+  validate_registry_selection
+fi
+
 {
   printf 'hosted action=%s ref=%s source=%s deploy=%s ' \
     "${1:-}" "${DOLLHOUSE_HOSTED_GIT_REF:-}" "${DOLLHOUSE_HOSTED_SOURCE_DIR:-}" "${DOLLHOUSE_HOSTED_DEPLOY_DIR:-}"
@@ -230,6 +257,16 @@ set -euo pipefail
   printf 'caddy_access_log_set=%s caddy_access_log=%s caddy_trusted_proxies_set=%s caddy_trusted_proxies=%s ' \
     "${DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG+x}" "${DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG:-}" \
     "${DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES+x}" "${DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES:-}"
+  printf 'caddy_image_set=%s caddy_image=%s caddy_data_set=%s caddy_data=%s caddy_config_set=%s caddy_config=%s ' \
+    "${DOLLHOUSE_HOSTED_CADDY_IMAGE+x}" "${DOLLHOUSE_HOSTED_CADDY_IMAGE:-}" \
+    "${DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME+x}" "${DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME:-}" \
+    "${DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME+x}" "${DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME:-}"
+  printf 'registry_mode_set=%s registry_mode=%s runtime_image_set=%s runtime_image=%s migration_image_set=%s migration_image=%s ' \
+    "${DOLLHOUSE_HOSTED_IMAGE_MODE+x}" "${DOLLHOUSE_HOSTED_IMAGE_MODE:-}" \
+    "${DOLLHOUSE_HOSTED_RUNTIME_IMAGE+x}" "${DOLLHOUSE_HOSTED_RUNTIME_IMAGE:-}" \
+    "${DOLLHOUSE_HOSTED_MIGRATION_IMAGE+x}" "${DOLLHOUSE_HOSTED_MIGRATION_IMAGE:-}"
+  printf 'legacy_checkpoint_set=%s legacy_checkpoint=%s ' \
+    "${DOLLHOUSE_HOSTED_LEGACY_CHECKPOINT+x}" "${DOLLHOUSE_HOSTED_LEGACY_CHECKPOINT:-}"
   printf 'bootstrap_username_set=%s bootstrap_username=%s bootstrap_id_set=%s bootstrap_id=%s ' \
     "${DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME+x}" "${DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME:-}" "${DOLLHOUSE_BOOTSTRAP_GITHUB_ID+x}" "${DOLLHOUSE_BOOTSTRAP_GITHUB_ID:-}"
   printf 'auth_provider_set=%s auth_provider=%s auth_issuer_set=%s auth_issuer=%s auth_audience_set=%s auth_audience=%s ' \
@@ -520,7 +557,95 @@ DOLLHOUSE_FAKE_REMOTE_STALE_CADDY_ENV=true \
   run_remote --skip-backup update > "${TMP_ROOT}/stale-caddy-env.out"
 assert_contains "${REMOTE_LOG}" "caddy_access_log_set= caddy_access_log= caddy_trusted_proxies_set= caddy_trusted_proxies="
 assert_not_contains "${REMOTE_LOG}" "caddy_access_log=stale"
+assert_contains "${REMOTE_LOG}" "legacy_checkpoint_set= legacy_checkpoint="
+assert_not_contains "${REMOTE_LOG}" "/stale-checkpoint"
 assert_not_contains "${REMOTE_LOG}" "caddy_trusted_proxies=198.51.100.0/24"
+assert_contains "${REMOTE_LOG}" "caddy_image_set= caddy_image= caddy_data_set= caddy_data= caddy_config_set= caddy_config="
+
+log "checking remote Caddy image and volume selection"
+CADDY_TEST_IMAGE="registry.example.test/team/caddy@sha256:$(printf 'a%.0s' {1..64})"
+CADDY_OTHER_IMAGE="registry.example.test/team/caddy@sha256:$(printf 'b%.0s' {1..64})"
+DOLLHOUSE_FAKE_VALIDATION="${REPO_ROOT}/scripts/hosted-deploy/validation.sh"
+export DOLLHOUSE_FAKE_VALIDATION
+reset_fake_state
+DOLLHOUSE_FAKE_VALIDATE_CADDY=true \
+DOLLHOUSE_TEST_DEPLOY_DIR="${TMP_ROOT}/fresh-caddy" \
+DOLLHOUSE_HOSTED_CADDY_IMAGE="${CADDY_TEST_IMAGE}" \
+DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME=fixture_data \
+DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME=fixture_config \
+  run_remote --skip-backup install > "${TMP_ROOT}/fresh-caddy.out"
+assert_contains "${REMOTE_LOG}" "caddy_image_set=x caddy_image=${CADDY_TEST_IMAGE} caddy_data_set=x caddy_data=fixture_data caddy_config_set=x caddy_config=fixture_config"
+
+cp "${DEPLOY_DIR}/.env.production" "${TMP_ROOT}/original.env"
+printf 'DOLLHOUSE_HOSTED_CADDY_IMAGE=%s\nDOLLHOUSE_HOSTED_CADDY_DATA_VOLUME=persist_data\nDOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME=persist_config\n' "${CADDY_TEST_IMAGE}" >> "${DEPLOY_DIR}/.env.production"
+cp "${DEPLOY_DIR}/.env.production" "${TMP_ROOT}/expected.env"
+reset_fake_state
+DOLLHOUSE_FAKE_VALIDATE_CADDY=true DOLLHOUSE_FAKE_REMOTE_STALE_CADDY_ENV=true \
+  run_remote --skip-backup update > "${TMP_ROOT}/caddy-fallback.out"
+assert_contains "${REMOTE_LOG}" "caddy_image_set= caddy_image= caddy_data_set= caddy_data= caddy_config_set= caddy_config="
+cmp -s "${DEPLOY_DIR}/.env.production" "${TMP_ROOT}/expected.env" || fail "fallback changed persisted Caddy selection"
+reset_fake_state
+DOLLHOUSE_FAKE_VALIDATE_CADDY=true DOLLHOUSE_HOSTED_CADDY_IMAGE="${CADDY_OTHER_IMAGE}" \
+  run_remote --skip-backup update > "${TMP_ROOT}/caddy-partial.out"
+assert_contains "${REMOTE_LOG}" "caddy_image_set=x caddy_image=${CADDY_OTHER_IMAGE} caddy_data_set= caddy_data= caddy_config_set= caddy_config="
+reset_fake_state
+DOLLHOUSE_FAKE_VALIDATE_CADDY=true DOLLHOUSE_HOSTED_CADDY_IMAGE="${CADDY_OTHER_IMAGE}" \
+DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME=other_data DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME=other_config \
+  run_remote --skip-backup update > "${TMP_ROOT}/caddy-override.out"
+assert_contains "${REMOTE_LOG}" "caddy_image_set=x caddy_image=${CADDY_OTHER_IMAGE} caddy_data_set=x caddy_data=other_data caddy_config_set=x caddy_config=other_config"
+
+sentinel="${TMP_ROOT}/injection-sentinel"
+for invalid in 'caddy:latest' "\$(touch ${sentinel})" "\`touch ${sentinel}\`" "registry.example.test/'quote" $'registry.example.test/team/caddy\ninvalid'; do
+  reset_fake_state
+  if DOLLHOUSE_FAKE_VALIDATE_CADDY=true DOLLHOUSE_HOSTED_CADDY_IMAGE="${invalid}" \
+    DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME=fixture_data DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME=fixture_config \
+      run_remote --skip-backup update > "${TMP_ROOT}/invalid-caddy.out" 2>&1; then
+    fail "invalid remote Caddy image unexpectedly accepted"
+  fi
+  assert_contains "${TMP_ROOT}/invalid-caddy.out" 'DOLLHOUSE_HOSTED_CADDY_IMAGE must be a registry/repository@sha256 digest reference'
+done
+for invalid in 'bad/name' '-leading' $'bad\nname' 'other_config'; do
+  reset_fake_state
+  if DOLLHOUSE_FAKE_VALIDATE_CADDY=true DOLLHOUSE_HOSTED_CADDY_IMAGE="${CADDY_TEST_IMAGE}" \
+    DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME="${invalid}" DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME=other_config \
+      run_remote --skip-backup update > "${TMP_ROOT}/invalid-caddy-volume.out" 2>&1; then
+    fail "invalid remote Caddy volume unexpectedly accepted"
+  fi
+done
+[[ ! -e "${sentinel}" ]] || fail "remote Caddy input executed"
+cp "${TMP_ROOT}/original.env" "${DEPLOY_DIR}/.env.production"
+
+log "checking registry selection transport and persisted fallback"
+REG_RUNTIME="registry.example.test/team/runtime@sha256:$(printf 'c%.0s' {1..64})"
+REG_MIGRATION="registry.example.test/team/migration@sha256:$(printf 'd%.0s' {1..64})"
+reset_fake_state
+DOLLHOUSE_FAKE_VALIDATE_REGISTRY=true DOLLHOUSE_HOSTED_IMAGE_MODE=registry \
+DOLLHOUSE_HOSTED_RUNTIME_IMAGE="${REG_RUNTIME}" DOLLHOUSE_HOSTED_MIGRATION_IMAGE="${REG_MIGRATION}" \
+  run_remote --skip-backup update > "${TMP_ROOT}/registry-explicit.out"
+assert_contains "${REMOTE_LOG}" "registry_mode_set=x registry_mode=registry runtime_image_set=x runtime_image=${REG_RUNTIME} migration_image_set=x migration_image=${REG_MIGRATION}"
+cp "${DEPLOY_DIR}/.env.production" "${TMP_ROOT}/registry-original.env"
+printf 'DOLLHOUSE_HOSTED_IMAGE_MODE=registry\nDOLLHOUSE_HOSTED_RUNTIME_IMAGE=%s\nDOLLHOUSE_HOSTED_MIGRATION_IMAGE=%s\n' "${REG_RUNTIME}" "${REG_MIGRATION}" >> "${DEPLOY_DIR}/.env.production"
+cp "${DEPLOY_DIR}/.env.production" "${TMP_ROOT}/registry-expected.env"
+reset_fake_state
+DOLLHOUSE_FAKE_VALIDATE_REGISTRY=true DOLLHOUSE_FAKE_REMOTE_STALE_REGISTRY_ENV=true run_remote --skip-backup update > "${TMP_ROOT}/registry-fallback.out"
+assert_contains "${REMOTE_LOG}" 'registry_mode_set= registry_mode= runtime_image_set= runtime_image= migration_image_set= migration_image='
+cmp -s "${DEPLOY_DIR}/.env.production" "${TMP_ROOT}/registry-expected.env" || fail "registry fallback altered persisted selection"
+reset_fake_state
+if DOLLHOUSE_FAKE_VALIDATE_REGISTRY=true DOLLHOUSE_HOSTED_IMAGE_MODE=registry \
+  DOLLHOUSE_HOSTED_RUNTIME_IMAGE='invalid:latest' DOLLHOUSE_HOSTED_MIGRATION_IMAGE="${REG_MIGRATION}" \
+  run_remote --skip-backup update > "${TMP_ROOT}/registry-invalid.out" 2>&1; then
+  fail "invalid registry selector accepted"
+fi
+for invalid in "\$(touch ${sentinel})" "registry.example.test/'quote" $'registry.example.test/team/runtime\ninvalid'; do
+  reset_fake_state
+  if DOLLHOUSE_FAKE_VALIDATE_REGISTRY=true DOLLHOUSE_HOSTED_IMAGE_MODE=registry \
+    DOLLHOUSE_HOSTED_RUNTIME_IMAGE="${invalid}" DOLLHOUSE_HOSTED_MIGRATION_IMAGE="${REG_MIGRATION}" \
+    run_remote --skip-backup update > "${TMP_ROOT}/registry-invalid.out" 2>&1; then
+    fail "unsafe registry selector accepted"
+  fi
+done
+[[ ! -e "${sentinel}" ]] || fail "registry selector executed"
+cp "${TMP_ROOT}/registry-original.env" "${DEPLOY_DIR}/.env.production"
 
 log "checking remote runtime overrides reach hosted helper"
 reset_fake_state
@@ -667,6 +792,74 @@ success_count="$(
 if [[ "${success_count}" != "0" ]]; then
   fail "expected no finalized backup after permanent pg_dump failure, got ${success_count}"
 fi
+
+log "checking legacy handoff standard backups and exact checkpoint forwarding"
+reset_fake_state
+rm -R "${DEPLOY_DIR}/backups" 2>/dev/null || true
+legacy_checkpoint="${TMP_ROOT}/checkpoint with 'quotes' and \$(literal)"
+DOLLHOUSE_HOSTED_LEGACY_CHECKPOINT="${legacy_checkpoint}" DOLLHOUSE_FAKE_REMOTE_STALE_CADDY_ENV=true \
+  run_remote legacy-offline-update > "${TMP_ROOT}/legacy-backup.out"
+assert_contains "${REMOTE_LOG}" 'hosted action=legacy-offline-update'
+assert_contains "${REMOTE_LOG}" "legacy_checkpoint_set=x legacy_checkpoint=${legacy_checkpoint}"
+assert_not_contains "${REMOTE_LOG}" '/stale-checkpoint'
+node - "${DEPLOY_DIR}/backups" "${REMOTE_LOG}" <<'NODE'
+const fs = require('fs');
+const assert = require('node:assert/strict');
+const files = fs.readdirSync(process.argv[2]);
+for (const prefix of ['env.pre-remote-legacy-offline-update-', 'env.production.pre-remote-legacy-offline-update-', 'pre-remote-legacy-offline-update-']) {
+  const matches = files.filter(name => name.startsWith(prefix));
+  assert.equal(matches.length, 1, `one standard backup for ${prefix}`);
+  const path = `${process.argv[2]}/${matches[0]}`;
+  assert.equal(fs.statSync(path).mode & 0o777, 0o600);
+  assert.ok(fs.statSync(path).size > 0);
+}
+const log = fs.readFileSync(process.argv[3], 'utf8');
+const dump = log.indexOf('pg_dump');
+const clone = log.indexOf('git clone');
+const helper = log.indexOf('hosted action=legacy-offline-update');
+assert.ok(dump >= 0 && dump < clone && clone < helper, 'backup before clone and helper');
+NODE
+
+log "checking legacy handoff cannot skip backups or inherit a checkpoint"
+for bad in '' relative $'/absolute\ninvalid'; do
+  reset_fake_state
+  : > "${SSH_LOG}"
+  if DOLLHOUSE_HOSTED_LEGACY_CHECKPOINT="${bad}" run_remote legacy-offline-update > "${TMP_ROOT}/legacy-input.out" 2>&1; then
+    fail 'legacy handoff accepted a missing or invalid checkpoint'
+  fi
+  assert_contains "${TMP_ROOT}/legacy-input.out" 'requires an explicit absolute'
+  [[ ! -s "${SSH_LOG}" ]] || fail 'invalid checkpoint reached SSH'
+done
+reset_fake_state
+: > "${SSH_LOG}"
+if DOLLHOUSE_HOSTED_LEGACY_CHECKPOINT="${legacy_checkpoint}" run_remote --skip-backup legacy-offline-update > "${TMP_ROOT}/legacy-skip.out" 2>&1; then
+  fail 'legacy handoff skipped its standard backup'
+fi
+assert_contains "${TMP_ROOT}/legacy-skip.out" 'standard DB/env backups; --skip-backup is refused'
+[[ ! -s "${SSH_LOG}" ]] || fail 'skip-backup refusal reached SSH'
+
+log "checking legacy backup failures never reach the helper"
+for missing in compose.yml .env .env.production; do
+  reset_fake_state
+  mv "${DEPLOY_DIR}/${missing}" "${TMP_ROOT}/held-input"
+  if DOLLHOUSE_HOSTED_LEGACY_CHECKPOINT="${legacy_checkpoint}" run_remote legacy-offline-update > "${TMP_ROOT}/legacy-missing.out" 2>&1; then
+    fail 'legacy handoff accepted missing backup inputs'
+  fi
+  mv "${TMP_ROOT}/held-input" "${DEPLOY_DIR}/${missing}"
+  assert_contains "${TMP_ROOT}/legacy-missing.out" 'requires existing compose.yml, .env and .env.production'
+  assert_not_contains "${REMOTE_LOG}" 'git clone'
+  assert_not_contains "${REMOTE_LOG}" 'hosted action=legacy-offline-update'
+done
+for failure in DOLLHOUSE_FAKE_PG_ISREADY_FAILS DOLLHOUSE_FAKE_PG_DUMP_FAILS; do
+  reset_fake_state
+  export "${failure}=9"
+  if DOLLHOUSE_HOSTED_LEGACY_CHECKPOINT="${legacy_checkpoint}" run_remote legacy-offline-update > "${TMP_ROOT}/legacy-database.out" 2>&1; then
+    fail 'legacy handoff accepted a failed database backup'
+  fi
+  unset "${failure}"
+  assert_contains "${TMP_ROOT}/legacy-database.out" 'backup'
+  assert_not_contains "${REMOTE_LOG}" 'hosted action=legacy-offline-update'
+done
 
 log "checking missing target error"
 MISSING_TARGET_OUTPUT="${TMP_ROOT}/missing-target.out"

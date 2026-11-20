@@ -90,20 +90,16 @@ stage_source() {
   fi
 
   if [[ -d "${SERVER_DIR}" ]]; then
-    previous_bundle="$(unique_path "${DEPLOY_DIR}/server.prev-${timestamp}")"
+    previous_bundle="${PREVIOUS_BUNDLE:-$(unique_path "${DEPLOY_DIR}/server.prev-${timestamp}")}"
+    [[ ! -e "${previous_bundle}" && ! -L "${previous_bundle}" ]] || \
+      die "previous bundle destination already exists"
     mv "${SERVER_DIR}" "${previous_bundle}" || die "failed to move current server bundle to ${previous_bundle}"
+    PREVIOUS_BUNDLE="${previous_bundle}"
   fi
   mv "${incoming}" "${SERVER_DIR}" || die "failed to promote incoming server bundle to ${SERVER_DIR}"
   # Consumed by start_or_update after successful replacement, not by staging.
   # shellcheck disable=SC2034
   STAGED_REVISION="${revision}"
-
-  return 0
-}
-
-latest_previous_bundle() {
-  [[ -d "${DEPLOY_DIR}" ]] || return 0
-  find "${DEPLOY_DIR}" -maxdepth 1 -type d -name 'server.prev-*' -print | sort | tail -n 1
 
   return 0
 }

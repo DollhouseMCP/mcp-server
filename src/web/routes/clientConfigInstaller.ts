@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto';
 import { CORE_SCHEMA, dump, load } from 'js-yaml';
 import { applyEdits, modify, parse as parseJsonc, type ParseError } from 'jsonc-parser';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
+import { SecurityMonitor } from '../../security/securityMonitor.js';
 
 interface InstallEnvironment {
   home?: string;
@@ -181,18 +182,39 @@ async function writeConfig(destination: string, content: string, mode: number): 
 
 /** Preserve unrelated config; reject malformed files instead of replacing them. */
 export async function installClientConfig(client: string, version = 'latest', environment: InstallEnvironment = {}): Promise<string> {
-  if (!validVersion(version)) throw new Error('Invalid install version');
-  const server = { command: 'npx', args: ['-y', `@dollhousemcp/mcp-server@${version}`] };
-  if (client === 'warp') {
-    return 'Warp requires manual installation through its UI. Copy this configuration:\n' + JSON.stringify({
-      dollhousemcp: { ...server, env: {}, working_directory: null, start_on_launch: true },
-    }, null, 2);
+  // Each install is a discrete audit record, even within the monitor's dedup window.
+  const attemptId = randomUUID();
+  try {
+    if (!validVersion(version)) throw new Error('Invalid install version');
+    const server = { command: 'npx', args: ['-y', `@dollhousemcp/mcp-server@${version}`] };
+    if (client === 'warp') {
+      return 'Warp requires manual installation through its UI. Copy this configuration:\n' + JSON.stringify({
+        dollhousemcp: { ...server, env: {}, working_directory: null, start_on_launch: true },
+      }, null, 2);
+    }
+    const target = clientConfigTarget(client, environment);
+    const destination = await configDestination(target.path);
+    const { config, mode, source } = await readConfig(destination, target);
+    validateConfig(config);
+    const update = updateConfig(config, target, client, server);
+    await writeConfig(destination, serializeConfig(config, target, source, update), mode);
+    SecurityMonitor.logSecurityEvent({
+      type: 'CONFIG_UPDATED',
+      severity: 'LOW',
+      source: 'clientConfigInstaller',
+      details: `MCP client configuration installed (${attemptId})`,
+      additionalData: { client, version: version.slice(0, 64), outcome: 'written' },
+    });
+    return `Config written to: ${target.path}`;
+  } catch (error) {
+    // Parser and filesystem errors can include config secrets and local paths.
+    SecurityMonitor.logSecurityEvent({
+      type: 'OPERATION_FAILED',
+      severity: 'LOW',
+      source: 'clientConfigInstaller',
+      details: `MCP client configuration installation failed (${attemptId})`,
+      additionalData: { outcome: 'failed' },
+    });
+    throw error;
   }
-  const target = clientConfigTarget(client, environment);
-  const destination = await configDestination(target.path);
-  const { config, mode, source } = await readConfig(destination, target);
-  validateConfig(config);
-  const update = updateConfig(config, target, client, server);
-  await writeConfig(destination, serializeConfig(config, target, source, update), mode);
-  return `Config written to: ${target.path}`;
 }

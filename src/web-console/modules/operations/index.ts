@@ -1,5 +1,5 @@
 export { createOperationsModule } from './OperationsModule.js';
-export type { OperationsModuleOptions } from './OperationsModule.js';
+export type { OperationsCanary, OperationsModuleOptions } from './OperationsModule.js';
 export {
   DEFAULT_OPERATOR_CONFIG_DEFINITIONS,
   OperatorConfigurationService,
@@ -15,6 +15,8 @@ export type {
 export { InMemoryConsoleTelemetryQuery, PostgresConsoleTelemetryQuery } from './OperationsTelemetry.js';
 export type { OperationsHealthChecks, OperationHealthCheck } from './OperationsHealth.js';
 export {
+  projectCanaryRun,
+  projectSetupStatus,
   projectOperationHealthComponent,
   projectOperationHealthSummary,
   projectOperatorConfigList,
@@ -27,6 +29,9 @@ export {
 } from './OperationsPrivacyProjectors.js';
 export type { ISystemMetricsSource } from './SystemMetricsSource.js';
 export type {
+  CanaryRunDto,
+  SetupStatusCheckDto,
+  SetupStatusDto,
   OperatorConfigListDto,
   OperatorConfigSettingDto,
   OperatorConfigValueSchemaDto,

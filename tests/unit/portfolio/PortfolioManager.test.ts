@@ -7,6 +7,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { tmpdir } from 'os';
 import { PortfolioManager, ElementType } from '../../../src/portfolio/PortfolioManager.js';
+import { logger } from '../../../src/utils/logger.js';
 import { createTestFileOperationsService } from '../../helpers/di-mocks.js';
 
 // Create shared file operations service for tests using di-mocks helper
@@ -41,6 +42,81 @@ describe('PortfolioManager', () => {
     }
   });
   
+  describe('honest directory probes', () => {
+    afterEach(() => jest.restoreAllMocks());
+
+    it.each(['exists', 'isFullyInitialized', 'hasLegacyPersonas'] as const)('%s distinguishes presence, absence and access failure', async method => {
+      const manager = new PortfolioManager(fileOperations, { baseDir: testDir });
+      jest.spyOn(manager, 'getLegacyPersonasDir').mockReturnValue(testDir);
+      const exists = jest.spyOn(fileOperations, method === 'hasLegacyPersonas' ? 'exists' : 'directoryExists').mockResolvedValue(true);
+      jest.spyOn(fileOperations, 'listDirectory').mockResolvedValue(['persona.md']);
+      await expect(manager[method]()).resolves.toBe(true);
+      exists.mockResolvedValue(false);
+      await expect(manager[method]()).resolves.toBe(false);
+      exists.mockRejectedValue(Object.assign(new Error('gone'), { code: 'ENOENT' }));
+      await expect(manager[method]()).resolves.toBe(false);
+      const denied = Object.assign(new Error('denied'), { code: 'EACCES' });
+      exists.mockRejectedValue(denied);
+      await expect(manager[method]()).rejects.toMatchObject({ message: expect.not.stringContaining(testDir), code: 'EACCES', cause: denied });
+    });
+
+    it('does not consider a regular file to be an initialized element directory', async () => {
+      const manager = new PortfolioManager(fileOperations, { baseDir: testDir });
+      for (const type of Object.values(ElementType)) await fs.mkdir(path.join(testDir, type), { recursive: true });
+      await fs.mkdir(path.join(testDir, ElementType.AGENT, '.state'), { recursive: true });
+      await fs.rmdir(path.join(testDir, ElementType.PERSONA));
+      await fs.writeFile(path.join(testDir, ElementType.PERSONA), 'not a directory');
+      await expect(manager['isFullyInitialized']()).resolves.toBe(false);
+    });
+
+    it('propagates access failure in an element subdirectory during readiness checks', async () => {
+      const manager = new PortfolioManager(fileOperations, { baseDir: testDir });
+      const denied = Object.assign(new Error('denied'), { code: 'EACCES' });
+      jest.spyOn(fileOperations, 'directoryExists').mockResolvedValueOnce(true).mockRejectedValue(denied);
+      await expect(manager['isFullyInitialized']()).rejects.toMatchObject({
+        message: expect.not.stringContaining(testDir), code: 'EACCES', cause: denied,
+      });
+    });
+
+    it('propagates unreadable legacy directory listings and tolerates disappearance', async () => {
+      const manager = new PortfolioManager(fileOperations, { baseDir: testDir });
+      jest.spyOn(manager, 'getLegacyPersonasDir').mockReturnValue(testDir);
+      jest.spyOn(fileOperations, 'exists').mockResolvedValue(true);
+      const denied = Object.assign(new Error('denied'), { code: 'EACCES' });
+      const listing = jest.spyOn(fileOperations, 'listDirectory').mockRejectedValue(denied);
+      await expect(manager.hasLegacyPersonas()).rejects.toMatchObject({ message: expect.not.stringContaining(testDir), code: 'EACCES', cause: denied });
+      listing.mockRejectedValue(Object.assign(new Error('gone'), { code: 'ENOENT' }));
+      await expect(manager.hasLegacyPersonas()).resolves.toBe(false);
+    });
+  });
+
+  describe('directory migration destination checks', () => {
+    afterEach(() => jest.restoreAllMocks());
+
+    it.each(['probe', 'listing'])('does not rename over a destination with an unreadable %s', async kind => {
+      portfolioManager = new PortfolioManager(fileOperations, { baseDir: testDir });
+      const denied = Object.assign(new Error('denied'), { code: 'EACCES' });
+      const exists = jest.spyOn(fileOperations, 'exists').mockResolvedValue(true);
+      if (kind === 'probe') exists.mockResolvedValueOnce(true).mockRejectedValueOnce(denied);
+      else jest.spyOn(fileOperations, 'listDirectory').mockRejectedValue(denied);
+      const rename = jest.spyOn(fileOperations, 'renameFile').mockResolvedValue(undefined);
+      const log = jest.spyOn(logger, 'error').mockImplementation(() => {});
+      await portfolioManager['migrateSingularDirectory']('skill', 'skills');
+      expect(rename).not.toHaveBeenCalled();
+      expect(log).toHaveBeenCalledWith('[PortfolioManager] Error during migration of skill:', denied);
+    });
+
+    it.each([false, true])('migrates only an absent destination (populated: %s)', async populated => {
+      portfolioManager = new PortfolioManager(fileOperations, { baseDir: testDir });
+      jest.spyOn(fileOperations, 'exists').mockResolvedValueOnce(true).mockResolvedValueOnce(populated);
+      jest.spyOn(fileOperations, 'listDirectory').mockResolvedValue(['existing.md']);
+      const rename = jest.spyOn(fileOperations, 'renameFile').mockResolvedValue(undefined);
+      await portfolioManager['migrateSingularDirectory']('skill', 'skills');
+      if (populated) expect(rename).not.toHaveBeenCalled();
+      else expect(rename).toHaveBeenCalledWith(path.join(testDir, 'skill'), path.join(testDir, 'skills'));
+    });
+  });
+
   describe('constructor', () => {
     it('should create independent instances', () => {
       const instance1 = new PortfolioManager(fileOperations, { baseDir: testDir });

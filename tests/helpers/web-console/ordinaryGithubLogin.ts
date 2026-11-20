@@ -16,7 +16,8 @@ import { assembleSecuredConsoleRouter, ConsoleModuleRegistry, HmacConsoleOpaqueV
 import { CookieJar, absoluteUrl, approveClientConsentPage, getFreePort, startASHarness } from '../../integration/auth/oauth-flow-helpers.js';
 
 /** All local auth routing/token verification is real; only upstream GitHub is fake. */
-export async function ordinaryGithubConsole(db: DatabaseInstance, githubId: number, providerEmail: string) {
+export async function ordinaryGithubConsole(db: DatabaseInstance, githubId: number, providerEmail: string,
+  options: { githubLogin?: string; skipAutoBootstrap?: boolean } = {}) {
   const port = await getFreePort(), origin = `http://127.0.0.1:${port}`;
   const storage = new PostgresAuthStorageLayer({ db }), sessions = new PostgresConsoleSessionStore(db);
   const resolver = new PostgresConsoleIdentityResolver(db), opaque = new HmacConsoleOpaqueValueService(randomBytes(32));
@@ -29,7 +30,7 @@ export async function ordinaryGithubConsole(db: DatabaseInstance, githubId: numb
       const url = String(input); providerCalls.push(url);
       let body;
       if (url === 'https://github.com/login/oauth/access_token') body = { access_token: TEST_CREDENTIALS.MOCK_GITHUB_OAUTH };
-      else if (url === 'https://api.github.com/user') body = { id: githubId, login: 'ordinary-invited-user', name: 'GitHub display' };
+      else if (url === 'https://api.github.com/user') body = { id: githubId, login: options.githubLogin ?? 'ordinary-invited-user', name: 'GitHub display' };
       else if (url === 'https://api.github.com/user/emails') body = [{ email: providerEmail, primary: true, verified: verifiedPrimary }];
       else throw new Error('Unexpected upstream route');
       return new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
@@ -40,10 +41,11 @@ export async function ordinaryGithubConsole(db: DatabaseInstance, githubId: numb
     accountAdminStore: new PostgresConsoleAccountAdminStore(db), opaqueValues: opaque,
     secretEncryption: new AeadSecretEncryptionService({ keyId: 'ordinary-login-test', key: randomBytes(32) }), publicBaseUrl: origin }));
   const harness = await startASHarness({ methods: [method], storage, publicBaseUrl: origin, port,
+    skipAutoBootstrap: options.skipAutoBootstrap,
     configureApp: app => app.use(assembleSecuredConsoleRouter(registry, { sessionStore: sessions, identityResolver: resolver,
       opaqueValues: opaque, consoleOrigin: origin, adminAuditWriter: new InMemoryAdminAuditWriter(),
       idempotencyStore: new InMemoryIdempotencyStore(), runtimeStore: new InMemoryRuntimeSessionControlStore(), idleTimeoutMs: 3600000 })) });
-  return { close: harness.close, sessions, opaque, providerCalls,
+  return { close: harness.close, sessions, opaque, providerCalls, storage, origin,
     async login(verified: boolean) {
       verifiedPrimary = verified;
       const jar = new CookieJar(); // Intentionally no restricted onboarding or prior normal cookies.

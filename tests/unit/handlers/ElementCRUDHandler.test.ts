@@ -1,3 +1,8 @@
+import type { ElementCRUDHandlerOptions } from '../../../src/handlers/ElementCRUDHandler.js';
+import { createActivePolicyCollector } from '../../../src/services/policy/ActivePolicyCollector.js';
+import { ContextTracker } from '../../../src/security/encryption/ContextTracker.js';
+import { TenantMemoryOperationProvider } from '../../../src/storage/TenantMemoryOperationProvider.js';
+import type { DatabaseTenantMemoryRegistry } from '../../../src/storage/DatabaseTenantMemoryRegistry.js';
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { ActivationMetricsTracker } from '../../../src/metrics/ActivationMetricsTracker.js';
 
@@ -1077,6 +1082,66 @@ describe('ElementCRUDHandler (DI)', () => {
         { type: ElementType.AGENT, name: 'Shared Agent' },
         { type: ElementType.AGENT, name: 'Shared Agent' },
       ]);
+    });
+  });
+
+  describe('policy collector factory injection', () => {
+    function construct(options: ElementCRUDHandlerOptions) {
+      return new ElementCRUDHandler(
+        skillManager, templateManager, templateRenderer, agentManager, memoryManager,
+        ensembleManager, personaHandler, portfolioManager, initService, indicatorService,
+        fileOperations, elementQueryService, validationRegistry,
+        new ActivationMetricsTracker(() => 'local-user'), options,
+      );
+    }
+
+    it('constructs and uses the injected collector with the handler dependencies', async () => {
+      const factory = jest.fn(createActivePolicyCollector);
+      const injected = construct({ policyCollectorFactory: factory });
+      expect(factory).toHaveBeenCalledTimes(1);
+      const deps = factory.mock.calls[0][0];
+      expect(deps).toEqual({
+        personaManager: personaHandler, skillManager, agentManager, ensembleManager,
+        getManagerForType: expect.any(Function), ensureInitialized: expect.any(Function),
+      });
+      expect(deps.getManagerForType('memories')).toBe(memoryManager);
+      const collect = jest.spyOn(factory.mock.results[0].value, 'collectActiveElementsForPolicy');
+      await injected.getActiveElementsForPolicy();
+      expect(collect).toHaveBeenCalledTimes(1);
+      expect(initService.ensureInitialized).toHaveBeenCalledTimes(1);
+    });
+
+    it('forwards the factory to a bound handler whose collector resolves the operation manager', async () => {
+      const tracker = new ContextTracker();
+      const boundManager = { ...memoryManager } as MemoryManager;
+      const slot = {};
+      const registry = {
+        capture: jest.fn(() => slot),
+        resolve: jest.fn(async () => boundManager),
+        assertCurrent: jest.fn(),
+      } as unknown as DatabaseTenantMemoryRegistry;
+      const provider = new TenantMemoryOperationProvider(registry, tracker);
+      const factory = jest.fn(createActivePolicyCollector);
+      const root = construct({ policyCollectorFactory: factory, memoryProvider: provider, contextTracker: tracker });
+      const context = tracker.createSessionContext('test', {
+        userId: 'factory-user', sessionId: 'factory-session', tenantId: null, transport: 'stdio', createdAt: 1,
+      });
+      await tracker.runAsync(context, async () => {
+        const operation = await provider.resolve(provider.capture());
+        const bound = root.bindCapturedMemoryOperation(provider, operation);
+        expect(factory).toHaveBeenCalledTimes(2);
+        const deps = factory.mock.calls[1][0];
+        expect(deps.getManagerForType('memories')).toBe(operation.manager);
+        expect(deps.getManagerForType('memories')).not.toBe(memoryManager);
+        const collect = jest.spyOn(factory.mock.results[1].value, 'collectActiveElementsForPolicy');
+        const rootCollect = jest.spyOn(factory.mock.results[0].value, 'collectActiveElementsForPolicy');
+        await bound.getActiveElementsForPolicy();
+        expect(collect).toHaveBeenCalledTimes(1);
+        expect(rootCollect).not.toHaveBeenCalled();
+        expect(() => factory.mock.calls[0][0].getManagerForType('memories')).toThrow('Bound memory operation required');
+      });
+      expect(() => factory.mock.calls[1][0].getManagerForType('memories')).toThrow('Memory invocation context changed');
+      await tracker.dispose();
     });
   });
 });

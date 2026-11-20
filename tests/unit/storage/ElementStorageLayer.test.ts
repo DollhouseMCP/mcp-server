@@ -19,9 +19,10 @@ function makeContent(name: string, description = ''): string {
 
 function createMockBackend(overrides: Partial<IStorageBackend> = {}): IStorageBackend {
   return {
+    listDirectories: jest.fn<any>().mockResolvedValue([]),
     listFiles: jest.fn<any>().mockResolvedValue([]),
     stat: jest.fn<any>().mockResolvedValue(makeMeta('test.md', 1000)),
-    statMany: jest.fn<any>().mockResolvedValue(new Map()),
+    statMany: jest.fn<any>().mockResolvedValue({ stats: new Map(), failures: new Map() }),
     readFile: jest.fn<any>().mockResolvedValue(makeContent('Test')),
     directoryExists: jest.fn<any>().mockResolvedValue(true),
     ...overrides,
@@ -37,10 +38,10 @@ describe('ElementStorageLayer', () => {
   beforeEach(() => {
     backend = createMockBackend({
       listFiles: jest.fn<any>().mockResolvedValue(['alpha.md', 'beta.md']),
-      statMany: jest.fn<any>().mockResolvedValue(new Map([
+      statMany: jest.fn<any>().mockResolvedValue({ stats: new Map([
         ['alpha.md', makeMeta('alpha.md', 1000)],
         ['beta.md', makeMeta('beta.md', 2000)],
-      ])),
+      ]), failures: new Map() }),
       readFile: jest.fn<any>().mockImplementation((absPath: string) => {
         if (absPath.includes('alpha')) return Promise.resolve(makeContent('Alpha', 'Alpha desc'));
         if (absPath.includes('beta')) return Promise.resolve(makeContent('Beta', 'Beta desc'));
@@ -57,20 +58,20 @@ describe('ElementStorageLayer', () => {
   });
 
   it('reads cold index status without scanning', async () => {
-    expect(await layer.readIndexedPath(['Alpha'])).toEqual({ path: undefined, indexComplete: false, authoritative: false });
+    expect(await layer.readIndexedPath(['Alpha'])).toEqual({ path: undefined, indexComplete: false, authoritative: false, unindexed: [] });
     expect(backend.statMany).not.toHaveBeenCalled();
     expect(await layer.findIndexedPath(['Alpha'])).toBe('alpha.md');
-    expect(await layer.readIndexedPath(['Alpha'])).toEqual({ path: 'alpha.md', indexComplete: true, authoritative: true });
+    expect(await layer.readIndexedPath(['Alpha'])).toEqual({ path: 'alpha.md', indexComplete: true, authoritative: true, unindexed: [] });
   });
 
   it.each([false, true])('leaves warm modified diffs for refresh (invalidated: %s)', async invalidate => {
     await layer.scan();
     const clock = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 2000);
     try {
-      (backend.statMany as jest.Mock<any>).mockResolvedValue(new Map([
+      (backend.statMany as jest.Mock<any>).mockResolvedValue({ stats: new Map([
         ['alpha.md', makeMeta('alpha.md', 3000)],
         ['beta.md', makeMeta('beta.md', 2000)],
-      ]));
+      ]), failures: new Map() });
       if (invalidate) layer.invalidate();
       expect(await layer.findIndexedPath(['Alpha'])).toBe('alpha.md');
       expect(await layer.readIndexedPath(['Alpha'])).toMatchObject({ indexComplete: true, authoritative: !invalidate });
@@ -176,15 +177,15 @@ describe('ElementStorageLayer', () => {
         .mockImplementationOnce(async () => {
           markOlderScanStarted();
           await olderScanBlocked;
-          return new Map([
+          return { stats: new Map([
             ['alpha.md', makeMeta('alpha.md', 1000)],
             ['beta.md', makeMeta('beta.md', 5000)],
-          ]);
+          ]), failures: new Map() };
         })
-        .mockResolvedValue(new Map([
+        .mockResolvedValue({ stats: new Map([
           ['alpha.md', makeMeta('alpha.md', 1000)],
           ['beta.md', makeMeta('beta.md', 5000)],
-        ]));
+        ]), failures: new Map() });
       (backend.readFile as jest.Mock<any>).mockImplementation((absPath: string) => {
         if (absPath.includes('alpha')) return Promise.resolve(makeContent('Alpha', 'Alpha desc'));
         if (absPath.includes('beta')) return Promise.resolve(makeContent('Beta Updated', 'New desc'));
@@ -216,10 +217,10 @@ describe('ElementStorageLayer', () => {
       layer.invalidate();
 
       // Backend now returns modified mtime for beta
-      (backend.statMany as jest.Mock<any>).mockResolvedValue(new Map([
+      (backend.statMany as jest.Mock<any>).mockResolvedValue({ stats: new Map([
         ['alpha.md', makeMeta('alpha.md', 1000)],
         ['beta.md', makeMeta('beta.md', 5000)], // changed mtime
-      ]));
+      ]), failures: new Map() });
       (backend.readFile as jest.Mock<any>).mockImplementation((absPath: string) => {
         if (absPath.includes('alpha')) return Promise.resolve(makeContent('Alpha', 'Alpha desc'));
         if (absPath.includes('beta')) return Promise.resolve(makeContent('Beta Updated', 'New desc'));
@@ -245,9 +246,9 @@ describe('ElementStorageLayer', () => {
 
       // Only alpha remains
       (backend.listFiles as jest.Mock<any>).mockResolvedValue(['alpha.md']);
-      (backend.statMany as jest.Mock<any>).mockResolvedValue(new Map([
+      (backend.statMany as jest.Mock<any>).mockResolvedValue({ stats: new Map([
         ['alpha.md', makeMeta('alpha.md', 1000)],
-      ]));
+      ]), failures: new Map() });
 
       const diff = await layer.scan();
 
@@ -295,9 +296,9 @@ describe('ElementStorageLayer', () => {
     it('should resolve canonical-equivalent Unicode names', async () => {
       const unicodeBackend = createMockBackend({
         listFiles: jest.fn<any>().mockResolvedValue(['cafe.md']),
-        statMany: jest.fn<any>().mockResolvedValue(new Map([
+        statMany: jest.fn<any>().mockResolvedValue({ stats: new Map([
           ['cafe.md', makeMeta('cafe.md', 1000)],
-        ])),
+        ]), failures: new Map() }),
         readFile: jest.fn<any>().mockResolvedValue(makeContent('Cafe\u0301', 'Unicode test')),
       });
 
@@ -334,10 +335,10 @@ describe('ElementStorageLayer', () => {
     it('should skip files that fail to parse without crashing', async () => {
       const badBackend = createMockBackend({
         listFiles: jest.fn<any>().mockResolvedValue(['good.md', 'bad.md']),
-        statMany: jest.fn<any>().mockResolvedValue(new Map([
+        statMany: jest.fn<any>().mockResolvedValue({ stats: new Map([
           ['good.md', makeMeta('good.md', 1000)],
           ['bad.md', makeMeta('bad.md', 2000)],
-        ])),
+        ]), failures: new Map() }),
         readFile: jest.fn<any>().mockImplementation((absPath: string) => {
           if (absPath.includes('bad')) return Promise.reject(new Error('read error'));
           return Promise.resolve(makeContent('Good'));

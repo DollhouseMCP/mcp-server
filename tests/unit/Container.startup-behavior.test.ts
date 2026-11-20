@@ -108,6 +108,26 @@ describe('Container Startup - Behavior (Non-Flaky)', () => {
   });
 
   describe('Migration Flow', () => {
+    it.each([true, false])('handles unreadable legacy personas with portfolio present: %s', async present => {
+      const migrationManager = container.resolve<any>('MigrationManager');
+      const portfolioManager = container.resolve<any>('PortfolioManager');
+      jest.spyOn(portfolioManager, 'exists').mockResolvedValue(present);
+      const legacy = jest.spyOn(portfolioManager, 'hasLegacyPersonas')
+        .mockRejectedValue(Object.assign(new Error('Cannot inspect legacy personas directory (EACCES)'), { code: 'EACCES' }));
+      const migrate = jest.spyOn(migrationManager, 'migrate');
+      const initialize = jest.spyOn(portfolioManager, 'initialize');
+
+      if (present) {
+        await container.preparePortfolio();
+        expect(legacy).not.toHaveBeenCalled();
+      } else {
+        await expect(container.preparePortfolio()).rejects.toThrow('EACCES');
+        expect(legacy).toHaveBeenCalled();
+      }
+      expect(migrate).not.toHaveBeenCalled();
+      expect(initialize).not.toHaveBeenCalled();
+    });
+
     it('should proceed with migration when needed', async () => {
       const migrationManager = container.resolve<any>('MigrationManager');
       const portfolioManager = container.resolve<any>('PortfolioManager');
@@ -147,28 +167,48 @@ describe('Container Startup - Behavior (Non-Flaky)', () => {
   });
 
   describe('Error Handling', () => {
-    it('should continue when migration check throws but portfolio succeeds', async () => {
+    it.each(['migration', 'portfolio', 'both'])('stops before writes when %s checks fail', async failed => {
       const migrationManager = container.resolve<any>('MigrationManager');
       const portfolioManager = container.resolve<any>('PortfolioManager');
+      const migrationError = new Error('Migration check failed');
+      const portfolioError = new Error('Portfolio check failed');
+      const migrationCheck = jest.spyOn(migrationManager, 'needsMigration');
+      const portfolioCheck = jest.spyOn(portfolioManager, 'exists');
+      if (failed === 'portfolio') migrationCheck.mockResolvedValue(true);
+      else migrationCheck.mockRejectedValue(migrationError);
+      if (failed === 'migration') portfolioCheck.mockResolvedValue(false);
+      else portfolioCheck.mockRejectedValue(portfolioError);
+      const migrate = jest.spyOn(migrationManager, 'migrate');
+      const initialize = jest.spyOn(portfolioManager, 'initialize');
 
-      jest.spyOn(migrationManager, 'needsMigration')
-        .mockRejectedValue(new Error('Migration check failed'));
-      jest.spyOn(portfolioManager, 'exists').mockResolvedValue(true);
-
-      // Should not throw - logs warning and continues
-      await expect(container.preparePortfolio()).resolves.not.toThrow();
+      await expect(container.preparePortfolio()).rejects.toMatchObject({
+        cause: failed === 'portfolio' ? portfolioError : migrationError,
+        message: failed === 'both'
+          ? expect.stringMatching(/migration:.*portfolio:/)
+          : expect.stringContaining(`${failed}:`),
+      });
+      expect(migrationCheck).toHaveBeenCalledTimes(1);
+      expect(portfolioCheck).toHaveBeenCalledTimes(1);
+      expect(migrate).not.toHaveBeenCalled();
+      expect(initialize).not.toHaveBeenCalled();
     });
 
-    it('should throw when portfolio check fails', async () => {
-      const migrationManager = container.resolve<any>('MigrationManager');
-      const portfolioManager = container.resolve<any>('PortfolioManager');
+    it.each([[false, false], [false, true], [true, false], [true, true]])(
+      'preserves successful checks (migration: %s, portfolio: %s)', async (needsMigration, portfolioExists) => {
+        const migrationManager = container.resolve<any>('MigrationManager');
+        const portfolioManager = container.resolve<any>('PortfolioManager');
+        jest.spyOn(migrationManager, 'needsMigration').mockResolvedValue(needsMigration);
+        jest.spyOn(portfolioManager, 'exists').mockResolvedValue(portfolioExists);
+        const migrate = jest.spyOn(migrationManager, 'migrate').mockResolvedValue({
+          success: true, migratedCount: 0, errors: [], backedUp: false,
+        });
+        const initialize = jest.spyOn(portfolioManager, 'initialize').mockResolvedValue(undefined);
 
-      jest.spyOn(migrationManager, 'needsMigration').mockResolvedValue(false);
-      jest.spyOn(portfolioManager, 'exists')
-        .mockRejectedValue(new Error('Portfolio check failed'));
-
-      await expect(container.preparePortfolio()).rejects.toThrow('Portfolio check failed');
-    });
+        await container.preparePortfolio();
+        expect(migrate).toHaveBeenCalledTimes(needsMigration ? 1 : 0);
+        expect(initialize).toHaveBeenCalledTimes(portfolioExists ? 0 : 1);
+      },
+    );
 
     it('should handle partial migration success', async () => {
       const migrationManager = container.resolve<any>('MigrationManager');

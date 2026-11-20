@@ -33,12 +33,14 @@ import { createHash } from 'node:crypto';
 import { env } from '../config/env.js';
 import { openCliAuthStorage, type CliAuthStorageHandle } from './cliAuthStorage.js';
 import { recordBootstrapCompleted } from '../auth/embedded-as/bootstrapAdmin.js';
+import { requireAdminDatabaseUrl } from './adminDatabase.js';
 
 interface BootstrapOptions {
   method: string;
   githubUsername?: string;
   githubId?: string;
   email?: string;
+  requireAdminUrl?: boolean;
 }
 
 interface GithubUser {
@@ -127,6 +129,7 @@ function parseAndValidateOptions(): BootstrapOptions {
     .option('--github-username <username>', 'GitHub username (resolved to numeric ID)')
     .option('--github-id <id>', 'GitHub numeric user ID (skip lookup)')
     .option('--email <email>', 'admin email address (for magic-link method)')
+    .option('--require-admin-url', 'require an explicit administrator database URL')
     .parse(process.argv);
 
   return program.opts<BootstrapOptions>();
@@ -262,6 +265,15 @@ function describeBootstrapError(err: unknown): string {
 
 async function main(): Promise<void> {
   const opts = parseAndValidateOptions();
+  if (opts.requireAdminUrl) {
+    try {
+      requireAdminDatabaseUrl(env);
+    } catch {
+      process.stderr.write('DOLLHOUSE_DATABASE_ADMIN_URL is required for hosted bootstrap.\n');
+      process.exitCode = 1;
+      return;
+    }
+  }
   const { adminSub, adminMethod } = await resolveBootstrapIdentity(opts);
 
   const handle = await openStorageOrExit(adminMethod);

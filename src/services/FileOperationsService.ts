@@ -1,5 +1,6 @@
-import { promises as fs, Stats } from 'fs';
-import * as path from 'path';
+import { sanitizeStorageError } from '../storage/StorageScanError.js';
+import { promises as fs, Stats } from 'node:fs';
+import * as path from 'node:path';
 import { FileLockManager } from '../security/fileLockManager.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { logger } from '../utils/logger.js';
@@ -10,6 +11,22 @@ interface ActiveSessionContainerRegistry {
   getActiveContainer(): {
     resolve<T>(name: string): T;
   } | undefined;
+}
+
+/** Missing paths and non-directory ancestors both mean the requested path is absent. */
+export function isAbsentPathError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException)?.code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
+/** Shared directory-kind probe, including callers without an injected service. */
+export async function directoryExists(directoryPath: string, stat: (filePath: string) => Promise<Stats> = filePath => fs.stat(filePath)): Promise<boolean> {
+  try {
+    return (await stat(directoryPath)).isDirectory();
+  } catch (error) {
+    if (isAbsentPathError(error)) return false;
+    throw sanitizeStorageError(error);
+  }
 }
 
 export interface FileReadOptions {
@@ -102,6 +119,7 @@ export interface IFileOperationsService {
    * @param filePath - Absolute path to check
    */
   exists(filePath: string): Promise<boolean>;
+  directoryExists(directoryPath: string): Promise<boolean>;
 
   /**
    * Get file statistics
@@ -159,9 +177,9 @@ export interface IFileOperationsService {
 }
 
 export class FileOperationsService implements IFileOperationsService {
-  private fileLockManager: FileLockManager;
+  private readonly fileLockManager: FileLockManager;
   private readonly defaultMaxFileSize: number;
-  private config: FileOperationsConfig;
+  private readonly config: FileOperationsConfig;
   private sessionContainerRegistryProvider?: () => ActiveSessionContainerRegistry | undefined;
 
   constructor(fileLockManager: FileLockManager, config?: FileOperationsConfig) {
@@ -275,9 +293,15 @@ export class FileOperationsService implements IFileOperationsService {
     try {
       await fs.access(filePath);
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      if (isAbsentPathError(error)) return false;
+      throw sanitizeStorageError(error);
     }
+  }
+
+  /** Test directory kind while preserving operational failures. */
+  async directoryExists(directoryPath: string): Promise<boolean> {
+    return directoryExists(directoryPath, filePath => this.stat(filePath));
   }
 
   /**

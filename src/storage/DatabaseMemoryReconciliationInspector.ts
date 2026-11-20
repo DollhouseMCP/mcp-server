@@ -13,7 +13,7 @@ import { validateMemoryControlFields } from '../elements/memories/memoryYamlVali
 import { SecurityError } from '../errors/SecurityError.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { assertJsonNumericReadFidelity } from '../security/numericReadFidelity.js';
-import { MemoryMetadataExtractor } from './MemoryMetadataExtractor.js';
+import { MemoryMetadataExtractor, MemoryMetadataExtractionError } from './MemoryMetadataExtractor.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 const MAX_ROWS = 10_000;
@@ -456,6 +456,21 @@ export class DatabaseMemoryReconciliationInspector {
   }
 
   private checkMetadata(
+    raw: Record<string, unknown>, parent: Parent,
+    tags: string[], volumes: Volume[],
+    add: (code: string, path: string) => void,
+    guardedRead = false,
+  ): boolean {
+    try {
+      return this.checkMetadataFields(raw, parent, tags, volumes, add, guardedRead);
+    } catch (error) {
+      if (!(error instanceof MemoryMetadataExtractionError)) throw error;
+      add('metadata_extraction_failed', 'rawContent');
+      return true;
+    }
+  }
+
+  private checkMetadataFields(
     raw: Record<string, unknown>, parent: Parent,
     tags: string[], volumes: Volume[],
     add: (code: string, path: string) => void,

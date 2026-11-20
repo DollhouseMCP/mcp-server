@@ -150,10 +150,14 @@ export class PostgresProductionDatabaseReadiness implements IProductionDatabaseR
   ): string {
     const details: string[] = [];
     if (identityFailures.length > 0) {
-      details.push('database identity did not match the configured production expectation');
+      details.push(
+        'database identity did not match the configured production expectation ' +
+        '(compare DOLLHOUSE_DATABASE_URL with DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_NAME and ' +
+        'DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_USER)',
+      );
     }
     if (missingTables.length > 0) {
-      details.push(`missing required tables: ${missingTables.join(', ')}`);
+      details.push(`missing required tables: ${missingTables.join(', ')} (run the database migrations for this release)`);
     }
     return details.join('; ');
   }
@@ -175,7 +179,12 @@ export function resolveWebConsoleProductionDatabaseVerificationFromEnv(
   };
 }
 
-export function productionDatabaseNotVerified(detail = 'Production database and migration state have not been verified.'): IProductionDatabaseReadiness {
+export const PRODUCTION_DATABASE_NOT_CONFIGURED_DETAIL =
+  'No expected database is configured. Set DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_NAME to the name of the ' +
+  'database this deployment must be connected to, and optionally DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_USER ' +
+  'to the application role it must connect as.';
+
+export function productionDatabaseNotVerified(detail = PRODUCTION_DATABASE_NOT_CONFIGURED_DETAIL): IProductionDatabaseReadiness {
   return new StaticProductionDatabaseReadiness({
     ready: false,
     failureCodes: ['production_database_not_verified'],

@@ -1,3 +1,4 @@
+import { fileMetadataProof } from './helpers/fileProof.js';
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
@@ -72,8 +73,7 @@ async function filesProof(files: string[]) {
   return Promise.all(files.map(async file => {
     const stat = await fs.lstat(file, { bigint: true });
     const bytes = stat.isSymbolicLink() ? await fs.readlink(file) : stat.isFile() ? await fs.readFile(file) : null;
-    return { file, device: stat.dev, inode: stat.ino, size: stat.size, mode: stat.mode,
-      links: stat.nlink, ctime: stat.ctimeNs, mtime: stat.mtimeNs, bytes };
+    return { file, ...fileMetadataProof(stat), bytes };
   }));
 }
 async function unchangedProof(setup: Setup) {

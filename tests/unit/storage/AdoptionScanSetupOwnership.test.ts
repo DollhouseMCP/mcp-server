@@ -6,23 +6,28 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 // New outer observation bound; the imported actual suite retains every 10s bound.
-it.each(['fail-fast', 'setup-timeout', 'blocked'])(
-  'owns actual EOF setup sibling promises and preserves %s failure', async mode => {
+for (const target of ['scan', 'reserved']) {
+  // The actual RESERVED suite intentionally supports POSIX only. Keep these
+  // three new controls explicit/pending on Windows; scan controls still run.
+  const ownedCase = target === 'reserved' && process.platform === 'win32' ? it.skip : it;
+  ownedCase.each(['fail-fast', 'setup-timeout', 'blocked'])(
+    `owns actual ${target} setup siblings and preserves %s failure`, async mode => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'eof-owned-'));
     try {
       const require = createRequire(import.meta.url);
+      const selected = target === 'reserved' ? 'whole-invocation budget exhaustion|controlled next' : 'EOF census fixture|controlled next';
       const result = spawnSync(process.execPath, [require.resolve('jest/bin/jest'), '--config', 'tests/jest.config.cjs',
         '--runInBand', '--no-coverage', '--testMatch', '**/eofSetupOwnership.fixture.ts',
-        '--testNamePattern', 'EOF census fixture|controlled next', '--json', '--outputFile', path.join(root, 'result.json')], {
+        '--testNamePattern', selected, '--json', '--outputFile', path.join(root, 'result.json')], {
         cwd: process.cwd(), env: { PATH: process.env.PATH, HOME: process.env.HOME,
           SystemRoot: process.env.SystemRoot ?? process.env.SYSTEMROOT, TMPDIR: root, TEMP: root, TMP: root,
-          NODE_OPTIONS: '--experimental-vm-modules --no-warnings', EOF_SETUP_PROOF_ROOT: root, EOF_SETUP_PROOF_MODE: mode },
+          NODE_OPTIONS: '--experimental-vm-modules --no-warnings', EOF_SETUP_PROOF_ROOT: root, EOF_SETUP_PROOF_MODE: mode, EOF_SETUP_PROOF_TARGET: target },
         encoding: 'utf8', timeout: 25000, maxBuffer: 4 * 1024 * 1024,
       });
       expect(result.error).toBeUndefined(); expect(result.signal).toBeNull(); expect(result.status).toBe(1);
       const report = JSON.parse(await fs.readFile(path.join(root, 'result.json'), 'utf8'));
       const cases = report.testResults[0].assertionResults.filter((item: { fullName: string }) =>
-        /EOF census fixture|controlled next/.test(item.fullName));
+        new RegExp(selected).test(item.fullName));
       expect(cases.map((item: { status: string }) => item.status)).toEqual(['failed', mode === 'blocked' ? 'failed' : 'passed']);
       const firstFailure = cases[0].failureMessages.join('\n');
       if (mode === 'setup-timeout') expect(firstFailure).toContain('Exceeded timeout of 10000 ms for a hook');
@@ -39,12 +44,15 @@ it.each(['fail-fast', 'setup-timeout', 'blocked'])(
       if (mode === 'blocked') {
         expect(cases[1].failureMessages.join('\n')).toContain('Previous storage case has not completed safe cleanup');
         expect(firstFailure).toContain('safe cleanup not established');
-        expect(summaries.filter((item: { phase: string }) => item.phase === 'write-drain-end')).toHaveLength(0);
-        expect(summaries).toContainEqual({ phase: 'teardown-returned', writes: 4096, roots: 1 });
+        if (target === 'scan') {
+          expect(summaries.filter((item: { phase: string }) => item.phase === 'write-drain-end')).toHaveLength(0);
+          expect(summaries).toContainEqual({ phase: 'teardown-returned', writes: 4096, roots: 1 });
+        }
       } else {
         expect(receipt.events.indexOf('sibling-settled-with-resources')).toBeLessThan(receipt.events.indexOf('root-cleanup'));
         expect(receipt.events.indexOf('root-cleanup')).toBeLessThan(receipt.events.indexOf('next-case'));
       }
-      process.stderr.write(`EOF ownership receipt ${JSON.stringify(receipt)}\n`);
+      process.stderr.write(`Storage setup ownership receipt ${JSON.stringify({ target, ...receipt })}\n`);
     } finally { await fs.rm(root, { recursive: true, force: true }); }
   }, 30000);
+}

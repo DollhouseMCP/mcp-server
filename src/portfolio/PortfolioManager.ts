@@ -2,7 +2,8 @@
  * Portfolio Manager - Manages the portfolio directory structure for all element types
  */
 
-
+import { sanitizeStorageError } from '../storage/StorageScanError.js';
+import { visitSequentially } from '../utils/visitSequentially.js';
 import * as path from 'node:path';
 import { homedir } from 'node:os';
 import { logger } from '../utils/logger.js';
@@ -11,7 +12,7 @@ import { SecurityMonitor } from '../security/securityMonitor.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { DefaultElementProvider } from './DefaultElementProvider.js';
 import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
-import { FileOperationsService } from '../services/FileOperationsService.js';
+import { FileOperationsService, isAbsentPathError } from '../services/FileOperationsService.js';
 import type { PathService } from '../paths/PathService.js';
 import type { ContextTracker } from '../security/encryption/ContextTracker.js';
 
@@ -239,11 +240,11 @@ export class PortfolioManager {
     }
     
     // Create subdirectories for each element type
-    for (const elementType of Object.values(ElementType)) {
+    await visitSequentially(Object.values(ElementType).values(), async elementType => {
       const elementDir = path.join(this.baseDir, elementType);
       await this.fileOperations.createDirectory(elementDir);
       logger.debug(`[PortfolioManager] Created directory: ${elementDir}`);
-    }
+    });
     
     // Create special directories for stateful elements
     const agentStateDir = path.join(this.baseDir, ElementType.AGENT, '.state');
@@ -273,41 +274,32 @@ export class PortfolioManager {
    * Check if portfolio directory exists
    */
   public async exists(): Promise<boolean> {
+    return this.probeDirectory('portfolio directory', () => this.fileOperations.directoryExists(this.baseDir));
+  }
+
+  /** Preserve absence and identify the directory role without exposing server paths. */
+  private async probeDirectory(role: string, probe: () => Promise<boolean>): Promise<boolean> {
     try {
-      return await this.fileOperations.exists(this.baseDir);
-    } catch {
-      return false;
+      return await probe();
+    } catch (error) {
+      if (isAbsentPathError(error)) return false;
+      throw sanitizeStorageError(error, undefined, undefined, role);
     }
   }
 
-  /**
-   * Check if portfolio is fully initialized (base dir + all subdirectories exist)
-   * This prevents the bug where base dir exists but subdirectories were deleted
-   */
+  /** Check the base, element directories and agent state directory without assuming failed probes are absent. */
   private async isFullyInitialized(): Promise<boolean> {
-    // First check if base directory exists
-    if (!await this.exists()) {
-      return false;
+    if (!await this.exists()) return false;
+    const directories = [
+      ...Object.values(ElementType).map(elementType => path.join(this.baseDir, elementType)),
+      path.join(this.baseDir, ElementType.AGENT, '.state'),
+    ];
+    for (const directory of directories) {
+      if (!await this.probeDirectory('portfolio element directory', () => this.fileOperations.directoryExists(directory))) return false;
     }
-
-    // Check if all required subdirectories exist
-    try {
-      for (const elementType of Object.values(ElementType)) {
-        const elementDir = path.join(this.baseDir, elementType);
-        if (!await this.fileOperations.exists(elementDir)) return false;
-      }
-
-      // Check special directories
-      const agentStateDir = path.join(this.baseDir, ElementType.AGENT, '.state');
-      if (!await this.fileOperations.exists(agentStateDir)) return false;
-
-      return true;
-    } catch {
-      // If any subdirectory is missing, portfolio is not fully initialized
-      return false;
-    }
+    return true;
   }
-  
+
   /**
    * Check if a filename appears to be a test element
    * SAFETY: Pattern-based filtering only, no content parsing
@@ -477,26 +469,24 @@ export class PortfolioManager {
    * Check if legacy personas directory exists
    */
   public async hasLegacyPersonas(): Promise<boolean> {
-    try {
-      const legacyDir = this.getLegacyPersonasDir();
+    const legacyDir = this.getLegacyPersonasDir();
+    return this.probeDirectory('legacy personas directory', async () => {
       if (!await this.fileOperations.exists(legacyDir)) return false;
       const files = await this.fileOperations.listDirectory(legacyDir);
       return files.some(file => file.endsWith('.md'));
-    } catch {
-      return false;
-    }
+    });
   }
-  
+
   /**
    * Get portfolio statistics
    */
   public async getStatistics(): Promise<Record<ElementType, number>> {
     const stats: Record<string, number> = {};
     
-    for (const elementType of Object.values(ElementType)) {
+    await visitSequentially(Object.values(ElementType).values(), async elementType => {
       const elements = await this.listElements(elementType);
       stats[elementType] = elements.length;
-    }
+    });
     
     return stats as Record<ElementType, number>;
   }
@@ -515,9 +505,9 @@ export class PortfolioManager {
       'ensemble': 'ensembles'
     };
     
-    for (const [oldName, newName] of Object.entries(oldToNew)) {
+    await visitSequentially(Object.entries(oldToNew).values(), async ([oldName, newName]) => {
       await this.migrateSingularDirectory(oldName, newName);
-    }
+    });
   }
 
   private async migrateSingularDirectory(oldName: string, newName: string): Promise<void> {
@@ -558,11 +548,7 @@ export class PortfolioManager {
   }
 
   private async countExistingDirectoryFiles(directory: string): Promise<number> {
-    try {
-      if (!await this.fileOperations.exists(directory)) return 0;
-      return (await this.fileOperations.listDirectory(directory)).length;
-    } catch {
-      return 0;
-    }
+    if (!await this.fileOperations.exists(directory)) return 0;
+    return (await this.fileOperations.listDirectory(directory)).length;
   }
 }

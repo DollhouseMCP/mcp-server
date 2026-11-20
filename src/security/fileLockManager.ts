@@ -1,7 +1,7 @@
 import { logger } from '../utils/logger.js';
-import * as fs from 'fs/promises';
-import * as path from 'path';
-import { randomBytes } from 'crypto';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { getValidatedLockTimeout } from '../config/performance-constants.js';
 
 /**
@@ -22,7 +22,7 @@ import { getValidatedLockTimeout } from '../config/performance-constants.js';
  */
 export class FileLockManager {
   // Map of resource identifiers to their lock promises
-  private locks = new Map<string, Promise<any>>();
+  private readonly locks = new Map<string, Promise<any>>();
 
   // Lock acquisition metrics for monitoring
   private metrics = {
@@ -93,7 +93,7 @@ export class FileLockManager {
 
     // Step 4: Clean up the map entry when the operation actually finishes.
     // Identity check prevents stale cleanup from removing a newer lock.
-    suppressedPromise.finally(() => {
+    void suppressedPromise.finally(() => {
       if (this.locks.get(resource) === suppressedPromise) {
         this.locks.delete(resource);
       }
@@ -108,7 +108,10 @@ export class FileLockManager {
       timeoutHandle = setTimeout(() => {
         this.metrics.lockTimeouts++;
         this.logListener?.('warn', 'Lock acquisition times out', { resource, timeoutMs: timeout });
-        reject(new Error(`Lock operation timeout for resource: ${resource}`));
+        reject(Object.assign(new Error(`Lock operation timeout for resource: ${resource}`), {
+          code: 'ETIMEDOUT',
+          ...(resource.startsWith('file:') ? { path: resource.slice('file:'.length) } : {}),
+        }));
       }, timeout);
     });
 
@@ -188,11 +191,11 @@ export class FileLockManager {
   /**
    * Generate temporary file path for atomic operations
    */
-  private async getTempFilePath(originalPath: string): Promise<string> {
+  private getTempFilePath(originalPath: string): Promise<string> {
     const dir = path.dirname(originalPath);
     const basename = path.basename(originalPath);
     const random = randomBytes(8).toString('hex');
-    return path.join(dir, this.TEMP_DIR, `${basename}.${random}.tmp`);
+    return Promise.resolve(path.join(dir, this.TEMP_DIR, `${basename}.${random}.tmp`));
   }
 
   /**

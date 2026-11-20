@@ -225,34 +225,23 @@ describe('LegacyDetectingPathResolver — detection', () => {
     );
   });
 
-  it('stays flat when marker probe returns "missing" (symlink / wrong kind / absent)', async () => {
-    // The default probe uses lstat and reports 'missing' for symlinks,
-    // so a pre-planted symlink cannot flip the layout.
+  it('stays flat when the migration marker is absent', async () => {
     const resolver = await LegacyDetectingPathResolver.detect({
       legacyRoot: LEGACY_ROOT,
       portfolioRoot: PORTFOLIO_ROOT,
       probe: mockProbe({
         [LEGACY_ROOT]: 'dir',
-        // Marker present but probe reports 'missing' (e.g. it's a
-        // symlink — lstat returns it, but isFile() is false, and the
-        // default probe treats that as 'missing').
       }),
     });
     expect(resolver.getLayout()).toBe('flat');
   });
 
-  it('rejects legacy root that is itself a symlink/file (probe returns non-dir)', async () => {
-    // If legacyRoot is a symlink pointing elsewhere, the probe returns
-    // 'file' or 'missing', not 'dir'. We treat that as "no legacy
-    // install" and use the new layout. Symlink-planting cannot hijack
-    // detection into a legacy branch.
-    const resolver = await LegacyDetectingPathResolver.detect({
+  it('rejects a legacy root that is a file', async () => {
+    await expect(LegacyDetectingPathResolver.detect({
       legacyRoot: LEGACY_ROOT,
       portfolioRoot: PORTFOLIO_ROOT,
       probe: mockProbe({ [LEGACY_ROOT]: 'file' }),
-    });
-    expect(resolver.getLayout()).toBe('per-user');
-    expect(resolver.getAnchorRoot()).toBe(path.resolve(PORTFOLIO_ROOT));
+    })).rejects.toThrow('Legacy root must be a directory');
   });
 
   it('rethrows non-ENOENT errors from the probe (fails loud on permission denied)', async () => {

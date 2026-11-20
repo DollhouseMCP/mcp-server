@@ -1,3 +1,4 @@
+import { getConfig } from '../harness/config.js';
 import { seedRuntimeSession } from '../harness/seed.js';
 import { setupWorld, type World } from '../harness/world.js';
 
@@ -41,6 +42,19 @@ describe('admin/operate — health', () => {
   ])('%s returns a health view', async (path) => {
     const res = await admin().get(path);
     expect(res.status).toBe(200);
+  });
+
+  // The harness migrates the database with this checkout, so the release's
+  // migrations are exactly the applied ledger.
+  it('verifies the database is fully migrated and reports the replica ready', async () => {
+    const res = await admin().get('/api/v1/admin/operate/health');
+    const components = (res.body as { components: Array<{ component: string; status: string; failure_codes: string[] }> }).components;
+    expect(components.find(component => component.component === 'database_migrations'))
+      .toMatchObject({ status: 'ok', failure_codes: [] });
+
+    const ready = await fetch(`${getConfig().baseUrl}/readyz`);
+    expect(ready.status).toBe(200);
+    expect(await ready.json()).toMatchObject({ ready: true });
   });
 });
 

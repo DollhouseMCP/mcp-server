@@ -65,7 +65,11 @@ describe('PostgresProductionDatabaseReadiness', () => {
         'production_database_user_mismatch',
         'production_database_migrations_incomplete',
       ],
-      detail: 'database identity did not match the configured production expectation; missing required tables: console_sessions, security_invalidation_events',
+      detail: 'database identity did not match the configured production expectation ' +
+        '(compare DOLLHOUSE_DATABASE_URL with DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_NAME and ' +
+        'DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_USER); ' +
+        'missing required tables: console_sessions, security_invalidation_events ' +
+        '(run the database migrations for this release)',
     });
   });
 

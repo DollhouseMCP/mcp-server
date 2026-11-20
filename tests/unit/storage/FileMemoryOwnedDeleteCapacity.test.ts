@@ -11,6 +11,7 @@ import { FileMemoryTransactionCoordinator } from '../../../src/storage/FileMemor
 import { FileMemoryOwnerSnapshots, type UnownedFileMemoryToken } from '../../../src/storage/FileMemoryOwnerSnapshots.js';
 import { FileMemoryVolumeStore } from '../../../src/storage/FileMemoryVolumeStore.js';
 import { cleanupDirectoryReadObservers, observeDirectoryReads } from './fixtures/aggregateDirectoryReadObserver.js';
+import { populatedCaseTimeoutMs, THOUSAND_ITEM_CASE_TIMEOUT_MS } from './fixtures/populatedCaseTimeout.js';
 
 const it = process.platform === 'win32' || !process.getuid ? jestIt.skip : jestIt;
 const lifecycle = new OwnedStorageCase();
@@ -150,7 +151,7 @@ describe('dormant head DELETE populated owner portfolios', () => {
         try { f = await fixture(nested, count); archived = await treeEvidence(f.owner); }
         catch (cause) { primary = { cause }; throw cause; }
         finally { setup.restore(primary); diagnostic('setup-complete', setup.measured); profile.mark('setup-end'); }
-      }), 10000);
+      }), populatedCaseTimeoutMs(count));
       it('completes fresh deletion and all preservation verification', lifecycle.own(async () => {
         const currentProfile = profile;
         try {
@@ -185,7 +186,7 @@ describe('dormant head DELETE populated owner portfolios', () => {
           diagnostic('assertions-complete', reads.measured);
           currentProfile.mark('assertions-complete');
         } finally { currentProfile.mark('lifecycle-finally'); }
-      }), 10000);
+      }), populatedCaseTimeoutMs(count));
     });
   describe.each([[false, 'pair-durable'], [true, 'pair-durable'], [true, 'head-durable']] as const)(
     'retains populated recovery authority at 1,000 owners, nested=%s phase=%s', (nested, phase) => {
@@ -200,7 +201,7 @@ describe('dormant head DELETE populated owner portfolios', () => {
         try { f = await fixture(nested, 1000); archived = await treeEvidence(f.owner); }
         catch (cause) { primary = { cause }; throw cause; }
         finally { setup.restore(primary); diagnostic('setup-complete', setup.measured); profile.mark('setup-end'); }
-      }), 10000);
+      }), THOUSAND_ITEM_CASE_TIMEOUT_MS);
       it('completes interruption, recovery and all preservation verification', lifecycle.own(async () => {
         const currentProfile = profile;
         try {
@@ -242,7 +243,7 @@ describe('dormant head DELETE populated owner portfolios', () => {
           diagnostic('assertions-complete', reads.measured);
           currentProfile.mark('assertions-complete');
         } finally { currentProfile.mark('lifecycle-finally'); }
-      }), 10000);
+      }), THOUSAND_ITEM_CASE_TIMEOUT_MS);
     });
 
 });

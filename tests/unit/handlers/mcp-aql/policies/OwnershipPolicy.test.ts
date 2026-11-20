@@ -204,6 +204,19 @@ describe('OwnershipPolicy', () => {
       expect(bash('git push --force-with-lease=main origin main')[0]).toMatchObject({ branch: 'main' });
     });
 
+    it.each(['--force-with-lease', '--force-if-includes', '--signed'])(
+      'preserves the remote and refspec after %s', (option) => {
+        expect(bash(`git push ${option} origin local:remote-branch`))
+          .toEqual([expect.objectContaining({ kind: 'branch', branch: 'remote-branch' })]);
+      },
+    );
+
+    it.each(['--all origin', '--branches origin', '--mirror origin', 'origin :', 'origin +:'])(
+      'reports an unresolved target for bulk push arguments %s', (args) => {
+        expect(bash(`git push ${args}`)).toEqual([expect.objectContaining({ kind: 'unresolvable' })]);
+      },
+    );
+
     it('reports branch deletion and skips tag pushes', () => {
       expect(bash('git push origin --delete feature/x')[0]).toMatchObject({ action: 'git push --delete', branch: 'feature/x' });
       expect(bash('git push origin :feature/old')[0]).toMatchObject({ action: 'git push --delete', branch: 'feature/old' });

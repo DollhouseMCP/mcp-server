@@ -149,7 +149,7 @@ for (const mode of ['filesystem', 'database'] as const) {
     afterEach(async () => {
       unsubscribe?.();
       jest.restoreAllMocks();
-      manager?.dispose();
+      await manager?.dispose();
       await env?.dispose();
       if (mode === 'database') await cleanupAllTestData();
     });

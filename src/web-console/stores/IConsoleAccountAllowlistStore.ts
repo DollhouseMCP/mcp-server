@@ -146,9 +146,11 @@ export function cloneAllowlistEntry(entry: ConsoleAccountAllowlistEntry): Consol
   };
 }
 
+export const MAX_ALLOWLIST_NOTE_LENGTH = 500;
+
 function validateAllowlistNote(note: string | null | undefined): void {
-  if (note !== undefined && note !== null && note.length > 500) {
-    throw new ConsoleStoreValidationError('note must be at most 500 characters');
+  if (note !== undefined && note !== null && note.length > MAX_ALLOWLIST_NOTE_LENGTH) {
+    throw new ConsoleStoreValidationError(`note must be at most ${MAX_ALLOWLIST_NOTE_LENGTH} characters`);
   }
 }
 

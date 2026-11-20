@@ -7,6 +7,11 @@
 
 import type { StorageItemMetadata } from './types.js';
 
+export interface StorageStatResult {
+  stats: Map<string, StorageItemMetadata>;
+  failures: Map<string, Error>;
+}
+
 export interface IStorageBackend {
   /**
    * List files in a directory filtered by extension.
@@ -15,6 +20,9 @@ export interface IStorageBackend {
    * @returns Array of filenames (not full paths) matching the extension
    */
   listFiles(directory: string, extension: string): Promise<string[]>;
+
+  /** List directory names, following symlink targets and retaining uncertain targets for later I/O. */
+  listDirectories(directory: string): Promise<string[]>;
 
   /**
    * Get metadata for a single file.
@@ -26,14 +34,13 @@ export interface IStorageBackend {
 
   /**
    * Get metadata for multiple files in parallel.
-   * Files that cannot be stat'd (e.g. deleted between list and stat)
-   * are silently omitted from the result.
+   * Absent paths are omitted. Other per-file errors are returned for indexing diagnostics.
    *
    * @param directory - Absolute path to the base directory
    * @param relativePaths - Array of relative paths within the directory
-   * @returns Map of relativePath → StorageItemMetadata for files that were stat'd successfully
+   * @returns Successful metadata and failures, both keyed by relative path.
    */
-  statMany(directory: string, relativePaths: string[]): Promise<Map<string, StorageItemMetadata>>;
+  statMany(directory: string, relativePaths: string[]): Promise<StorageStatResult>;
 
   /**
    * Read the full contents of a file.
@@ -43,7 +50,8 @@ export interface IStorageBackend {
   readFile(absolutePath: string): Promise<string>;
 
   /**
-   * Check whether a directory exists.
+   * Check whether a directory exists. ENOENT, ENOTDIR, and non-directories
+   * return false; all other stat errors reject.
    * @param directory - Absolute path to check
    * @returns true if the directory exists
    */

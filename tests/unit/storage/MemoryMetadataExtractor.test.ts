@@ -1,12 +1,76 @@
+import * as path from 'node:path';
 /**
  * Unit tests for MemoryMetadataExtractor
  */
 
-import { MemoryMetadataExtractor } from '../../../src/storage/MemoryMetadataExtractor.js';
-import { MEMORY_CONSTANTS } from '../../../src/elements/memories/constants.js';
+import { Memory } from '../../../src/elements/memories/Memory.js';
+import { createRealMemoryManager, createTestMetadataService } from '../../helpers/di-mocks.js';
+import { SerializationService } from '../../../src/services/SerializationService.js';
+import { jest, afterAll } from '@jest/globals';
+import { SecureYamlParser, hasFrontmatterFraming, matchFrontmatterFrame } from '../../../src/security/secureYamlParser.js';
+import { MemoryMetadataExtractor, MemoryMetadataExtractionError } from '../../../src/storage/MemoryMetadataExtractor.js';
+import { MEMORY_CONSTANTS, DEFAULT_MEMORY_NAME } from '../../../src/elements/memories/constants.js';
 
 describe('MemoryMetadataExtractor', () => {
+  const manager = createRealMemoryManager(path.resolve('tmp', 'memory-metadata-parity'));
+  afterAll(() => manager.dispose());
   describe('extractMetadata', () => {
+    it('keeps the memory constructor default aligned with the shared name', () => {
+      const memory = new Memory({}, createTestMetadataService());
+      expect(memory.metadata.name).toBe(DEFAULT_MEMORY_NAME);
+    });
+
+    it('rejects an oversized document even when no frame matches', () => {
+      const raw = `\n---\n${'a'.repeat(MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE)}`;
+      expect(() => MemoryMetadataExtractor.extractMetadata(raw, 'oversized.yaml')).toThrow(MemoryMetadataExtractionError);
+    });
+
+    const metadata = 'name: Framed\nautoLoad: true\npriority: 7\nmemoryType: system';
+    const legacy = `---\n${metadata}\n---\nBenign body`;
+    const framingCases = [
+      ['leading blank line', `\n${legacy}`],
+      ['opening fence trailing spaces', legacy.replace('---\n', '---  \n')],
+      ['CRLF', legacy.replaceAll('\n', '\r\n')],
+      ['BOM (default entry on both sides)', `\uFEFF${legacy}`],
+      ['no closing fence', `---\n${metadata}`],
+      ['unsafe Unicode only in body', `${legacy}\nunsafe \u202E text`],
+      ['fence inside body', `${legacy}\n---\nname: Body`],
+      ['empty', ''],
+      ['pure YAML', metadata],
+      ['legacy benign', legacy],
+    ];
+    it.each(framingCases)('matches loader metadata for %s', (_label, raw) => {
+      const loaded = manager['parseContent'](raw).data;
+      manager['migrateMetadataDefaults'](loaded, 'sample.yaml');
+      const entry = MemoryMetadataExtractor.extractMetadata(raw, 'sample.yaml');
+      expect({ name: entry.name, autoLoad: entry.autoLoad, priority: entry.priority, memoryType: entry.memoryType }).toEqual({
+        name: loaded.name,
+        autoLoad: loaded.autoLoad,
+        priority: loaded.priority,
+        memoryType: loaded.memoryType ?? 'user',
+      });
+      if (loaded.name === DEFAULT_MEMORY_NAME) {
+        expect(entry).toEqual(MemoryMetadataExtractor.extractMetadata('', 'sample.yaml'));
+      }
+    });
+
+    it.each(framingCases)('shares the loader framing route for %s', (_label, raw) => {
+      const frontmatterRoute = new SerializationService().hasFrontmatter(raw);
+      expect(hasFrontmatterFraming(raw)).toBe(frontmatterRoute);
+      const parser = jest.spyOn(SecureYamlParser, 'parseRawYaml');
+      try {
+        MemoryMetadataExtractor.extractMetadata(raw, 'sample.yaml');
+        const frame = frontmatterRoute ? matchFrontmatterFrame(raw) : null;
+        if (!raw.trim() || (frontmatterRoute && !frame)) {
+          expect(parser).not.toHaveBeenCalled();
+        } else {
+          expect(parser).toHaveBeenCalledWith(frame?.frontmatter ?? raw, expect.objectContaining({ contentPolicy: 'structure-only' }));
+        }
+      } finally {
+        parser.mockRestore();
+      }
+    });
+
     it('should extract fields from YAML with a metadata key wrapper', () => {
       const raw = `
 metadata:
@@ -67,7 +131,7 @@ someOtherKey: value
 
       const result = MemoryMetadataExtractor.extractMetadata(raw, 'misc.yml');
 
-      expect(result.name).toBe('unnamed');
+      expect(result.name).toBe(DEFAULT_MEMORY_NAME);
       expect(result.description).toBe('');
       expect(result.version).toBe('1.0.0');
       expect(result.author).toBe('');
@@ -80,7 +144,7 @@ someOtherKey: value
     it('should handle empty content gracefully', () => {
       const result = MemoryMetadataExtractor.extractMetadata('', 'empty.yml');
 
-      expect(result.name).toBe('unnamed');
+      expect(result.name).toBe(DEFAULT_MEMORY_NAME);
       expect(result.description).toBe('');
       expect(result.version).toBe('1.0.0');
       expect(result.author).toBe('');
@@ -91,28 +155,27 @@ someOtherKey: value
     it('should handle whitespace-only content gracefully', () => {
       const result = MemoryMetadataExtractor.extractMetadata('   \n  \n  ', 'blank.yml');
 
-      expect(result.name).toBe('unnamed');
+      expect(result.name).toBe(DEFAULT_MEMORY_NAME);
       expect(result.filePath).toBe('blank.yml');
     });
 
-    it('should handle corrupt/non-object YAML gracefully', () => {
+    it('should reject non-object YAML', () => {
       // A plain scalar string parses as a string, not an object
-      const result = MemoryMetadataExtractor.extractMetadata('just a plain string', 'bad.yml');
-
-      expect(result.name).toBe('unnamed');
-      expect(result.description).toBe('');
-      expect(result.filePath).toBe('bad.yml');
+      const extract = () => MemoryMetadataExtractor.extractMetadata('just a plain string', 'bad.yml');
+      expect(extract).toThrow(MemoryMetadataExtractionError);
+      expect(extract).toThrow('bad.yml');
+      expect(extract).toThrow(/Cannot extract memory metadata.*: .+/);
     });
 
-    it('should handle YAML that parses as an array gracefully', () => {
+    it('should reject YAML arrays', () => {
       const raw = `
 - item1
 - item2
 `;
-      const result = MemoryMetadataExtractor.extractMetadata(raw, 'array.yml');
-
-      expect(result.name).toBe('unnamed');
-      expect(result.filePath).toBe('array.yml');
+      const extract = () => MemoryMetadataExtractor.extractMetadata(raw, 'array.yml');
+      expect(extract).toThrow(MemoryMetadataExtractionError);
+      expect(extract).toThrow('array.yml');
+      expect(extract).toThrow(/Cannot extract memory metadata.*: .+/);
     });
 
     it('should parse frontmatter-style metadata by extracting the YAML block', () => {
@@ -133,16 +196,50 @@ This is body content that should be ignored for metadata extraction.
       expect(result.filePath).toBe('frontmatter.yml');
     });
 
+    it('decides legacy framing before parsing and treats tag-like body text as content', () => {
+      const frontmatter = 'name: Accepted\nautoLoad: true';
+      const body = 'payload: !!js/function "function() {}"';
+      const parse = jest.spyOn(SecureYamlParser, 'parseRawYaml');
+      try {
+        const metadata = MemoryMetadataExtractor.extractMetadata(`---\n${frontmatter}\n---\n${body}`, 'legacy.yml');
+        expect(metadata).toMatchObject({ name: 'Accepted', autoLoad: true });
+        expect(parse).toHaveBeenCalledTimes(1);
+        expect(parse).toHaveBeenCalledWith(frontmatter, expect.objectContaining({ contentPolicy: 'structure-only' }));
+      } finally {
+        parse.mockRestore();
+      }
+    });
+
+    it('does not retry rejected frontmatter as another YAML fragment', () => {
+      const parse = jest.spyOn(SecureYamlParser, 'parseRawYaml');
+      try {
+        expect(() => MemoryMetadataExtractor.extractMetadata('---\nname: !!js/function "function() {}"\n---\nBenign body', 'rejected.yml'))
+          .toThrow(MemoryMetadataExtractionError);
+        expect(parse).toHaveBeenCalledTimes(1);
+      } finally {
+        parse.mockRestore();
+      }
+    });
+
+    it('rejects oversized whole documents even when their frontmatter is small', () => {
+      const raw = `---\nname: Small\n---\n${'a'.repeat(MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE)}`;
+      expect(() => MemoryMetadataExtractor.extractMetadata(raw, 'large.yml')).toThrow(MemoryMetadataExtractionError);
+    });
+
+    it('preserves code-bearing legacy content above the strict prose scanner limit', () => {
+      const raw = `---\nname: Legacy\n---\n${'process.env example\n'.repeat(35_000)}`;
+      expect(MemoryMetadataExtractor.extractMetadata(raw, 'legacy-large.yml').name).toBe('Legacy');
+    });
+
     it('should fail closed for malicious YAML tags', () => {
       const raw = `
 name: Malicious
 payload: !!js/function "function () { return process.env; }"
 `;
-      const result = MemoryMetadataExtractor.extractMetadata(raw, 'malicious.yml');
-
-      expect(result.name).toBe('unnamed');
-      expect(result.description).toBe('');
-      expect(result.filePath).toBe('malicious.yml');
+      const extract = () => MemoryMetadataExtractor.extractMetadata(raw, 'malicious.yml');
+      expect(extract).toThrow(MemoryMetadataExtractionError);
+      expect(extract).toThrow('malicious.yml');
+      expect(extract).toThrow(/Cannot extract memory metadata.*: .+/);
     });
 
     it('should fail closed for oversized YAML input', () => {
@@ -153,11 +250,10 @@ payload: !!js/function "function () { return process.env; }"
 name: Oversized
 description: ${hugeValue}
 `;
-      const result = MemoryMetadataExtractor.extractMetadata(raw, 'oversized.yml');
-
-      expect(result.name).toBe('unnamed');
-      expect(result.description).toBe('');
-      expect(result.filePath).toBe('oversized.yml');
+      const extract = () => MemoryMetadataExtractor.extractMetadata(raw, 'oversized.yml');
+      expect(extract).toThrow(MemoryMetadataExtractionError);
+      expect(extract).toThrow('oversized.yml');
+      expect(extract).toThrow(/Cannot extract memory metadata.*: .+/);
     });
 
     it('should extract a legacy memory between MAX_YAML_SIZE and LEGACY_MAX_YAML_SIZE (#2864)', () => {
@@ -229,10 +325,10 @@ entries:
   - content: harmless prose
 `;
 
-      const result = MemoryMetadataExtractor.extractMetadata(raw, 'unsafe-metadata.yml');
-
-      expect(result.name).toBe('unnamed');
-      expect(result.autoLoad).toBeUndefined();
+      const extract = () => MemoryMetadataExtractor.extractMetadata(raw, 'unsafe-metadata.yml');
+      expect(extract).toThrow(MemoryMetadataExtractionError);
+      expect(extract).toThrow('unsafe-metadata.yml');
+      expect(extract).toThrow(/Cannot extract memory metadata.*: .+/);
     });
 
     it('should prefer stats.totalEntries over entries array length', () => {

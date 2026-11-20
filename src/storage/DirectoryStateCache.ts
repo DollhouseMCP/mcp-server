@@ -1,7 +1,7 @@
 import type { ManifestDiffResult } from './types.js';
 
 export interface ScanState {
-  lastScanTimestamp: number;
+  lastScanAt: number;
   scanInProgress: Promise<ManifestDiffResult> | null;
 }
 
@@ -37,10 +37,6 @@ export class DirectoryStateCache<T extends ScanState> {
     this.states.set(dir, state);
     // The caller has not yet marked newly acquired state busy.
     this.trim(dir);
-  }
-
-  hasCompletedScan(dir: string): boolean {
-    return (this.get(dir)?.lastScanTimestamp ?? 0) > 0;
   }
 
   async use<R>(state: T, operation: () => Promise<R>): Promise<R> {
