@@ -932,7 +932,7 @@ function couldContainGitPush(command: string): boolean {
  */
 function couldContainGitHubMutation(command: string): boolean {
   const raw = command.replace(/\\\r?\n/g, '');
-  if (/\bapi\.github\.com\b/i.test(raw) || couldContainGitPush(raw) || /\bgh\s+["'`$]/.test(raw)) return true;
+  if (/\bapi\.github\.com\b/i.test(raw) || couldContainGitPush(raw) || /\b(?:gh|git)["']?\s+["'`$]/.test(raw)) return true;
   for (const match of raw.matchAll(/\bgh\s+(pr|issue|api)\b(?:\s+([\w-]+))?/g)) {
     if (match[1] === 'api') return true;
     if (!match[2] || !OWNERSHIP_EXEMPT_GH_SUBCOMMANDS.has(match[2])) return true;

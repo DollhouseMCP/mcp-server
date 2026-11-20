@@ -173,6 +173,7 @@ describe('OwnershipPolicy', () => {
       'gh api repos/o/r/pulls/7/merge -X PUT',
       'curl -X PUT https://api.github.com/repos/o/r/pulls/7/merge',
       'gh "$(printf pr)" close 7',
+      '"git" "$(printf \'pu\'\'sh\')" origin feature/x',
     ])('retains fail-closed inspection for oversized mutation signals: %s', (mutation) => {
       expect(bash(' '.repeat(4000) + mutation)).toEqual([expect.objectContaining({ kind: 'unresolvable' })]);
     });
