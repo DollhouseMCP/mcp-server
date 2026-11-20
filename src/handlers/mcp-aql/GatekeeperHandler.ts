@@ -473,7 +473,7 @@ export class GatekeeperHandler {
 
     const classification = classifyTool(toolName, toolInput.input);
     const staticResponse = this.resolveStaticClassification(toolName, toolInput.input, classification, agentIdentity);
-    if (staticResponse && classification.behavior === 'deny') {
+    if (classification.behavior === 'deny') {
       return staticResponse;
     }
 
