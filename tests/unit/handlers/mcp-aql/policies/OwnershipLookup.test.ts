@@ -212,60 +212,71 @@ describe('resolveGhBinary', () => {
 });
 
 describe('OwnershipCache', () => {
+  const cachedPR = { ...PR, repo: { owner: 'o', name: 'r' } };
+  const cachedBranch = { ...BRANCH, repo: { owner: 'o', name: 'r' } };
+
+  it.each([cachedPR, ISSUE, cachedBranch])('never caches implicit-repository $kind targets', (intent) => {
+    const implicit = { ...intent, repo: undefined };
+    const cache = new OwnershipCache();
+    cache.set('default', implicit, { status: 'resolved', authorLogin: 'me' });
+    expect(ownershipCacheKey(implicit)).toBeUndefined();
+    expect(cache.get('default', implicit)).toBeUndefined();
+    expect(cache.size).toBe(0);
+  });
   it('never caches current-branch lookups', () => {
-    expect(ownershipCacheKey({ ...PR, selector: undefined })).toBeUndefined();
-    expect(ownershipCacheKey({ ...BRANCH, branch: undefined })).toBeUndefined();
+    expect(ownershipCacheKey({ ...cachedPR, selector: undefined })).toBeUndefined();
+    expect(ownershipCacheKey({ ...cachedBranch, branch: undefined })).toBeUndefined();
     expect(ownershipCacheKey({ kind: 'unresolvable', action: 'x', source: 'x' })).toBeUndefined();
     const cache = new OwnershipCache();
-    cache.set('s', { ...PR, selector: undefined }, { status: 'resolved', authorLogin: 'me' });
+    cache.set('s', { ...cachedPR, selector: undefined }, { status: 'resolved', authorLogin: 'me' });
     expect(cache.size).toBe(0);
   });
 
   it('keys explicit targets by kind, repo and selector', () => {
-    expect(ownershipCacheKey(PR)).toBe('pr||12');
+    expect(ownershipCacheKey(cachedPR)).toBe('pr|o/r|12');
     expect(ownershipCacheKey(ISSUE)).toBe('issue|o/r|7');
-    expect(ownershipCacheKey(BRANCH)).toBe('branch||feature/x');
+    expect(ownershipCacheKey(cachedBranch)).toBe('branch|o/r|feature/x');
   });
 
   it('returns cached results per session and isolates sessions', () => {
     const cache = new OwnershipCache();
-    cache.set('a', PR, { status: 'resolved', authorLogin: 'x' });
-    expect(cache.get('a', PR)).toEqual({ status: 'resolved', authorLogin: 'x' });
-    expect(cache.get('b', PR)).toBeUndefined();
+    cache.set('a', cachedPR, { status: 'resolved', authorLogin: 'x' });
+    expect(cache.get('a', cachedPR)).toEqual({ status: 'resolved', authorLogin: 'x' });
+    expect(cache.get('b', cachedPR)).toBeUndefined();
     cache.clearSession('a');
-    expect(cache.get('a', PR)).toBeUndefined();
+    expect(cache.get('a', cachedPR)).toBeUndefined();
   });
 
   it('never caches errors so a failed lookup is retried', () => {
     const cache = new OwnershipCache();
-    cache.set('a', PR, { status: 'error', message: 'boom' });
-    expect(cache.get('a', PR)).toBeUndefined();
+    cache.set('a', cachedPR, { status: 'error', message: 'boom' });
+    expect(cache.get('a', cachedPR)).toBeUndefined();
     expect(cache.size).toBe(0);
   });
 
   it('expires resolved and not_found entries on their own TTLs', () => {
     let now = 1_000;
     const cache = new OwnershipCache({ resolvedTtlMs: 100, notFoundTtlMs: 10, now: () => now });
-    cache.set('a', PR, { status: 'resolved', authorLogin: 'x' });
-    cache.set('a', BRANCH, { status: 'not_found' });
+    cache.set('a', cachedPR, { status: 'resolved', authorLogin: 'x' });
+    cache.set('a', cachedBranch, { status: 'not_found' });
     now += 11;
-    expect(cache.get('a', BRANCH)).toBeUndefined();
-    expect(cache.get('a', PR)).toBeDefined();
+    expect(cache.get('a', cachedBranch)).toBeUndefined();
+    expect(cache.get('a', cachedPR)).toBeDefined();
     now += 100;
-    expect(cache.get('a', PR)).toBeUndefined();
+    expect(cache.get('a', cachedPR)).toBeUndefined();
   });
 
   it('bounds sessions and entries per session', () => {
     const cache = new OwnershipCache({ maxSessions: 2, maxEntriesPerSession: 2 });
-    cache.set('s1', PR, { status: 'resolved', authorLogin: 'x' });
-    cache.set('s2', PR, { status: 'resolved', authorLogin: 'x' });
-    cache.set('s3', PR, { status: 'resolved', authorLogin: 'x' });
-    expect(cache.get('s1', PR)).toBeUndefined();
-    expect(cache.get('s3', PR)).toBeDefined();
+    cache.set('s1', cachedPR, { status: 'resolved', authorLogin: 'x' });
+    cache.set('s2', cachedPR, { status: 'resolved', authorLogin: 'x' });
+    cache.set('s3', cachedPR, { status: 'resolved', authorLogin: 'x' });
+    expect(cache.get('s1', cachedPR)).toBeUndefined();
+    expect(cache.get('s3', cachedPR)).toBeDefined();
 
     cache.set('s3', ISSUE, { status: 'resolved', authorLogin: 'x' });
-    cache.set('s3', BRANCH, { status: 'resolved', authorLogin: 'x' });
-    expect(cache.get('s3', PR)).toBeUndefined();
-    expect(cache.get('s3', BRANCH)).toBeDefined();
+    cache.set('s3', cachedBranch, { status: 'resolved', authorLogin: 'x' });
+    expect(cache.get('s3', cachedPR)).toBeUndefined();
+    expect(cache.get('s3', cachedBranch)).toBeDefined();
   });
 });

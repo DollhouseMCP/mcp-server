@@ -83,6 +83,27 @@ describe('OwnershipPolicyService', () => {
     expect(lookup).not.toHaveBeenCalled();
   });
 
+  it.each([
+    'cd ../other && gh pr merge 5',
+    'pushd ../other; gh pr merge 5',
+    'GH_REPO=org/other gh pr merge 5',
+    'env GH_REPO=org/other gh pr merge 5',
+    'git -C ../other push origin feature/x',
+    'git --git-dir=../other/.git push origin feature/x',
+    'git --work-tree=../other push origin feature/x',
+  ])('never uses a cwd lookup to allow a redirected mutation: %s', async (command) => {
+    for (const result of [resolved('mickdarling'), { status: 'not_found' } as const]) {
+      const lookup = jest.fn<OwnershipResolver['lookup']>().mockResolvedValue(result);
+      const service = new OwnershipPolicyService({
+        config: { ...CONFIG, mode: 'confirm' },
+        resolver: { lookup, resolveOwnerLogin: async () => 'mickdarling' },
+        cache: new OwnershipCache(),
+      });
+      expect((await service.evaluate('Bash', { command }, { cwd: '/work/original' }))?.behavior).toBe('confirm');
+      expect(lookup).not.toHaveBeenCalled();
+    }
+  });
+
   it('allows pushes to branches with no open PR', async () => {
     const { resolver } = fakeResolver({});
     const service = new OwnershipPolicyService({ config: CONFIG, resolver, cache: new OwnershipCache() });
@@ -90,14 +111,44 @@ describe('OwnershipPolicyService', () => {
   });
 
   describe('caching', () => {
+    it.each(['gh pr merge 5', 'gh issue close 5', 'git push origin feature/x'])(
+      're-resolves implicit repositories across cwd changes without session_id: %s',
+      async (command) => {
+        const lookup = jest.fn<OwnershipResolver['lookup']>().mockImplementation(async (_intent, context) =>
+          resolved(context?.cwd === '/work/repo-a' ? 'mickdarling' : 'stranger'));
+        const service = new OwnershipPolicyService({
+          config: { ...CONFIG, mode: 'confirm' },
+          resolver: { lookup, resolveOwnerLogin: async () => 'mickdarling' },
+          cache: new OwnershipCache(),
+        });
+        expect((await service.evaluate('Bash', { command }, { cwd: '/work/repo-a' }))?.behavior).toBe('allow');
+        expect((await service.evaluate('Bash', { command }, { cwd: '/work/repo-b' }))?.behavior).toBe('confirm');
+        expect(lookup).toHaveBeenCalledTimes(2);
+      },
+    );
+
+    it('does not reuse an implicit target even when cwd and session are unchanged', async () => {
+      const lookup = jest.fn<OwnershipResolver['lookup']>()
+        .mockResolvedValueOnce(resolved('mickdarling'))
+        .mockResolvedValueOnce(resolved('stranger'));
+      const service = new OwnershipPolicyService({
+        config: { ...CONFIG, mode: 'confirm' },
+        resolver: { lookup, resolveOwnerLogin: async () => 'mickdarling' },
+        cache: new OwnershipCache(),
+      });
+      const context = { cwd: '/work/repo', sessionId: 'shared' };
+      expect((await service.evaluate('Bash', { command: 'gh pr merge 5' }, context))?.behavior).toBe('allow');
+      expect((await service.evaluate('Bash', { command: 'gh pr merge 5' }, context))?.behavior).toBe('confirm');
+    });
+
     it('caches explicit PR lookups per session and re-resolves current-branch lookups', async () => {
       const { resolver, lookup } = fakeResolver({ '1': resolved('mickdarling'), '@current': resolved('mickdarling') });
       const service = new OwnershipPolicyService({ config: CONFIG, resolver, cache: new OwnershipCache() });
-      await service.evaluate('Bash', { command: 'gh pr merge 1' }, { sessionId: 'a' });
-      await service.evaluate('Bash', { command: 'gh pr edit 1 --title x' }, { sessionId: 'a' });
+      await service.evaluate('Bash', { command: 'gh pr merge 1 --repo o/r' }, { sessionId: 'a' });
+      await service.evaluate('Bash', { command: 'gh pr edit 1 --repo o/r --title x' }, { sessionId: 'a' });
       expect(lookup).toHaveBeenCalledTimes(1);
 
-      await service.evaluate('Bash', { command: 'gh pr merge 1' }, { sessionId: 'b' });
+      await service.evaluate('Bash', { command: 'gh pr merge 1 --repo o/r' }, { sessionId: 'b' });
       expect(lookup).toHaveBeenCalledTimes(2);
 
       await service.evaluate('Bash', { command: 'git push' }, { sessionId: 'a' });
@@ -109,18 +160,18 @@ describe('OwnershipPolicyService', () => {
       const authors: Record<string, OwnershipLookupResult | Error> = { '1': { status: 'error', message: 'offline' } };
       const { resolver, lookup } = fakeResolver(authors);
       const service = new OwnershipPolicyService({ config: CONFIG, resolver, cache: new OwnershipCache() });
-      expect((await service.evaluate('Bash', { command: 'gh pr merge 1' }, { sessionId: 'a' }))?.behavior).toBe('confirm');
+      expect((await service.evaluate('Bash', { command: 'gh pr merge 1 --repo o/r' }, { sessionId: 'a' }))?.behavior).toBe('confirm');
       authors['1'] = resolved('mickdarling');
-      expect((await service.evaluate('Bash', { command: 'gh pr merge 1' }, { sessionId: 'a' }))?.behavior).toBe('allow');
+      expect((await service.evaluate('Bash', { command: 'gh pr merge 1 --repo o/r' }, { sessionId: 'a' }))?.behavior).toBe('allow');
       expect(lookup).toHaveBeenCalledTimes(2);
     });
 
     it('clears a session\'s cache on request', async () => {
       const { resolver, lookup } = fakeResolver({ '1': resolved('mickdarling') });
       const service = new OwnershipPolicyService({ config: CONFIG, resolver, cache: new OwnershipCache() });
-      await service.evaluate('Bash', { command: 'gh pr merge 1' }, { sessionId: 'a' });
+      await service.evaluate('Bash', { command: 'gh pr merge 1 --repo o/r' }, { sessionId: 'a' });
       service.clearSession('a');
-      await service.evaluate('Bash', { command: 'gh pr merge 1' }, { sessionId: 'a' });
+      await service.evaluate('Bash', { command: 'gh pr merge 1 --repo o/r' }, { sessionId: 'a' });
       expect(lookup).toHaveBeenCalledTimes(2);
     });
   });

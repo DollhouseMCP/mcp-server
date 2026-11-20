@@ -150,6 +150,50 @@ describe('OwnershipPolicy', () => {
     );
   });
 
+  describe('repository context changes', () => {
+    it.each([
+      'cd ../other && gh pr merge 5',
+      'pushd ../other; gh issue close 5',
+      'popd && git push origin feature/x',
+      'GH_REPO=org/other gh pr merge 5',
+      'env GH_REPO=org/other gh pr merge 5',
+      'GH_REPO=org/other; gh pr merge 5',
+      'export GH_REPO=org/other; gh pr merge 5',
+      'GIT_DIR=/other/.git git push origin feature/x',
+      'env GIT_WORK_TREE=/other git push origin feature/x',
+      'git -C ../other push origin feature/x',
+      'git -C../other push origin feature/x',
+      'git --git-dir ../other/.git push origin feature/x',
+      'git --git-dir=../other/.git push origin feature/x',
+      'git --work-tree ../other push origin feature/x',
+      'git --work-tree=../other push origin feature/x',
+      'cd ../other && gh pr merge --repo o/r',
+    ])('fails closed instead of resolving in the hook cwd: %s', (command) => {
+      expect(bash(command)).toEqual([expect.objectContaining({ kind: 'unresolvable' })]);
+    });
+
+    it.each([
+      'cd ../other && gh pr merge 5 --repo o/r',
+      'GH_REPO=elsewhere/repo gh pr merge 5 --repo=o/r',
+      'pushd ../other; gh pr merge https://github.com/o/r/pull/5',
+      'env GH_REPO=elsewhere/repo gh issue close https://github.com/o/r/issues/5',
+      'cd ../other; gh api -X PUT repos/o/r/pulls/5/merge',
+    ])('keeps a target explicitly pinned to a repository: %s', (command) => {
+      expect(bash(command)).toHaveLength(1);
+      expect(bash(command)[0].kind).not.toBe('unresolvable');
+    });
+
+    it('does not resolve a later unpinned mutation from an earlier pinned one', () => {
+      expect(bash('cd ../other; gh pr merge 5 --repo o/r; gh issue close 7').map(intent => intent.kind))
+        .toEqual(['pull_request', 'unresolvable']);
+    });
+
+    it('does not gate reads or unrelated environment prefixes', () => {
+      expect(bash('cd ../other && gh pr view 5')).toEqual([]);
+      expect(bash('FOO=bar env gh pr merge 5')[0].kind).toBe('pull_request');
+    });
+  });
+
   describe('detectGitHubMutations — gh issue', () => {
     it.each(['edit', 'close', 'reopen', 'delete', 'transfer', 'lock', 'unlock', 'pin', 'unpin'])(
       'reports gh issue %s',
