@@ -5,6 +5,25 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { OwnedStorageCase } from './fixtures/ownedStorageCase.js';
+import { ErasureCrashPhases } from './fixtures/erasureCrashPhases.js';
+
+it('retains bounded crash phases on failure without emitting them on ordinary success', () => {
+  const phases = new ErasureCrashPhases(1000);
+  phases.observe({ type: 'other', phase: 'script-entry', at: 1010 });
+  phases.observe({ type: 'erasure-profile', phase: 'unknown', at: 1010 });
+  phases.observe({ type: 'erasure-profile', phase: 'script-entry', at: Number.NaN });
+  for (const [index, phase] of ['script-entry', 'owners-imported', 'dependencies-imported', 'erase-start', 'barrier', 'barrier'].entries()) {
+    phases.observe({ type: 'erasure-profile', phase, at: 1000 + index });
+  }
+  expect(phases.report(false, false)).toEqual({});
+  const expected = { childPhases: [
+    { phase: 'script-entry', elapsedMs: 0 }, { phase: 'owners-imported', elapsedMs: 1 },
+    { phase: 'dependencies-imported', elapsedMs: 2 }, { phase: 'erase-start', elapsedMs: 3 }, { phase: 'barrier', elapsedMs: 4 },
+  ] };
+  expect(phases.report(true, false)).toEqual(expected);
+  expect(phases.report(false, true)).toEqual(expected);
+  expect(new ErasureCrashPhases(1000).report(true, false)).toEqual({ childPhases: [] });
+});
 
 it('preserves falsy original rejections', async () => {
   const owner = new OwnedStorageCase(); owner.begin();
@@ -48,3 +67,42 @@ it('isolates actual timed-out Jest callbacks before cleanup and subsequent admis
     expect((await fs.stat(path.join(root, 'blocked'))).isDirectory()).toBe(true);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 }, 30000);
+
+// CREATE itself is POSIX-only. These controls import that real suite and its
+// cleanup hook; the existing 10s case and hook budgets remain unchanged.
+(process.platform === 'win32' ? it.skip : it).each(['timeout', 'fail-fast', 'blocked'])(
+  'owns actual CREATE callback and admitted sibling work after %s', async mode => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'create-case-proof-'));
+    try {
+      const require = createRequire(import.meta.url);
+      const selected = mode === 'timeout'
+        ? 'fits compact phase evidence and completes Created[.]yaml with 100 existing memories$|controlled CREATE next case$'
+        : 'controlled CREATE (fail-fast sibling proof|next case)$';
+      const result = spawnSync(process.execPath, [require.resolve('jest/bin/jest'), '--config', 'tests/jest.config.cjs',
+        '--runInBand', '--no-coverage', '--testMatch', '**/createOwnership.fixture.ts',
+        '--testNamePattern', selected, '--json', '--outputFile', path.join(root, 'result.json')], {
+        cwd: process.cwd(), env: { PATH: process.env.PATH, HOME: process.env.HOME,
+          SystemRoot: process.env.SystemRoot ?? process.env.SYSTEMROOT, TMPDIR: root, TEMP: root, TMP: root,
+          NODE_OPTIONS: '--experimental-vm-modules --no-warnings', CREATE_OWNERSHIP_PROOF_ROOT: root, CREATE_OWNERSHIP_PROOF_MODE: mode },
+        encoding: 'utf8', timeout: 30000, maxBuffer: 4 * 1024 * 1024,
+      });
+      expect(result.error).toBeUndefined(); expect(result.signal).toBeNull(); expect(result.status).toBe(1);
+      const report = JSON.parse(await fs.readFile(path.join(root, 'result.json'), 'utf8'));
+      const cases = report.testResults[0].assertionResults.filter((item: { fullName: string }) => new RegExp(selected).test(item.fullName));
+      expect(cases.map((item: { status: string }) => item.status)).toEqual(['failed', mode === 'blocked' ? 'failed' : 'passed']);
+      const firstFailure = cases[0].failureMessages.join('\n');
+      if (mode === 'timeout') expect(firstFailure).toContain('Exceeded timeout of 10000 ms for a test');
+      else expect(firstFailure).toContain('CREATE controlled first failure');
+      const receipt = JSON.parse(await fs.readFile(path.join(root, 'receipt.json'), 'utf8'));
+      expect(receipt).toMatchObject({ siblingStarted: true, siblingSettled: true, cleanupBeforeSettlement: false,
+        removals: mode === 'blocked' ? 0 : 1, nextEntered: mode !== 'blocked', rootRetained: mode === 'blocked',
+        observer: mode === 'blocked' ? 'retained' : 'original' });
+      if (mode === 'blocked') {
+        expect(firstFailure).toContain('safe cleanup not established');
+        expect(cases[1].failureMessages.join('\n')).toContain('Previous storage case has not completed safe cleanup');
+      } else {
+        expect(receipt.events.indexOf('sibling-settled-with-resources')).toBeLessThan(receipt.events.indexOf('root-cleanup'));
+        expect(receipt.events.indexOf('root-cleanup')).toBeLessThan(receipt.events.indexOf('next-case'));
+      }
+    } finally { await fs.rm(root, { recursive: true, force: true }); }
+  }, 35000);

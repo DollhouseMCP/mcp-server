@@ -23,6 +23,22 @@ describe('UnicodeValidator', () => {
       expect(result.severity).toBeUndefined();
     });
 
+    test('preserves every printable ASCII character while retaining ASCII attack detection', () => {
+      const printableAscii = Array.from({ length: 95 }, (_, i) => String.fromCharCode(i + 32)).join('');
+      expect(UnicodeValidator.normalize(printableAscii)).toEqual({
+        isValid: true, normalizedContent: printableAscii, detectedIssues: undefined, severity: undefined,
+      });
+      const escapedAttack = String.raw`\u0061`.repeat(11);
+      expect(UnicodeValidator.normalize(escapedAttack)).toEqual({
+        isValid: false, normalizedContent: escapedAttack,
+        detectedIssues: ['Excessive Unicode escapes detected (11)'], severity: 'high',
+      });
+      expect(UnicodeValidator.normalize('safe\u0000payload')).toEqual({
+        isValid: false, normalizedContent: 'safepayload',
+        detectedIssues: ['Zero-width or non-printable characters detected'], severity: 'medium',
+      });
+    });
+
     test('should normalize Unicode to NFC form', () => {
       // é can be represented as single character (é) or as e + combining accent (é)
       const composed = 'café'; // Single character é

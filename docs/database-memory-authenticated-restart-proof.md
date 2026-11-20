@@ -21,7 +21,7 @@ A test-only preloader delegates to the actual provider, container and session me
 
 The console cases boot a separate fresh embedded/Postgres child using the real ordinary-role database readiness verifier, registrar, auth/session stores, actual auth_accounts subject, startup allowlist cutover and guarded qualifier. Generated cookies are inserted using the existing session/HMAC representation. They do not prove login, browser/OIDC authentication or allowlist sign-in admission. A healthy session without console:self is rejected by the actual schema CHECK; the normal un-elevated session cannot access the admin route and receives its actual step-up refusal.
 
-The private console mount evidence explicitly supplies fixture assertions for all eleven external checks below. **None is proved by these console tests**, even when related actual startup components execute:
+The console starts without a readiness evidence file, so the fixture supplies none. **None of the eleven deployment capabilities below is proved by these console tests**, even when related actual startup components execute:
 
 - production_database_migrations
 - security_invalidation_multi_replica

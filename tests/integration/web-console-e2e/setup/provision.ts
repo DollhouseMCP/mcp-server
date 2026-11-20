@@ -8,7 +8,7 @@
  * imports this module directly.
  */
 import { spawn, type ChildProcess, execFile } from 'node:child_process';
-import { createWriteStream, mkdirSync, writeFileSync } from 'node:fs';
+import { createWriteStream, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { promisify } from 'node:util';
@@ -104,8 +104,6 @@ export function bootApp(runDir: string): BootedApp {
   const b64 = () => randomBytes(32).toString('base64');
   const hex = () => randomBytes(32).toString('hex');
   const opaqueHmacKey = b64();
-  const evidencePath = path.join(runDir, 'replacement-readiness.json');
-  writeFileSync(evidencePath, JSON.stringify(readinessEvidence(), null, 2));
 
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -129,7 +127,6 @@ export function bootApp(runDir: string): BootedApp {
     DOLLHOUSE_HTTP_WEB_CONSOLE: 'false',
     DOLLHOUSE_WEB_AUTH_ENABLED: 'false',
     DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED: 'true',
-    DOLLHOUSE_WEB_CONSOLE_REPLACEMENT_READINESS_EVIDENCE: evidencePath,
     DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_NAME: DB_NAME,
     DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_USER: APP_ROLE,
     DOLLHOUSE_WEB_CONSOLE_PORTFOLIO_WRITE_ROUTES_ENABLED: 'true',
@@ -164,25 +161,4 @@ export function bootApp(runDir: string): BootedApp {
   child.stdout.pipe(logStream);
   child.stderr.pipe(logStream);
   return { child, opaqueHmacKey, logPath };
-}
-
-function readinessEvidence(): unknown {
-  const ids = [
-    'production_database_migrations', 'security_invalidation_multi_replica', 'allowlist_authority_parity',
-    'embedded_as_login_step_up', 'account_invite_redemption', 'oauth_grant_revocation',
-    'github_integration_connect_callback', 'portfolio_sync_live_repository',
-    'signing_key_auth_policy_multi_replica', 'approval_execution_projection', 'audit_telemetry_projection',
-  ];
-  return {
-    phase: 'pre-replacement',
-    composition: {
-      activationProfile: 'shared-hosted', storageBackend: 'postgres', apiV1MountCreated: true, routesMounted: false,
-      registeredRouteModuleIds: [
-        'auth', 'health', 'accountAdmin', 'activations', 'approvals', 'audit', 'executions', 'integrations',
-        'me-logs', 'operations', 'portfolio', 'runtimeSessions', 'security-admin', 'selfSecurity', 'selfService',
-        'session-telemetry',
-      ],
-    },
-    liveChecks: ids.map(id => ({ id, ready: true, detail: 'e2e/pw: verified by harness setup.' })),
-  };
 }

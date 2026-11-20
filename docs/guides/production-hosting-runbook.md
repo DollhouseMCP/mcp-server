@@ -116,7 +116,17 @@ DollhouseMCP ships an `auth_allowlist` table (DB mode) or `~/.dollhouse/auth/all
 
 When `REQUIRED=false` AND the server binds to a non-loopback host AND a social method (`github` / `magic-link`) is configured, a startup warning fires naming the open-sign-in risk. Set `REQUIRED=true` to silence it.
 
-**Managing the list:** the dedicated `dollhouse-allowlist` CLI. NOT exposed through MCP-AQL (security policy stays out of AI-mediated surfaces).
+**Managing the list:** the dedicated `dollhouse-allowlist` CLI, or the console's Accounts page on a hosted install. NOT exposed through MCP-AQL (security policy stays out of AI-mediated surfaces).
+
+**Which list the command changes.** On a hosted install (the embedded authorization server on PostgreSQL), sign-in uses the allowlist the console manages (`account_allowlist_entries`), and the command changes that one. It does not write the earlier `auth_allowlist` table there, which sign-in no longer reads. On any other install the command changes the storage layer's allowlist, as before.
+
+On a hosted install each change records which console admin made it:
+
+- with one console admin, that admin is recorded and nothing extra is needed;
+- with several, add `--as <username>` to say which one you are;
+- with none yet, designate the admin first with `dollhouse-admin-bootstrap`.
+
+Removing an entry there revokes it, as removing it in the console does: the identity is refused until it is added again.
 
 ```bash
 # Add by email
@@ -143,6 +153,30 @@ docker compose run --rm dollhousemcp \
 docker compose run --rm dollhousemcp \
   npx dollhouse-allowlist update --id <uuid> --note "new note"
 ```
+
+**If the server refuses to start with "Sign-in allowlist authority cutover refused".** The earlier `auth_allowlist` table holds entries that are not in the allowlist sign-in uses. Versions before this fix let `dollhouse-allowlist add` put them there on a hosted install. Sign-in does not honour them, and the server will not start while they remain. The message names the entries, by kind and value, in the server log; if your logs are shipped somewhere with stricter rules about personal data than the host itself, bear that in mind. Clear them with:
+
+```bash
+# Show what is left in the earlier allowlist. Changes nothing.
+docker compose run --rm dollhousemcp npx dollhouse-allowlist reconcile
+
+# Add the entries sign-in does not have to the allowlist it uses, then clear the earlier allowlist
+docker compose run --rm dollhousemcp npx dollhouse-allowlist reconcile --carry
+
+# Or clear the earlier allowlist without adding anything
+docker compose run --rm dollhousemcp npx dollhouse-allowlist reconcile --discard
+```
+
+`reconcile` never adds back an entry that an admin has since removed in the console; it reports it and clears it. Either flag normally leaves the earlier allowlist empty, after which the server starts.
+
+Two things can differ, because the earlier allowlist took any text and the console's does not:
+
+- **A value the console's allowlist does not accept** (a GitHub username with a character GitHub does not allow, an email with no domain) cannot be carried. `--carry` carries the rest, leaves that entry where it is, says why, and exits non-zero. Add a corrected entry with `dollhouse-allowlist add` if you still want it, then run `reconcile --discard` to clear what is left. The server does not start while such an entry remains.
+- **A note longer than 500 characters** is cut to fit when its entry is carried. The command prints the full note once, since the earlier copy is then cleared.
+
+While `--carry` or `--discard` runs, it holds off console changes to the identities it is working on, so a removal made in the console at the same moment is never overwritten. On a running server the same gap shows as `allowlist_parity` degraded in the console's Operations health, before a restart finds it.
+
+An install that is rolled back to a version from before the console managed the allowlist would read the earlier table again, which `reconcile` has emptied. Re-add the entries there after such a rollback.
 
 For **filesystem mode** (no DB), the same CLI works, OR you can edit `~/.dollhouse/auth/allowlist.json` directly — the server picks up changes within ~1 second via fsnotify, no restart needed.
 
@@ -955,7 +989,13 @@ sudo systemctl restart dollhousemcp
 sudo journalctl -u dollhousemcp -f
 ```
 
-Migrations run automatically on startup. Watch `/readyz` — it returns 503 with `reason: "migrations_pending"` during a migration window and 200 once everything is current.
+The server does not apply database migrations when it starts. Run the migration job for the new release (`docker compose --env-file .env.production run --rm dollhousemcp-migrate`, or `npm run db:migrate` for the bare binary), then watch `/readyz`. With the web console enabled, it returns 503 while the database is missing any of this release's migrations, and 200 once they are all applied. The response gives no reason: the server log names the first missing migration, and the console's Operations health shows `database_migrations` as not ready.
+
+"Missing" is the migration job's own rule: this release has a migration newer than the newest one the database has applied. That is the only migration result that returns 503.
+
+If every migration is applied but the database's record of them does not match this release entry for entry, the server keeps serving. This happens when a migration file was changed after a database had already applied it: the migration job never re-applies, so the record keeps the old file's hash. The server logs one error, "Applied migrations do not match this release; the server keeps serving", naming the first entry that differs, and Operations health shows `database_migrations` as degraded with `migrations_mismatch`. It means the record cannot prove the schema is the one this release expects, not that the schema is wrong. Compare the schema before relying on it.
+
+If the server's database role cannot read the migration ledger (`drizzle.__drizzle_migrations`), the server cannot check and keeps serving. It logs one warning that migrations are not verified, with the grant that fixes it, and Operations health shows `database_migrations` as degraded.
 
 Migration `0048` marks a non-GitHub integration credential that cannot be attributed to a provider descriptor as `status='error'` with `error_reason='revocation_failed'`. The encrypted credential is retained so it can still be revoked through its provider, and account deletion remains blocked with HTTP 409 and code `integration_credential_cleanup_pending` until the credential is resolved. There are two exits: the user can open the console integrations page and click **Disconnect** for the provider in the error state, or an administrator can repeat the account-deletion request with `integration_credential_cleanup_override: "abandon_unrevoked_provider_credentials"` in the request body to record an audited abandonment.
 
@@ -967,6 +1007,37 @@ The minimum-viable monitoring stack:
 - **Cert renewal alert.** Caddy renews automatically but log a daily check (`docker compose logs caddy | grep -i certificate`).
 - **Disk usage on the host.** Postgres growth + log retention can fill a disk fast. Alert at 80%.
 - **`/readyz`** is a stricter probe than `/healthz` — it returns 503 during bootstrap, mid-migration, or if Postgres is unreachable. Use this as the readiness gate in any load balancer.
+
+<a id="the-approvals-and-executions-canary"></a>
+
+#### The canary synthetic check
+
+The canary synthetic check is how the server verifies that approvals and executions display correctly.
+
+Pending approvals and agent executions are stored per user and per session, so the server cannot check that the console displays them without a session to look at. It does not look at a real user's. It keeps one reserved user for the purpose, `dollhousemcp-canary`, which is disabled, holds no role, has no sign-in identity and does not appear in the console's account list.
+
+A run of the canary synthetic check opens a session for that user, makes one approval request and one execution record the way a live session does, reads both back through the console's own handlers and privacy filters, and removes everything it made. A run is limited to 15 seconds.
+
+It runs only when asked:
+
+- **By an admin.** `POST /api/v1/admin/operate/canary/run` with the operator capability and admin elevation. The request is recorded in the admin audit as `operate.canary.run`. The answer is 200 whatever the check found, with the finding in the body.
+- **On a schedule, if you switch one on.** Set `DOLLHOUSE_WEB_CONSOLE_CANARY_INTERVAL_MINUTES` to between 5 and 720. The default is 0, which is no schedule. The first scheduled run is one interval after start-up. Each scheduled run is recorded as a security event from `WebConsoleCanary`, because there is no admin to audit it as.
+
+Operations health shows the last result on that server under the label "Canary synthetic check" (`approval_execution_projection` in the API):
+
+| Status | Meaning |
+|---|---|
+| Healthy | The last run passed, within the last 24 hours. |
+| No current result (`not_run`) | The canary synthetic check has not run on this server since it started, or its last pass is more than 24 hours old. This does not lower the overall status. |
+| Degraded | The last run found a fault or could not finish. The code says which: `canary_approval_not_readable`, `canary_execution_not_readable`, `canary_privacy_projection_failed`, `canary_user_not_inert`, `canary_cleanup_failed`, `canary_could_not_run` or `canary_timed_out`. It stays until a later run passes or the server restarts. |
+
+Things to know:
+
+- The result is held in memory by the server that ran it. With several replicas, each reports its own last run, and a restart goes back to no current result.
+- It never feeds `/readyz`. A failing canary synthetic check does not take a replica out of service.
+- It does not go over the network. It says nothing about the HTTP layer, the MCP handshake or whether a real client can connect.
+- `canary_user_not_inert` means the canary account has been changed: enabled, given a role or given a sign-in identity. The check refuses to run until the account is put back, because an account that can sign in must not be one the server writes to by itself.
+- If a server stops in the middle of a run, the records it made are removed at the next start-up or by the next run, once they are five minutes old. They belong to the canary user only.
 
 ### Logs
 
@@ -1201,4 +1272,5 @@ docker compose --env-file .env.production restart dollhousemcp
 - [Deployment Configuration](./deployment-configuration.md) — full env-var reference
 - [Secret Rotation Runbook](./secret-rotation-runbook.md) — per-secret rotation procedures
 - [Logging](./logging.md) — log queries, redaction, and the operational-logging section
+- [Console setup checks](./console-setup-checks.md) — what each check proves, how to read the status, how to qualify a deployment
 - [Console Authentication](./console-auth.md) — web console token, TOTP, rotation

@@ -438,6 +438,82 @@ validate_docker_log_max_file() {
   return 0
 }
 
+validate_caddy_image_reference() {
+  local image="$1"
+  [[ "${image}" =~ ^[a-z0-9][a-z0-9.-]*(:[0-9]+)?(/[a-z0-9]+([._-][a-z0-9]+)*)+@sha256:[0-9a-f]{64}$ ]] ||
+    die "DOLLHOUSE_HOSTED_CADDY_IMAGE must be a registry/repository@sha256 digest reference"
+}
+
+validate_caddy_volume_name() {
+  local name="$1"
+  [[ "${name}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]] || die "Caddy volume must be an explicit safe name"
+}
+
+validate_caddy_selection() {
+  local image="$1" data_volume="$2" config_volume="$3"
+  validate_caddy_image_reference "${image}"
+  validate_caddy_volume_name "${data_volume}"
+  validate_caddy_volume_name "${config_volume}"
+  [[ "${data_volume}" != "${config_volume}" ]] || die "Caddy data and config require distinct explicit named volumes"
+}
+
+validate_persisted_caddy_fields() {
+  [[ -f "${ENV_FILE}" ]] || return 0
+  local line value image_count=0 data_count=0 config_count=0
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    [[ "${line}" =~ ^[[:space:]]*\# || "${line}" =~ ^[[:space:]]*$ ]] && continue
+    if [[ "${line}" =~ ^[[:space:]]*(export[[:space:]]+)?(CADDY_IMAGE|CADDY_DATA_VOLUME|CADDY_CONFIG_VOLUME|CADDY_ADMISSION_RECEIPT|CADDY_RECOVERY_VERIFIED|CADDY_KEEP_PROXY|CADDY_TRANSITION_TOKEN|PREVIOUS_BUNDLE|HOSTED_CADDY_[A-Z_]+)= ]]; then
+      die "Internal Caddy aliases are forbidden in the deployment environment file"
+    fi
+    case "${line}" in
+      DOLLHOUSE_HOSTED_CADDY_IMAGE=*) image_count=$((image_count+1)); value="${line#*=}"; validate_caddy_image_reference "${value}" ;;
+      DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME=*) data_count=$((data_count+1)); value="${line#*=}"; validate_caddy_volume_name "${value}" ;;
+      DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME=*) config_count=$((config_count+1)); value="${line#*=}"; validate_caddy_volume_name "${value}" ;;
+      *DOLLHOUSE_HOSTED_CADDY_IMAGE=*|*DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME=*|*DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME=*)
+        die "Caddy deployment environment fields must use literal unquoted assignments" ;;
+      *) : ;;
+    esac
+  done < "${ENV_FILE}"
+  (( image_count <= 1 && data_count <= 1 && config_count <= 1 )) || die "Duplicate Caddy deployment fields are forbidden"
+}
+
+validate_registry_reference() {
+  local image="$1"
+  [[ "${image}" =~ ^[a-z0-9][a-z0-9.-]*(:[0-9]+)?(/[a-z0-9]+([._-][a-z0-9]+)*)+@sha256:[0-9a-f]{64}$ ]] ||
+    die "hosted image must use a registry/repository@sha256 digest reference"
+}
+
+validate_registry_selection() {
+  case "${IMAGE_MODE}" in
+    build) [[ -z "${RUNTIME_IMAGE}" && -z "${MIGRATION_IMAGE}" ]] || die "build mode cannot use registry image selectors" ;;
+    registry)
+      validate_registry_reference "${RUNTIME_IMAGE}"
+      validate_registry_reference "${MIGRATION_IMAGE}"
+      [[ "${RUNTIME_IMAGE}" != "${MIGRATION_IMAGE}" ]] || die "runtime and migration images must be distinct"
+      ;;
+    *) die "DOLLHOUSE_HOSTED_IMAGE_MODE must be build or registry" ;;
+  esac
+}
+
+validate_persisted_registry_fields() {
+  [[ -f "${ENV_FILE}" ]] || return 0
+  local line value mode_count=0 runtime_count=0 migration_count=0
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    [[ "${line}" =~ ^[[:space:]]*\# || "${line}" =~ ^[[:space:]]*$ ]] && continue
+    if [[ "${line}" =~ ^[[:space:]]*(export[[:space:]]+)?(IMAGE_MODE|RUNTIME_IMAGE|MIGRATION_IMAGE|REGISTRY_ADMISSION)= ]]; then
+      die "Internal image aliases are forbidden in the deployment environment file"
+    fi
+    case "${line}" in
+      DOLLHOUSE_HOSTED_IMAGE_MODE=*) mode_count=$((mode_count+1)); value="${line#*=}"; [[ "${value}" == build || "${value}" == registry ]] || die "invalid persisted image mode" ;;
+      DOLLHOUSE_HOSTED_RUNTIME_IMAGE=*) runtime_count=$((runtime_count+1)); value="${line#*=}"; [[ -z "${value}" ]] || validate_registry_reference "${value}" ;;
+      DOLLHOUSE_HOSTED_MIGRATION_IMAGE=*) migration_count=$((migration_count+1)); value="${line#*=}"; [[ -z "${value}" ]] || validate_registry_reference "${value}" ;;
+      *DOLLHOUSE_HOSTED_IMAGE_MODE*|*DOLLHOUSE_HOSTED_RUNTIME_IMAGE*|*DOLLHOUSE_HOSTED_MIGRATION_IMAGE*) die "hosted image fields must use literal unquoted assignments" ;;
+      *) : ;;
+    esac
+  done < "${ENV_FILE}"
+  (( mode_count <= 1 && runtime_count <= 1 && migration_count <= 1 )) || die "duplicate hosted image fields are forbidden"
+}
+
 validate_render_inputs() {
   resolve_mode_defaults
   validate_bool DOLLHOUSE_AUTH_OPEN_DCR "${OPEN_DCR}"
@@ -454,8 +530,11 @@ validate_render_inputs() {
   validate_bind_address
   validate_no_whitespace DOLLHOUSE_HTTP_ALLOWED_HOSTS "${ALLOWED_HOSTS}"
   validate_trusted_proxy_list DOLLHOUSE_TRUSTED_PROXIES "${TRUSTED_PROXIES}"
+  validate_persisted_caddy_fields
+  validate_caddy_selection "${CADDY_IMAGE}" "${CADDY_DATA_VOLUME}" "${CADDY_CONFIG_VOLUME}"
   validate_bool DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG "${CADDY_ACCESS_LOG}"
   validate_cidr_list DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES "${CADDY_TRUSTED_PROXIES}"
+  validate_registry_selection
   validate_render_value DOLLHOUSE_HOSTED_IMAGE_TAG "${IMAGE_TAG}"
   validate_render_value DOLLHOUSE_HOSTED_MEM_LIMIT "${MEM_LIMIT}"
   validate_render_value DOLLHOUSE_HOSTED_CPUS "${CPU_LIMIT}"

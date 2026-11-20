@@ -59,8 +59,8 @@ with the supported preview (`:3199`) or manual `docker/poc` smoke setup (`:3001`
 ## How it works
 
 - **Auto-boot** (`setup/globalSetup.ts`): provisions an isolated DB + app role +
-  grants, runs migrations, marks auth bootstrap, generates ephemeral secrets +
-  readiness evidence, boots the app via `tsx`, waits for health, tears down after.
+  grants, runs migrations, marks auth bootstrap, generates ephemeral secrets,
+  boots the app via `tsx`, waits for health, tears down after.
 - **Sessions** (`harness/forgeSession.ts`): the HTTP suite plants
   `console_sessions` rows directly to get a session at any privilege tier
   (anonymous / user / admin-unelevated / admin-elevated) without driving login —

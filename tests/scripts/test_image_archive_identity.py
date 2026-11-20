@@ -10,7 +10,8 @@ import tarfile
 import tempfile
 import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
-from image_archive_identity import verify_saved_image, verify_fixed_runner, sha
+from image_archive_identity import verify_saved_image, verify_saved_image_file, verify_fixed_runner, sha
+import image_archive_identity as identity
 
 
 def encoded(value):
@@ -25,10 +26,15 @@ def layer(data=b'owned content'):
     return out.getvalue()
 
 
-def fixture(modern=False, indexed=False, wrong_diff=False, arch="amd64"):
+def fixture(modern=False, indexed=False, wrong_diff=False, arch="amd64", source=None, labels=None):
+    if source is not None and labels is not None:
+        raise ValueError('Use either source or labels for a fixture')
     raw = layer(); compressed = gzip.compress(raw, mtime=0) if modern else raw
-    config = encoded({'os': 'linux', 'architecture': arch, 'rootfs': {'type': 'layers',
-                     'diff_ids': [sha(b'wrong') if wrong_diff else sha(raw)]}})
+    config_data = {'os': 'linux', 'architecture': arch, 'rootfs': {'type': 'layers',
+                   'diff_ids': [sha(b'wrong') if wrong_diff else sha(raw)]}}
+    if source is not None: config_data['config'] = {'Labels': {'org.dollhousemcp.engine-proof-source': source}}
+    if labels is not None: config_data['config'] = {'Labels': labels}
+    config = encoded(config_data)
     config_id = sha(config); layer_id = sha(compressed)
     config_path = 'blobs/sha256/' + config_id[7:] if modern else config_id[7:] + '.json'
     layer_path = 'blobs/sha256/' + layer_id[7:] if modern else 'classic/layer.tar'
@@ -61,6 +67,40 @@ def write_archive(root, members):
 
 
 class ImageGraphTests(unittest.TestCase):
+    def test_nonobject_descriptors_refuse_before_archive_parser_for_both_apis(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'archive'; path.write_bytes(b'inert')
+            for value in ('descriptor', [], 7):
+                with self.subTest(value=value), patch.object(identity, 'SavedImage') as parser:
+                    with self.assertRaisesRegex(ValueError, 'Admission descriptor'):
+                        verify_saved_image(path, 'sha256:' + 'a' * 64, 1024, value)
+                    with path.open('rb') as stream:
+                        with self.assertRaisesRegex(ValueError, 'Admission descriptor'):
+                            verify_saved_image_file(stream, 'sha256:' + 'a' * 64, 1024, value)
+                        with self.assertRaisesRegex(ValueError, 'Inspection descriptor'):
+                            verify_saved_image_file(stream, 'sha256:' + 'a' * 64, 1024, inspection_descriptor=value)
+                    parser.assert_not_called()
+
+    def test_fd_api_rejects_unbacked_or_nonregular_streams_before_parsing(self):
+        import os
+        stream = io.BytesIO(b'not an archive')
+        with self.assertRaisesRegex(ValueError, 'open regular file'):
+            verify_saved_image_file(stream, 'sha256:' + 'a' * 64, 1024)
+        with open(os.devnull, 'rb') as device:
+            with self.assertRaisesRegex(ValueError, 'open regular file'):
+                verify_saved_image_file(device, 'sha256:' + 'a' * 64, 1024)
+
+    def test_classic_descriptor_and_store_mismatch_have_distinct_failures(self):
+        members, store, _, _, size = fixture()
+        with tempfile.TemporaryDirectory() as d:
+            path = write_archive(Path(d), members)
+            descriptor = {'digest': store, 'size': 1, 'mediaType': 'fixture'}
+            with self.assertRaisesRegex(ValueError, 'does not support an inspect descriptor'):
+                verify_saved_image(path, store, size, descriptor)
+            with self.assertRaisesRegex(ValueError, 'config identity'):
+                verify_saved_image(path, 'sha256:' + 'f' * 64, size)
+
     def test_classic_config_id_and_real_diffid_are_verified(self):
         members, store, config, desc, size = fixture()
         with tempfile.TemporaryDirectory() as d:
@@ -182,6 +222,104 @@ class ImageGraphTests(unittest.TestCase):
             wrong = copy.deepcopy(desc); wrong['platform']['architecture'] = 'arm64'
             with self.assertRaises(ValueError): verify_saved_image(path, store, size, wrong)
 
+    def test_retained_direct_single_manifest_can_bind_missing_platform_to_config(self):
+        source = 'a' * 40
+        for arch in ('amd64', 'arm64'):
+            members, store, config, desc, size = fixture(True, arch=arch, source=source)
+            del desc['platform']
+            members['index.json'] = encoded({'schemaVersion': 2, 'manifests': [desc]})
+            with self.subTest(arch=arch), tempfile.TemporaryDirectory() as d:
+                path = write_archive(Path(d), members)
+                for identity_value, role in ((store, 'manifest'), (config, 'config')):
+                    graph = verify_saved_image(path, identity_value, size, desc, platform='linux/'+arch, expected_source=source)
+                    self.assertEqual(graph['store_id_role'], role)
+                    self.assertEqual(graph['unpacked_layer_bytes'], size)
+                    with path.open('rb') as stream:
+                        self.assertEqual(verify_saved_image_file(stream, identity_value, size, desc, platform='linux/'+arch, expected_source=source)['store_id_role'], role)
+                with self.assertRaisesRegex(ValueError, 'source label'):
+                    verify_saved_image(path, store, size, desc, platform='linux/'+arch, expected_source='b'*40)
+                self.assertEqual(verify_saved_image(path, store, size, None, platform='linux/'+arch, expected_source=source)['store_id_role'], 'manifest')
+                with path.open('rb') as stream:
+                    self.assertEqual(verify_saved_image_file(stream, store, size, None, platform='linux/'+arch, expected_source=source, inspection_descriptor=desc)['store_id_role'], 'manifest')
+                null_platform = {**desc, 'platform': None}
+                with self.assertRaisesRegex(ValueError, 'Inspect descriptor'):
+                    verify_saved_image(path, store, size, null_platform, platform='linux/'+arch, expected_source=source)
+                with path.open('rb') as stream:
+                    with self.assertRaisesRegex(ValueError, 'Inspect descriptor'):
+                        verify_saved_image_file(stream, store, size, None, platform='linux/'+arch, expected_source=source, inspection_descriptor=null_platform)
+                wrong = {**desc, 'platform': {'os':'linux', 'architecture':arch}}
+                with self.assertRaisesRegex(ValueError, 'Inspect descriptor'):
+                    verify_saved_image(path, store, size, wrong, platform='linux/'+arch, expected_source=source)
+                with self.assertRaises(ValueError):
+                    verify_saved_image(path, store, size-1, desc, platform='linux/'+arch, expected_source=source)
+                other_arch = 'arm64' if arch == 'amd64' else 'amd64'
+                with self.assertRaisesRegex(ValueError, 'platform'):
+                    verify_saved_image(path, store, size, desc, platform='linux/'+other_arch, expected_source=source)
+                with path.open('rb') as stream:
+                    with self.assertRaisesRegex(ValueError, 'Inspect descriptor'):
+                        verify_saved_image_file(stream, store, size, desc, platform='linux/'+arch, expected_source=source, inspection_descriptor=wrong)
+
+    def test_unknown_source_kind_fails_before_opening_archive(self):
+        for source in (None, 'a' * 40):
+            with self.subTest(source=source), self.assertRaisesRegex(ValueError, 'Unknown image source kind'):
+                verify_saved_image(Path('not-opened.tar'), 'sha256:' + '0' * 64, 100, expected_source=source, source_kind='unknown')
+
+    def test_caddy_requires_explicit_mode_and_both_bound_labels(self):
+        source = 'a' * 40
+        revision = {'org.opencontainers.image.revision': source}
+        distribution = {'org.dollhousemcp.caddy.distribution': 'source-rebuilt-security-candidate'}
+        for labels in (revision, revision | distribution):
+            with tempfile.TemporaryDirectory() as tmp:
+                members, store, _, _, size = fixture(modern=True, labels=labels)
+                path = write_archive(Path(tmp), members)
+                with self.assertRaisesRegex(ValueError, 'source label mismatch'):
+                    verify_saved_image(path, store, size, expected_source=source)
+                if labels == revision:
+                    with self.assertRaisesRegex(ValueError, 'retained Caddy'):
+                        verify_saved_image(path, store, size, expected_source=source, source_kind='caddy')
+                else:
+                    graph = verify_saved_image(path, store, size, expected_source=source, source_kind='caddy')
+                    self.assertEqual(graph['store_id'], store)
+                    with self.assertRaisesRegex(ValueError, 'retained Caddy'):
+                        verify_saved_image(path, store, size, expected_source=None, source_kind='caddy')
+                    with self.assertRaisesRegex(ValueError, 'source label mismatch'):
+                        verify_saved_image(path, store, size, expected_source='b' * 40, source_kind='caddy')
+
+    def test_retained_missing_platform_fallback_refuses_explicit_invalid_and_multiple_roots(self):
+        source = 'a' * 40
+        for value in (None, {}, '', False, [], {'os':'linux','architecture':'arm64'}, {'os':'windows','architecture':'amd64'}):
+            members, store, _, desc, size = fixture(True, source=source)
+            desc['platform'] = value; members['index.json'] = encoded({'schemaVersion':2, 'manifests':[desc]})
+            with self.subTest(platform=value), tempfile.TemporaryDirectory() as d:
+                path = write_archive(Path(d), members)
+                with self.assertRaises(ValueError): verify_saved_image(path, store, size, desc, expected_source=source)
+        members, store, _, desc, size = fixture(True, source=source)
+        del desc['platform']; other = {**desc, 'platform': {'os':'linux', 'architecture':'arm64'}}
+        members['index.json'] = encoded({'schemaVersion':2, 'manifests':[desc, other]})
+        with tempfile.TemporaryDirectory() as d:
+            path = write_archive(Path(d), members)
+            with self.assertRaisesRegex(ValueError, 'platform'):
+                verify_saved_image(path, store, size, desc, expected_source=source)
+
+    def test_retained_missing_platform_fallback_refuses_nested_graph_and_bad_layer(self):
+        source = 'a' * 40
+        members, store, config, root, size = fixture(True, indexed=True, source=source)
+        nested = json.loads(members['blobs/sha256/'+store[7:]])
+        child = nested['manifests'][0]; del child['platform']
+        data = encoded(nested); root = {**root, 'digest':sha(data), 'size':len(data)}
+        members['blobs/sha256/'+root['digest'][7:]] = data
+        members['index.json'] = encoded({'schemaVersion':2, 'manifests':[root]})
+        with tempfile.TemporaryDirectory() as d:
+            path = write_archive(Path(d), members)
+            with self.assertRaisesRegex(ValueError, 'platform'):
+                verify_saved_image(path, config, size, root, expected_source=source)
+        members, store, _, desc, size = fixture(True, wrong_diff=True, source=source)
+        del desc['platform']; members['index.json'] = encoded({'schemaVersion':2, 'manifests':[desc]})
+        with tempfile.TemporaryDirectory() as d:
+            path = write_archive(Path(d), members)
+            with self.assertRaisesRegex(ValueError, 'diffID'):
+                verify_saved_image(path, store, size, desc, expected_source=source)
+
     def test_arm_data_requires_explicit_platform_and_matching_descriptor(self):
         for modern in (False, True):
             members, store, _, desc, size = fixture(modern, arch='arm64')
@@ -207,6 +345,28 @@ class ImageGraphTests(unittest.TestCase):
         bad = copy.deepcopy(evidence); bad['config_digest'] = 'sha256:' + 'e' * 64
         with self.assertRaisesRegex(ValueError, 'independent config'):
             verify_fixed_runner(bad, reference)
+
+    def test_classic_runner_requires_exact_config_store_identity(self):
+        reference = Path(__file__).resolve().parents[2] / '.github/grype-runner-reference'
+        config = 'sha256:04f59b17d8d39a8fdeb138fecb8fcbaa6e208ed7b6db929c7e98ad9005e0a52f'
+        evidence = {'format': 'classic-docker', 'store_id_role': 'config', 'store_id': config,
+                    'config_digest': config, 'root_digest': None, 'manifest_digest': None}
+        self.assertEqual(verify_fixed_runner(evidence, reference)['container_image_id'], config)
+        for key, bad in [('store_id', 'sha256:' + 'f' * 64), ('store_id_role', 'manifest')]:
+            changed = copy.deepcopy(evidence); changed[key] = bad
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'Classic runner store identity'):
+                verify_fixed_runner(changed, reference)
+
+    def test_fixed_oci_runner_retains_distinct_store_aliases(self):
+        reference = Path(__file__).resolve().parents[2] / '.github/grype-runner-reference'
+        root = 'sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66'
+        manifest = 'sha256:c83040f7e24bacea68e58a0b96a484ba430bf24abb2973eab7ba4701144b7b63'
+        config = 'sha256:04f59b17d8d39a8fdeb138fecb8fcbaa6e208ed7b6db929c7e98ad9005e0a52f'
+        for role, identifier in [('index', root), ('manifest', manifest), ('config', config)]:
+            evidence = {'format': 'oci-with-docker-manifest', 'store_id_role': role, 'store_id': identifier,
+                        'root_digest': root, 'manifest_digest': manifest, 'config_digest': config}
+            with self.subTest(role=role):
+                self.assertEqual(verify_fixed_runner(evidence, reference)['container_image_id'], identifier)
 
 
 if __name__ == '__main__':

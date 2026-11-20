@@ -6,15 +6,18 @@ import {
   InMemoryConsoleTelemetryQuery,
   createOperationsModule,
   executeConsoleRoute,
+  projectCanaryRun,
   projectOperatorConfigList,
   projectOperatorConfigSetting,
   projectOperationHealthComponent,
   projectOperationHealthSummary,
   projectOperationalLogs,
   projectOperationalMetrics,
+  projectSetupStatus,
   projectSystemMetrics,
   type ConsoleRouteDefinition,
   type ISystemMetricsSource,
+  type OperationsCanary,
   type OperationsHealthChecks,
 } from '../../../../src/web-console/index.js';
 import { OPERATION_HEALTH_COMPONENTS } from '../../../../src/web-console/modules/operations/OperationsHealth.js';
@@ -34,6 +37,8 @@ const SYSTEM_METRICS_PATH = '/api/v1/admin/operate/metrics/system';
 const OPERATE_CONFIG_PATH = '/api/v1/admin/operate/config';
 const LICENSE_KEY_PATH = '/api/v1/admin/operate/config/:key';
 const CONSOLE_PORT_KEY = 'console.port';
+const CANARY_RUN_PATH = '/api/v1/admin/operate/canary/run';
+const SETUP_STATUS_PATH = '/api/v1/admin/operate/setup-status';
 type ConsoleRouteRequest = Parameters<ConsoleRouteDefinition['handler']>[0];
 
 class RacingOperatorConfigStore extends InMemoryOperatorConfigStore {
@@ -79,13 +84,31 @@ const HEALTH_CHECKS: OperationsHealthChecks = {
 function createModule(
   healthChecks: OperationsHealthChecks = HEALTH_CHECKS,
   telemetry = createTelemetry(),
+  canary?: OperationsCanary,
 ) {
   return createOperationsModule({
     healthChecks,
     telemetry,
     operatorConfigStore: new InMemoryOperatorConfigStore(),
+    ...(canary ? { canary } : {}),
     now: () => NOW,
   });
+}
+
+function canaryThatFinds(state: 'passed' | 'pending' | 'failed', code: string, detail: string) {
+  const triggers: string[] = [];
+  const canary: OperationsCanary = {
+    run: trigger => {
+      triggers.push(trigger);
+      return Promise.resolve({
+        result: { id: 'approval_execution_projection', state, code, detail } as Awaited<ReturnType<OperationsCanary['run']>>['result'],
+        trigger,
+        startedAt: NOW,
+        finishedAt: new Date(NOW.getTime() + 180),
+      });
+    },
+  };
+  return { canary, triggers };
 }
 
 function createTelemetry(logCount = 1): InMemoryConsoleTelemetryQuery {
@@ -301,6 +324,314 @@ describe('OperationsModule', () => {
           failure_codes: ['security_invalidation_processor_not_ready'],
         },
       ]),
+    });
+  });
+
+  it('leaves database migrations out of health when there is no ledger to check', async () => {
+    const route = findRoute(createModule().routes, 'GET', '/api/v1/admin/operate/health');
+    const result = await route.handler({ query: {}, params: {} } as unknown as ConsoleRouteRequest);
+    const summary = projectOperationHealthSummary(result.body);
+    expect(summary.components.map(component => component.component)).toEqual([
+      'database', 'auth_server', 'gatekeeper', 'runtime_control', 'security_invalidation', 'api_mount',
+    ]);
+  });
+
+  it.each([
+    ['ok', [], 'ok'],
+    ['not_ready', ['migrations_incomplete'], 'degraded'],
+    ['degraded', ['migration_ledger_unreadable'], 'degraded'],
+  ] as const)('reports database migrations as %s with its stable code', async (status, codes, overall) => {
+    const healthy = { ...HEALTH_CHECKS,
+      securityInvalidation: () => true,
+      apiMount: () => true,
+      databaseMigrations: () => ({
+        component: 'database_migrations' as const, status, checked_at: NOW.toISOString(), failure_codes: [...codes],
+      }),
+    };
+    const route = findRoute(createModule(healthy).routes, 'GET', '/api/v1/admin/operate/health');
+    const result = await route.handler({ query: {}, params: {} } as unknown as ConsoleRouteRequest);
+
+    // A database behind the release is a readiness fault, not an outage of this surface.
+    expect(result.status).toBe(200);
+    const summary = projectOperationHealthSummary(result.body);
+    expect(summary.status).toBe(overall);
+    expect(summary.components.map(component => component.component)).toEqual([
+      'database', 'auth_server', 'gatekeeper', 'runtime_control', 'security_invalidation', 'database_migrations', 'api_mount',
+    ]);
+    expect(summary.components.find(component => component.component === 'database_migrations')).toEqual({
+      component: 'database_migrations', status, checked_at: NOW.toISOString(), failure_codes: [...codes],
+    });
+  });
+
+  it.each([
+    ['ok', [], 'ok'],
+    ['degraded', ['allowlist_entries_not_carried_over'], 'degraded'],
+    ['degraded', ['allowlists_unreadable'], 'degraded'],
+  ] as const)('reports allowlist parity as %s with its stable code, after database migrations', async (status, codes, overall) => {
+    const healthy = { ...HEALTH_CHECKS,
+      securityInvalidation: () => true,
+      apiMount: () => true,
+      databaseMigrations: () => true,
+      allowlistParity: () => ({
+        component: 'allowlist_parity' as const, status, checked_at: NOW.toISOString(), failure_codes: [...codes],
+      }),
+    };
+    const route = findRoute(createModule(healthy).routes, 'GET', '/api/v1/admin/operate/health');
+    const result = await route.handler({ query: {}, params: {} } as unknown as ConsoleRouteRequest);
+
+    // A gap between the allowlists affects some sign-ins; the console itself still answers.
+    expect(result.status).toBe(200);
+    const summary = projectOperationHealthSummary(result.body);
+    expect(summary.status).toBe(overall);
+    expect(summary.components.map(component => component.component)).toEqual([
+      'database', 'auth_server', 'gatekeeper', 'runtime_control', 'security_invalidation',
+      'database_migrations', 'allowlist_parity', 'api_mount',
+    ]);
+    expect(summary.components.find(component => component.component === 'allowlist_parity')).toEqual({
+      component: 'allowlist_parity', status, checked_at: NOW.toISOString(), failure_codes: [...codes],
+    });
+  });
+
+  it.each([
+    ['ok', [], 'ok'],
+    ['degraded', ['audit_or_telemetry_unreadable'], 'degraded'],
+    ['degraded', ['admin_audit_chain_broken'], 'degraded'],
+    ['degraded', ['admin_audit_integrity_unverified'], 'degraded'],
+  ] as const)('reports audit and telemetry as %s with its stable code, just before the API mount', async (status, codes, overall) => {
+    const healthy = { ...HEALTH_CHECKS,
+      securityInvalidation: () => true,
+      apiMount: () => true,
+      auditTelemetry: () => ({
+        component: 'audit_telemetry' as const, status, checked_at: NOW.toISOString(), failure_codes: [...codes],
+      }),
+    };
+    const route = findRoute(createModule(healthy).routes, 'GET', '/api/v1/admin/operate/health');
+    const result = await route.handler({ query: {}, params: {} } as unknown as ConsoleRouteRequest);
+
+    // An audit page that cannot display is a console fault; this surface still answers.
+    expect(result.status).toBe(200);
+    const summary = projectOperationHealthSummary(result.body);
+    expect(summary.status).toBe(overall);
+    expect(summary.components.map(component => component.component)).toEqual([
+      'database', 'auth_server', 'gatekeeper', 'runtime_control', 'security_invalidation', 'audit_telemetry', 'api_mount',
+    ]);
+    expect(summary.components.find(component => component.component === 'audit_telemetry')).toEqual({
+      component: 'audit_telemetry', status, checked_at: NOW.toISOString(), failure_codes: [...codes],
+    });
+  });
+
+  it.each([
+    ['ok', [], 'ok'],
+    // Nobody has asked for a run. That is not a fault, so the deployment still reads as healthy.
+    ['not_run', [], 'ok'],
+    ['degraded', ['canary_approval_not_readable'], 'degraded'],
+    ['degraded', ['canary_timed_out'], 'degraded'],
+  ] as const)('reports the approvals and executions canary as %s with its stable code, just before the API mount', async (status, codes, overall) => {
+    const healthy = { ...HEALTH_CHECKS,
+      securityInvalidation: () => true,
+      apiMount: () => true,
+      auditTelemetry: () => true,
+      approvalExecutionProjection: () => ({
+        component: 'approval_execution_projection' as const, status, checked_at: NOW.toISOString(), failure_codes: [...codes],
+      }),
+    };
+    const route = findRoute(createModule(healthy).routes, 'GET', '/api/v1/admin/operate/health');
+    const result = await route.handler({ query: {}, params: {} } as unknown as ConsoleRouteRequest);
+
+    expect(result.status).toBe(200);
+    const summary = projectOperationHealthSummary(result.body);
+    expect(summary.status).toBe(overall);
+    expect(summary.components.map(component => component.component)).toEqual([
+      'database', 'auth_server', 'gatekeeper', 'runtime_control', 'security_invalidation',
+      'audit_telemetry', 'approval_execution_projection', 'api_mount',
+    ]);
+    expect(summary.components.find(component => component.component === 'approval_execution_projection')).toEqual({
+      component: 'approval_execution_projection', status, checked_at: NOW.toISOString(), failure_codes: [...codes],
+    });
+  });
+
+  it('does not offer the canary where there is nothing for it to check', () => {
+    const module = createModule();
+
+    expect(module.routes.some(route => route.path === CANARY_RUN_PATH)).toBe(false);
+    expect(module.auditOperations).not.toContainEqual({ id: 'operate.canary.run' });
+  });
+
+  it('offers the canary run as an audited, elevated operator action that must carry an idempotency key', () => {
+    const module = createModule(HEALTH_CHECKS, createTelemetry(), canaryThatFinds('passed', 'canary_passed', 'ok').canary);
+
+    expect(findRoute(module.routes, 'POST', CANARY_RUN_PATH)).toMatchObject({
+      audience: 'admin',
+      requiredCapability: OPERATE_CAPABILITY,
+      elevation: 'admin_30m',
+      privacyClass: OPERATIONAL_PRIVACY,
+      idempotency: 'required',
+      auditOperation: 'operate.canary.run',
+    });
+    expect(module.auditOperations).toContainEqual({ id: 'operate.canary.run' });
+  });
+
+  it.each([
+    ['passed', 'canary_passed', 'Created, read back through the console and removed.'],
+    ['failed', 'canary_approval_not_readable', 'The console did not list the approval request.'],
+    ['pending', 'canary_timed_out', 'The canary did not finish, so nothing is verified.'],
+  ] as const)('runs the canary for the admin and answers 200 with what it found (%s)', async (state, code, detail) => {
+    const { canary, triggers } = canaryThatFinds(state, code, detail);
+    const route = findRoute(createModule(HEALTH_CHECKS, createTelemetry(), canary).routes, 'POST', CANARY_RUN_PATH);
+
+    const result = await executeConsoleRoute(route, { query: {}, params: {}, headers: {}, body: {} } as unknown as ConsoleRouteRequest);
+
+    // The request to run it succeeded whatever it found; the finding is in the body.
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual({
+      check: 'approval_execution_projection',
+      state,
+      code,
+      detail,
+      trigger: 'admin',
+      started_at: NOW.toISOString(),
+      finished_at: new Date(NOW.getTime() + 180).toISOString(),
+    });
+    expect(triggers).toEqual(['admin']);
+  });
+
+  it('projects a canary run by allowlist rather than source object shape', () => {
+    expect(projectCanaryRun({
+      state: 'failed',
+      code: 'canary_approval_not_readable',
+      detail: 'x'.repeat(600),
+      trigger: 'schedule',
+      started_at: NOW.toISOString(),
+      finished_at: NOW.toISOString(),
+      session_id: MUST_NOT_LEAK,
+      result: { connection_string: MUST_NOT_LEAK },
+    })).toEqual({
+      check: 'approval_execution_projection',
+      state: 'failed',
+      code: 'canary_approval_not_readable',
+      detail: 'x'.repeat(500),
+      trigger: 'schedule',
+      started_at: NOW.toISOString(),
+      finished_at: NOW.toISOString(),
+    });
+    // Anything unrecognised reads as "nothing verified", never as a pass.
+    expect(projectCanaryRun({ state: 'ok', code: 'not a code', trigger: 'someone' })).toEqual({
+      check: 'approval_execution_projection', state: 'pending', code: '', detail: '', trigger: 'admin', started_at: '', finished_at: '',
+    });
+  });
+
+  it('keeps the "not run" status through the health projector', () => {
+    expect(projectOperationHealthComponent({
+      component: 'approval_execution_projection', status: 'not_run', checked_at: NOW.toISOString(), failure_codes: [],
+    })).toEqual({
+      component: 'approval_execution_projection', status: 'not_run', checked_at: NOW.toISOString(), failure_codes: [],
+    });
+  });
+
+  it('does not offer the setup status where nothing reports on it', () => {
+    const module = createModule();
+
+    expect(module.routes.some(route => route.path === SETUP_STATUS_PATH)).toBe(false);
+    expect(module.auditOperations).not.toContainEqual({ id: 'operate.setup_status.show' });
+  });
+
+  it('offers the setup status to elevated operators only, as an audited read', async () => {
+    const { WEB_CONSOLE_SETUP_CHECKS, listWebConsoleSetupCheckStatuses } = await import('../../../../src/web-console/setup/index.js');
+    const observedAt = new Date(NOW.getTime() - 60_000);
+    const module = createOperationsModule({
+      healthChecks: HEALTH_CHECKS,
+      telemetry: createTelemetry(),
+      operatorConfigStore: new InMemoryOperatorConfigStore(),
+      setupStatus: () => Promise.resolve({
+        checkedAt: NOW,
+        checks: listWebConsoleSetupCheckStatuses([
+          { id: 'production_database_migrations', state: 'failed', detail: 'Migration 0061 is missing.' },
+          { id: 'embedded_as_login_step_up', state: 'passed', detail: 'An administrator has elevated.', observedAt },
+          { id: 'account_invite_redemption', state: 'not_applicable' },
+        ]),
+      }),
+      now: () => NOW,
+    });
+    const route = findRoute(module.routes, 'GET', SETUP_STATUS_PATH);
+
+    expect(route).toMatchObject({
+      audience: 'admin',
+      requiredCapability: OPERATE_CAPABILITY,
+      elevation: 'admin_30m',
+      privacyClass: OPERATIONAL_PRIVACY,
+      idempotency: 'not_applicable',
+      auditOperation: 'operate.setup_status.show',
+    });
+    expect(module.auditOperations).toContainEqual({ id: 'operate.setup_status.show' });
+
+    const result = await executeConsoleRoute(route, { query: {}, params: {}, headers: {} } as unknown as ConsoleRouteRequest);
+    const body = result.body as ReturnType<typeof projectSetupStatus>;
+
+    expect(result.status).toBe(200);
+    expect(body.checked_at).toBe(NOW.toISOString());
+    expect(body.checks).toHaveLength(11);
+    expect(body.counts).toEqual({ passed: 1, pending: 8, failed: 1, not_applicable: 1 });
+    const migrations = WEB_CONSOLE_SETUP_CHECKS.production_database_migrations;
+    expect(body.checks[0]).toEqual({
+      id: 'production_database_migrations',
+      title: migrations.title,
+      proves: migrations.proves,
+      verification: 'server-probe',
+      verified_by: migrations.verifiedBy,
+      remediation: migrations.remediation,
+      state: 'failed',
+      detail: 'Migration 0061 is missing.',
+      observed_at: null,
+    });
+    expect(body.checks.find(check => check.id === 'embedded_as_login_step_up')).toMatchObject({
+      state: 'passed', detail: 'An administrator has elevated.', observed_at: observedAt.toISOString(),
+    });
+    // A check nothing reported on is pending, with no detail.
+    expect(body.checks.find(check => check.id === 'oauth_grant_revocation')).toMatchObject({ state: 'pending', detail: null });
+  });
+
+  it('projects the setup status by allowlist, taking each check\'s wording from the catalog and not from the value', async () => {
+    const { WEB_CONSOLE_SETUP_CHECKS } = await import('../../../../src/web-console/setup/index.js');
+
+    const projected = projectSetupStatus({
+      checked_at: NOW.toISOString(),
+      connection_string: MUST_NOT_LEAK,
+      checks: [
+        {
+          id: 'github_integration_connect_callback',
+          title: MUST_NOT_LEAK,
+          remediation: MUST_NOT_LEAK,
+          state: 'passed',
+          detail: 'd'.repeat(600),
+          observed_at: 'not a time',
+          user_id: MUST_NOT_LEAK,
+        },
+        { id: 'not_a_check', state: 'passed', detail: MUST_NOT_LEAK },
+        { id: 'oauth_grant_revocation', state: 'verified', detail: 42 },
+      ],
+    });
+
+    expect(JSON.stringify(projected)).not.toContain(MUST_NOT_LEAK);
+    expect(projected.checks.map(check => check.id)).toEqual(['github_integration_connect_callback', 'oauth_grant_revocation']);
+    expect(projected.checks[0]).toMatchObject({
+      title: WEB_CONSOLE_SETUP_CHECKS.github_integration_connect_callback.title,
+      remediation: WEB_CONSOLE_SETUP_CHECKS.github_integration_connect_callback.remediation,
+      detail: 'd'.repeat(500),
+      observed_at: null,
+    });
+    // A state the console does not know reads as pending, never as passed.
+    expect(projected.checks[1]).toMatchObject({ state: 'pending', detail: null });
+    expect(projected.counts).toEqual({ passed: 1, pending: 1, failed: 0, not_applicable: 0 });
+  });
+
+  it('reports a migration check that throws as unavailable rather than failing the whole summary', async () => {
+    const checks = { ...HEALTH_CHECKS, databaseMigrations: () => { throw new Error('boom'); } };
+    const route = findRoute(createModule(checks).routes, 'GET', '/api/v1/admin/operate/health');
+    const result = await route.handler({ query: {}, params: {} } as unknown as ConsoleRouteRequest);
+    expect(projectOperationHealthSummary(result.body).components
+      .find(component => component.component === 'database_migrations')).toEqual({
+      component: 'database_migrations', status: 'unavailable', checked_at: NOW.toISOString(),
+      failure_codes: ['database_migrations_check_failed'],
     });
   });
 

@@ -5,13 +5,21 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 HOSTED_DEPLOY="${REPO_ROOT}/scripts/hosted-deploy.sh"
+export DOLLHOUSE_HOSTED_CADDY_IMAGE="${DOLLHOUSE_HOSTED_CADDY_IMAGE:-registry.example.test/team/caddy@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
+export DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME="${DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME:-fixture_data}"
+export DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME="${DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME:-fixture_config}"
+# The fake delegates non-mocked Python calls to this explicit real interpreter.
+DOLLHOUSE_FAKE_PYTHON="${DOLLHOUSE_FAKE_PYTHON:-$(command -v python3)}"
+"${DOLLHOUSE_FAKE_PYTHON}" -c 'import sys; sys.exit("Python 3.11 or newer required" if sys.version_info < (3, 11) else 0)'
+export DOLLHOUSE_FAKE_PYTHON
 TMP_ROOT="$(mktemp -d)"
+TMP_ROOT="$(cd "${TMP_ROOT}" && pwd -P)"
 FAKE_BIN="${TMP_ROOT}/bin"
 DOCKER_LOG="${TMP_ROOT}/docker.log"
 CURL_LOG="${TMP_ROOT}/curl.log"
 
 cleanup() {
-  if [[ -n "${TMP_ROOT:-}" && -d "${TMP_ROOT}" && "${TMP_ROOT}" == "${TMPDIR:-/tmp}"* ]]; then
+  if [[ -n "${TMP_ROOT:-}" && -d "${TMP_ROOT}" && "${TMP_ROOT}" == "$(cd "${TMPDIR:-/tmp}" && pwd -P)"/* ]]; then
     rm -R "${TMP_ROOT}"
   fi
 }
@@ -25,6 +33,17 @@ fail() {
   printf '[hosted-deploy-workflow-test] error: %s\n' "$*" >&2
   exit 1
 }
+
+log "checking commented and active Caddy environment fields"
+COMMENT_ENV="${TMP_ROOT}/commented.env"
+printf '  # DOLLHOUSE_HOSTED_CADDY_IMAGE=example\n\t# CADDY_IMAGE=example\n  \n' > "${COMMENT_ENV}"
+bash -c 'source "$1"; ENV_FILE="$2"; die() { exit 1; }; validate_persisted_caddy_fields' \
+  _ "${REPO_ROOT}/scripts/hosted-deploy/validation.sh" "${COMMENT_ENV}" || fail "comments should be ignored"
+printf 'export DOLLHOUSE_HOSTED_CADDY_IMAGE=unsafe\n' >> "${COMMENT_ENV}"
+if bash -c 'source "$1"; ENV_FILE="$2"; die() { exit 1; }; validate_persisted_caddy_fields' \
+  _ "${REPO_ROOT}/scripts/hosted-deploy/validation.sh" "${COMMENT_ENV}"; then
+  fail "active unsafe Caddy assignment should be refused"
+fi
 
 assert_contains() {
   local file="$1"
@@ -58,6 +77,11 @@ printf 'docker %s\n' "$*" >> "${DOLLHOUSE_FAKE_DOCKER_LOG:?}"
 
 if [[ "${1:-}" == "compose" && "${2:-}" == "version" ]]; then
   printf 'Docker Compose version fake\n'
+  exit 0
+fi
+
+if [[ "${1:-}" == inspect && "${3:-}" == '{{.Config.User}}|{{.State.Running}}' ]]; then
+  printf '1001:1001|true\n'
   exit 0
 fi
 
@@ -167,16 +191,84 @@ fi
 exit 0
 EOF
 
-  chmod +x "${FAKE_BIN}/docker" "${FAKE_BIN}/curl"
+  cat > "${FAKE_BIN}/python3" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  */caddy_image_admission.py) printf '{}\n' ;;
+  */caddy_transition_action.py)
+    cat >/dev/null
+    case "${2:-}" in
+      status) printf 'none\n' ;;
+      begin-fresh|begin-update|begin-rollback) printf 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' ;;
+      start-proxy) printf 'compose\n' ;;
+      select-rollback|select-proxy) printf '%s/server.prev-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' "${DOLLHOUSE_HOSTED_DEPLOY_DIR:?}" ;;
+      stage|bind-admission) printf 'ok\n' ;;
+      finish)
+        [[ "$(cat "${DOLLHOUSE_HOSTED_DEPLOY_DIR:?}/.fixture-caddy-phase")" == released ]] || exit 1
+        printf 'release:finish\n' >> "${DOLLHOUSE_FAKE_DOCKER_LOG:?}"
+        printf 'ok\n' ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  */caddy_recover_action.py) cat >/dev/null; printf '{"restored_id":"%064d","preserved_replacement_id":"%064d"}\n' 1 2 ;;
+  */caddy_rollback_guard.py) cat >/dev/null ;;
+  */caddy_release_action.py)
+    payload="$(cat)"
+    action="${2:-}"
+    phase_file="${DOLLHOUSE_HOSTED_DEPLOY_DIR:?}/.fixture-caddy-phase"
+    printf 'release:%s\n' "${action}" >> "${DOLLHOUSE_FAKE_DOCKER_LOG:?}"
+    case "${action}" in
+      prepare) next=prepared ;;
+      confirm) [[ "$(cat "${phase_file}")" == prepared ]] || exit 1; next=fenced ;;
+      probe-fence) [[ "$(cat "${phase_file}")" == fenced ]] || exit 1; next=probed ;;
+      accept)
+        [[ "$(cat "${phase_file}")" == probed ]] || exit 1
+        base="$(printf '%s' "${payload}" | "${DOLLHOUSE_FAKE_PYTHON:?}" -c 'import json,sys; print(json.load(sys.stdin)["public_base_url"])')"
+        allow_bootstrap="$(printf '%s' "${payload}" | "${DOLLHOUSE_FAKE_PYTHON:?}" -c 'import json,sys; print(json.load(sys.stdin)["allow_bootstrap"])')"
+        for probe in healthz readyz mcp; do
+          body_file="${phase_file}.body"
+          status="$(curl -o "${body_file}" -w '%{http_code}' "${base}/${probe}")"
+          case "${probe}:${status}" in
+            healthz:200|readyz:200|mcp:401) ;;
+            readyz:503)
+              [[ "${allow_bootstrap}" == True ]] && grep -Fq bootstrap_required "${body_file}" || exit 1
+              printf '[hosted-deploy] warning: /readyz reports bootstrap_required\n' >&2 ;;
+            *) exit 1 ;;
+          esac
+        done
+        rm -f "${body_file}"
+        next=accepted ;;
+      release) [[ "$(cat "${phase_file}")" == accepted ]] || exit 1; next=released ;;
+      *) exit 1 ;;
+    esac
+    printf '%s\n' "${next}" > "${phase_file}"
+    ;;
+  */caddy_fresh_action.py|*/caddy_fresh_recheck.py|*/caddy_prestart_action.py|*/caddy_verify_noop_action.py) cat >/dev/null; printf '{}\n' ;;
+  */caddy_unchanged_action.py)
+    cat >/dev/null
+    printf '%s/server.prev-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' "${DOLLHOUSE_HOSTED_DEPLOY_DIR:?}"
+    ;;
+  *) exec "${DOLLHOUSE_FAKE_PYTHON:?}" "$@" ;;
+esac
+EOF
+
+  cat > "${FAKE_BIN}/flock" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+
+  chmod +x "${FAKE_BIN}/docker" "${FAKE_BIN}/curl" "${FAKE_BIN}/python3" "${FAKE_BIN}/flock"
 }
 
 create_source_repo() {
   SOURCE_REPO="${TMP_ROOT}/source"
-  mkdir -p "${SOURCE_REPO}/docker"
+  mkdir -p "${SOURCE_REPO}/docker" "${SOURCE_REPO}/src/cli"
   git -C "${SOURCE_REPO}" init -q
   git -C "${SOURCE_REPO}" config user.email "test@example.com"
   git -C "${SOURCE_REPO}" config user.name "Hosted Deploy Test"
-  printf 'FROM scratch\n' > "${SOURCE_REPO}/docker/Dockerfile"
+  printf 'FROM scratch\nFROM production AS migration\n' > "${SOURCE_REPO}/docker/Dockerfile"
+  : > "${SOURCE_REPO}/src/cli/migrate-database.ts"
   printf '{"scripts":{"db:migrate":"echo migrate"}}\n' > "${SOURCE_REPO}/package.json"
   printf 'v1' > "${SOURCE_REPO}/version.txt"
   git -C "${SOURCE_REPO}" add .
@@ -240,11 +332,84 @@ DOLLHOUSE_HOSTED_SOURCE_DIR="${SOURCE_REPO}" \
 [[ ! -s "${DOCKER_LOG}" ]] || fail "dry-run install should not call docker"
 [[ ! -s "${CURL_LOG}" ]] || fail "dry-run install should not call curl"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would run database migrations"
+assert_contains "${DRY_RUN_OUTPUT}" "would retain a verified unchanged hardened caddy proxy; otherwise pull and admit"
+assert_contains "${DRY_RUN_OUTPUT}" "retaining an unchanged qualified caddy proxy when applicable"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would apply post-migration database grants"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would write ${DRY_RUN_DEPLOY_DIR}/apply-post-migration-grants.sh to pass grant passwords through container environment"
-assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would write ${DRY_RUN_DEPLOY_DIR}/bootstrap-admin.sh to use the admin database URL inside the maintenance container"
+assert_contains "${DRY_RUN_OUTPUT}" "dry-run: hosted bootstrap requires the administrator database URL inside the maintenance container"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would verify https://mcp.example.com/healthz"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would warn, not fail, if /readyz reports bootstrap_required"
+PATH="${FAKE_BIN}:${PATH}" \
+DOLLHOUSE_FAKE_DOCKER_LOG="${DOCKER_LOG}" \
+DOLLHOUSE_FAKE_CURL_LOG="${CURL_LOG}" \
+DOLLHOUSE_HOSTED_DEPLOY_DIR="${DRY_RUN_DEPLOY_DIR}" \
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+DOLLHOUSE_HOSTED_SOURCE_DIR="${SOURCE_REPO}" \
+  bash "${HOSTED_DEPLOY}" --dry-run update > "${DRY_RUN_OUTPUT}"
+assert_contains "${DRY_RUN_OUTPUT}" "retain an unchanged qualified caddy proxy or refresh it after admission"
+[[ ! -s "${DOCKER_LOG}" && ! -s "${CURL_LOG}" ]] || fail "dry-run update must not call docker or curl"
+
+PATH="${FAKE_BIN}:${PATH}" \
+DOLLHOUSE_FAKE_DOCKER_LOG="${DOCKER_LOG}" \
+DOLLHOUSE_FAKE_CURL_LOG="${CURL_LOG}" \
+DOLLHOUSE_HOSTED_DEPLOY_DIR="${DRY_RUN_DEPLOY_DIR}" \
+DOLLHOUSE_HOSTED_CADDY_IMAGE="registry.example.test/team/caddy@sha256:$(printf 'a%.0s' {1..64})" \
+DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME="new-data" DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME="new-config" \
+  bash "${HOSTED_DEPLOY}" --dry-run prepare-caddy-offline > "${DRY_RUN_OUTPUT}"
+assert_contains "${DRY_RUN_OUTPUT}" "ingress would remain closed"
+[[ ! -e "${DRY_RUN_DEPLOY_DIR}" && ! -s "${DOCKER_LOG}" && ! -s "${CURL_LOG}" ]] || fail "offline preparation dry-run must not mutate or contact Docker"
+
+for boot_action in abandon-caddy-offline accept-caddy-restart; do
+  PATH="${FAKE_BIN}:${PATH}" \
+  DOLLHOUSE_FAKE_DOCKER_LOG="${DOCKER_LOG}" \
+  DOLLHOUSE_FAKE_CURL_LOG="${CURL_LOG}" \
+  DOLLHOUSE_HOSTED_DEPLOY_DIR="${DRY_RUN_DEPLOY_DIR}" DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+  DOLLHOUSE_HOSTED_CADDY_IMAGE="registry.example.test/team/caddy@sha256:$(printf 'a%.0s' {1..64})" \
+  DOLLHOUSE_HOSTED_CADDY_DATA_VOLUME="new-data" DOLLHOUSE_HOSTED_CADDY_CONFIG_VOLUME="new-config" \
+    bash "${HOSTED_DEPLOY}" --dry-run "${boot_action}" > "${DRY_RUN_OUTPUT}"
+  assert_contains "${DRY_RUN_OUTPUT}" "public legacy acceptance"
+  [[ ! -e "${DRY_RUN_DEPLOY_DIR}" && ! -s "${DOCKER_LOG}" && ! -s "${CURL_LOG}" ]] || fail "${boot_action} dry-run must not mutate or contact Docker"
+done
+
+log "checking digest render and persisted selectors"
+REGISTRY_DIR="${TMP_ROOT}/registry-render"
+REG_RUNTIME="registry.example.test/team/runtime@sha256:$(printf 'c%.0s' {1..64})"
+REG_MIGRATION="registry.example.test/team/migration@sha256:$(printf 'd%.0s' {1..64})"
+PATH="${FAKE_BIN}:${PATH}" DOLLHOUSE_HOSTED_DEPLOY_DIR="${REGISTRY_DIR}" \
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com DOLLHOUSE_HOSTED_IMAGE_MODE=registry \
+DOLLHOUSE_HOSTED_RUNTIME_IMAGE="${REG_RUNTIME}" DOLLHOUSE_HOSTED_MIGRATION_IMAGE="${REG_MIGRATION}" \
+  bash "${HOSTED_DEPLOY}" render > "${TMP_ROOT}/registry-render.out"
+assert_contains "${REGISTRY_DIR}/compose.yml" "image: ${REG_RUNTIME}"
+assert_contains "${REGISTRY_DIR}/compose.yml" "image: ${REG_MIGRATION}"
+if grep -q '^    build:' "${REGISTRY_DIR}/compose.yml"; then fail "registry render retained a build section"; fi
+PATH="${FAKE_BIN}:${PATH}" DOLLHOUSE_HOSTED_DEPLOY_DIR="${REGISTRY_DIR}" \
+  bash "${HOSTED_DEPLOY}" render > "${TMP_ROOT}/registry-rerender.out"
+assert_contains "${REGISTRY_DIR}/compose.yml" "image: ${REG_RUNTIME}"
+assert_contains "${REGISTRY_DIR}/compose.yml" "image: ${REG_MIGRATION}"
+REGISTRY_ROLLBACK_LOG="${TMP_ROOT}/registry-rollback-docker.log"
+: > "${REGISTRY_ROLLBACK_LOG}"
+if PATH="${FAKE_BIN}:${PATH}" DOLLHOUSE_FAKE_DOCKER_LOG="${REGISTRY_ROLLBACK_LOG}" \
+  DOLLHOUSE_HOSTED_DEPLOY_DIR="${REGISTRY_DIR}" DOLLHOUSE_HOSTED_IMAGE_MODE=build \
+  bash "${HOSTED_DEPLOY}" rollback > "${TMP_ROOT}/registry-rollback.out" 2>&1; then
+  fail "build override bypassed persisted registry rollback refusal"
+fi
+assert_contains "${TMP_ROOT}/registry-rollback.out" 'cannot switch an existing registry deployment to build mode in place'
+if grep -Ev '^docker compose version$' "${REGISTRY_ROLLBACK_LOG}" | grep -q .; then fail "registry rollback override invoked Docker mutation"; fi
+BAD_BUILD_DIR="${TMP_ROOT}/registry-malformed-build"
+mkdir -p "${BAD_BUILD_DIR}"
+sed 's/^DOLLHOUSE_HOSTED_IMAGE_MODE=registry$/DOLLHOUSE_HOSTED_IMAGE_MODE=build/' "${REGISTRY_DIR}/.env.production" > "${BAD_BUILD_DIR}/.env.production"
+: > "${REGISTRY_ROLLBACK_LOG}"
+if PATH="${FAKE_BIN}:${PATH}" DOLLHOUSE_FAKE_DOCKER_LOG="${REGISTRY_ROLLBACK_LOG}" \
+  DOLLHOUSE_HOSTED_DEPLOY_DIR="${BAD_BUILD_DIR}" bash "${HOSTED_DEPLOY}" rollback > "${TMP_ROOT}/registry-malformed-rollback.out" 2>&1; then
+  fail "build mode with registry selectors allowed rollback"
+fi
+assert_contains "${TMP_ROOT}/registry-malformed-rollback.out" 'build mode cannot use registry image selectors'
+if grep -Ev '^docker compose version$' "${REGISTRY_ROLLBACK_LOG}" | grep -q .; then fail "malformed rollback invoked Docker mutation"; fi
+printf 'export DOLLHOUSE_HOSTED_RUNTIME_IMAGE=unsafe\n' >> "${REGISTRY_DIR}/.env.production"
+if PATH="${FAKE_BIN}:${PATH}" DOLLHOUSE_HOSTED_DEPLOY_DIR="${REGISTRY_DIR}" \
+  bash "${HOSTED_DEPLOY}" render > "${TMP_ROOT}/registry-unsafe.out" 2>&1; then
+  fail "unsafe persisted registry selector was accepted"
+fi
 
 log "checking HTTP verification retries"
 : > "${CURL_LOG}"
@@ -292,43 +457,68 @@ DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
 DOLLHOUSE_HOSTED_SOURCE_DIR="${SOURCE_REPO}" \
 DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=dummy-client \
 DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=dummy-secret \
-  bash "${HOSTED_DEPLOY}" install > "${BOOTSTRAP_OUTPUT}" 2>&1
+  bash "${HOSTED_DEPLOY}" install > "${BOOTSTRAP_OUTPUT}" 2>&1 || { cat "${BOOTSTRAP_OUTPUT}" >&2; fail "bootstrap-required install failed"; }
 assert_contains "${BOOTSTRAP_OUTPUT}" "/readyz reports bootstrap_required"
 
+log "checking each acceptance failure retains the fence"
+for probe in HEALTHZ READYZ MCP; do
+  failure_dir="${TMP_ROOT}/acceptance-${probe}"
+  failure_log="${TMP_ROOT}/acceptance-${probe}.docker.log"
+  if env PATH="${FAKE_BIN}:${PATH}" DOLLHOUSE_FAKE_PYTHON="${DOLLHOUSE_FAKE_PYTHON}" \
+    DOLLHOUSE_FAKE_DOCKER_LOG="${failure_log}" DOLLHOUSE_FAKE_CURL_LOG="${CURL_LOG}" \
+    DOLLHOUSE_FAKE_CURL_STATE_DIR="${TMP_ROOT}/acceptance-${probe}-curl" \
+    "DOLLHOUSE_FAKE_${probe}_STATUS_SEQUENCE=500" \
+    DOLLHOUSE_HOSTED_DEPLOY_DIR="${failure_dir}" DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+    DOLLHOUSE_HOSTED_SOURCE_DIR="${SOURCE_REPO}" DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=dummy-client \
+    DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=dummy-secret \
+      bash "${HOSTED_DEPLOY}" install > "${TMP_ROOT}/acceptance-${probe}.out" 2>&1; then
+    fail "${probe} acceptance failure unexpectedly passed"
+  fi
+  assert_file_equals "${failure_dir}/.fixture-caddy-phase" probed
+  if grep -Fxq 'release:release' "${failure_log}" || [[ -e "${failure_dir}/DEPLOYED_REVISION" ]]; then
+    fail "${probe} acceptance failure released ingress or wrote the deployment marker"
+  fi
+done
+
 log "running install workflow"
+DOCKER_LOG="${TMP_ROOT}/docker-install.log"
 run_hosted install
 assert_file_equals "${DEPLOY_DIR}/server/version.txt" "v1"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} build dollhousemcp dollhousemcp-migrate"
-assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} run --rm dollhousemcp-migrate"
+assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} run --rm --pull never --no-deps dollhousemcp-migrate"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} exec -T postgres /usr/local/bin/apply-post-migration-grants"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} pull caddy"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d"
 assert_contains "${CURL_LOG}" "https://mcp.example.com/healthz"
+expected_phases=$'release:prepare\nrelease:confirm\nrelease:probe-fence\nrelease:accept\nrelease:release\nrelease:finish'
+[[ "$(grep '^release:' "${DOCKER_LOG}")" == "${expected_phases}" ]] || fail "release phases are out of order"
 
 log "running update workflow"
+DOCKER_LOG="${TMP_ROOT}/docker-update.log"
 commit_source_version "v2"
 run_hosted update
 assert_file_equals "${DEPLOY_DIR}/server/version.txt" "v2"
 previous_bundle="$(latest_dir 'server.prev-*')"
 [[ -n "${previous_bundle}" ]] || fail "expected update to retain a previous server bundle"
 assert_file_equals "${previous_bundle}/version.txt" "v1"
-assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d dollhousemcp"
-assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} pull caddy"
-assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d --no-deps --force-recreate caddy"
+assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d --pull never --no-build --no-deps --force-recreate dollhousemcp"
+if grep -Fq "${COMPOSE_CMD} pull caddy" "${DOCKER_LOG}"; then fail "unchanged proxy was unexpectedly pulled during update"; fi
 
 log "running bootstrap-admin workflow"
+DOCKER_LOG="${TMP_ROOT}/docker-bootstrap.log"
 run_hosted_with_bootstrap bootstrap-admin octocat
-assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} run --rm dollhousemcp-migrate /usr/local/bin/dollhouse-bootstrap-admin --method github --github-username octocat"
+assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} run --rm --pull never --no-deps dollhousemcp-migrate node dist/cli/admin-bootstrap.js --require-admin-url --method github --github-username octocat"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} exec -T postgres /usr/local/bin/apply-post-migration-grants"
 
 log "running rollback workflow"
+DOCKER_LOG="${TMP_ROOT}/docker-rollback.log"
 run_hosted rollback
 assert_file_equals "${DEPLOY_DIR}/server/version.txt" "v1"
 rollback_bundle="$(latest_dir 'server.rollback-from-*')"
 [[ -n "${rollback_bundle}" ]] || fail "expected rollback to retain the rolled-back current bundle"
 assert_file_equals "${rollback_bundle}/version.txt" "v2"
-assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} pull caddy"
-assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d dollhousemcp caddy"
+if grep -Fq "${COMPOSE_CMD} pull caddy" "${DOCKER_LOG}"; then fail "proxy recovery unexpectedly pulled caddy during rollback"; fi
+assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d --pull never --no-build --no-deps --force-recreate dollhousemcp"
 
 log "checking invalid source error"
 bad_output="${TMP_ROOT}/bad-source.out"

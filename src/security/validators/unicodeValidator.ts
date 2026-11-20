@@ -253,6 +253,11 @@ export class UnicodeValidator {
    * Replace confusable Unicode characters with ASCII equivalents
    */
   private static replaceConfusables(content: string): { normalized: string; hasConfusables: boolean } {
+    // Every mapping key is non-ASCII. Other validation and security logging
+    // still run in normalize(); only the inapplicable mapping scan is avoided.
+    if (!/\P{ASCII}/u.test(content)) {
+      return { normalized: content, hasConfusables: false };
+    }
     let normalized = content;
     let hasConfusables = false;
 

@@ -1,0 +1,136 @@
+{
+  "scope": "Exact retained image compiled-code control-flow evidence; no whole-image runtime/native qualification.",
+  "archive_sha256": "3324e25e3b6be147bdd396fced766abde54781061fbe1e0f9d49dca136f1d45e",
+  "manifest_store_id": "sha256:13d294b73a003c602676a8978f3ec27f2ab820fc45bf597eebc072629216c64a",
+  "config_digest": "sha256:2ba0fe4a3d0192990d2cf6ad0d4a4dc0f8d60022bcc0ec8278edc6d0bca6a6fd",
+  "image_revision_label": "e5449665b24907a3b3b01353ac8bbe0f4f3ee3e6",
+  "static_manifest_sha256": "70c7aab621714c09e25dae4deac16b407a59256da9b654d216c500259711b811",
+  "files": {
+    "app/dist/handlers/mcp-aql/MemorySaveHandler.js": "85461597a44e824454be0482a8c2521994c89be2fc4e6e2b01a2375a61129388",
+    "app/dist/handlers/mcp-aql/MCPAQLHandler.js": "a4ad108c5e5b852329968d7d258c134b26ea53068fa466cd1301e6108e2dd77e",
+    "app/dist/di/SessionContainer.js": "999a92a0d17fa35d5ef65e82a7e1e52e9fb964d43bfde56a780d6a9a026ddc8b",
+    "app/dist/server/StreamableHttpServer.js": "a22bc2fe3c442fe483cef9f2b31ed67e7d75bda39765f1f04ccc428d191ae16d",
+    "app/dist/di/Container.js": "25287f4053b5cfffa67676fe63f70cbcdbe0e3df60ab973fed59dd19faffb4e2",
+    "app/dist/index.js": "10be410d736084240c14f791f79729f6481fd27cc4d4100c76675d2c8ce41025",
+    "app/dist/storage/MemoryIndexFile.js": "ef750ff88819f2304711aed67cf0a8d2779101785957f10db83dd82643f7fde1",
+    "app/dist/storage/MemoryStorageLayer.js": "8ed0f9238d60c1b16da3f2c65baaf92f772e31e54ce3dc72a6db855a9ae0d0e4",
+    "app/dist/elements/base/BaseElementManager.js": "d283bdf91d5dfe12c0f9711a8b89247b519ef77bf3eb14fb2ac0d75b8873acf7",
+    "app/dist/elements/memories/MemoryManager.js": "2161db4ed37ecf63f496de671c9170fe6c36674881d08b2fcdd4d682c70972a9",
+    "app/dist/security/validation/BackgroundValidator.js": "bd3d4b844bc4ce94d12c2b3d2ff3e7dce16891cf4058e5922fa989a788bb4ce8",
+    "app/dist/config/performance-constants.js": "e7911940dcbcad15cbef5ad9eab33a855c9ba3a3f7997774f73e4cc94ca70ba8"
+  },
+  "fragments": {
+    "appendValidated": {
+      "source": "app/dist/handlers/mcp-aql/MemorySaveHandler.js",
+      "full_file_sha256": "85461597a44e824454be0482a8c2521994c89be2fc4e6e2b01a2375a61129388",
+      "start_line": 444,
+      "end_line": 500,
+      "method_sha256": "00662fc13aac33784d8e21a66ef458b1d39a256f3b5093406d6003d6c67d45ed",
+      "compiled_bytes": "    async appendValidated(memoryName, targetMemory, manager, saveKey, priorFailure, input) {\n        const { content, tags, metadata, origin } = input;\n        const failure = origin.bindingCheck ? this.failedMemorySaves.get(saveKey) : priorFailure;\n        if (origin.bindingCheck)\n            this.checkCurrentRetained(saveKey, targetMemory);\n        // Issue #2329: if a previous save of this memory failed (e.g. disk error),\n        // recover before accepting more entries \u2014 otherwise they pile up in RAM\n        // behind the same failure and are lost on restart.\n        this.checkOrigin(origin);\n        this.requireLegacyDeferred(manager);\n        if (failure) {\n            try {\n                await this.runInOrigin(failure, () => this.saveMemoryTracked(saveKey, targetMemory, failure.manager, failure));\n                this.checkOrigin(origin);\n            }\n            catch (retryErr) {\n                throw this.retainedSaveRetryCause(memoryName, failure, retryErr);\n            }\n        }\n        const before = targetMemory.captureAppendState();\n        const policyRemovedBefore = targetMemory.getPolicyRemovedCount();\n        const candidate = targetMemory.createAppendCandidate();\n        let entryResult;\n        // Issue #2329: verify the memory can still be persisted BEFORE reporting\n        // success. The disk write below is deferred (debounced), so a validation\n        // failure there can never reach the caller \u2014 entries were acknowledged with\n        // an id and then silently lost when the memory outgrew save limits.\n        try {\n            entryResult = await candidate.addEntry(content, tags, metadata);\n            await manager.assertPersistable(candidate);\n        }\n        catch (validationErr) {\n            throw new Error(`Entry NOT saved to memory '${memoryName}': ` +\n                `${validationErr instanceof Error ? validationErr.message : validationErr}`);\n        }\n        if (origin.bindingCheck)\n            this.checkCurrentRetained(saveKey, targetMemory);\n        this.checkOrigin(origin);\n        this.requireLegacyDeferred(manager);\n        if (!targetMemory.commitAppendCandidate(before, candidate, entryResult)) {\n            throw new Error(`Entry NOT saved to memory '${memoryName}': memory changed during validation, so the append was not applied. ` +\n                `Check the current memory and retry.`);\n        }\n        this.trackSaveFrequency(memoryName);\n        this.debouncedMemorySave(memoryName, targetMemory, manager, origin);\n        // Issue #2859: removals are never silent. Expired entries and, for memories\n        // with onFull 'evict_oldest', the oldest entries can be removed by this add.\n        const removedCount = targetMemory.getPolicyRemovedCount() - policyRemovedBefore;\n        // Entry prose begins as untrusted. Return only server-generated receipt\n        // fields so the mutation response cannot bypass later rendering controls.\n        return {\n            id: entryResult.id,\n            timestamp: entryResult.timestamp.toISOString(),\n            trustLevel: entryResult.trustLevel,\n            ...this.removalWarningFields(memoryName, removedCount),\n        };\n    }\n"
+    },
+    "debouncedMemorySave": {
+      "source": "app/dist/handlers/mcp-aql/MemorySaveHandler.js",
+      "full_file_sha256": "85461597a44e824454be0482a8c2521994c89be2fc4e6e2b01a2375a61129388",
+      "start_line": 562,
+      "end_line": 600,
+      "method_sha256": "06255425fc2b5546a62bd63ae2675b9a5469a3042e68c1553f7fa0dc318a9dfa",
+      "compiled_bytes": "    debouncedMemorySave(memoryName, memory, manager, origin) {\n        this.requireLegacyDeferred(manager);\n        const key = this.memorySaveKey(memoryName);\n        // Capture the originating per-user context now, while a request context is\n        // active, so a shutdown flush (which runs with none) can re-establish it.\n        this.checkOrigin(origin);\n        const existing = this.pendingSaves.get(key);\n        if (existing) {\n            clearTimeout(existing.timer);\n            this.debounceMetrics.coalesced++;\n            logger.debug(`[MCPAQLHandler] Coalesced save for memory '${memoryName}' (pending: ${this.pendingSaves.size}, coalesced: ${this.debounceMetrics.coalesced}, written: ${this.debounceMetrics.written})`);\n        }\n        let queued;\n        const timer = setTimeout(() => {\n            if (this.observeDeferredRefusal(manager))\n                return;\n            if (!origin.bindingCheck) {\n                this.pendingSaves.delete(key);\n                this.debounceMetrics.written++;\n                logger.debug(`[MCPAQLHandler] Flushing debounced save for memory '${memoryName}' (coalesced: ${this.debounceMetrics.coalesced}, written: ${this.debounceMetrics.written})`);\n                this.saveMemoryTracked(key, memory, manager, origin).catch(err => {\n                    logger.error(`[MCPAQLHandler] Debounced save failed for memory '${memoryName}' (pending: ${this.pendingSaves.size}, coalesced: ${this.debounceMetrics.coalesced}, written: ${this.debounceMetrics.written}): ${err}`);\n                });\n                return;\n            }\n            void this.flushOne(key, memory, manager, 'debounce timer', origin).then(saved => {\n                if (this.pendingSaves.get(key) === queued &&\n                    (saved || this.failedMemorySaves.get(key)?.memory === memory))\n                    this.pendingSaves.delete(key);\n            }).catch(err => {\n                logger.error(`[MCPAQLHandler] Debounced save retained for memory '${memoryName}': ${err}`);\n            });\n        }, STORAGE_LAYER_CONFIG.MEMORY_SAVE_DEBOUNCE_MS);\n        if (typeof timer === 'object' && 'unref' in timer) {\n            timer.unref();\n        }\n        queued = { timer, memory, manager, ...origin };\n        this.pendingSaves.set(key, queued);\n    }\n"
+    },
+    "flushPendingSaves": {
+      "source": "app/dist/handlers/mcp-aql/MemorySaveHandler.js",
+      "full_file_sha256": "85461597a44e824454be0482a8c2521994c89be2fc4e6e2b01a2375a61129388",
+      "start_line": 282,
+      "end_line": 314,
+      "method_sha256": "6c378dec5bf52cdd56aab5406c0092358e0c379e72ef3bd8403e2133ca284096",
+      "compiled_bytes": "    async flushPendingSaves() {\n        this.reportGuardedPending();\n        if (this.observeDeferredRefusal() && (this.pendingSaves.size || this.failedMemorySaves.size))\n            throw this.deferredRefusal();\n        const pending = [...this.pendingSaves.entries()];\n        for (const [, entry] of pending)\n            clearTimeout(entry.timer);\n        if (pending.length > 0) {\n            logger.info(`[MCPAQLHandler] Flushing ${pending.length} pending memory save(s) on shutdown (total coalesced: ${this.debounceMetrics.coalesced}, total written: ${this.debounceMetrics.written})`);\n        }\n        const flushedKeys = new Set();\n        for (const [key, entry] of pending) {\n            const { memory, manager } = entry;\n            flushedKeys.add(key);\n            const saved = await this.flushOne(key, memory, manager, 'shutdown', entry);\n            // A closed boundary/context failure must not drop this or later queued\n            // candidates. Preserve newer coalesced work under the same key too.\n            if (this.pendingSaves.get(key) === entry &&\n                (saved || this.failedMemorySaves.get(key)?.memory === memory))\n                this.pendingSaves.delete(key);\n        }\n        // Retry any failure-ledger entry not already attempted above. Direct Map\n        // iteration is safe: saveMemoryTracked only deletes the current key on\n        // success, which the iteration protocol tolerates.\n        for (const [key, entry] of this.failedMemorySaves) {\n            if (flushedKeys.has(key))\n                continue;\n            const recovered = await this.runInOrigin(entry, () => this.retryLedgerEntryIfAlive(key, entry, 'Shutdown retry'));\n            if (recovered) {\n                this.debounceMetrics.written++;\n            }\n        }\n    }\n"
+    },
+    "saveMemoryTracked": {
+      "source": "app/dist/handlers/mcp-aql/MemorySaveHandler.js",
+      "full_file_sha256": "85461597a44e824454be0482a8c2521994c89be2fc4e6e2b01a2375a61129388",
+      "start_line": 608,
+      "end_line": 646,
+      "method_sha256": "db08ab3c2c241ffbf6962baa97a863fe27a35191f79802c45932d8385e6f0525",
+      "compiled_bytes": "    async saveMemoryTracked(key, memory, manager, origin = {}) {\n        this.checkOrigin(origin);\n        const attempt = (this.memorySaveAttempts.get(key) ?? 0) + 1;\n        this.memorySaveAttempts.set(key, attempt);\n        let originalProbeToken = null;\n        try {\n            this.requireLegacyDeferred(manager);\n            if (origin.bindingCheck)\n                originalProbeToken = manager.getMemoryProbeToken(memory);\n            await manager.save(memory);\n            this.checkOrigin(origin);\n            // A save already in flight cannot be cancelled. Keep its evidence if the\n            // boundary closes before bookkeeping; never claim that it rolled back.\n            this.requireLegacyDeferred(manager);\n            if (this.memorySaveAttempts.get(key) === attempt) {\n                this.failedMemorySaves.delete(key);\n                // Prune the counter on latest-success so the map stays bounded by\n                // currently-failing memories. A stale in-flight save then sees\n                // undefined !== its attempt and correctly skips ledger updates.\n                this.memorySaveAttempts.delete(key);\n            }\n        }\n        catch (err) {\n            if (this.memorySaveAttempts.get(key) === attempt) {\n                this.failedMemorySaves.set(key, {\n                    error: err instanceof Error ? err : new Error(String(err)),\n                    memory,\n                    manager,\n                    probeToken: this.failedSaveProbeToken(origin, manager, memory, originalProbeToken),\n                    // getContext() here returns the ambient context on the normal debounced\n                    // path, and the re-established context when retried from the shutdown\n                    // flush (flushOne runs saveMemoryTracked inside runInSaveContext).\n                    context: origin.context ?? this.contextScope?.getContext?.(),\n                    bindingCheck: origin.bindingCheck,\n                });\n            }\n            throw err;\n        }\n    }\n"
+    },
+    "cleanupSession": {
+      "source": "app/dist/handlers/mcp-aql/MemorySaveHandler.js",
+      "full_file_sha256": "85461597a44e824454be0482a8c2521994c89be2fc4e6e2b01a2375a61129388",
+      "start_line": 246,
+      "end_line": 263,
+      "method_sha256": "b3a366f7253fc9409ae39535f48ff37c5650a919a6933e8c9abf38221ca9f1f1",
+      "compiled_bytes": "    cleanupSession(sessionId) {\n        this.reportGuardedPending(sessionId);\n        const prefix = `${sessionId}:`;\n        if (this.observeDeferredRefusal())\n            return;\n        for (const [key, entry] of this.failedMemorySaves) {\n            if (!key.startsWith(prefix))\n                continue;\n            void this.runInOrigin(entry, () => this.retryLedgerEntryIfAlive(key, entry, 'Session cleanup')).catch((error) => {\n                // The retry helper handles storage failures itself, but retain the ledger\n                // if context restoration fails before the retry can run.\n                logger.error(`[MCPAQLHandler] Session cleanup could not retry memory '${key}': ${error}`);\n            });\n        }\n        // Non-durability bookkeeping only. Pending saves and their timers are left\n        // intact so they fire \u2014 and persist \u2014 in their propagated per-user context.\n        this.deleteByPrefix(this.saveFrequencyCounters, prefix);\n    }\n"
+    },
+    "flushOne": {
+      "source": "app/dist/handlers/mcp-aql/MemorySaveHandler.js",
+      "full_file_sha256": "85461597a44e824454be0482a8c2521994c89be2fc4e6e2b01a2375a61129388",
+      "start_line": 316,
+      "end_line": 332,
+      "method_sha256": "959595a9c1273c428bdb9c4432e293de14ac37e618fa2e987557fc5db9d25b38",
+      "compiled_bytes": "    async flushOne(key, memory, manager, reason, origin = {}) {\n        try {\n            // Re-establish the save's originating per-user context. Shutdown runs with\n            // no ambient AsyncLocalStorage context, so without this a file-mode\n            // per-user save would resolve to the shared baseDir instead of the owner's.\n            await this.runInOrigin(origin, () => this.saveMemoryTracked(key, memory, manager, origin));\n            this.debounceMetrics.written++;\n            return true;\n        }\n        catch (err) {\n            if (this.observeDeferredRefusal(manager) || origin.bindingCheck)\n                throw err;\n            const entryCount = typeof memory.getEntries === 'function' ? memory.getEntries().size : 'unknown';\n            logger.error(`[MCPAQLHandler] Flush save failed for memory '${key}' on ${reason} (entries: ${entryCount}) \u2014 unpersisted entries will be lost if the process exits: ${err}`);\n            return false;\n        }\n    }\n"
+    },
+    "closeHttpServer": {
+      "source": "app/dist/server/StreamableHttpServer.js",
+      "full_file_sha256": "a22bc2fe3c442fe483cef9f2b31ed67e7d75bda39765f1f04ccc428d191ae16d",
+      "start_line": 154,
+      "end_line": 168,
+      "method_sha256": "24a3c88c605c7a0d8da0e6fbd8cf35b8c5059081840b5054d822cc1723a0f727",
+      "compiled_bytes": "async function closeHttpServer(httpServer) {\n    // Destroy all active sockets so keep-alive connections don't prevent shutdown.\n    // httpServer.close() only stops accepting new connections \u2014 existing sockets\n    // stay alive until their keep-alive timeout expires.\n    httpServer.closeAllConnections();\n    await new Promise((resolve, reject) => {\n        httpServer.close((error) => {\n            if (error) {\n                reject(error);\n                return;\n            }\n            resolve();\n        });\n    });\n}\n"
+    },
+    "disposeSession": {
+      "source": "app/dist/server/StreamableHttpServer.js",
+      "full_file_sha256": "a22bc2fe3c442fe483cef9f2b31ed67e7d75bda39765f1f04ccc428d191ae16d",
+      "start_line": 353,
+      "end_line": 388,
+      "method_sha256": "5f136a2d38c8ecd6ec438e04df357234f65ce764463da072d8fec28e0290e0e3",
+      "compiled_bytes": "    const disposeSession = async (sessionId, skipTransportClose = false) => {\n        if (!sessionId) {\n            return;\n        }\n        const session = sessions.get(sessionId);\n        if (!session) {\n            return;\n        }\n        sessions.delete(sessionId);\n        sessionTelemetry.disposed += 1;\n        clearSessionTimer(session);\n        options.onSessionDisposed?.(sessionId);\n        try {\n            await options.runtimeSessionControl?.markSessionDisposed(sessionId);\n        }\n        catch (error) {\n            logger.warn('[StreamableHTTP] Failed to mark runtime session disposed', {\n                sessionId,\n                error: error instanceof Error ? error.message : String(error),\n            });\n        }\n        if (!skipTransportClose) {\n            await session.transport.close().catch(() => {\n                /* transport shutdown is best-effort */\n            });\n        }\n        try {\n            await session.attachment.dispose();\n        }\n        catch (error) {\n            logger.warn('[StreamableHTTP] Failed to dispose session attachment', {\n                sessionId,\n                error: error instanceof Error ? error.message : String(error),\n            });\n        }\n    };\n"
+    },
+    "shutdown": {
+      "source": "app/dist/server/StreamableHttpServer.js",
+      "full_file_sha256": "a22bc2fe3c442fe483cef9f2b31ed67e7d75bda39765f1f04ccc428d191ae16d",
+      "start_line": 869,
+      "end_line": 896,
+      "method_sha256": "cfcf466c464d3c672b054200483c0deaf48625ba13649c7615410b59e705090d",
+      "compiled_bytes": "    const shutdown = async () => {\n        if (closingPromise) {\n            return closingPromise;\n        }\n        closingPromise = (async () => {\n            // Wait for any in-flight pool replenishment to finish.\n            // closingPromise is set before this await, so maintainSessionPool()'s\n            // while-loop guard (!closingPromise) will stop the loop from continuing\n            // to prepareSession() after the current iteration completes.\n            if (replenishPoolPromise) {\n                await replenishPoolPromise.catch(() => { });\n            }\n            const allSessions = Array.from(sessions.keys());\n            const warmSessions = pooledSessions.splice(0);\n            if (runtimeCommandPollTimer) {\n                clearInterval(runtimeCommandPollTimer);\n                runtimeCommandPollTimer = null;\n            }\n            for (const sessionId of allSessions) {\n                await disposeSession(sessionId);\n            }\n            for (const preparedSession of warmSessions) {\n                await disposePreparedSession(preparedSession);\n            }\n            await closeHttpServer(httpServer);\n        })();\n        return closingPromise;\n    };\n"
+    },
+    "handleSignal": {
+      "source": "app/dist/server/StreamableHttpServer.js",
+      "full_file_sha256": "a22bc2fe3c442fe483cef9f2b31ed67e7d75bda39765f1f04ccc428d191ae16d",
+      "start_line": 899,
+      "end_line": 907,
+      "method_sha256": "e7e16726936c0a44053e0a5ea04be9328f59c3a30163f491b780d20a14f76361",
+      "compiled_bytes": "        const handleSignal = (signal) => {\n            logger.info(`[StreamableHTTP] Received ${signal}, shutting down...`);\n            void shutdown()\n                .then(() => process.exit(0))\n                .catch((error) => {\n                console.error('[DollhouseMCP] Streamable HTTP shutdown failed:', error);\n                process.exit(1);\n            });\n        };\n"
+    },
+    "sessionDispose": {
+      "source": "app/dist/di/SessionContainer.js",
+      "full_file_sha256": "999a92a0d17fa35d5ef65e82a7e1e52e9fb964d43bfde56a780d6a9a026ddc8b",
+      "start_line": 86,
+      "end_line": 90,
+      "method_sha256": "39d6ac5dabb72480e63fe17304c6b11886307ef61d714d6a1b0846e7ba562546",
+      "compiled_bytes": "    async dispose() {\n        await this.disposeSessionServices();\n        this.cleanupSharedState();\n        logger.debug(`[SessionContainer] Disposed session '${this.sessionId}'`);\n    }\n"
+    },
+    "cleanupSharedState": {
+      "source": "app/dist/di/SessionContainer.js",
+      "full_file_sha256": "999a92a0d17fa35d5ef65e82a7e1e52e9fb964d43bfde56a780d6a9a026ddc8b",
+      "start_line": 124,
+      "end_line": 131,
+      "method_sha256": "ba15dfdd336948e31b67b05cbd37a6741c27f6a1dd38417d740be868234d0cad",
+      "compiled_bytes": "    cleanupSharedState() {\n        this.safeCleanup('SessionActivationRegistry', (svc) => svc.dispose(this.sessionId));\n        this.safeCleanup('gatekeeper', (svc) => svc.disposeSession(this.sessionId));\n        // Issue #2329: cleanupSession is deliberately non-writing (it leaves pending\n        // memory-save timers to fire in their per-user context), so this is a\n        // synchronous bookkeeping cleanup \u2014 nothing to await.\n        this.safeCleanup('mcpAqlHandler', (svc) => svc.cleanupSession(this.sessionId));\n    }\n"
+    },
+    "safeCleanup": {
+      "source": "app/dist/di/SessionContainer.js",
+      "full_file_sha256": "999a92a0d17fa35d5ef65e82a7e1e52e9fb964d43bfde56a780d6a9a026ddc8b",
+      "start_line": 133,
+      "end_line": 143,
+      "method_sha256": "53d870b6f6f2c4cd2186d073b915e686b7fcc682a602d23398ea14f32a5972f2",
+      "compiled_bytes": "    safeCleanup(serviceName, cleanup) {\n        try {\n            cleanup(this.parent.resolve(serviceName));\n        }\n        catch (error) {\n            logger.warn(`[SessionContainer] Failed to clean up ${serviceName}`, {\n                sessionId: this.sessionId,\n                error: error instanceof Error ? error.message : String(error),\n            });\n        }\n    }\n"
+    },
+    "aqlCleanupSession": {
+      "source": "app/dist/handlers/mcp-aql/MCPAQLHandler.js",
+      "full_file_sha256": "a4ad108c5e5b852329968d7d258c134b26ea53068fa466cd1301e6108e2dd77e",
+      "start_line": 502,
+      "end_line": 518,
+      "method_sha256": "0d172c361ed18bc0005c8fcbd208ae774d349adc285870813231309b43756d09",
+      "compiled_bytes": "    cleanupSession(sessionId) {\n        const prefix = `${sessionId}:`;\n        if (this.memoryProvider) {\n            for (const saves of this.tenantSaveHandlers.values())\n                saves.cleanupSession(sessionId);\n        }\n        else\n            this.requireOrdinary(this.memorySaveHandler).cleanupSession(sessionId);\n        // Remove session-keyed entries from tracking collections\n        this.deleteByPrefix(this.executingAgents, prefix);\n        this.deleteByPrefix(this.abortedGoals, prefix);\n        // Issue #1947: Remove per-session rate limiters\n        this.verificationRateLimiters.delete(sessionId);\n        this.deadlockReliefIssuanceLimiters.delete(sessionId);\n        this.permissionPromptLimiters.delete(sessionId);\n        this.cliApprovalLimiters.delete(sessionId);\n    }\n"
+    }
+  }
+}

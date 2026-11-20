@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals
 jest.unstable_mockModule('dotenv', () => ({ default: { config: jest.fn() } }));
 
 const originalEnv = { ...process.env };
-beforeEach(() => { jest.resetModules(); delete process.env.DOLLHOUSE_HTTP_STREAM_MAX_LIFETIME_MS; delete process.env.DOLLHOUSE_HTTP_STREAM_KEEPALIVE_MS; delete process.env.DOLLHOUSE_HTTP_STREAM_EXPIRY_GRACE_MS; });
+beforeEach(() => { jest.resetModules(); delete process.env.DOLLHOUSE_HTTP_STREAM_MAX_LIFETIME_MS; delete process.env.DOLLHOUSE_HTTP_STREAM_KEEPALIVE_MS; delete process.env.DOLLHOUSE_HTTP_STREAM_EXPIRY_GRACE_MS; delete process.env.DOLLHOUSE_HTTP_STREAM_CREDENTIAL_RECHECK_MS; });
 afterEach(() => { process.env = { ...originalEnv }; jest.resetModules(); });
 
 describe('MCP stream lifetime environment configuration', () => {
@@ -74,5 +74,28 @@ describe('MCP stream expiry grace environment configuration', () => {
   it.each(['-1', '1.5', '2147483648'])('rejects invalid grace %s', async value => {
     process.env.DOLLHOUSE_HTTP_STREAM_EXPIRY_GRACE_MS = value;
     await expect(import('../../../src/config/env.js')).rejects.toThrow('DOLLHOUSE_HTTP_STREAM_EXPIRY_GRACE_MS');
+  });
+});
+
+describe('MCP stream credential recheck environment configuration', () => {
+  it('defaults to thirty seconds', async () => {
+    const { env } = await import('../../../src/config/env.js');
+    expect(env.DOLLHOUSE_HTTP_STREAM_CREDENTIAL_RECHECK_MS).toBe(30000);
+  });
+
+  it.each(['0', '1000', '2147483647'])('accepts interval %s', async value => {
+    process.env.DOLLHOUSE_HTTP_STREAM_CREDENTIAL_RECHECK_MS = value;
+    const { env } = await import('../../../src/config/env.js');
+    expect(env.DOLLHOUSE_HTTP_STREAM_CREDENTIAL_RECHECK_MS).toBe(Number(value));
+  });
+
+  it.each(['1', '999'])('rejects sub-second interval %s with actionable units', async value => {
+    process.env.DOLLHOUSE_HTTP_STREAM_CREDENTIAL_RECHECK_MS = value;
+    await expect(import('../../../src/config/env.js')).rejects.toThrow('DOLLHOUSE_HTTP_STREAM_CREDENTIAL_RECHECK_MS: 0 disables rechecks; minimum nonzero interval is 1000 ms');
+  });
+
+  it.each(['-1', '1.5', '2147483648'])('rejects invalid interval %s', async value => {
+    process.env.DOLLHOUSE_HTTP_STREAM_CREDENTIAL_RECHECK_MS = value;
+    await expect(import('../../../src/config/env.js')).rejects.toThrow('DOLLHOUSE_HTTP_STREAM_CREDENTIAL_RECHECK_MS');
   });
 });

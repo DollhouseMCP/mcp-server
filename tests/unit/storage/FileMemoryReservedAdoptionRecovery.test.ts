@@ -9,45 +9,73 @@ import { FileMemoryFence } from '../../../src/storage/FileMemoryFence.js';
 import { FileMemoryTransactionCoordinator } from '../../../src/storage/FileMemoryTransactionCoordinator.js';
 import { FileMemoryOwnerSnapshots, type AdoptionRecoveryPublication, type UnownedFileMemoryToken } from '../../../src/storage/FileMemoryOwnerSnapshots.js';
 import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
+import { OwnedStorageCase } from './fixtures/ownedStorageCase.js';
 import { FileMemoryAdoptionRecoveryScanBudget } from '../../../src/storage/FileMemoryAdoptionRecoveryScanBudget.js';
 
 const USER = '11111111-1111-4111-8111-111111111111';
 const roots: string[] = [];
+const capacityOwnership = new OwnedStorageCase();
+const capacityIO: Promise<unknown>[] = [];
+let capacityActive = false;
+// Only this capacity fixture uses the owner. A failed drain keeps admission
+// blocked; later ordinary cases must not restore its mocks or remove its roots.
+beforeEach(() => { if (capacityActive) capacityOwnership.begin(); });
+function capacityCheckpoint(): void { if (capacityActive) capacityOwnership.checkpoint(); }
+function capacityOperation<T>(body: () => Promise<T>): Promise<T> {
+  capacityCheckpoint();
+  const original = body();
+  if (capacityActive) {
+    capacityIO.push(original);
+    void original.catch(() => undefined); // Observe siblings, preserving the original rejection.
+  }
+  return original;
+}
 async function fixture(stop = 'active-registry', existing?: { tenantRoot: string; coordinator: FileMemoryTransactionCoordinator }) {
+  capacityCheckpoint();
   const tenantRoot = existing?.tenantRoot ?? await fs.mkdtemp(path.join(os.tmpdir(), 'adoption-final-'));
-  if (!existing) roots.push(tenantRoot);
+  if (!existing) roots.push(tenantRoot); // Register allocation before a closing-admission checkpoint.
+  capacityCheckpoint();
   const locator = existing ? 'Notes/Second.yaml' : 'Notes/ÜberNote.yaml';
   const headPath = path.join(tenantRoot, locator);
+  capacityCheckpoint();
   await fs.mkdir(path.dirname(headPath), { recursive: true });
+  capacityCheckpoint();
   await fs.writeFile(headPath, 'name: Original\nentries: []\n');
   const coordinator = existing?.coordinator ?? new FileMemoryTransactionCoordinator({ tenantRoot, getCurrentUserId: () => USER, fence: new FileMemoryFence() });
   const store = new FileMemoryOwnerSnapshots({ coordinator });
+  capacityCheckpoint();
   const legacy = await store.readHeadSnapshot(locator);
   const adopter = new FileMemoryOwnerSnapshots({ coordinator, afterPublication: phase => {
     if (phase === stop) throw new Error('interrupted adoption');
   } });
+  capacityCheckpoint();
   await expect(adopter.adoptUnowned(legacy.token as UnownedFileMemoryToken)).rejects.toBeDefined();
   const hash = createHash('sha256').update(path.basename(headPath)).digest('hex');
   const sidecarPath = path.join(path.dirname(headPath), `.${hash}.memory-owner.json`);
+  capacityCheckpoint();
   const reserved = JSON.parse(await fs.readFile(sidecarPath, 'utf8'));
   const request = { locator, ownerId: reserved.ownerId as string };
   const registryPath = path.join(tenantRoot, '.memory-owners', 'owners', `${request.ownerId}.json`);
   const stagePath = `${sidecarPath}.adopt-${request.ownerId}.tmp`;
   const archivePath = path.join(tenantRoot, 'archive-evidence');
+  capacityCheckpoint();
   await fs.writeFile(archivePath, 'unrelated durable archive evidence', { mode: 0o600 });
   return { tenantRoot, locator, headPath, coordinator, store, legacy, request, sidecarPath, registryPath, stagePath, archivePath };
 }
 type Setup = Awaited<ReturnType<typeof fixture>>;
 async function proof(files: string[]) {
-  return Promise.all(files.map(async file => {
+  return Promise.all(files.map(file => capacityOperation(async () => {
     const stat = await fs.lstat(file, { bigint: true });
+    capacityCheckpoint();
+    const bytes = stat.isFile() ? await fs.readFile(file) : null;
     return { file, dev: stat.dev, inode: stat.ino, size: stat.size, mode: stat.mode, links: stat.nlink,
-      ctime: stat.ctimeNs, mtime: stat.mtimeNs, bytes: stat.isFile() ? await fs.readFile(file) : null };
-  }));
+      ctime: stat.ctimeNs, mtime: stat.mtimeNs, bytes };
+  })));
 }
 async function residual(setup: Setup) {
   const files = [setup.archivePath];
   for (const directory of [path.dirname(setup.headPath), path.dirname(setup.registryPath)]) {
+    capacityCheckpoint();
     try { for (const name of (await fs.readdir(directory)).sort()) files.push(path.join(directory, name)); }
     catch (cause) { if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause; }
   }
@@ -68,10 +96,25 @@ async function failureOf(action: Promise<unknown>): Promise<{ code: string; caus
   try { await action; } catch (cause) { return cause as { code: string; cause: unknown; token?: unknown }; }
   throw new Error('expected failure');
 }
+async function cleanup(checkpoint: () => void): Promise<void> {
+  checkpoint(); jest.restoreAllMocks();
+  checkpoint(); SecurityMonitor.clearAllEventsForTesting();
+  while (roots.length) {
+    checkpoint(); await fs.rm(roots[0], { recursive: true, force: true });
+    checkpoint(); roots.shift();
+  }
+}
 afterEach(async () => {
-  jest.restoreAllMocks();
-  SecurityMonitor.clearAllEventsForTesting();
-  for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
+  if (!capacityActive) { await cleanup(() => undefined); return; }
+  // The owner first drains the complete setup/body callback. Its Promise.all
+  // can fail early, so also settle every original admitted sibling before any
+  // global mock/root cleanup. Drain and cleanup share the existing hook budget.
+  await capacityOwnership.teardown(async checkpoint => {
+    await Promise.allSettled(capacityIO);
+    checkpoint(); capacityIO.splice(0);
+    await cleanup(checkpoint);
+  });
+  capacityActive = false; // A failed teardown leaves the owner sticky/blocked.
 });
 
 describe('dormant final RESERVED adoption recovery', () => {
@@ -362,14 +405,22 @@ describe('dormant final RESERVED adoption recovery', () => {
         node: process.version, pid: process.pid, noiseFiles: 4096, ...accounting })}\n`);
     };
     beforeEach(async () => {
-      started = performance.now();
-      try {
-        setup = await fixture();
-        await Promise.all(Array.from({ length: 4096 }, (_, index) => fs.writeFile(path.join(path.dirname(setup.headPath), `noise-${index}`), 'x')));
-        before = await residual(setup);
-      } finally { diagnostic('setup-end'); }
+      capacityOwnership.begin(); capacityActive = true;
+      started = performance.now(); lifecycleStarted = undefined;
+      await capacityOwnership.own(async () => {
+        try {
+          setup = await fixture();
+          capacityCheckpoint(); diagnostic('fixture-ready');
+          // Preserve the original 4,096-way Promise.all scheduling and promises.
+          await Promise.all(Array.from({ length: 4096 }, (_, index) => capacityOperation(() =>
+            fs.writeFile(path.join(path.dirname(setup.headPath), `noise-${index}`), 'x'))));
+          capacityCheckpoint(); diagnostic('writes-fulfilled');
+          before = await residual(setup);
+          capacityCheckpoint(); diagnostic('residual-proof-ready');
+        } finally { diagnostic('setup-end'); }
+      })();
     }, 10000);
-    it('charges unrelated entries against one whole invocation budget, preserving exhaustion evidence', async () => {
+    it('charges unrelated entries against one whole invocation budget, preserving exhaustion evidence', capacityOwnership.own(async () => {
       lifecycleStarted = performance.now(); diagnostic('lifecycle-start');
       const read = FileMemoryAdoptionRecoveryScanBudget.prototype.read;
       let budgetReadCalls = 0;
@@ -384,10 +435,12 @@ describe('dormant final RESERVED adoption recovery', () => {
       try {
         await expect(setup.store.recoverReservedAdoption(setup.request)).rejects.toMatchObject({ code: 'EADOPTIONPENDING', cause: { code: 'EHEADRESOURCE' } });
       } finally { diagnostic('recovery-end', accounting()); }
+      capacityCheckpoint();
       expect(await residual(setup)).toEqual(before);
+      capacityCheckpoint();
       await expect(fs.lstat(setup.stagePath)).rejects.toMatchObject({ code: 'ENOENT' });
       diagnostic('assertions-complete', accounting());
-    }, 10000);
+    }), 10000);
   });
   it('retains a known token when the same private budget exhausts only after publication', async () => {
     const setup = await fixture();

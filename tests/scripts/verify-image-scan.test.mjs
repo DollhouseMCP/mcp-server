@@ -125,6 +125,11 @@ test('offline local DB import requires bound Python manifest, image and actual i
         MemorySwap: 8589934592, PidsLimit: 64, Tmpfs: { '/work': 'rw,noexec,nosuid,nodev,size=6g,mode=1777' } } },
   };
   assert.deepEqual(verifyImageScan(value, image, now, cache, proof), { Low: 1 });
+  const frozen = structuredClone(proof);
+  frozen.database.origin = 'frozen-admitted'; frozen.scanner_archive.origin = 'frozen-admitted';
+  assert.deepEqual(verifyImageScan(value, image, now, cache, frozen), { Low: 1 });
+  frozen.database.url = 'https://grype.anchore.io/databases/v6/different.tar.zst';
+  assert.throws(() => verifyImageScan(value, image, now, cache, frozen), /Offline/);
   const classic = structuredClone(proof);
   classic.runner.archive = { format: 'classic-docker', store_id_role: 'config',
     store_id: classic.runner.config_digest, config_digest: classic.runner.config_digest,

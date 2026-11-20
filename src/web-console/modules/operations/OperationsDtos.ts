@@ -4,9 +4,17 @@ export type OperationHealthComponent =
   | 'gatekeeper'
   | 'runtime_control'
   | 'security_invalidation'
+  | 'database_migrations'
+  | 'allowlist_parity'
+  | 'audit_telemetry'
+  | 'approval_execution_projection'
   | 'api_mount';
 
-export type OperationHealthStatus = 'ok' | 'degraded' | 'unavailable' | 'not_ready';
+/**
+ * `not_run` is a check that only runs when asked and has not been asked yet.
+ * Nothing is known to be wrong, so it does not lower the overall status.
+ */
+export type OperationHealthStatus = 'ok' | 'degraded' | 'unavailable' | 'not_ready' | 'not_run';
 
 export interface OperationHealthComponentDto {
   readonly component: OperationHealthComponent;
@@ -19,6 +27,40 @@ export interface OperationHealthSummaryDto {
   readonly status: OperationHealthStatus;
   readonly checked_at: string;
   readonly components: readonly OperationHealthComponentDto[];
+}
+
+export interface CanaryRunDto {
+  readonly check: 'approval_execution_projection';
+  readonly state: 'passed' | 'pending' | 'failed';
+  readonly code: string;
+  readonly detail: string;
+  readonly trigger: 'admin' | 'schedule';
+  readonly started_at: string;
+  readonly finished_at: string;
+}
+
+export type SetupCheckStateDto = 'passed' | 'pending' | 'failed' | 'not_applicable';
+
+export interface SetupStatusCheckDto {
+  readonly id: string;
+  readonly title: string;
+  /** What a pass proves. */
+  readonly proves: string;
+  readonly verification: string;
+  /** How the system knows. */
+  readonly verified_by: string;
+  /** What to do when it has not passed. */
+  readonly remediation: string;
+  readonly state: SetupCheckStateDto;
+  readonly detail: string | null;
+  /** When the thing the state rests on last happened, where that is recorded. */
+  readonly observed_at: string | null;
+}
+
+export interface SetupStatusDto {
+  readonly checked_at: string;
+  readonly counts: Readonly<Record<SetupCheckStateDto, number>>;
+  readonly checks: readonly SetupStatusCheckDto[];
 }
 
 export type OperationLogLevel = 'debug' | 'info' | 'warn' | 'error';

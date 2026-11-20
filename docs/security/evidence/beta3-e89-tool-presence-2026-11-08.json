@@ -1,0 +1,141 @@
+{
+  "read_only_archive_inspection": true,
+  "targets": [
+    "usr/bin/infocmp",
+    "usr/bin/nsenter",
+    "usr/bin/mount",
+    "usr/bin/umount"
+  ],
+  "results": {
+    "amd64": {
+      "archive": "/private/tmp/beta3-e89-image-retention-20261108/verified-amd64/production-linux-amd64.docker.tar",
+      "archive_sha256_from_verified_metadata": "ed00c737bfb53800e07129f69d8bd2d6634f3281fe3bd13a6ce7d9b2ecb3dfa9",
+      "config_sha256": "abe4ad0bd1a07fc57e54cafd8d17c1d37021acd7f8eb72e6a8a6123ee60df8c1",
+      "final_presence": {
+        "usr/bin/infocmp": false,
+        "usr/bin/nsenter": false,
+        "usr/bin/mount": false,
+        "usr/bin/umount": false
+      },
+      "events": [
+        {
+          "layer_index": 0,
+          "archive_layer": "blobs/sha256/f2be67225471500c788ce88c597eb5ea8336e912ad1ca4815650e0281afe2034",
+          "path": "usr/bin/infocmp",
+          "action": "present",
+          "type": "0"
+        },
+        {
+          "layer_index": 0,
+          "archive_layer": "blobs/sha256/f2be67225471500c788ce88c597eb5ea8336e912ad1ca4815650e0281afe2034",
+          "path": "usr/bin/mount",
+          "action": "present",
+          "type": "0"
+        },
+        {
+          "layer_index": 0,
+          "archive_layer": "blobs/sha256/f2be67225471500c788ce88c597eb5ea8336e912ad1ca4815650e0281afe2034",
+          "path": "usr/bin/nsenter",
+          "action": "present",
+          "type": "0"
+        },
+        {
+          "layer_index": 0,
+          "archive_layer": "blobs/sha256/f2be67225471500c788ce88c597eb5ea8336e912ad1ca4815650e0281afe2034",
+          "path": "usr/bin/umount",
+          "action": "present",
+          "type": "0"
+        },
+        {
+          "layer_index": 8,
+          "archive_layer": "blobs/sha256/a677c0c61a233ef8f35cab780272ce735e7ca938990c77bd1e2518488170e8f8",
+          "path": "usr/bin/infocmp",
+          "action": "whiteout"
+        },
+        {
+          "layer_index": 8,
+          "archive_layer": "blobs/sha256/a677c0c61a233ef8f35cab780272ce735e7ca938990c77bd1e2518488170e8f8",
+          "path": "usr/bin/mount",
+          "action": "whiteout"
+        },
+        {
+          "layer_index": 8,
+          "archive_layer": "blobs/sha256/a677c0c61a233ef8f35cab780272ce735e7ca938990c77bd1e2518488170e8f8",
+          "path": "usr/bin/nsenter",
+          "action": "whiteout"
+        },
+        {
+          "layer_index": 8,
+          "archive_layer": "blobs/sha256/a677c0c61a233ef8f35cab780272ce735e7ca938990c77bd1e2518488170e8f8",
+          "path": "usr/bin/umount",
+          "action": "whiteout"
+        }
+      ]
+    },
+    "arm64": {
+      "archive": "/private/tmp/beta3-e89-image-retention-20261108/verified-arm64/production-linux-arm64.docker.tar",
+      "archive_sha256_from_verified_metadata": "cce6ccfa8f06b3e9f1410a5ad3c586b0d9f708618ebd7320b25e7261334aae6d",
+      "config_sha256": "de13d3d1085e9d6ced29577e024b3e55f01adcc471c050dab88e7bd1d706b6e4",
+      "final_presence": {
+        "usr/bin/infocmp": false,
+        "usr/bin/nsenter": false,
+        "usr/bin/mount": false,
+        "usr/bin/umount": false
+      },
+      "events": [
+        {
+          "layer_index": 0,
+          "archive_layer": "blobs/sha256/e5593b7179d10a64cfe451e886e3ab13ccd476f906dc670865322ae1dbdf969f",
+          "path": "usr/bin/infocmp",
+          "action": "present",
+          "type": "0"
+        },
+        {
+          "layer_index": 0,
+          "archive_layer": "blobs/sha256/e5593b7179d10a64cfe451e886e3ab13ccd476f906dc670865322ae1dbdf969f",
+          "path": "usr/bin/mount",
+          "action": "present",
+          "type": "0"
+        },
+        {
+          "layer_index": 0,
+          "archive_layer": "blobs/sha256/e5593b7179d10a64cfe451e886e3ab13ccd476f906dc670865322ae1dbdf969f",
+          "path": "usr/bin/nsenter",
+          "action": "present",
+          "type": "0"
+        },
+        {
+          "layer_index": 0,
+          "archive_layer": "blobs/sha256/e5593b7179d10a64cfe451e886e3ab13ccd476f906dc670865322ae1dbdf969f",
+          "path": "usr/bin/umount",
+          "action": "present",
+          "type": "0"
+        },
+        {
+          "layer_index": 8,
+          "archive_layer": "blobs/sha256/6995ce05628642e4a7cd71c9b1fa0ec914e2b06c77b51d85a027f709c1127fa4",
+          "path": "usr/bin/infocmp",
+          "action": "whiteout"
+        },
+        {
+          "layer_index": 8,
+          "archive_layer": "blobs/sha256/6995ce05628642e4a7cd71c9b1fa0ec914e2b06c77b51d85a027f709c1127fa4",
+          "path": "usr/bin/mount",
+          "action": "whiteout"
+        },
+        {
+          "layer_index": 8,
+          "archive_layer": "blobs/sha256/6995ce05628642e4a7cd71c9b1fa0ec914e2b06c77b51d85a027f709c1127fa4",
+          "path": "usr/bin/nsenter",
+          "action": "whiteout"
+        },
+        {
+          "layer_index": 8,
+          "archive_layer": "blobs/sha256/6995ce05628642e4a7cd71c9b1fa0ec914e2b06c77b51d85a027f709c1127fa4",
+          "path": "usr/bin/umount",
+          "action": "whiteout"
+        }
+      ]
+    }
+  }
+}

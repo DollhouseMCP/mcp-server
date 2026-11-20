@@ -32,6 +32,26 @@ const REVIEWED_SAFETY_104 = Object.freeze({
   ]),
 });
 
+// Safety 1.0.6 has the same reviewed non-manifest pack bytes; these exact
+// manifest and lock blobs bind the qualified beta development overrides.
+const REVIEWED_SAFETY_106 = Object.freeze({
+  version: '1.0.6',
+  gitHead: '2d71c51b2a6cb4f499faf73695409f48835f6b1a',
+  files: Object.freeze([
+    Object.freeze({
+      path: 'packages/safety/package.json',
+      published: 'cb1fefdad820b085249d3fe440f98a1fbcb77c81',
+      beta: '2a078dfc294faec0ee22847e363c1ab658ed8365',
+    }),
+    Object.freeze({
+      path: 'packages/safety/package-lock.json',
+      published: '3cb4a451ecc296f375295cc7068255fcdd1a0b8a',
+      beta: 'a688749cf99f34ca8268488b58b127a5d3f71bc5',
+    }),
+  ]),
+});
+const REVIEWED_SAFETY = Object.freeze([REVIEWED_SAFETY_104, REVIEWED_SAFETY_106]);
+
 function run(command, args, cwd) {
   return spawnSync(command, args, {
     cwd,
@@ -115,13 +135,10 @@ function validateRegistryResult(result, localVersion, log) {
   return { status: 'published-version', version: localVersion, gitHead: publishedGitHead };
 }
 
-function matchesReviewedSafety104(cwd, localVersion, publishedGitHead) {
-  if (localVersion !== REVIEWED_SAFETY_104.version
-    || publishedGitHead !== REVIEWED_SAFETY_104.gitHead) {
-    return false;
-  }
-
-  return compareRecordedSafetyTree(cwd, publishedGitHead, REVIEWED_SAFETY_104.files);
+function matchesReviewedSafety(cwd, localVersion, publishedGitHead) {
+  const record = REVIEWED_SAFETY.find(entry => entry.version === localVersion
+    && entry.gitHead === publishedGitHead);
+  return record ? compareRecordedSafetyTree(cwd, publishedGitHead, record.files) : false;
 }
 
 // Read-only structural comparison for offline Git fixtures. This does not grant
@@ -218,7 +235,7 @@ export function checkSafetyPackageVersion({
     throw new Error(`Comparing published safety package tree failed: ${treeResult.error.message}`);
   }
   if (treeResult.status === 1) {
-    if (matchesReviewedSafety104(cwd, localVersion, publishedGitHead)) {
+    if (matchesReviewedSafety(cwd, localVersion, publishedGitHead)) {
       log(`Published ${PACKAGE_NAME}@${localVersion} has the exact reviewed beta development-pin divergence; every other safety tree entry is identical.`);
       return {
         status: 'published-reviewed-equivalent',
