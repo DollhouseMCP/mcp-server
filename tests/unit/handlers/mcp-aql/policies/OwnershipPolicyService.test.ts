@@ -5,7 +5,7 @@
 
 import { describe, it, expect, jest } from '@jest/globals';
 import { OwnershipPolicyService } from '../../../../../src/handlers/mcp-aql/policies/OwnershipPolicyService.js';
-import { OwnershipCache, type OwnershipResolver } from '../../../../../src/handlers/mcp-aql/policies/OwnershipLookup.js';
+import { GhOwnershipResolver, OwnershipCache, type GhRunner, type OwnershipResolver } from '../../../../../src/handlers/mcp-aql/policies/OwnershipLookup.js';
 import type { GitHubMutationIntent, OwnershipLookupResult, OwnershipPolicyConfig } from '../../../../../src/handlers/mcp-aql/policies/OwnershipPolicy.js';
 
 const CONFIG: OwnershipPolicyConfig = { mode: 'deny', ownerLogin: 'mickdarling', teammates: ['insomnolence'] };
@@ -108,6 +108,39 @@ describe('OwnershipPolicyService', () => {
     const { resolver } = fakeResolver({});
     const service = new OwnershipPolicyService({ config: CONFIG, resolver, cache: new OwnershipCache() });
     expect((await service.evaluate('Bash', { command: 'git push origin scratch' }))?.behavior).toBe('allow');
+  });
+
+  describe('resolver boundary regressions', () => {
+    it.each([
+      'gh pr close https://github.com/actual/target/pull/12 --repo decoy/repo',
+      'gh issue close https://github.com/actual/target/issues/12 --repo decoy/repo',
+    ])('gates the URL target rather than a trusted or absent decoy: %s', async (command) => {
+      for (const decoyIsMissing of [false, true]) {
+        const run = jest.fn<GhRunner>().mockImplementation(async args => {
+          const actual = args.includes('actual/target') || args.some(arg => arg.includes('repos/actual/target/issues/'));
+          if (!actual && decoyIsMissing) return { stdout: '', stderr: 'HTTP 404', exitCode: 1 };
+          const login = actual ? 'stranger' : 'mickdarling';
+          return { stdout: JSON.stringify({ author: { login }, user: { login }, number: 12 }), stderr: '', exitCode: 0 };
+        });
+        const service = new OwnershipPolicyService({ config: { ...CONFIG, mode: 'confirm' }, resolver: new GhOwnershipResolver(run), cache: new OwnershipCache() });
+        expect((await service.evaluate('Bash', { command }))?.behavior).toBe('confirm');
+      }
+    });
+
+    it.each(['gh pr merge 5', 'gh issue close 5', 'git push origin feature/x', 'git push'])('gates an invalid supplied cwd before any lookup: %s', async (command) => {
+      const run = jest.fn<GhRunner>().mockResolvedValue({ stdout: '{"author":{"login":"mickdarling"},"number":5}', stderr: '', exitCode: 0 });
+      const service = new OwnershipPolicyService({ config: { ...CONFIG, mode: 'confirm' }, resolver: new GhOwnershipResolver(run), cache: new OwnershipCache() });
+      expect((await service.evaluate('Bash', { command }, { cwd: 'relative/other-checkout' }))?.behavior).toBe('confirm');
+      expect(run).not.toHaveBeenCalled();
+    });
+
+    it('gates a truncated list of trusted branch authors', async () => {
+      const run = jest.fn<GhRunner>().mockResolvedValue({
+        stdout: JSON.stringify(Array.from({ length: 5 }, (_, number) => ({ author: { login: 'mickdarling' }, number }))), stderr: '', exitCode: 0,
+      });
+      const service = new OwnershipPolicyService({ config: { ...CONFIG, mode: 'confirm' }, resolver: new GhOwnershipResolver(run), cache: new OwnershipCache() });
+      expect((await service.evaluate('Bash', { command: 'git push origin feature/x' }))?.behavior).toBe('confirm');
+    });
   });
 
   describe('caching', () => {

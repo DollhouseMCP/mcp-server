@@ -70,7 +70,10 @@ function hardenedGitConfigParameters(existing: string | undefined): string {
   return existing && existing.trim() !== '' ? `${existing} ${GIT_CONFIG_HARDENING}` : GIT_CONFIG_HARDENING;
 }
 
-/** Accept `cwd` only when it is an existing absolute directory; anything else is dropped (gh then runs without a repo). */
+/**
+ * Accept only an existing absolute directory. Undefined inherits the process
+ * cwd, so repo-dependent lookups reject an invalid supplied directory first.
+ */
 export function sanitizeWorkingDirectory(cwd: string | undefined): string | undefined {
   if (!cwd || !isAbsolute(cwd)) return undefined;
   try {
@@ -238,6 +241,20 @@ export interface OwnershipResolver {
 }
 
 export const DEFAULT_GH_TIMEOUT_MS = 8000;
+const BRANCH_PR_LIMIT = 5;
+
+function lookupNeedsWorkingDirectory(intent: GitHubMutationIntent): boolean {
+  switch (intent.kind) {
+    case 'pull_request':
+      return intent.selector === undefined || (!intent.repo && !PR_URL_PATTERN.test(intent.selector));
+    case 'issue':
+      return !intent.repo && !ISSUE_URL_PATTERN.test(intent.selector ?? '');
+    case 'branch':
+      return intent.branch === undefined || !intent.repo;
+    default:
+      return false;
+  }
+}
 
 export class GhOwnershipResolver implements OwnershipResolver {
   constructor(
@@ -245,12 +262,12 @@ export class GhOwnershipResolver implements OwnershipResolver {
     private readonly timeoutMs: number = DEFAULT_GH_TIMEOUT_MS,
   ) {}
 
-  private runOptions(context: OwnershipLookupContext): GhRunOptions {
-    return { cwd: sanitizeWorkingDirectory(context.cwd), timeoutMs: this.timeoutMs };
+  private runOptions(cwd: string | undefined): GhRunOptions {
+    return { cwd, timeoutMs: this.timeoutMs };
   }
 
   async resolveOwnerLogin(context: OwnershipLookupContext = {}): Promise<string | undefined> {
-    const result = await this.run(['api', 'user', '--jq', '.login'], this.runOptions(context));
+    const result = await this.run(['api', 'user', '--jq', '.login'], this.runOptions(sanitizeWorkingDirectory(context.cwd)));
     if (result.exitCode !== 0) {
       logger.warn('[OwnershipLookup] Could not resolve the authenticated gh user', { stderr: result.stderr.slice(0, 200) });
       return undefined;
@@ -260,13 +277,20 @@ export class GhOwnershipResolver implements OwnershipResolver {
   }
 
   async lookup(intent: GitHubMutationIntent, context: OwnershipLookupContext = {}): Promise<OwnershipLookupResult> {
+    const cwd = sanitizeWorkingDirectory(context.cwd);
+    if (context.cwd !== undefined && cwd === undefined && lookupNeedsWorkingDirectory(intent)) {
+      return { status: 'error', message: 'supplied working directory is invalid for repository or current-branch inference' };
+    }
+    // Keep this validated path through to execFile. If it disappears afterward,
+    // spawning fails; it must never fall back to the server's working directory.
+    const lookupContext = { cwd };
     switch (intent.kind) {
       case 'pull_request':
-        return this.lookupPullRequest(intent, context);
+        return this.lookupPullRequest(intent, lookupContext);
       case 'issue':
-        return this.lookupIssue(intent, context);
+        return this.lookupIssue(intent, lookupContext);
       case 'branch':
-        return this.lookupBranch(intent, context);
+        return this.lookupBranch(intent, lookupContext);
       default:
         return { status: 'error', message: 'target cannot be identified' };
     }
@@ -279,7 +303,7 @@ export class GhOwnershipResolver implements OwnershipResolver {
       const url = PR_URL_PATTERN.exec(intent.selector);
       const number = parseNumber(intent.selector);
       if (url) {
-        repo = repo ?? { owner: url[1], name: url[2] };
+        repo = { owner: url[1], name: url[2] };
         selectorArgs.push(url[3]);
       } else if (number !== undefined) {
         selectorArgs.push(String(number));
@@ -291,7 +315,7 @@ export class GhOwnershipResolver implements OwnershipResolver {
     }
     const result = await this.run(
       ['pr', 'view', ...selectorArgs, '--json', 'author,number', ...repoArg(repo)],
-      this.runOptions(context),
+      this.runOptions(context.cwd),
     );
     if (result.exitCode !== 0) return classifyFailure(result, 'gh pr view', PR_NOT_FOUND_PATTERN);
     const author = extractAuthor((parseJson(result.stdout) ?? {}) as GhAuthorPayload);
@@ -306,14 +330,14 @@ export class GhOwnershipResolver implements OwnershipResolver {
     }
     const url = ISSUE_URL_PATTERN.exec(intent.selector);
     const number = url ? Number(url[3]) : parseNumber(intent.selector);
-    const repo = intent.repo ?? (url ? { owner: url[1], name: url[2] } : undefined);
+    const repo = url ? { owner: url[1], name: url[2] } : intent.repo;
     if (number === undefined) {
       return { status: 'error', message: `unsupported issue selector '${intent.selector.slice(0, 80)}'` };
     }
     const repoPath = repo ? `${repo.owner}/${repo.name}` : '{owner}/{repo}';
     const result = await this.run(
       ['api', `repos/${repoPath}/issues/${number}`, '--jq', '{number: .number, user: {login: .user.login}}'],
-      this.runOptions(context),
+      this.runOptions(context.cwd),
     );
     if (result.exitCode !== 0) return classifyFailure(result, 'gh api issues', ISSUE_NOT_FOUND_PATTERN);
     const author = extractAuthor((parseJson(result.stdout) ?? {}) as GhAuthorPayload);
@@ -331,13 +355,16 @@ export class GhOwnershipResolver implements OwnershipResolver {
       return { status: 'error', message: `unsupported branch name '${intent.branch.slice(0, 80)}'` };
     }
     const result = await this.run(
-      ['pr', 'list', '--head', intent.branch, '--state', 'open', '--json', 'author,number', '--limit', '5', ...repoArg(intent.repo)],
-      this.runOptions(context),
+      ['pr', 'list', '--head', intent.branch, '--state', 'open', '--json', 'author,number', '--limit', String(BRANCH_PR_LIMIT), ...repoArg(intent.repo)],
+      this.runOptions(context.cwd),
     );
     if (result.exitCode !== 0) return classifyFailure(result, 'gh pr list', PR_NOT_FOUND_PATTERN);
     const payload = parseJson(result.stdout);
     if (!Array.isArray(payload)) return { status: 'error', message: 'gh pr list returned unexpected output' };
     if (payload.length === 0) return { status: 'not_found' };
+    if (payload.length >= BRANCH_PR_LIMIT) {
+      return { status: 'error', message: `branch '${intent.branch}' reached the PR lookup limit; author results may be truncated` };
+    }
     const authors = payload
       .map(entry => extractAuthor(entry as GhAuthorPayload))
       .filter((author): author is { login: string; number?: number } => author !== undefined);
