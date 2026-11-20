@@ -491,6 +491,8 @@ These variables control the Gatekeeper policy enforcement engine that protects a
 
 Ownership checks run before built-in read-only command patterns can allow a call. For example, `gh pr checks 5 && gh pr merge 5` still requires confirmation when PR 5 belongs to someone else. A static deny remains final. Full PR/issue URLs determine the lookup repository even when a `--repo` flag disagrees. If a supplied working directory is invalid and repository or current-branch inference is needed, the lookup requires confirmation. Branch-author results that reach the bounded fetch limit also require confirmation because another author may be outside the returned page.
 
+Edits selecting multiple issues require confirmation. Executable `$()` and backtick substitutions are inspected inside double quotes; single-quoted and escaped text remain literal. Commands over 4000 characters, or nested substitutions that cannot be fully inspected within the bounded scan, require confirmation instead of ignoring unexamined contents.
+
 ### Permission Prompt Configuration
 
 These variables tune the permission prompt system introduced in v2.0.0 (Issue #625) for headless session approval workflows.

@@ -102,7 +102,7 @@ describe('OwnershipPolicy', () => {
 
     it('exposes sub-shell contents as their own segments', () => {
       expect(splitShellSegments('echo $(gh pr close 7) `gh issue close 8`')).toEqual([
-        'echo', 'gh pr close 7', 'gh issue close 8',
+        'echo $(gh pr close 7) `gh issue close 8`', 'gh pr close 7', 'gh issue close 8',
       ]);
     });
 
@@ -111,6 +111,96 @@ describe('OwnershipPolicy', () => {
         'gh', 'pr', 'edit', '12', '--title', 'New title', '-b', 'x y', '--repo=o/r',
       ]);
       expect(tokenizeShellWords('echo a\\ b')).toEqual(['echo', 'a b']);
+    });
+  });
+
+  describe('substitution and inspection boundaries', () => {
+    it.each([
+      'echo "$(gh pr close 7)"',
+      'echo "$(echo "$(gh pr close 7)")"',
+      'echo "$(echo \')\'; gh pr close 7)"',
+      'echo "$(echo "("; gh pr close 7)"',
+      'echo "$( (gh pr close 7) )"',
+      'echo "`gh pr close 7`"',
+      String.raw`echo "\\$(gh pr close 7)"`,
+    ])('inspects executable contents: %s', (command) => {
+      expect(bash(command)).toContainEqual(expect.objectContaining({ kind: 'pull_request', selector: '7' }));
+    });
+
+    it('finds every mutation within a quoted substitution', () => {
+      expect(bash('echo "$(gh pr close 7; gh issue close 8)"').map(intent => intent.selector)).toEqual(['7', '8']);
+    });
+
+    it.each([
+      "echo '$(gh pr close 7)'",
+      String.raw`echo "\$(gh pr close 7)"`,
+      'echo "$(gh pr view 7)"',
+      'echo "$(printf \'%s\' \'gh pr close 7\')"',
+    ])('keeps literal text and read-only substitutions mutation-free: %s', (command) => {
+      expect(bash(command)).toEqual([]);
+    });
+
+    it('keeps outer arguments intact while separately exposing substitution bodies', () => {
+      const command = 'gh pr edit 5 --body "$(gh pr close 7)" --repo o/r';
+      expect(splitShellSegments(command)).toEqual([command, 'gh pr close 7']);
+      expect(tokenizeShellWords(command)).toEqual(['gh', 'pr', 'edit', '5', '--body', '$(gh pr close 7)', '--repo', 'o/r']);
+      expect(bash(command)).toEqual([
+        expect.objectContaining({ kind: 'unresolvable', repo: { owner: 'o', name: 'r' } }),
+        expect.objectContaining({ kind: 'pull_request', selector: '7' }),
+      ]);
+    });
+
+    it.each([
+      'gh pr merge "$(printf 5)" --repo o/r',
+      'gh "$(printf pr)" close 7',
+      'git "$(printf push)" origin feature/x',
+    ])('fails closed for a computed mutation target or dispatch: %s', (command) => {
+      expect(bash(command)).toContainEqual(expect.objectContaining({ kind: 'unresolvable' }));
+    });
+
+    it('fails closed instead of allowing an uninspected suffix beyond 4000 characters', () => {
+      const command = ' '.repeat(4000) + 'gh pr merge 5';
+      expect(bash(command)).toEqual([expect.objectContaining({ kind: 'unresolvable' })]);
+      expect(() => splitShellSegments(command)).toThrow(RangeError);
+    });
+
+    it('inspects the full command at the 4000-character boundary', () => {
+      const mutation = 'gh pr close 7';
+      expect(bash(' '.repeat(4000 - mutation.length) + mutation)).toEqual([
+        expect.objectContaining({ kind: 'pull_request', selector: '7' }),
+      ]);
+    });
+
+    it('does not let a comment close a substitution before a later mutation', () => {
+      expect(bash('echo "$(echo hi # )\ngh pr close 7)"')).toContainEqual(
+        expect.objectContaining({ kind: 'pull_request', selector: '7' }),
+      );
+    });
+
+    it.each([
+      'echo "$(gh \\\npr close 7)"',
+      'echo "$(g\\\nh pr close 7)"',
+    ])('honours shell line continuation: %s', (command) => {
+      expect(bash(command)).toContainEqual(expect.objectContaining({ kind: 'pull_request', selector: '7' }));
+    });
+
+    it.each([
+      'echo "$(case x in x) gh pr close 7;; esac)"',
+      'echo "$(cat <<EOF\n)\nEOF\ngh pr close 7)"',
+      'echo "$(echo ${value:-)}; gh pr close 7)"',
+    ])('fails closed when full shell grammar would be needed to match substitution boundaries: %s', (command) => {
+      expect(bash(command)).toEqual([expect.objectContaining({ kind: 'unresolvable' })]);
+    });
+
+    it('fails closed for ambiguous escaped legacy backtick nesting', () => {
+      expect(bash('echo "`echo \\`gh pr close 7\\``"')).toEqual([expect.objectContaining({ kind: 'unresolvable' })]);
+    });
+
+    it('fails closed when deeply nested substitutions exceed the bounded inspection work', () => {
+      const command = '$('.repeat(100) + 'gh pr close 7' + ')'.repeat(100);
+      expect(command.length).toBeLessThan(4000);
+      expect(bash(command)).toEqual([expect.objectContaining({ kind: 'unresolvable' })]);
+      expect(() => splitShellSegments(command)).toThrow(RangeError);
     });
   });
 
@@ -208,6 +298,18 @@ describe('OwnershipPolicy', () => {
         expect(bash(command)).toEqual([]);
       },
     );
+  });
+
+  it.each([
+    'gh issue edit 23 34 --add-label bug',
+    'gh issue edit --repo o/r 23 34 --title "New title"',
+    'gh issue edit https://github.com/o/r/issues/23 https://github.com/o/r/issues/34 --add-label bug',
+  ])('fails closed for a bulk issue edit: %s', (command) => {
+    expect(bash(command)).toEqual([expect.objectContaining({ kind: 'unresolvable' })]);
+  });
+
+  it('retains a resolvable single issue edit', () => {
+    expect(bash('gh issue edit 23 --add-label bug')).toEqual([expect.objectContaining({ kind: 'issue', selector: '23' })]);
   });
 
   describe('detectGitHubMutations — gh api', () => {

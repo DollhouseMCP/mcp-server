@@ -163,4 +163,25 @@ describe('GatekeeperHandler permission_prompt ownership policy', () => {
     expect(f.evaluate).not.toHaveBeenCalled();
   });
 
+  it.each([
+    'gh issue edit 23 34 --add-label bug',
+    'echo "$(gh pr close 7)"',
+    ' '.repeat(4000) + 'gh pr close 7',
+  ])('gates bulk, quoted and oversized mutations in both entry points: %s', async (command) => {
+    const lookup = jest.fn<OwnershipResolver['lookup']>().mockImplementation(async intent => ({
+      status: 'resolved', authorLogin: intent.selector === '23' ? 'mickdarling' : 'stranger',
+    }));
+    const policy = new OwnershipPolicyService({
+      config: { mode: 'confirm', ownerLogin: 'mickdarling', teammates: [] },
+      resolver: { lookup, resolveOwnerLogin: async () => 'mickdarling' }, cache: new OwnershipCache(),
+    });
+    const f = fixture(undefined, policy);
+    const input = { command };
+    await expect(f.handler.dispatch('permissionPrompt', { ...MERGE, input })).resolves.toMatchObject({
+      behavior: 'deny', classification: { stage: 'approval_required' },
+    });
+    await expect(f.handler.dispatch('evaluatePermission', { ...MERGE, input, platform: 'claude_code' }))
+      .resolves.toMatchObject({ hookSpecificOutput: { permissionDecision: 'ask' } });
+  });
+
 });

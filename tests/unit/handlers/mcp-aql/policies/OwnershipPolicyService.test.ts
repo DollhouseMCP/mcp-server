@@ -110,6 +110,42 @@ describe('OwnershipPolicyService', () => {
     expect((await service.evaluate('Bash', { command: 'git push origin scratch' }))?.behavior).toBe('allow');
   });
 
+  describe('bulk, substitution and length regressions', () => {
+    it('cannot let an owner-authored first issue authorize an unowned second issue', async () => {
+      const { resolver, lookup } = fakeResolver({ '23': resolved('mickdarling'), '34': resolved('stranger') });
+      const service = new OwnershipPolicyService({ config: { ...CONFIG, mode: 'confirm' }, resolver, cache: new OwnershipCache() });
+      expect((await service.evaluate('Bash', { command: 'gh issue edit 23 34 --add-label bug' }))?.behavior).toBe('confirm');
+      expect(lookup).not.toHaveBeenCalled();
+    });
+
+    it('checks authorship inside a double-quoted substitution', async () => {
+      const { resolver, lookup } = fakeResolver({ '7': resolved('stranger') });
+      const service = new OwnershipPolicyService({ config: { ...CONFIG, mode: 'confirm' }, resolver, cache: new OwnershipCache() });
+      expect((await service.evaluate('Bash', { command: 'echo "$(gh pr close 7)"' }))?.behavior).toBe('confirm');
+      expect(lookup).toHaveBeenCalledWith(expect.objectContaining({ selector: '7' }), { cwd: undefined });
+    });
+
+    it('still allows a trusted author inside a resolvable substitution', async () => {
+      const { resolver } = fakeResolver({ '7': resolved('mickdarling') });
+      const service = new OwnershipPolicyService({ config: { ...CONFIG, mode: 'confirm' }, resolver, cache: new OwnershipCache() });
+      expect((await service.evaluate('Bash', { command: 'echo "$(gh pr close 7)"' }))?.behavior).toBe('allow');
+    });
+
+    it('fails closed without a lookup when a command exceeds the inspection limit', async () => {
+      const { resolver, lookup } = fakeResolver({ '7': resolved('mickdarling') });
+      const service = new OwnershipPolicyService({ config: { ...CONFIG, mode: 'confirm' }, resolver, cache: new OwnershipCache() });
+      expect((await service.evaluate('Bash', { command: ' '.repeat(4000) + 'gh pr close 7' }))?.behavior).toBe('confirm');
+      expect(lookup).not.toHaveBeenCalled();
+    });
+
+    it('does not guess the repository inherited by a substitution under a repository prefix', async () => {
+      const { resolver, lookup } = fakeResolver({ '7': resolved('mickdarling') });
+      const service = new OwnershipPolicyService({ config: { ...CONFIG, mode: 'confirm' }, resolver, cache: new OwnershipCache() });
+      expect((await service.evaluate('Bash', { command: 'GH_REPO=other/repo echo "$(gh pr close 7)"' }))?.behavior).toBe('confirm');
+      expect(lookup).not.toHaveBeenCalled();
+    });
+  });
+
   describe('resolver boundary regressions', () => {
     it.each([
       'gh pr close https://github.com/actual/target/pull/12 --repo decoy/repo',
