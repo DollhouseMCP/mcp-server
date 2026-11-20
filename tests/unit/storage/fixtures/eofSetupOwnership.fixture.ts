@@ -4,6 +4,7 @@ import * as path from 'node:path';
 
 const proofRoot = process.env.EOF_SETUP_PROOF_ROOT!;
 const mode = process.env.EOF_SETUP_PROOF_MODE!;
+const reserved = process.env.EOF_SETUP_PROOF_TARGET === 'reserved';
 const writes: Promise<void>[] = [];
 const events: string[] = [];
 const observer = { read: () => 'original' };
@@ -15,13 +16,13 @@ const held = new Promise<void>(resolve => { release = resolve; });
 // stalled kernel syscall. Its returned promise includes a real readback.
 const writeFile = (...args: Parameters<typeof actualFs.writeFile>): Promise<void> => {
   const name = typeof args[0] === 'string' ? path.basename(args[0]) : '';
-  if (!/^n\d+$/.test(name)) return actualFs.writeFile(...args);
-  ownedRoot = path.dirname(String(args[0]));
+  if (!(reserved ? /^noise-\d+$/ : /^n\d+$/).test(name)) return actualFs.writeFile(...args);
+  ownedRoot = reserved ? path.dirname(path.dirname(String(args[0]))) : path.dirname(String(args[0]));
   let write: Promise<void>;
-  if (name === 'n0' && mode !== 'setup-timeout') {
+  if (name === (reserved ? 'noise-0' : 'n0') && mode !== 'setup-timeout') {
     // Intentionally falsy: the regression must preserve Promise.all's original rejection.
     write = Promise.reject(undefined);
-  } else if (name === 'n1') {
+  } else if (name === (reserved ? 'noise-1' : 'n1')) {
     write = actualFs.writeFile(...args).then(async () => {
       await held;
       expect(await actualFs.readFile(String(args[0]), 'utf8')).toBe('x');
@@ -48,7 +49,8 @@ afterEach(() => {
   events.push('afterEach-enter');
   if (mode !== 'blocked') release();
 });
-await import('../FileMemoryAdoptionRecoveryScanBudget.test.js');
+if (reserved) await import('../FileMemoryReservedAdoptionRecovery.test.js');
+else await import('../FileMemoryAdoptionRecoveryScanBudget.test.js');
 it('controlled next case enters only after owned settlement and cleanup', async () => {
   nextEntered = true; events.push('next-case');
   expect(settled).toBe(4096); expect(removals).toBe(1);

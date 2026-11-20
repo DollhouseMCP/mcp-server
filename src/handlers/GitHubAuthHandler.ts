@@ -230,7 +230,11 @@ export class GitHubAuthHandler {
         const possiblePaths = this.getOAuthHelperCandidatePaths(pkgRoot);
 
         for (const testPath of possiblePaths) {
-          if (await this.fileOperations.exists(testPath)) return testPath;
+          try {
+            if (await this.fileOperations.exists(testPath)) return testPath;
+          } catch {
+            // Optional helper candidates may be unreadable; continue searching.
+          }
         }
 
         logger.error('OAUTH_INDEX_2734: oauth-helper.mjs not found', {
@@ -742,7 +746,8 @@ export class GitHubAuthHandler {
           this.populateOAuthHelperResult(health, result);
         }
 
-        health.hasLog = await this.fileOperations.exists(logFile);
+        // Log availability is diagnostic only; an unreadable log is unavailable.
+        health.hasLog = await this.fileOperations.exists(logFile).catch(() => false);
         health.errorLog = await this.readOAuthHelperErrorLogIfNeeded(health, logFile);
 
         return health;

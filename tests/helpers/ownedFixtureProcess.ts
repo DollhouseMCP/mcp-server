@@ -1,5 +1,5 @@
 /** Test-only process ownership; never use this for an application process. */
-import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import { rm } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
 import { types } from 'node:util';
@@ -163,6 +163,26 @@ export class OwnedFixtureProcess {
     try { process.kill(-this.child.pid, 0); return true; }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
+      if (process.platform === 'darwin' && (error as NodeJS.ErrnoException).code === 'EPERM') {
+        // Failure-only evidence: no process arguments/environment or extra signals.
+        // Observation never replaces the original denial or authorizes cleanup.
+        try {
+          const pgid = this.child.pid;
+          const ps = spawnSync('/bin/ps', ['-axo', 'pid=,ppid=,pgid=,uid=,state='], {
+            encoding: 'utf8', timeout: 100, maxBuffer: 1024 * 1024,
+          });
+          const matches = (ps.stdout ?? '').split('\n').flatMap(line => {
+            const m = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+([A-Za-z?])/.exec(line);
+            return m && Number(m[3]) === pgid
+              ? [{ pid: Number(m[1]), ppid: Number(m[2]), pgid: Number(m[3]), uid: Number(m[4]), state: m[5] }]
+              : [];
+          });
+          console.error('OWNED_FIXTURE_DARWIN_GROUP_DENIAL', JSON.stringify({
+            pgid, observerUid: process.getuid?.(), psExit: ps.status, psFailed: Boolean(ps.error),
+            members: matches.slice(0, 16), membersTruncated: matches.length > 16,
+          }));
+        } catch { /* Evidence failure cannot replace the original EPERM. */ }
+      }
       throw error;
     }
   }

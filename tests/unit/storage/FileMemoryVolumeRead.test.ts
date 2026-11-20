@@ -10,6 +10,8 @@ import { FileMemoryTransactionCoordinator } from '../../../src/storage/FileMemor
 import { FileMemoryOwnerSnapshots, type UnownedFileMemoryToken } from '../../../src/storage/FileMemoryOwnerSnapshots.js';
 import { FileMemoryVolumeStore, MAX_FILE_MEMORY_VOLUME_BYTES } from '../../../src/storage/FileMemoryVolumeStore.js';
 
+import { fileMetadataProof } from './helpers/fileProof.js';
+
 const it = process.platform === 'win32' || !process.getuid ? jestIt.skip : jestIt;
 const roots: string[] = [];
 const extension = import.meta.url.endsWith('.js') ? 'js' : 'ts';
@@ -102,20 +104,20 @@ describe('dormant verified file archive observation', () => {
     const spelling = f.store as unknown as { requireVolumeSpelling(root: string, volume: number): Promise<void> };
     const original = spelling.requireVolumeSpelling.bind(f.store);
     let proofs = 0;
-    let aliasIdentity: Awaited<ReturnType<typeof fs.lstat>> | undefined;
+    let aliasIdentity: ReturnType<typeof fileMetadataProof> | undefined;
     const spy = jest.spyOn(spelling, 'requireVolumeSpelling').mockImplementation(async (root, volume) => {
       await original(root, volume);
       // Actual between-scan barrier: the final spelling proof succeeded; the
       // very next enumeration must reject the new alias it observes itself.
       if (++proofs === 2) {
         await fs.mkdir(aliasPath, { mode: 0o700 });
-        aliasIdentity = await fs.lstat(aliasPath);
+        aliasIdentity = fileMetadataProof(await fs.lstat(aliasPath, { bigint: true }));
       }
     });
     try {
       await expect(f.store.read(f.token, 1)).rejects.toMatchObject({ code: 'EARCHIVEUNSAFE' });
       expect(proofs).toBe(2);
-      expect(await fs.lstat(aliasPath)).toEqual(aliasIdentity);
+      expect(fileMetadataProof(await fs.lstat(aliasPath, { bigint: true }))).toEqual(aliasIdentity);
       expect(f.calls()).toBe(calls);
       expect((await fs.readdir(ownerRoot)).sort()).toEqual([alias, 'v2'].sort());
     } finally { spy.mockRestore(); }
@@ -157,12 +159,12 @@ describe('dormant verified file archive observation', () => {
     const spelling = f.store as unknown as { requireNamespaceComponent(parent: string, component: string, required?: boolean): Promise<void> };
     const original = spelling.requireNamespaceComponent.bind(f.store);
     let proofs = 0;
-    let aliasIdentity: Awaited<ReturnType<typeof fs.lstat>> | undefined;
+    let aliasIdentity: ReturnType<typeof fileMetadataProof> | undefined;
     const spy = jest.spyOn(spelling, 'requireNamespaceComponent').mockImplementation(async (p, c, required) => {
       await original(p, c, required);
       if (p === parent && c === component && ++proofs === 2) {
         await fs.mkdir(aliasPath, { mode: 0o700 });
-        aliasIdentity = await fs.lstat(aliasPath);
+        aliasIdentity = fileMetadataProof(await fs.lstat(aliasPath, { bigint: true }));
       }
     });
     try {
@@ -170,7 +172,7 @@ describe('dormant verified file archive observation', () => {
       expect(proofs).toBe(2);
       expect(aliasIdentity).toBeDefined();
       expect(outcome).toMatchObject({ code: 'EARCHIVEUNSAFE' });
-      expect(await fs.lstat(aliasPath)).toEqual(aliasIdentity);
+      expect(fileMetadataProof(await fs.lstat(aliasPath, { bigint: true }))).toEqual(aliasIdentity);
       expect(f.calls()).toBe(calls);
       expect(await fs.readdir(parent)).toContain(alias);
     } finally { spy.mockRestore(); }

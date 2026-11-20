@@ -67,6 +67,22 @@ export interface ParsedContent {
   excerpt?: string;
 }
 
+/** Decide whether a document follows the frontmatter route, even if its frame is incomplete. */
+export function hasFrontmatterFraming(raw: string): boolean {
+  return raw.trim().startsWith('---');
+}
+
+/** Whether an untrimmed partial read can still begin the parser's strict frame. */
+export function canStartFrontmatterFrame(raw: string): boolean {
+  return ['---\n', '---\r\n'].some(opening => opening.startsWith(raw) || raw.startsWith(opening));
+}
+
+/** Match the parser's strict frontmatter fences without trimming the input. */
+export function matchFrontmatterFrame(raw: string): { frontmatter: string; body: string } | null {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(raw);
+  return match ? { frontmatter: match[1], body: raw.substring(match[0].length) } : null;
+}
+
 export class SecureYamlParser {
   private static readonly RAW_YAML_MAX_DEPTH = 64;
   private static readonly RAW_YAML_MAX_EXPANDED_NODES = 100_000;
@@ -75,7 +91,7 @@ export class SecureYamlParser {
     SECURITY_LIMITS.YAML_BOMB_AMPLIFICATION_THRESHOLD + 1;
 
   private static readonly DEFAULT_OPTIONS: SecureParseOptions = {
-    maxYamlSize: 64 * 1024,      // 64KB for YAML
+    maxYamlSize: SECURITY_LIMITS.MAX_YAML_LENGTH,      // 64KB for YAML
     maxContentSize: 1024 * 1024,  // 1MB for content
     validateContent: true,
     validateFields: true         // By default, apply field validators
@@ -147,7 +163,7 @@ export class SecureYamlParser {
   static parse(input: string, options: SecureParseOptions = {}): ParsedContent {
     const opts = { ...this.DEFAULT_OPTIONS, ...options };
     const maxContentSize = opts.maxContentSize ?? 1024 * 1024;
-    const maxYamlSize = opts.maxYamlSize ?? 64 * 1024;
+    const maxYamlSize = opts.maxYamlSize ?? SECURITY_LIMITS.MAX_YAML_LENGTH;
 
     // 1. Size validation
     if (input.length > maxContentSize) {
@@ -156,7 +172,7 @@ export class SecureYamlParser {
 
     // 2. Extract frontmatter boundaries
     // FIX: Support both Unix (\n) and Windows (\r\n) line endings
-    const frontmatterMatch = /^---\r?\n([\s\S]*?)\r?\n---/.exec(input);
+    const frontmatterMatch = matchFrontmatterFrame(input);
     if (!frontmatterMatch) {
       // No frontmatter, return empty data
       return {
@@ -165,8 +181,8 @@ export class SecureYamlParser {
       };
     }
 
-    const yamlContent = frontmatterMatch[1];
-    const markdownContent = input.substring(frontmatterMatch[0].length);
+    const yamlContent = frontmatterMatch.frontmatter;
+    const markdownContent = frontmatterMatch.body;
 
     // 3. Validate YAML size
     if (yamlContent.length > maxYamlSize) {
@@ -238,8 +254,9 @@ export class SecureYamlParser {
         }
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      throw new SecurityError(`YAML parsing failed: ${message}`, 'high');
+      // Callback and infrastructure failures are not evidence of invalid YAML.
+      if (!(error instanceof yaml.YAMLException)) throw error;
+      throw new SecurityError(`YAML parsing failed: ${error.message}`, 'high');
     }
   }
 

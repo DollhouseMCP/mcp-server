@@ -71,12 +71,14 @@ export interface ElementIndexEntry {
 
 /**
  * Result of diffing current filesystem state against a stored manifest.
- * Each array contains relative paths.
+ * Each array contains relative paths. File-layer scans report previously unindexed
+ * paths as modified on every retry and on repair, even if a reader discarded an
+ * earlier diff. A vanished unindexed path is not an indexed removal.
  */
 export interface ManifestDiffResult {
-  /** Files present on disk but not in manifest (new files) */
+  /** Previously unseen files (raw manifest diffs: files absent from the manifest). */
   added: string[];
-  /** Files whose mtime changed since last manifest snapshot */
+  /** Changed files, including retried or repaired unindexed paths in file-layer scans. */
   modified: string[];
   /** Files in manifest but no longer on disk */
   removed: string[];

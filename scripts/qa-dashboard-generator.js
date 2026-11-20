@@ -524,7 +524,7 @@ This dashboard will show QA metrics trends once test runs are completed.
 \`\`\`bash
 # Run QA tests to generate initial metrics
 npm run build
-node scripts/qa-test-runner.js
+npm run qa:all
 
 # Or run individual QA tests
 node scripts/qa-simple-test.js

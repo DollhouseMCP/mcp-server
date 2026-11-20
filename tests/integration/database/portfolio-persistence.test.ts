@@ -17,10 +17,10 @@ beforeAll(async () => { USER_ID = await ensureTestUser(); });
 afterAll(async () => { await closeTestDb(); });
 const NOW = new Date('2026-09-28T00:00:00Z');
 const directories: string[] = [];
-const disposables: { dispose(): void }[] = [];
+const disposables: { dispose(): Promise<void> }[] = [];
 afterEach(async () => {
   jest.restoreAllMocks();
-  for (const manager of disposables.splice(0)) manager.dispose();
+  for (const manager of disposables.splice(0)) await manager.dispose();
   for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
   await cleanupAllTestData();
 });

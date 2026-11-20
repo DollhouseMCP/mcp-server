@@ -18,14 +18,15 @@ export type { IStorageLayer, StorageScanOptions } from './IStorageLayer.js';
 export { FrontmatterParser } from './FrontmatterParser.js';
 export type { FrontmatterData } from './FrontmatterParser.js';
 export { FileStorageBackend } from './FileStorageBackend.js';
-export { StorageManifest } from './StorageManifest.js';
-export { MetadataIndex } from './MetadataIndex.js';
+export { FileStateTable } from './FileStateTable.js';
+export { MemoryIndexPersistence } from './MemoryIndexPersistence.js';
+export type { IndexPersistence } from './MemoryIndexPersistence.js';
 export { ElementStorageLayer } from './ElementStorageLayer.js';
 export type { ElementStorageLayerOptions } from './ElementStorageLayer.js';
 
 // Classes — Phase 2 (MemoryStorageLayer for .yaml memories)
 export { MemoryMetadataExtractor } from './MemoryMetadataExtractor.js';
 export { MemoryIndexFile } from './MemoryIndexFile.js';
-export type { MemoryIndexData, MemoryIndexFileOptions } from './MemoryIndexFile.js';
+export type { MemoryIndexData } from './MemoryIndexFile.js';
 export { MemoryStorageLayer } from './MemoryStorageLayer.js';
 export type { MemoryStorageLayerOptions } from './MemoryStorageLayer.js';

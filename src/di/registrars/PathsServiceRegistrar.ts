@@ -25,6 +25,7 @@ import * as os from 'node:os';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 
+import { env } from '../../config/env.js';
 import type { IUserPathResolver } from '../../paths/IUserPathResolver.js';
 import { LegacyDetectingPathResolver } from '../../paths/LegacyDetectingPathResolver.js';
 import { PackageResourceLocator } from '../../paths/PackageResourceLocator.js';
@@ -81,14 +82,17 @@ export class PathsServiceRegistrar {
       env: process.env,
     });
 
-    // `portfolioRoot` is only used on the fresh-install branch inside
-    // detect(); when a legacy install is present, the returned
+    // `portfolioRoot` holds fresh-install decisions; without one, a legacy
+    // install takes precedence and the returned
     // resolver anchors on `legacyRoot`. Both are passed so detect()
     // does not need to re-derive either from process state.
     const userPathResolver = await LegacyDetectingPathResolver.detect({
       legacyRoot,
       portfolioRoot,
     });
+
+    // Database deployments retain path resolution without requiring writable file storage.
+    if (env.DOLLHOUSE_STORAGE_BACKEND !== 'database') await userPathResolver.persistLayoutDecision();
 
     const anchorRoot = userPathResolver.getAnchorRoot();
     const resolvedLegacy = path.resolve(legacyRoot);

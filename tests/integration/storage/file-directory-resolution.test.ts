@@ -149,7 +149,7 @@ describe.each(['flat', 'per-user'])('%s storage directory resolution', layout =>
       // This scan's idle state cannot survive alongside the retained directories.
       const initial = storage['getState']();
       await storage.scan();
-      if ('indexFile' in initial) await initial.indexFile.flush();
+      await initial.persistence?.flush();
       expect(storage.hasCompletedScan()).toBe(false);
       if (operation === 'update target') {
         expect((await manager['_persister'].resolveUpdateTarget('Display Metadata'))?.path).toBe(relative);
@@ -196,7 +196,7 @@ describe.each(['flat', 'per-user'])('%s storage directory resolution', layout =>
       const churnDirectoryState = async () => {
         const original = storage['getState']();
         if (!pinned) manager['uncacheByPath'](file);
-        if ('indexFile' in original) await original.indexFile.flush();
+        await original.persistence?.flush();
         for (let i = 0; i < MAX_CACHED_DIRECTORY_STATES; i++) {
           storage['getState'](path.join(home, `idle-${i}`));
         }
@@ -227,7 +227,7 @@ describe.each(['flat', 'per-user'])('%s storage directory resolution', layout =>
       const storage = manager['storageLayer'] as ElementStorageLayer | MemoryStorageLayer;
       const state = storage['getState']();
       if (!pinned) manager['uncacheByPath'](path.join(directory, relative));
-      if ('indexFile' in state) await state.indexFile.flush();
+      await state.persistence?.flush();
       for (let i = 0; i < MAX_CACHED_DIRECTORY_STATES; i++) storage['getState'](path.join(home, `deleted-${i}`));
       await fs.unlink(path.join(directory, relative));
       await manager['scanAndEvict']();

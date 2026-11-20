@@ -258,6 +258,12 @@ describe('FileOperationsService', () => {
   });
 
   describe('exists', () => {
+    it.each(['ENOTDIR', 'EACCES', 'EIO'])('classifies access error %s', async code => {
+      const error = Object.assign(new Error(code), { code });
+      mockAccess.mockRejectedValue(error);
+      if (code === 'ENOTDIR') await expect(service.exists('/test/file.txt')).resolves.toBe(false);
+      else await expect(service.exists('/test/file.txt')).rejects.toMatchObject({ cause: error });
+    });
     it('should return true if file exists', async () => {
       mockAccess.mockResolvedValue(undefined);
       const result = await service.exists('/test/file.txt');
@@ -266,7 +272,7 @@ describe('FileOperationsService', () => {
     });
 
     it('should return false if file does not exist', async () => {
-      mockAccess.mockRejectedValue(new Error('ENOENT'));
+      mockAccess.mockRejectedValue(Object.assign(new Error('gone'), { code: 'ENOENT' }));
       const result = await service.exists('/test/file.txt');
       expect(result).toBe(false);
     });
@@ -366,4 +372,19 @@ describe('FileOperationsService', () => {
       await expect(service.createFileExclusive(filePath, content)).rejects.toThrow('Permission denied');
     });
   });
+  it.each(['ENOENT', 'ENOTDIR', 'EACCES', 'EIO'])('classifies directory probe %s', async code => {
+    const error = Object.assign(new Error(code), { code });
+    const stat = jest.spyOn(service, 'stat').mockRejectedValue(error);
+    try {
+      if (code === 'ENOENT' || code === 'ENOTDIR') await expect(service.directoryExists('/test')).resolves.toBe(false);
+      else await expect(service.directoryExists('/test')).rejects.toMatchObject({ cause: error });
+    } finally { stat.mockRestore(); }
+  });
+
+  it.each([true, false])('returns the directory kind (%s) from stat', async isDirectory => {
+    const stat = jest.spyOn(service, 'stat').mockResolvedValue({ isDirectory: () => isDirectory } as import('node:fs').Stats);
+    try { await expect(service.directoryExists('/test')).resolves.toBe(isDirectory); }
+    finally { stat.mockRestore(); }
+  });
+
 });

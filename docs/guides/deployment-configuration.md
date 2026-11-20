@@ -1385,7 +1385,7 @@ All variables are optional unless marked **required**. Variables with no default
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DOLLHOUSE_PORTFOLIO_DIR` | *(platform default — see [Directory layout](#directory-layout))* | Portfolio root directory. Must be an absolute path. |
+| `DOLLHOUSE_PORTFOLIO_DIR` | *(platform default — see [Directory layout](#directory-layout))* | Portfolio root directory. Must be an absolute path. Fresh or recovered installations refuse a path at or inside `~/.dollhouse`; choose a directory outside it. Existing flat installations using that path continue to work. |
 | `DOLLHOUSE_CONFIG_DIR` | *(platform default)* | Config directory. Must be an absolute path. |
 | `DOLLHOUSE_CACHE_DIR` | *(platform default)* | Cache directory. Must be an absolute path. |
 | `DOLLHOUSE_STATE_DIR` | *(platform default)* | State directory. Must be an absolute path. |

@@ -20,9 +20,9 @@ import { elements } from '../database/schema/elements.js';
 import { memoryEntries } from '../database/schema/memories.js';
 import type { UserIdResolver } from '../database/UserContext.js';
 import { getErrorCode, isSerializationFailure, isUniqueViolation, type DrizzleTx } from '../database/db-utils.js';
-import { MemoryMetadataExtractor } from './MemoryMetadataExtractor.js';
+import { MemoryMetadataExtractor, MemoryMetadataExtractionError } from './MemoryMetadataExtractor.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
-import { MEMORY_CONSTANTS } from '../elements/memories/constants.js';
+import { DEFAULT_MEMORY_NAME, MEMORY_CONSTANTS } from '../elements/memories/constants.js';
 import { validateMemoryControlFields } from '../elements/memories/memoryYamlValidation.js';
 import { AbstractDatabaseStorageLayer } from './AbstractDatabaseStorageLayer.js';
 import { logger } from '../utils/logger.js';
@@ -238,6 +238,9 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
   }
 
   private headWriteFailure(cause: unknown): unknown {
+      if (cause instanceof MemoryMetadataExtractionError) {
+        return this.createInvalidHeadError('Memory head YAML could not be parsed', cause);
+      }
       if (isSerializationFailure(cause)) {
         // Retain the attempt. Admitted callers still await outer transaction
         // completion before deciding whether rollback is known or uncertain.
@@ -267,9 +270,12 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
     }
     const inputMetadata = { ...metadata, tags: [...metadata.tags] };
     const expectedHead = { token, revision };
-    const prepared = this.prepareMemoryContent(userId, nextName, content, inputMetadata, undefined, expectedHead);
+    let prepared: ReturnType<DatabaseMemoryStorageLayer['prepareMemoryContent']>;
     let saved: { id: string; revision?: bigint };
-    try { saved = await prepared.write(tx); }
+    try {
+      prepared = this.prepareMemoryContent(userId, nextName, content, inputMetadata, undefined, expectedHead);
+      saved = await prepared.write(tx);
+    }
     catch (cause) { throw this.headWriteFailure(cause); }
     if (this.guardedReadCheck) {
       const checkpoint = () => { requireDatabaseMemoryWriteAuthority(authority, this, userId); };
@@ -329,7 +335,7 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
     const byteSize = Buffer.byteLength(content, 'utf8');
 
     // Use the caller-provided name as authoritative, falling back to extracted
-    const elementName = name || extracted.name || 'unnamed';
+    const elementName = name || extracted.name || DEFAULT_MEMORY_NAME;
 
     const write = async (tx: DrizzleTx): Promise<{ id: string; revision?: bigint }> => {
       // Build the column values once; both insert and upsert-SET reuse the

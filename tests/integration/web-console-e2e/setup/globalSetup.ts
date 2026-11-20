@@ -5,8 +5,7 @@
  *
  * Two modes:
  *  - Auto-boot (default): provision an isolated DB + role, run migrations,
- *    generate ephemeral secrets + readiness evidence, boot the app, wait for
- *    health. Distinct port (3101) + database from the manual run-smoke setup.
+ *    generate ephemeral secrets, boot the app, wait for health. Distinct port (3101) + database from the manual run-smoke setup.
  *  - Attach (E2E_NO_BOOT=1): target an already-running instance; the caller
  *    exports E2E_BASE_URL / E2E_DATABASE_ADMIN_URL / E2E_OPAQUE_HMAC_KEY.
  */
@@ -124,29 +123,7 @@ async function applyAppGrants(): Promise<void> {
   }
 }
 
-function readinessEvidence(): unknown {
-  const ids = [
-    'production_database_migrations', 'security_invalidation_multi_replica', 'allowlist_authority_parity',
-    'embedded_as_login_step_up', 'account_invite_redemption', 'oauth_grant_revocation',
-    'github_integration_connect_callback', 'portfolio_sync_live_repository',
-    'signing_key_auth_policy_multi_replica', 'approval_execution_projection', 'audit_telemetry_projection',
-  ];
-  return {
-    _note: 'e2e harness readiness evidence — all checks ready so the /api/v1 gate passes for the isolated test instance.',
-    phase: 'pre-replacement',
-    composition: {
-      activationProfile: 'shared-hosted', storageBackend: 'postgres', apiV1MountCreated: true, routesMounted: false,
-      registeredRouteModuleIds: [
-        'auth', 'health', 'accountAdmin', 'activations', 'approvals', 'audit', 'executions', 'integrations',
-        'me-logs', 'operations', 'portfolio', 'runtimeSessions', 'security-admin', 'selfSecurity', 'selfService',
-        'session-telemetry',
-      ],
-    },
-    liveChecks: ids.map(id => ({ id, ready: true, detail: 'e2e: verified by the harness setup.' })),
-  };
-}
-
-function buildAppEnv(secrets: Record<string, string>, evidencePath: string, runDir: string): NodeJS.ProcessEnv {
+function buildAppEnv(secrets: Record<string, string>, runDir: string): NodeJS.ProcessEnv {
   return {
     ...process.env,
     NODE_ENV: 'development',
@@ -169,7 +146,6 @@ function buildAppEnv(secrets: Record<string, string>, evidencePath: string, runD
     DOLLHOUSE_HTTP_WEB_CONSOLE: 'false',
     DOLLHOUSE_WEB_AUTH_ENABLED: 'false',
     DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED: 'true',
-    DOLLHOUSE_WEB_CONSOLE_REPLACEMENT_READINESS_EVIDENCE: evidencePath,
     DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_NAME: DB_NAME,
     DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_USER: APP_ROLE,
     DOLLHOUSE_WEB_CONSOLE_PORTFOLIO_WRITE_ROUTES_ENABLED: 'true',
@@ -220,15 +196,12 @@ export default async function globalSetup(): Promise<void> {
     opaqueHmacKey: b64(), secretEncryptionKey: b64(), protectedCorrelationHmacKey: b64(),
     masterEncryptionKey: b64(), cookieSigningSecret: hex(), inviteTokenSecret: hex(),
   };
-  const evidencePath = path.join(runDir, 'replacement-readiness.json');
-  writeFileSync(evidencePath, JSON.stringify(readinessEvidence(), null, 2));
-
   const logPath = path.join(runDir, 'logs', `app-${Date.now()}.log`);
   const logStream = createWriteStream(logPath, { flags: 'a' });
   const tsxCliPath = path.join(root, 'node_modules', 'tsx', 'dist', 'cli.mjs');
   const child = spawn(process.execPath, [tsxCliPath, path.join(root, 'src/index.ts'), '--streamable-http'], {
     cwd: path.join(runDir, 'cwd'),
-    env: buildAppEnv(secrets, evidencePath, runDir),
+    env: buildAppEnv(secrets, runDir),
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true,
   });

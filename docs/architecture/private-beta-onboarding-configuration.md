@@ -7,8 +7,8 @@ consume the resolver after the complete path has passed qualification.
 The pure resolver requires Streamable HTTP, embedded GitHub authentication,
 `DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED=true`, database storage, PostgreSQL auth storage
 and PostgreSQL rate limiting. The descriptor console must be enabled and the
-legacy HTTP console disabled. Existing console replacement evidence and readiness
-checks remain mandatory; this flag does not override them.
+legacy HTTP console disabled. Existing console readiness checks remain mandatory;
+this flag does not override them.
 
 Set `DOLLHOUSE_PUBLIC_BASE_URL` to the exact trusted HTTPS origin and
 `DOLLHOUSE_ONBOARDING_SUPPORT_EMAIL` to the support mailbox shown in the invitation

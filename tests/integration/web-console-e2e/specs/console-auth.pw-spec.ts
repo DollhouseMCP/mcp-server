@@ -21,6 +21,20 @@ import {
 import { BASE_URL } from '../setup/provision.js';
 
 const USER = 'e2e_admin';
+
+// The console's pages are served with a content security policy. Chrome
+// reports anything the policy refuses on the console, so every test in this
+// file also proves the page did nothing the policy had to block.
+const policyViolations: string[] = [];
+test.beforeEach(({ page }) => {
+  policyViolations.length = 0;
+  page.on('console', message => {
+    if (/Content Security Policy/i.test(message.text())) policyViolations.push(message.text());
+  });
+});
+test.afterEach(() => {
+  expect(policyViolations).toEqual([]);
+});
 const OPERATE = '/api/v1/admin/operate/health';
 const MANIFEST_URL = '**/api/v1/me/manifest';
 const CONSOLE_SHELL = '#console-shell';
@@ -164,6 +178,19 @@ async function openMockOperations(page: Page): Promise<void> {
   await expect(page.locator(OPERATIONS_TAB)).toBeVisible();
   await page.locator(OPERATIONS_TAB).click();
 }
+
+// The harness boots the real server with the console enabled and writes no
+// readiness evidence file. Before #3223 that start-up exited.
+test('a fresh install starts and serves the console with no readiness evidence file', async ({ request }) => {
+  expect(process.env.DOLLHOUSE_WEB_CONSOLE_REPLACEMENT_READINESS_EVIDENCE).toBeUndefined();
+
+  const shell = await request.get(`${BASE_URL}/ui/`);
+  expect(shell.status()).toBe(200);
+  expect(shell.headers()['content-type']).toContain('text/html');
+
+  const health = await request.get(`${BASE_URL}/api/v1/health`);
+  expect(health.status()).toBe(200);
+});
 
 test('console UI serves its asset graph and boots from server metadata', async ({ page }) => {
   const assetFailures: string[] = [];

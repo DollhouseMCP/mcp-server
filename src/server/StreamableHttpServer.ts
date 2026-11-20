@@ -25,6 +25,7 @@ import { logger } from '../utils/logger.js';
 import { assertSafePublicBaseUrl, isLoopbackHost } from '../auth/oauth/url.js';
 import { createHttpOrHttpsServer } from './createHttpOrHttpsServer.js';
 import { loadVersionedConsoleUi } from './consoleUiAssets.js';
+import { createConsoleUiSecurityHeadersMiddleware } from '../web-console/middleware/ConsoleSecurityHeaders.js';
 import { TlsConfig } from './TlsConfig.js';
 
 export type RuntimeTransportName = 'stdio' | 'streamable-http';
@@ -59,6 +60,10 @@ export interface StreamableHttpRuntimeOptions {
   sessionIdleTimeoutMs?: number;
   streamMaxLifetimeMs?: number;
   streamExpiryGraceMs?: number;
+  /** Interval between stream credential rechecks; defaults to the env setting. */
+  streamCredentialRecheckMs?: number;
+  /** Asks the auth provider whether an open stream's credential is still good. Rechecks are off when omitted. */
+  isStreamCredentialActive?: (claims: AuthClaims) => Promise<boolean>;
   streamKeepaliveMs?: number;
   sseStallWatcher?: ISseStallWatcher;
   sessionPoolSize?: number;
@@ -96,6 +101,14 @@ export interface StreamableHttpRuntimeOptions {
   webConsoleApiV1?: {
     router: Router;
     markMounted: () => void;
+    /**
+     * False only when the console has verified that the database has not had
+     * this release's migrations applied. /readyz then reports not ready so the
+     * replica is taken out of rotation; nothing else about the fault is
+     * disclosed there. A ledger that cannot be read, or that differs from this
+     * release in an already-applied migration, does not make this false.
+     */
+    isSafeToServe?: () => Promise<boolean>;
   };
   /** Poll interval for durable runtime termination commands when runtimeSessionControl is configured. */
   runtimeCommandPollIntervalMs?: number;
@@ -582,6 +595,13 @@ export async function createStreamableHttpRuntime(
     0,
     options.runtimeCommandPollIntervalMs ?? DEFAULT_RUNTIME_COMMAND_POLL_INTERVAL_MS,
   );
+  const streamCredentialRecheckMs = Math.max(0, options.streamCredentialRecheckMs ?? env.DOLLHOUSE_HTTP_STREAM_CREDENTIAL_RECHECK_MS);
+  if (options.isStreamCredentialActive && streamCredentialRecheckMs === 0) {
+    logger.warn(
+      '[StreamableHTTP] Stream credential rechecks are disabled (DOLLHOUSE_HTTP_STREAM_CREDENTIAL_RECHECK_MS=0). ' +
+      'An open stream keeps delivering after its grant is revoked or its account is disabled, until the credential expires.',
+    );
+  }
   const publicBaseUrl = env.DOLLHOUSE_PUBLIC_BASE_URL;
   if (publicBaseUrl) {
     assertSafePublicBaseUrl(publicBaseUrl);
@@ -993,6 +1013,15 @@ export async function createStreamableHttpRuntime(
             return;
           }
         }
+        // A server running against a schema older than its release is unsafe
+        // for MCP traffic as well as the console, so the whole replica drains.
+        if (options.webConsoleApiV1?.isSafeToServe && !await options.webConsoleApiV1.isSafeToServe()) {
+          res.status(503).json({
+            ready: false,
+            version: PACKAGE_VERSION,
+          });
+          return;
+        }
         res.status(200).json({
           ready: true,
           version: PACKAGE_VERSION,
@@ -1031,6 +1060,11 @@ export async function createStreamableHttpRuntime(
     // and CSS font URLs then stay in that same versioned module graph.
     const consoleUiDir = resolve(dirname(fileURLToPath(import.meta.url)), '../web-console/ui');
     const { assetBasePath, html } = await loadVersionedConsoleUi(consoleUiDir);
+    // Every /ui response carries the security headers: the page, its assets
+    // and the redirect. (A not-found page gets a stricter content policy from
+    // Express itself.) The API router sets its own headers, but it is mounted
+    // after these handlers, so without this the console's pages had none.
+    app.use('/ui', createConsoleUiSecurityHeadersMiddleware());
     app.use('/ui', (_req, res, next) => {
       res.setHeader('Cache-Control', 'no-store, max-age=0, must-revalidate');
       next();
@@ -1203,6 +1237,48 @@ export async function createStreamableHttpRuntime(
     }
   };
 
+  /** Detaches a closed stream from its session, unless a newer stream has already replaced it. */
+  const detachStream = (sessionId: string, session: ActiveSessionRecord, res: Response): void => {
+    session.observers.delete(res);
+    if (sessions.get(sessionId) !== session || session.stream !== res) return;
+    session.stream = undefined;
+    session.stopStallWatcher?.();
+    session.stopStallWatcher = undefined;
+    if (session.idle.close(res)) session.presence?.close();
+  };
+
+  /** Makes an accepted stream the session's current one, and resyncs the client if payloads were dropped. */
+  const attachStream = (sessionId: string, session: ActiveSessionRecord, res: Response, claims: AuthClaims | undefined): void => {
+    if (claims && streamTokenExpiry(claims) === undefined && (options.streamMaxLifetimeMs ?? env.DOLLHOUSE_HTTP_STREAM_MAX_LIFETIME_MS) === 0) {
+      logger.warn('[StreamableHTTP] Stream credential has no expiry and no lifetime cap; connected stream is unbounded', { sessionId });
+    }
+    session.stream = res;
+    session.idle.open(res);
+    recordRuntimeActivity(sessionId);
+    session.presence?.open();
+    session.stopStallWatcher = options.sseStallWatcher?.attach(res);
+    if (session.credentialResyncPending) {
+      session.credentialResyncPending = false;
+      void session.transport.send({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' })
+        .catch(error => logger.debug('[StreamableHTTP] Stream reconnect resync failed', { sessionId, error: errorMessage(error) }));
+    }
+  };
+
+  /** Credential recheck wiring for one stream. No recheck without verified claims or a provider that can answer. */
+  const streamRecheckOptions = (sessionId: string, claims: AuthClaims | undefined) => {
+    const isActive = options.isStreamCredentialActive;
+    return {
+      recheckCredential: claims && isActive ? () => isActive(claims) : undefined,
+      credentialRecheckMs: streamCredentialRecheckMs,
+      onCredentialRevoked: () => logger.info(
+        '[StreamableHTTP] Stream credential is no longer active; closing the stream', { sessionId },
+      ),
+      onCredentialRecheckFailed: (error: unknown) => logger.warn(
+        '[StreamableHTTP] Stream credential recheck failed; retrying at the next interval', { sessionId, error: errorMessage(error) },
+      ),
+    };
+  };
+
   const handleStreamRequest = async (req: Request, res: Response, sessionId: string, session: ActiveSessionRecord): Promise<void> => {
     // Seed Node's public header table so SDK writeHead headers remain readable
     // through getHeader. No header-method wrappers or SDK internals are needed.
@@ -1223,14 +1299,7 @@ export async function createStreamableHttpRuntime(
     let complete!: () => void;
     const pending = { response: res, done: new Promise<void>(resolve => { complete = resolve; }) };
     if (candidate) session.pendingStream = pending;
-    const onClose = (): void => {
-      session.observers.delete(res);
-      if (sessions.get(sessionId) !== session || session.stream !== res) return;
-      session.stream = undefined;
-      session.stopStallWatcher?.();
-      session.stopStallWatcher = undefined;
-      if (session.idle.close(res)) session.presence?.close();
-    };
+    const onClose = (): void => detachStream(sessionId, session, res);
     const claims = res.locals.authClaims as AuthClaims | undefined;
     const observer = observeStream(res, {
       isCurrent: () => sessions.get(sessionId) === session,
@@ -1243,6 +1312,7 @@ export async function createStreamableHttpRuntime(
       // Presence-lapse drops do not initiate resync: a lapsed session closes rather than recovering.
       suppressPayloads: () => session.presence?.hasExpired() ?? false,
       binding: streamCredentialBinding(claims),
+      ...streamRecheckOptions(sessionId, claims),
       onCredentialPayloadDropped: () => { session.credentialResyncPending = true; },
       onCredentialRenewed: () => logger.debug(
         '[StreamableHTTP] Stream credential renewed; resuming MCP payloads', { sessionId },
@@ -1250,21 +1320,7 @@ export async function createStreamableHttpRuntime(
       onCredentialExpired: () => logger.debug(
         '[StreamableHTTP] Stream credential expired; suppressing MCP payloads, keeping heartbeats', { sessionId },
       ),
-      onOpen: () => {
-        if (claims && streamTokenExpiry(claims) === undefined && (options.streamMaxLifetimeMs ?? env.DOLLHOUSE_HTTP_STREAM_MAX_LIFETIME_MS) === 0) {
-          logger.warn('[StreamableHTTP] Stream credential has no expiry and no lifetime cap; connected stream is unbounded', { sessionId });
-        }
-        session.stream = res;
-        session.idle.open(res);
-        recordRuntimeActivity(sessionId);
-        session.presence?.open();
-        session.stopStallWatcher = options.sseStallWatcher?.attach(res);
-        if (session.credentialResyncPending) {
-          session.credentialResyncPending = false;
-          void session.transport.send({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' })
-            .catch(error => logger.debug('[StreamableHTTP] Stream reconnect resync failed', { sessionId, error: errorMessage(error) }));
-        }
-      },
+      onOpen: () => attachStream(sessionId, session, res, claims),
       onClose,
     });
     session.observers.set(res, observer);

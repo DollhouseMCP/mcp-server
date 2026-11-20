@@ -246,6 +246,7 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
       path: firstIndexedPath(names, name => this.getPathByNameInState(state, name)),
       indexComplete: state.scanCompleted,
       authoritative: state.scanCompleted,
+      unindexed: [],
     });
   }
 

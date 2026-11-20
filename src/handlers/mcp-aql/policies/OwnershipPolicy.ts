@@ -609,7 +609,8 @@ function detectGh(tokens: string[], source: string): GitHubMutationIntent | unde
 // ── Detection: git push ────────────────────────────────────────────
 
 /** `git push` options that take a value as the next token. */
-const GIT_PUSH_VALUE_FLAGS = new Set(['-o', '--push-option', '--receive-pack', '--exec', '--repo', '--recurse-submodules', '--signed', '--force-with-lease', '--force-if-includes']);
+const GIT_PUSH_VALUE_FLAGS = new Set(['-o', '--push-option', '--receive-pack', '--exec', '--repo', '--recurse-submodules']);
+const GIT_PUSH_BULK_FLAGS = new Set(['--all', '--branches', '--mirror']);
 /** Global git options (before the subcommand) that take a value. */
 const GIT_GLOBAL_VALUE_FLAGS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path']);
 
@@ -627,12 +628,14 @@ interface PushArgs {
   positionals: string[];
   deleting: boolean;
   tagsOnly: boolean;
+  bulk: boolean;
 }
 
 function parsePushArgs(tokens: string[], pushIndex: number): PushArgs {
   const positionals: string[] = [];
   let deleting = false;
   let tagsOnly = false;
+  let bulk = false;
   for (let i = pushIndex + 1; i < tokens.length; i++) {
     const token = tokens[i];
     if (token === '--') {
@@ -645,9 +648,10 @@ function parsePushArgs(tokens: string[], pushIndex: number): PushArgs {
     }
     if (token === '-d' || token === '--delete') deleting = true;
     if (token === '--tags') tagsOnly = true;
+    if (GIT_PUSH_BULK_FLAGS.has(token)) bulk = true;
     if (GIT_PUSH_VALUE_FLAGS.has(token) && i + 1 < tokens.length) i++;
   }
-  return { positionals, deleting, tagsOnly };
+  return { positionals, deleting, tagsOnly, bulk };
 }
 
 interface RefspecTarget {
@@ -679,8 +683,9 @@ function detectGitPush(tokens: string[], source: string): GitHubMutationIntent[]
   const pushIndex = findGitSubcommandIndex(tokens);
   if (pushIndex === -1 || tokens[pushIndex] !== 'push') return [];
 
-  const { positionals, deleting, tagsOnly } = parsePushArgs(tokens, pushIndex);
+  const { positionals, deleting, tagsOnly, bulk } = parsePushArgs(tokens, pushIndex);
   const refspecs = positionals.slice(1);
+  if (bulk) return [{ kind: 'unresolvable', action: 'git push', source }];
   if (refspecs.length === 0) {
     // Bare `git push` / `git push origin`: pushes the current branch.
     return tagsOnly ? [] : [{ kind: 'branch', action: 'git push', branch: undefined, source }];
@@ -688,6 +693,10 @@ function detectGitPush(tokens: string[], source: string): GitHubMutationIntent[]
 
   const intents: GitHubMutationIntent[] = [];
   const seen = new Set<string>();
+  // Matching refspecs need remote state to enumerate their targets.
+  if (refspecs.includes(':') || refspecs.includes('+:')) {
+    intents.push({ kind: 'unresolvable', action: 'git push', source });
+  }
   for (const refspec of refspecs) {
     const target = refspecTarget(refspec, deleting);
     if (!target) continue;

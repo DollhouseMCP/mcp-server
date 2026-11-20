@@ -85,6 +85,7 @@ export class BuildInfoService {
   private deferredSetupChecker: (() => boolean) | null = null;
   /** Issue #1948: Cache git info (constant for process lifetime). */
   private _cachedGitInfo: { commit?: string; branch?: string } | null = null;
+  private _pendingGitInfo: Promise<{ commit?: string; branch?: string }> | null = null;
   /** Issue #1948: Cache docker info (constant for process lifetime). */
   private _cachedDockerInfo: { isDocker: boolean; info?: string } | null = null;
 
@@ -377,20 +378,32 @@ export class BuildInfoService {
    * Data source: Git CLI output (system-controlled), no user input
    */
   private async getGitInfo(): Promise<{ commit?: string; branch?: string }> {
-    // Issue #1948: Cache on first call — git info is constant for process lifetime
+    // Issue #1948: Cache on first call — git info is constant for process lifetime.
     if (this._cachedGitInfo) return this._cachedGitInfo;
-    try {
-      // SECURITY NOTE: Git commands return system-controlled data - not user input
-      // Git commit hashes and branch names are controlled by git, no Unicode normalization needed
-      const commit = child_process.execSync('git rev-parse --short HEAD', { encoding: 'utf-8', timeout: 5000 }).trim();
-      const branch = child_process.execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf-8', timeout: 5000 }).trim();
+    if (this._pendingGitInfo) return this._pendingGitInfo;
 
-      this._cachedGitInfo = { commit, branch };
+    this._pendingGitInfo = (async () => {
+      try {
+        // These system-controlled commands retain their individual timeout and run in order.
+        const execGit = (command: string): Promise<string> => new Promise((resolve, reject) => {
+          child_process.exec(command, { encoding: 'utf-8', timeout: 5000 }, (error, stdout) => {
+            if (error) reject(error);
+            else resolve(stdout.trim());
+          });
+        });
+        const commit = await execGit('git rev-parse --short HEAD');
+        const branch = await execGit('git rev-parse --abbrev-ref HEAD');
+        this._cachedGitInfo = { commit, branch };
+      } catch {
+        // Not in a git repository, git not available, or a command failed/timed out.
+        this._cachedGitInfo = {};
+      }
       return this._cachedGitInfo;
-    } catch {
-      // Not in a git repository or git not available
-      this._cachedGitInfo = {};
-      return this._cachedGitInfo;
+    })();
+    try {
+      return await this._pendingGitInfo;
+    } finally {
+      this._pendingGitInfo = null;
     }
   }
 

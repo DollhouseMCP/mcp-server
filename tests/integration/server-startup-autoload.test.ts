@@ -176,7 +176,7 @@ describe('Server Startup - Auto-Load Memories Integration', () => {
     }
     // Dispose any MemoryManager instances created during tests
     for (const manager of createdMemoryManagers) {
-      manager.dispose();
+      await manager.dispose();
     }
     createdMemoryManagers.length = 0; // Clear the array
   });
@@ -871,7 +871,7 @@ Real content.
 
       // Filter out seed memory to verify our test files
       const testMemories = memoryNames.filter(n => !n.includes('dollhousemcp-baseline'));
-      expect(testMemories.length).toBe(1);
+      expect(testMemories).toHaveLength(1);
     });
   });
 
@@ -923,8 +923,8 @@ Backup content ${i}.
       const testAutoLoad = autoLoadMemories.filter(m => !m.metadata.name.includes('dollhousemcp-baseline'));
 
       // Should have exactly 3 test memories (not 5 - backups are excluded)
-      expect(testMemories.length).toBe(3);
-      expect(testAutoLoad.length).toBe(3);
+      expect(testMemories).toHaveLength(3);
+      expect(testAutoLoad).toHaveLength(3);
 
       // Verify the correct memories are present
       const names = testAutoLoad.map(m => m.metadata.name).sort();
@@ -965,9 +965,9 @@ Backup content ${i}.
       const testAutoLoad = autoLoadMemories.filter(m => !m.metadata.name.includes('dollhousemcp-baseline'));
 
       // Should have 5 test memories (2 auto-load + 3 regular)
-      expect(testMemories.length).toBe(5);
+      expect(testMemories).toHaveLength(5);
       // Should have 2 auto-load test memories
-      expect(testAutoLoad.length).toBe(2);
+      expect(testAutoLoad).toHaveLength(2);
     });
   });
 
@@ -1040,7 +1040,7 @@ Backup content ${i}.
 
       // Filter out seed memory to verify our test file count
       const testMemories = memories.filter(m => !m.metadata.name.includes('dollhousemcp-baseline'));
-      expect(testMemories.length).toBe(4);
+      expect(testMemories).toHaveLength(4);
     });
 
     it('should handle empty backup folders gracefully', async () => {
@@ -1074,7 +1074,7 @@ Backup content ${i}.
 
       // Filter out seed memory to verify our test file count
       const testMemories = memories.filter(m => !m.metadata.name.includes('dollhousemcp-baseline'));
-      expect(testMemories.length).toBe(1);
+      expect(testMemories).toHaveLength(1);
     });
   });
 
@@ -1106,10 +1106,10 @@ Backup content ${i}.
       const testAutoLoad = autoLoadMemories.filter(m => !m.metadata.name.includes('dollhousemcp-baseline'));
 
       // Should have 3 test memories
-      expect(testMemories.length).toBe(3);
+      expect(testMemories).toHaveLength(3);
 
       // Only 1 test memory should be in auto-load list
-      expect(testAutoLoad.length).toBe(1);
+      expect(testAutoLoad).toHaveLength(1);
       expect(testAutoLoad[0].metadata.name).toBe('auto-enabled');
 
       // Verify metadata shows autoLoad status correctly
@@ -1222,7 +1222,7 @@ Backup content ${i}.
           status: m.getStatus()
         }));
 
-      expect(statusReport.length).toBe(3);
+      expect(statusReport).toHaveLength(3);
 
       // Verify we can see all the relevant info
       const test1 = statusReport.find(s => s.name === 'status-test-1');

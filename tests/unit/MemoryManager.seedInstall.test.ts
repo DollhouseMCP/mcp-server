@@ -103,8 +103,8 @@ describe('MemoryManager - Seed Installation', () => {
     });
   });
 
-  afterEach(() => {
-    memoryManager.dispose();
+  afterEach(async () => {
+    await memoryManager.dispose();
   });
 
   describe('installSeedMemories', () => {

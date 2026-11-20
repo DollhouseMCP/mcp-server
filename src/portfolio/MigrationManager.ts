@@ -2,7 +2,8 @@
  * Migration Manager - Handles migration from legacy structure to portfolio structure
  */
 
-import * as path from 'path';
+import * as path from 'node:path';
+import { visitSequentially } from '../utils/visitSequentially.js';
 import { PortfolioManager } from './PortfolioManager.js';
 import { ElementType } from './types.js';
 import { logger } from '../utils/logger.js';
@@ -22,9 +23,9 @@ export interface MigrationResult {
 }
 
 export class MigrationManager {
-  private portfolioManager: PortfolioManager;
-  private fileLockManager: FileLockManager;
-  private fileOperations: FileOperationsService;
+  private readonly portfolioManager: PortfolioManager;
+  private readonly fileLockManager: FileLockManager;
+  private readonly fileOperations: FileOperationsService;
   /**
    * Phase 4.5 follow-up: optional storage-layer factory. When present AND
    * the factory produces a writable (database-backed) layer, `migratePersona`
@@ -52,11 +53,8 @@ export class MigrationManager {
    * Check if migration is needed
    */
   public async needsMigration(): Promise<boolean> {
-    const hasLegacy = await this.portfolioManager.hasLegacyPersonas();
-    const portfolioExists = await this.portfolioManager.exists();
-    
-    // Need migration if we have legacy personas but no portfolio yet
-    return hasLegacy && !portfolioExists;
+    if (await this.portfolioManager.exists()) return false;
+    return this.portfolioManager.hasLegacyPersonas();
   }
   
   /**
@@ -116,7 +114,7 @@ export class MigrationManager {
       logger.info(`[MigrationManager] Found ${personaFiles.length} personas to migrate`);
       
       // Migrate each persona
-      for (const file of personaFiles) {
+      await visitSequentially(personaFiles.values(), async file => {
         try {
           await this.migratePersona(file);
           result.migratedCount++;
@@ -148,7 +146,7 @@ export class MigrationManager {
             }
           });
         }
-      }
+      });
       
       // If all migrations successful, optionally clean up legacy directory
       if (result.success && result.migratedCount > 0) {
@@ -349,7 +347,7 @@ export class MigrationManager {
     const files = await this.fileOperations.listDirectory(legacyDir);
     let copiedCount = 0;
 
-    for (const file of files) {
+    await visitSequentially(files.values(), async file => {
       const srcPath = path.join(legacyDir, file);
       const destPath = path.join(backupDir, file);
 
@@ -360,7 +358,7 @@ export class MigrationManager {
         });
         copiedCount++;
       }
-    }
+    });
     
     // SECURITY FIX: DMCP-SEC-006 - Log backup operation details for audit trail
     SecurityMonitor.logSecurityEvent({

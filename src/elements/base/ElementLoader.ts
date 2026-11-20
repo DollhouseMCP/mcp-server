@@ -209,6 +209,11 @@ export class ElementLoader<T extends IElement> {
     });
   }
 
+  /** Record a storage-reported failure without reading or caching the element. */
+  recordUnreadableElement(relativePath: string, error: Error): void {
+    this.handleLoadError(error, relativePath, path.join(this.host.elementDir, relativePath), randomUUID());
+  }
+
   private handleLoadError(
     error: unknown,
     relativePath: string,

@@ -10,13 +10,48 @@ if [[ "${1:-}" == "--case" ]]; then
   DEPLOY_DIR="$3"
   SERVER_DIR="${DEPLOY_DIR}/server"
   EVENTS="${DEPLOY_DIR}/events"
+  HOSTED_DEPLOY_LIB_DIR="${REPO_ROOT}/scripts/hosted-deploy"
   source "${REPO_ROOT}/scripts/hosted-deploy/source.sh"
   source "${REPO_ROOT}/scripts/hosted-deploy/runtime.sh"
+  source "${REPO_ROOT}/scripts/hosted-deploy/render.sh"
 
   log() { :; }
   die() { printf '%s\n' "$*" >&2; exit 1; }
   ensure_runtime_prerequisites() { :; }
-  render_files() { :; }
+  render_files() {
+    if [[ "${MODE}" == noop-* ]]; then
+      CADDY_FILE="${DEPLOY_DIR}/Caddyfile"
+      caddyfile_content() { printf '%s\n' "${REQUESTED_CONFIG}"; }
+      require_safe_caddyfile_change
+    fi
+  }
+  validate_persisted_caddy_fields() { :; }
+  resolve_mode_defaults() { :; }
+  validate_caddy_selection() { :; }
+  validate_registry_selection() { :; }
+  acquire_caddy_deployment_lock() { :; }
+  IMAGE_MODE=build
+  [[ "${MODE}" != registry-refusal ]] || IMAGE_MODE=registry
+  CADDY_IMAGE=fixture CADDY_DATA_VOLUME=fixture_data CADDY_CONFIG_VOLUME=fixture_config
+  caddy_transition() {
+    local action="$1"
+    case "${action}" in
+      select-rollback) printf '%s/server.prev-20000101\n' "${DEPLOY_DIR}" ;;
+      begin-rollback) printf '%032d\n' 0 ;;
+      stage) : ;;
+      *) die "unexpected transition action: ${action}" ;;
+    esac
+  }
+  caddy_recovery_request_json() { printf '{}\n'; }
+  python3() {
+    local script_path="$1"
+    [[ "${script_path}" == */caddy_rollback_guard.py ]] || return 1
+    cat >/dev/null
+    printf 'proxy-guard:server.prev-20000101\n' >> "${EVENTS}"
+    [[ "${MODE}" != guard-failure ]]
+  }
+  caddy_release() { local action="$1"; printf 'release:%s\n' "${action}" >> "${EVENTS}"; }
+  finish_caddy_transition() { printf 'transition-finished\n' >> "${EVENTS}"; }
   # Real moves exercise bundle restoration on failed promotion.
   mv() {
     local source_path="$1"
@@ -30,7 +65,9 @@ if [[ "${1:-}" == "--case" ]]; then
     printf 'compose:%s\n' "$*" >> "${EVENTS}"
     case "$1" in
       build)
+        [[ "$*" == "build dollhousemcp" ]]
         [[ "$(cat "${SERVER_DIR}/version")" == "previous" ]]
+        ! grep -q 'AS migration' "${SERVER_DIR}/docker/Dockerfile"
         [[ "${MODE}" != "build-failure" ]]
         ;;
       pull) [[ "${MODE}" != "pull-failure" ]] ;;
@@ -47,6 +84,10 @@ if [[ "${1:-}" == "--case" ]]; then
     [[ "${MODE}" != "drain-refusal" ]]
   }
   rollback_server
+  caddy_release accept
+  caddy_release release
+  finish_caddy_transition
+  write_deployed_markers
   exit 0
 fi
 
@@ -55,21 +96,26 @@ trap 'rm -rf -- "${TMP_ROOT}"' EXIT
 
 fail() { printf 'rollback-order test: %s\n' "$*" >&2; exit 1; }
 
-for mode in promotion-failure build-failure readiness-failure pull-failure drain-refusal success; do
+for mode in registry-refusal guard-failure promotion-failure build-failure readiness-failure drain-refusal success noop-same noop-changed; do
   fixture="${TMP_ROOT}/${mode}"
   mkdir -p "${fixture}/server" "${fixture}/server.prev-20000101"
   printf 'current\n' > "${fixture}/server/version"
   printf 'previous\n' > "${fixture}/server.prev-20000101/version"
+  mkdir -p "${fixture}/server.prev-20000101/docker"
+  printf 'FROM node AS builder\nFROM builder AS production\n' > "${fixture}/server.prev-20000101/docker/Dockerfile"
+  printf 'fixture-config\n' > "${fixture}/Caddyfile"
+  : > "${fixture}/events"
   printf 'current-revision\n' > "${fixture}/DEPLOYED_REVISION"
   printf '2000-01-01T00:00:00Z\n' > "${fixture}/DEPLOYED_AT"
   set +e
-  bash "$0" --case "${mode}" "${fixture}" > "${fixture}/stdout" 2> "${fixture}/stderr"
+  if [[ "${mode}" == noop-changed ]]; then requested=changed; else requested='fixture-config'; fi
+  REQUESTED_CONFIG="${requested}" bash "$0" --case "${mode}" "${fixture}" > "${fixture}/stdout" 2> "${fixture}/stderr"
   status=$?
   set -e
-  if [[ "${mode}" == "success" ]]; then
+  if [[ "${mode}" == "success" || "${mode}" == "noop-same" ]]; then
     [[ "${status}" == 0 ]] || fail "success exited ${status}"
     # Compare the whole sequence, including the chosen source and image build.
-    expected=$'move:server\nmove:server.prev-20000101\ncompose:build dollhousemcp dollhousemcp-migrate\npostgres-ready\ncompose:pull caddy\ngraceful-stop\ncompose:up -d dollhousemcp caddy\nreplacement'
+    expected=$'proxy-guard:server.prev-20000101\nmove:server\nmove:server.prev-20000101\ncompose:build dollhousemcp\npostgres-ready\nrelease:prepare\nrelease:confirm\nrelease:probe-fence\ngraceful-stop\ncompose:up -d --pull never --no-build --no-deps --force-recreate dollhousemcp\nreplacement\nrelease:accept\nrelease:release\ntransition-finished'
     [[ "$(cat "${fixture}/events")" == "${expected}" ]] || fail "unexpected replacement order"
     [[ "$(cat "${fixture}/DEPLOYED_REVISION")" == "rollback:server.prev-20000101" ]] || fail "successful replacement marker missing"
     [[ "$(cat "${fixture}/DEPLOYED_AT")" != "2000-01-01T00:00:00Z" ]] || fail "successful replacement timestamp missing"
@@ -84,7 +130,10 @@ for mode in promotion-failure build-failure readiness-failure pull-failure drain
       fail "healthy app stopped before ${mode}"
     fi
   fi
-  if [[ "${mode}" == "promotion-failure" ]]; then
+  if [[ "${mode}" == "registry-refusal" ]]; then
+    [[ ! -s "${fixture}/events" ]] || fail "registry refusal occurred after mutation"
+  fi
+  if [[ "${mode}" == "registry-refusal" || "${mode}" == "promotion-failure" || "${mode}" == "guard-failure" || "${mode}" == "noop-changed" ]]; then
     [[ "$(cat "${fixture}/server/version")" == "current" ]] || fail "failed promotion lost current bundle"
     [[ "$(cat "${fixture}/server.prev-20000101/version")" == "previous" ]] || fail "failed promotion lost previous bundle"
   else

@@ -49,7 +49,7 @@ describe('Oversized legacy memory recovery', () => {
 
   afterEach(async () => {
     jest.restoreAllMocks();
-    manager.dispose();
+    await manager.dispose();
     await fs.rm(root, { recursive: true, force: true });
   });
 

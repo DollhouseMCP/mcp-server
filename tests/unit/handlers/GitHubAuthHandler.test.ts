@@ -136,6 +136,20 @@ describe('GitHubAuthHandler (DI)', () => {
     handler = new GitHubAuthHandlerClass(authManager, configManager, initService, indicatorService, fileOperations);
   });
 
+  it('skips an unreadable helper candidate and tries the next path', async () => {
+    fileOperations.exists.mockRejectedValueOnce(Object.assign(new Error('denied'), { code: 'EACCES' }))
+      .mockResolvedValueOnce(true);
+    const helper = await handler['findOAuthHelperPath']();
+    expect(fileOperations.exists).toHaveBeenCalledTimes(2);
+    expect(helper).toBe(fileOperations.exists.mock.calls[1][0]);
+  });
+
+  it('treats an unreadable diagnostic log as unavailable', async () => {
+    fileOperations.exists.mockRejectedValue(Object.assign(new Error('denied'), { code: 'EACCES' }));
+    fileOperations.readFile.mockRejectedValue(Object.assign(new Error('gone'), { code: 'ENOENT' }));
+    expect((await handler['checkOAuthHelperHealth']()).hasLog).toBe(false);
+  });
+
   describe('setupGitHubAuth', () => {
     it('prefixes responses and ensures initialization when already connected', async () => {
       authManager.getAuthStatus.mockResolvedValue({ isAuthenticated: true, username: 'tester' } as any);
