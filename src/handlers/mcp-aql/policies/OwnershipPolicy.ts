@@ -710,10 +710,26 @@ function detectGitPush(tokens: string[], source: string): GitHubMutationIntent[]
 
 // ── Detection: Bash entry point ────────────────────────────────────
 
-function detectBashSegment(segment: string): GitHubMutationIntent[] {
-  const tokens = stripLeadingWrappers(tokenizeShellWords(segment));
-  if (tokens.length === 0) return [];
-  const executable = basename(tokens[0]);
+/** Repository context changes cannot be replayed safely in the hook's cwd. */
+const SHELL_DIRECTORY_COMMANDS = new Set(['cd', 'pushd', 'popd']);
+const REPOSITORY_ENV_ASSIGNMENT = /^(?:GH_REPO|GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR)=/;
+
+function gitChangesRepository(tokens: string[]): boolean {
+  const subcommandIndex = findGitSubcommandIndex(tokens);
+  return tokens.slice(1, subcommandIndex).some(token =>
+    token.startsWith('-C') || /^(?:--git-dir|--work-tree)(?:=|$)/.test(token));
+}
+
+/** A repo alone does not pin the current-branch selector after a directory change. */
+function hasPinnedTarget(intent: GitHubMutationIntent): boolean {
+  if (intent.selector === undefined && intent.branch === undefined) return false;
+  if (intent.repo) return true;
+  const url = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/(?:pull|issues)\/\d+(?:[/?#].*)?$/.exec(intent.selector ?? '');
+  return Boolean(url && parseRepoRef(`${url[1]}/${url[2]}`));
+}
+
+function detectBashSegment(tokens: string[], segment: string): GitHubMutationIntent[] {
+  const executable = basename(tokens[0] ?? '');
   if (executable === 'gh') {
     const intent = detectGh(tokens, segment);
     return intent ? [intent] : [];
@@ -724,10 +740,32 @@ function detectBashSegment(segment: string): GitHubMutationIntent[] {
   return [];
 }
 
+function changesShellRepository(tokens: string[], prefixedRepository: boolean): boolean {
+  const executable = basename(tokens[0] ?? '');
+  return SHELL_DIRECTORY_COMMANDS.has(executable) ||
+    (tokens.length === 0 && prefixedRepository) ||
+    (executable === 'export' && tokens.slice(1).some(token => REPOSITORY_ENV_ASSIGNMENT.test(token)));
+}
+
 function detectBashMutations(command: string): GitHubMutationIntent[] {
   const intents: GitHubMutationIntent[] = [];
+  // Deliberately retain uncertainty across segments, including subshells: the
+  // scanner does not model shell scope or restore cwd after popd/cd-back.
+  let repositoryChanged = false;
   for (const segment of splitShellSegments(command)) {
-    intents.push(...detectBashSegment(segment));
+    const rawTokens = tokenizeShellWords(segment);
+    const tokens = stripLeadingWrappers(rawTokens);
+    const executable = basename(tokens[0] ?? '');
+    const prefixedRepository = rawTokens.slice(0, rawTokens.length - tokens.length)
+      .some(token => REPOSITORY_ENV_ASSIGNMENT.test(token));
+    repositoryChanged ||= changesShellRepository(tokens, prefixedRepository);
+    const contextChanged = repositoryChanged || prefixedRepository ||
+      (executable === 'git' && gitChangesRepository(tokens));
+    for (const intent of detectBashSegment(tokens, segment)) {
+      intents.push(contextChanged && !hasPinnedTarget(intent)
+        ? { ...intent, kind: 'unresolvable' }
+        : intent);
+    }
   }
   return intents;
 }

@@ -3,9 +3,11 @@
  *
  * Resolves who authored the PR, issue or PR-head branch a tool call is about
  * to modify, using the operator's own `gh` CLI authentication. Results for
- * explicit targets (a PR number, an issue number, a named branch) are cached
- * per session. Lookups that depend on "the current branch" of a working
- * directory are never cached: a `git checkout` between two calls would
+ * explicit targets in an explicit repository are cached per session.
+ * Implicit-repository lookups are never cached: the same number or branch
+ * can identify a different author in another cwd, even in the same session.
+ * Lookups that depend on "the current branch" of a working directory are
+ * never cached: a `git checkout` between two calls would
  * otherwise map a teammate's branch onto a stale, owner-authored result.
  *
  * Errors are never cached either, so a transient failure fails closed once
@@ -371,10 +373,12 @@ interface CacheEntry {
 
 /**
  * Build the cache key for an intent, or `undefined` when the intent must not
- * be cached (anything that depends on the working directory's current branch).
+ * be cached (anything that depends on the working directory's repository or
+ * current branch).
  */
 export function ownershipCacheKey(intent: GitHubMutationIntent): string | undefined {
-  const repo = intent.repo ? `${intent.repo.owner}/${intent.repo.name}`.toLowerCase() : '';
+  if (!intent.repo) return undefined;
+  const repo = `${intent.repo.owner}/${intent.repo.name}`.toLowerCase();
   switch (intent.kind) {
     case 'pull_request':
       return intent.selector === undefined ? undefined : `pr|${repo}|${intent.selector}`;
