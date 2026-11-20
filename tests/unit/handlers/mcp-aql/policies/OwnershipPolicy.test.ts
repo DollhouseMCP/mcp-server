@@ -140,6 +140,13 @@ describe('OwnershipPolicy', () => {
       expect(bash(command)).toEqual([]);
     });
 
+    it.each([
+      'echo "$(printf \'%s\' \'case << ${value}\')"',
+      'echo "$(printf "%s" "case <<")"',
+    ])('does not mistake quoted data for shell grammar: %s', (command) => {
+      expect(bash(command)).toEqual([]);
+    });
+
     it('keeps outer arguments intact while separately exposing substitution bodies', () => {
       const command = 'gh pr edit 5 --body "$(gh pr close 7)" --repo o/r';
       expect(splitShellSegments(command)).toEqual([command, 'gh pr close 7']);

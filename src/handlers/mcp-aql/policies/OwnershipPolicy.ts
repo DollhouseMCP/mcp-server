@@ -343,6 +343,7 @@ interface SubstitutionFrame {
 /** Match executable substitutions without borrowing the surrounding quote state. */
 class SubstitutionReader {
   private readonly frames: SubstitutionFrame[];
+  private complexSyntax = false;
 
   constructor(private readonly text: string, private readonly start: number, private readonly opener: SubstitutionOpener) {
     this.frames = [this.frame(opener)];
@@ -362,8 +363,7 @@ class SubstitutionReader {
     const legacyNesting = this.opener.closing === '`' && body.includes('\\`');
     // These constructs can contain ')' that is not a substitution terminator.
     // They need a full shell grammar; conservatively refuse partial matching.
-    const complexSyntax = /<<|\$\{|\bcase\b/.test(body);
-    return { body, end: Math.min(end, this.text.length - 1), complete: complete && !legacyNesting && !complexSyntax };
+    return { body, end: Math.min(end, this.text.length - 1), complete: complete && !legacyNesting && !this.complexSyntax };
   }
 
   private frame(opener: SubstitutionOpener): SubstitutionFrame {
@@ -371,12 +371,14 @@ class SubstitutionReader {
   }
 
   private advance(index: number): number {
-    const frame = this.frames[this.frames.length - 1];
+    // read() only advances while a substitution frame exists.
+    const frame = this.frames.at(-1)!;
     const ch = this.text[index];
     if (frame.quote !== "'" && ch === '\\') return index + 2;
     if (this.consumeQuote(frame, ch)) return index + 1;
     const commentEnd = this.skipComment(frame, index);
     if (commentEnd !== undefined) return commentEnd;
+    this.complexSyntax ||= this.needsShellGrammar(frame, index);
     if (ch === '`' && frame.closing === '`') {
       this.frames.pop();
       return index + 1;
@@ -388,6 +390,15 @@ class SubstitutionReader {
     }
     if (frame.quote === null && frame.closing === ')') this.consumeParenthesis(frame, ch);
     return index + 1;
+  }
+
+  private needsShellGrammar(frame: SubstitutionFrame, index: number): boolean {
+    if (this.text.startsWith('${', index)) return true;
+    if (frame.quote !== null) return false;
+    if (this.text.startsWith('<<', index)) return true;
+    return this.text.startsWith('case', index) &&
+      /[\s;&|()`]/.test(this.text[index - 1] ?? ' ') &&
+      /[\s;&|()]/.test(this.text[index + 4] ?? ' ');
   }
 
   private skipComment(frame: SubstitutionFrame, index: number): number | undefined {
@@ -504,8 +515,7 @@ function inspectShellSegments(command: string): { segments: ShellSegment[]; comp
   const segments: ShellSegment[] = [];
   let remaining = 2 * MAX_COMMAND_LENGTH;
   let complete = true;
-  for (let job = 0; job < pending.length; job++) {
-    const text = pending[job];
+  for (const text of pending) {
     remaining -= text.length;
     if (remaining < 0) return { segments, complete: false };
     let current = '';
