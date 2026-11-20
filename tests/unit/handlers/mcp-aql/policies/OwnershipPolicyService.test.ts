@@ -131,6 +131,14 @@ describe('OwnershipPolicyService', () => {
       expect((await service.evaluate('Bash', { command: 'echo "$(gh pr close 7)"' }))?.behavior).toBe('allow');
     });
 
+    it.each(['confirm', 'deny'] as const)('keeps quoted oversized mutations gated in %s mode', async (mode) => {
+      const { resolver, lookup } = fakeResolver({ '7': resolved('mickdarling') });
+      const service = new OwnershipPolicyService({ config: { ...CONFIG, mode }, resolver, cache: new OwnershipCache() });
+      const command = '"gh" pr close 7; #' + ' '.repeat(4000);
+      expect((await service.evaluate('Bash', { command }))?.behavior).toBe('confirm');
+      expect(lookup).not.toHaveBeenCalled();
+    });
+
     it('fails closed without a lookup when a command exceeds the inspection limit', async () => {
       const { resolver, lookup } = fakeResolver({ '7': resolved('mickdarling') });
       const service = new OwnershipPolicyService({ config: { ...CONFIG, mode: 'confirm' }, resolver, cache: new OwnershipCache() });

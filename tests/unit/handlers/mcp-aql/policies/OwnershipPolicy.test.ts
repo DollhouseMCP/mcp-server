@@ -178,6 +178,22 @@ describe('OwnershipPolicy', () => {
       expect(bash(' '.repeat(4000) + mutation)).toEqual([expect.objectContaining({ kind: 'unresolvable' })]);
     });
 
+    it.each([
+      '"gh" pr close 7',
+      "'gh' issue close 8",
+      String.raw`g\h pr merge 5`,
+      'g"h" p"r" c"lose" 7',
+      '"git" push origin feature/x',
+      String.raw`g\it p\ush origin feature/x`,
+    ])('fails closed for quoted or escaped words in oversized commands: %s', (mutation) => {
+      expect(bash(mutation + '; #' + ' '.repeat(4000))).toEqual([
+        expect.objectContaining({ kind: 'unresolvable' }),
+      ]);
+      expect(bash('echo "$(' + mutation + '; cat <<EOF)"')).toContainEqual(
+        expect.objectContaining({ kind: 'unresolvable' }),
+      );
+    });
+
     it('keeps outer arguments intact while separately exposing substitution bodies', () => {
       const command = 'gh pr edit 5 --body "$(gh pr close 7)" --repo o/r';
       expect(splitShellSegments(command)).toEqual([command, 'gh pr close 7']);

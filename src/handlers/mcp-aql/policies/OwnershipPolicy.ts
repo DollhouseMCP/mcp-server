@@ -932,8 +932,12 @@ function couldContainGitPush(command: string): boolean {
  */
 function couldContainGitHubMutation(command: string): boolean {
   const raw = command.replace(/\\\r?\n/g, '');
-  if (/\bapi\.github\.com\b/i.test(raw) || couldContainGitPush(raw) || /\b(?:gh|git)["']?\s+["'`$]/.test(raw)) return true;
-  for (const match of raw.matchAll(/\bgh\s+(pr|issue|api)\b(?:\s+([\w-]+))?/g)) {
+  if (/\b(?:gh|git)["']?\s+["'`$]/.test(raw)) return true;
+  // Over-approximate shell word spelling: quoted/escaped command names and
+  // subcommands still signal mutations when structured inspection is incomplete.
+  const words = raw.replace(/["'\\]/g, '');
+  if (/\bapi\.github\.com\b/i.test(words) || couldContainGitPush(words)) return true;
+  for (const match of words.matchAll(/\bgh\s+(pr|issue|api)\b(?:\s+([\w-]+))?/g)) {
     if (match[1] === 'api') return true;
     if (!match[2] || !OWNERSHIP_EXEMPT_GH_SUBCOMMANDS.has(match[2])) return true;
   }
