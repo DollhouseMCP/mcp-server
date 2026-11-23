@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { generateDisplayCode } from '@dollhousemcp/safety';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
+import type { BlockReleaseReason } from '../../security/DangerZoneEnforcer.js';
 import { getPermissionHookStatus } from '../../utils/permissionHooks.js';
 import {
   PERMISSION_AUTHORITY_HOSTS,
@@ -45,6 +46,13 @@ import {
   buildOperationSummary,
   resolveCliApprovalPolicy,
 } from './OperationSummary.js';
+
+const RELEASE_FAILURE_MESSAGES: Record<BlockReleaseReason, string> = {
+  unavailable: 'Block-state storage is unavailable. The challenge has been retained; retry later.',
+  'admin-only': 'This block requires administrative release. Contact an administrator.',
+  session: 'Verify from the session that triggered the block.',
+  declined: 'The block was already released or replaced. Retry the operation.',
+};
 
 interface VerificationMetricsRecorder {
   recordAttempt(): void;
@@ -212,7 +220,7 @@ export class GatekeeperHandler {
     }
   }
 
-  private verify(params: Record<string, unknown>): unknown {
+  private async verify(params: Record<string, unknown>): Promise<unknown> {
     this.deps.verificationMetrics.recordAttempt();
     const attemptTimestamp = Date.now();
     const challengeId = validateRequiredString(params, 'challenge_id', 'the verification challenge ID');
@@ -231,7 +239,7 @@ export class GatekeeperHandler {
     }
 
     const challengePreCheck = this.getChallengePreCheck(store, challengeId);
-    this.validateChallengeSessionOwner(challengeId);
+    await this.validateChallengeSessionOwner(challengeId);
     if (challengeIsForDeadlockRelief(challengePreCheck)) {
       throw new VerificationError(
         GatekeeperErrorCode.VERIFICATION_FAILED,
@@ -240,9 +248,15 @@ export class GatekeeperHandler {
     }
 
     this.verifyCode(store, challengeId, code);
+    let result: unknown;
+    try { result = await this.unblockVerifiedAgent(challengeId); } catch (error) {
+      store.set(challengeId, challengePreCheck);
+      this.deps.verificationMetrics.recordFailure();
+      throw error;
+    }
     const verifyDurationMs = attemptTimestamp - (challengePreCheck.expiresAt - 5 * 60 * 1000);
     this.deps.verificationMetrics.recordSuccess(verifyDurationMs > 0 ? verifyDurationMs : undefined);
-    return this.unblockVerifiedAgent(challengeId);
+    return result;
   }
 
   private logVerificationAttempt(challengeId: string): void {
@@ -314,14 +328,16 @@ export class GatekeeperHandler {
     );
   }
 
-  private validateChallengeSessionOwner(challengeId: string): void {
+  private async validateChallengeSessionOwner(challengeId: string): Promise<void> {
     const preCheckSessionId = this.deps.contextTracker?.getSessionContext?.()?.sessionId;
     const enforcer = this.deps.handlers.dangerZoneEnforcer;
     if (!enforcer) {
       return;
     }
-    for (const agentName of enforcer.getBlockedAgents()) {
-      const blockInfo = enforcer.check(agentName);
+    await enforcer.refresh();
+    const names = await enforcer.getBlockedAgents();
+    const checks = await Promise.all(names.map(async name => ({ name, blockInfo: await enforcer.check(name) })));
+    for (const { blockInfo } of checks) {
       if (blockInfo.verificationId === challengeId && blockInfo.blocked && blockInfo.sessionId && blockInfo.sessionId !== preCheckSessionId) {
         this.deps.verificationMetrics.recordFailure();
         throw new VerificationError(
@@ -357,9 +373,9 @@ export class GatekeeperHandler {
     );
   }
 
-  private unblockVerifiedAgent(challengeId: string): unknown {
+  private async unblockVerifiedAgent(challengeId: string): Promise<unknown> {
     const enforcer = this.deps.handlers.dangerZoneEnforcer;
-    const unblockedAgent = enforcer ? this.findAndUnblockAgent(enforcer, challengeId) : undefined;
+    const unblockedAgent = enforcer ? await this.findAndUnblockAgent(enforcer, challengeId) : undefined;
     if (unblockedAgent) {
       SecurityMonitor.logSecurityEvent({
         type: 'VERIFICATION_SUCCEEDED',
@@ -388,19 +404,17 @@ export class GatekeeperHandler {
     };
   }
 
-  private findAndUnblockAgent(
+  private async findAndUnblockAgent(
     enforcer: NonNullable<HandlerRegistry['dangerZoneEnforcer']>,
     challengeId: string
-  ): string | undefined {
-    for (const agentName of enforcer.getBlockedAgents()) {
-      const blockInfo = enforcer.check(agentName);
-      if (blockInfo.verificationId !== challengeId) {
-        continue;
-      }
-      const currentSessionId = this.deps.contextTracker?.getSessionContext?.()?.sessionId;
-      return enforcer.unblock(agentName, challengeId, currentSessionId) ? agentName : undefined;
+  ): Promise<string | undefined> {
+    const currentSessionId = this.deps.contextTracker?.getSessionContext?.()?.sessionId;
+    const result = await enforcer.releaseChallenge(challengeId, currentSessionId);
+    if (!result.released) {
+      throw new VerificationError(GatekeeperErrorCode.VERIFICATION_FAILED,
+        RELEASE_FAILURE_MESSAGES[result.reason]);
     }
-    return undefined;
+    return result.agentName;
   }
 
   private releaseDeadlock(params: Record<string, unknown>): unknown {
@@ -417,7 +431,7 @@ export class GatekeeperHandler {
       : this.deps.issueDeadlockReliefChallenge();
   }
 
-  private beetlejuice(params: Record<string, unknown>): unknown {
+  private async beetlejuice(params: Record<string, unknown>): Promise<unknown> {
     const agentName = typeof params.agent_name === 'string' && params.agent_name.length > 0
       ? params.agent_name
       : 'beetlejuice-test-agent';
@@ -433,9 +447,14 @@ export class GatekeeperHandler {
     const challengeId = randomUUID();
     const code = generateDisplayCode();
     const expiresAt = Date.now() + 5 * 60 * 1000;
-    store.set(challengeId, { code, expiresAt, reason: 'Beetlejuice test trigger (Issue #503)' });
     const beetlejuiceSessionId = this.deps.contextTracker?.getSessionContext?.()?.sessionId;
-    enforcer.block(agentName, 'Beetlejuice test trigger', ['beetlejuice_beetlejuice_beetlejuice'], challengeId, undefined, beetlejuiceSessionId);
+    const blocked = await enforcer.block(agentName, 'Beetlejuice test trigger', ['beetlejuice_beetlejuice_beetlejuice'], challengeId, undefined, beetlejuiceSessionId);
+    const flushed = await enforcer.flush();
+    if (!blocked || !flushed) {
+      throw new VerificationError(GatekeeperErrorCode.VERIFICATION_FAILED,
+        'Unable to persist the requested block: block-state storage is unavailable. Agent operations remain denied; repair storage and retry.');
+    }
+    store.set(challengeId, { code, expiresAt, reason: 'Beetlejuice test trigger (Issue #503)' });
     this.deps.handlers.verificationNotifier?.showCode(code, `Agent '${agentName}' requires verification (Beetlejuice trigger)`);
 
     SecurityMonitor.logSecurityEvent({

@@ -40,6 +40,7 @@ jest.unstable_mockModule('fs/promises', () => ({
 }));
 
 // Dynamic import after mocking (required for ESM)
+const { FileDangerZoneBlockStore } = await import('../../../src/state/FileDangerZoneBlockStore.js');
 const { DangerZoneEnforcer } = await import('../../../src/security/DangerZoneEnforcer.js');
 
 /**
@@ -75,6 +76,7 @@ function createMockFileOps(options?: MockFileOpsOptions) {
     fileExists: jest.fn<() => Promise<boolean>>().mockResolvedValue(false),
     listFiles: jest.fn<() => Promise<string[]>>().mockResolvedValue([]),
     ensureDirectory: jest.fn<() => Promise<void>>().mockResolvedValue(),
+    createDirectory: jest.fn<() => Promise<void>>().mockResolvedValue(),
   } as any;
 }
 
@@ -82,29 +84,30 @@ describe('DangerZoneEnforcer', () => {
   let enforcer: InstanceType<typeof DangerZoneEnforcer>;
   let mockFileOps: ReturnType<typeof createMockFileOps>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     jest.clearAllMocks();
     mockFileOps = createMockFileOps();
-    enforcer = new DangerZoneEnforcer(mockFileOps, TEST_SECURITY_DIR);
+    enforcer = new DangerZoneEnforcer(new FileDangerZoneBlockStore(mockFileOps, TEST_SECURITY_DIR));
+    await enforcer.initialize();
     enforcer.setAdminToken(TEST_ADMIN_TOKEN);
   });
 
   describe('block()', () => {
-    it('should block an agent', () => {
+    it('should block an agent', async () => {
       enforcer.block(
         TEST_AGENT_NAME,
         'Danger zone pattern matched',
         ['beetlejuice_beetlejuice_beetlejuice']
       );
 
-      const result = enforcer.check(TEST_AGENT_NAME);
+      const result = (await enforcer.check(TEST_AGENT_NAME));
       expect(result.blocked).toBe(true);
       expect(result.reason).toBe('Danger zone pattern matched');
       expect(result.eventId).toMatch(/^[0-9a-f-]{36}$/);
       expect(new Date(result.blockedAt ?? '').toISOString()).toBe(result.blockedAt);
     });
 
-    it('should include verification ID if provided', () => {
+    it('should include verification ID if provided', async () => {
       enforcer.block(
         TEST_AGENT_NAME,
         'Danger zone',
@@ -112,7 +115,7 @@ describe('DangerZoneEnforcer', () => {
         TEST_VERIFICATION_CODE
       );
 
-      const result = enforcer.check(TEST_AGENT_NAME);
+      const result = (await enforcer.check(TEST_AGENT_NAME));
       expect(result.blocked).toBe(true);
       expect(result.verificationId).toBe(TEST_VERIFICATION_CODE);
       expect(result.resolution).toContain(TEST_VERIFICATION_CODE);
@@ -157,40 +160,40 @@ describe('DangerZoneEnforcer', () => {
   });
 
   describe('unblock()', () => {
-    it('should unblock an agent', () => {
+    it('should unblock an agent', async () => {
       enforcer.block(TEST_AGENT_NAME, 'Blocked', []);
 
-      const unblocked = enforcer.unblock(TEST_AGENT_NAME);
+      const unblocked = (await enforcer.unblock(TEST_AGENT_NAME));
       expect(unblocked).toBe(true);
 
-      const result = enforcer.check(TEST_AGENT_NAME);
+      const result = (await enforcer.check(TEST_AGENT_NAME));
       expect(result.blocked).toBe(false);
     });
 
-    it('should return true for non-blocked agents', () => {
-      const unblocked = enforcer.unblock('never-blocked');
+    it('should return true for non-blocked agents', async () => {
+      const unblocked = (await enforcer.unblock('never-blocked'));
       expect(unblocked).toBe(true);
     });
 
-    it('should require matching verification ID', () => {
+    it('should require matching verification ID', async () => {
       enforcer.block(TEST_AGENT_NAME, 'Blocked', [], TEST_VERIFICATION_CODE);
 
       // Wrong verification ID
-      const wrongUnblock = enforcer.unblock(TEST_AGENT_NAME, 'wrong-id');
+      const wrongUnblock = (await enforcer.unblock(TEST_AGENT_NAME, 'wrong-id'));
       expect(wrongUnblock).toBe(false);
 
       // Still blocked
-      expect(enforcer.check(TEST_AGENT_NAME).blocked).toBe(true);
+      expect((await enforcer.check(TEST_AGENT_NAME)).blocked).toBe(true);
 
       // Correct verification ID
-      const correctUnblock = enforcer.unblock(TEST_AGENT_NAME, TEST_VERIFICATION_CODE);
+      const correctUnblock = (await enforcer.unblock(TEST_AGENT_NAME, TEST_VERIFICATION_CODE));
       expect(correctUnblock).toBe(true);
-      expect(enforcer.check(TEST_AGENT_NAME).blocked).toBe(false);
+      expect((await enforcer.check(TEST_AGENT_NAME)).blocked).toBe(false);
     });
 
-    it('should log enriched unblock event with duration', () => {
+    it('should log enriched unblock event with duration', async () => {
       enforcer.block(TEST_AGENT_NAME, 'Blocked', []);
-      enforcer.unblock(TEST_AGENT_NAME);
+      (await enforcer.unblock(TEST_AGENT_NAME));
 
       expect(mockLogSecurityEvent).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -209,7 +212,7 @@ describe('DangerZoneEnforcer', () => {
       await new Promise(resolve => setTimeout(resolve, 50));
       mockFileOps.writeFile.mockClear();
 
-      enforcer.unblock(TEST_AGENT_NAME);
+      (await enforcer.unblock(TEST_AGENT_NAME));
       await new Promise(resolve => setTimeout(resolve, 50));
 
       expect(mockFileOps.writeFile).toHaveBeenCalled();
@@ -217,37 +220,37 @@ describe('DangerZoneEnforcer', () => {
   });
 
   describe('check()', () => {
-    it('should return blocked=false for non-blocked agents', () => {
-      const result = enforcer.check('unblocked-agent');
+    it('should return blocked=false for non-blocked agents', async () => {
+      const result = (await enforcer.check('unblocked-agent'));
       expect(result.blocked).toBe(false);
       expect(result.reason).toBeUndefined();
       expect(result.resolution).toBeUndefined();
     });
 
-    it('should return block details for blocked agents', () => {
+    it('should return block details for blocked agents', async () => {
       enforcer.block('blocked-agent', 'Test reason', ['pattern1']);
 
-      const result = enforcer.check('blocked-agent');
+      const result = (await enforcer.check('blocked-agent'));
       expect(result.blocked).toBe(true);
       expect(result.reason).toBe('Test reason');
       expect(result.resolution).toBeDefined();
     });
 
     // Issue #142 / #405: Actionable verify_challenge instructions
-    it('should include verify_challenge guidance when verificationId is present', () => {
+    it('should include verify_challenge guidance when verificationId is present', async () => {
       enforcer.block('verified-agent', 'DZ trigger', ['pattern'], 'verify-xyz');
 
-      const result = enforcer.check('verified-agent');
+      const result = (await enforcer.check('verified-agent'));
       expect(result.blocked).toBe(true);
       expect(result.resolution).toContain('verify_challenge');
       expect(result.resolution).toContain('verify-xyz');
       expect(result.resolution).toContain('code');
     });
 
-    it('should show admin contact when no verificationId', () => {
+    it('should show admin contact when no verificationId', async () => {
       enforcer.block('no-verify-agent', 'DZ trigger', ['pattern']);
 
-      const result = enforcer.check('no-verify-agent');
+      const result = (await enforcer.check('no-verify-agent'));
       expect(result.blocked).toBe(true);
       expect(result.resolution).toContain('administrator');
       expect(result.resolution).not.toContain('verify_challenge');
@@ -255,26 +258,26 @@ describe('DangerZoneEnforcer', () => {
   });
 
   describe('hasBlockedAgents()', () => {
-    it('should return false when no agents blocked', () => {
-      expect(enforcer.hasBlockedAgents()).toBe(false);
+    it('should return false when no agents blocked', async () => {
+      expect((await enforcer.hasBlockedAgents())).toBe(false);
     });
 
-    it('should return true when agents are blocked', () => {
+    it('should return true when agents are blocked', async () => {
       enforcer.block('agent1', 'Reason', []);
-      expect(enforcer.hasBlockedAgents()).toBe(true);
+      expect((await enforcer.hasBlockedAgents())).toBe(true);
     });
   });
 
   describe('getBlockedAgents()', () => {
-    it('should return empty array when no agents blocked', () => {
-      expect(enforcer.getBlockedAgents()).toEqual([]);
+    it('should return empty array when no agents blocked', async () => {
+      expect((await enforcer.getBlockedAgents())).toEqual([]);
     });
 
-    it('should return list of blocked agents', () => {
+    it('should return list of blocked agents', async () => {
       enforcer.block('agent1', 'Reason', []);
       enforcer.block('agent2', 'Reason', []);
 
-      const blocked = enforcer.getBlockedAgents();
+      const blocked = (await enforcer.getBlockedAgents());
       expect(blocked).toHaveLength(2);
       expect(blocked).toContain('agent1');
       expect(blocked).toContain('agent2');
@@ -282,36 +285,36 @@ describe('DangerZoneEnforcer', () => {
   });
 
   describe('clearAll()', () => {
-    it('should clear all blocks', () => {
+    it('should clear all blocks', async () => {
       enforcer.block('agent1', 'Reason', []);
       enforcer.block('agent2', 'Reason', []);
 
-      expect(enforcer.hasBlockedAgents()).toBe(true);
+      expect((await enforcer.hasBlockedAgents())).toBe(true);
 
-      expect(enforcer.clearAll(TEST_ADMIN_TOKEN)).toBe(true);
+      expect(await enforcer.clearAll(TEST_ADMIN_TOKEN)).toBe(true);
 
-      expect(enforcer.hasBlockedAgents()).toBe(false);
-      expect(enforcer.getBlockedAgents()).toEqual([]);
+      expect((await enforcer.hasBlockedAgents())).toBe(false);
+      expect((await enforcer.getBlockedAgents())).toEqual([]);
     });
 
-    it('should require admin token when configured', () => {
+    it('should require admin token when configured', async () => {
       enforcer.setAdminToken('secret-token');
       enforcer.block('agent1', 'Reason', []);
 
       // Without token - should fail
-      const failedClear = enforcer.clearAll();
+      const failedClear = await enforcer.clearAll();
       expect(failedClear).toBe(false);
-      expect(enforcer.hasBlockedAgents()).toBe(true);
+      expect((await enforcer.hasBlockedAgents())).toBe(true);
 
       // With wrong token - should fail
-      const wrongTokenClear = enforcer.clearAll('wrong-token');
+      const wrongTokenClear = await enforcer.clearAll('wrong-token');
       expect(wrongTokenClear).toBe(false);
-      expect(enforcer.hasBlockedAgents()).toBe(true);
+      expect((await enforcer.hasBlockedAgents())).toBe(true);
 
       // With correct token - should succeed
-      const successClear = enforcer.clearAll('secret-token');
+      const successClear = await enforcer.clearAll('secret-token');
       expect(successClear).toBe(true);
-      expect(enforcer.hasBlockedAgents()).toBe(false);
+      expect((await enforcer.hasBlockedAgents())).toBe(false);
     });
 
     it.each([undefined, '', 'unconfigured-token-sentinel'])('should refuse an unconfigured reset with token %p', async (token) => {
@@ -320,14 +323,14 @@ describe('DangerZoneEnforcer', () => {
       enforcer.block('agent2', 'Other reason', ['pattern']);
       // Finish the existing block writes before observing the attempted reset.
       await new Promise<void>(resolve => setImmediate(resolve));
-      const contexts = enforcer.getBlockedAgents().map(name => enforcer.check(name));
+      const contexts = await Promise.all((await enforcer.getBlockedAgents()).map(name => enforcer.check(name)));
       const metrics = enforcer.getMetrics();
       const writes = mockFileOps.writeFile.mock.calls.length;
       mockLogSecurityEvent.mockClear();
 
-      expect(enforcer.clearAll(token)).toBe(false);
+      expect(await enforcer.clearAll(token)).toBe(false);
 
-      expect(enforcer.getBlockedAgents().map(name => enforcer.check(name))).toEqual(contexts);
+      expect(await Promise.all((await enforcer.getBlockedAgents()).map(name => enforcer.check(name)))).toEqual(contexts);
       expect(enforcer.getMetrics()).toEqual(metrics);
       expect(mockFileOps.writeFile).toHaveBeenCalledTimes(writes);
       expect(mockLogSecurityEvent).toHaveBeenCalledTimes(1);
@@ -340,12 +343,12 @@ describe('DangerZoneEnforcer', () => {
       expect(JSON.stringify(mockLogSecurityEvent.mock.calls)).not.toContain('unconfigured-token-sentinel');
     });
 
-    it('should log enriched clearAll event with agent names', () => {
+    it('should log enriched clearAll event with agent names', async () => {
       enforcer.block('agent-a', 'Reason', []);
       enforcer.block('agent-b', 'Reason', []);
       mockLogSecurityEvent.mockClear();
 
-      enforcer.clearAll(TEST_ADMIN_TOKEN);
+      await enforcer.clearAll(TEST_ADMIN_TOKEN);
 
       expect(mockLogSecurityEvent).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -361,55 +364,55 @@ describe('DangerZoneEnforcer', () => {
   });
 
   describe('input validation', () => {
-    it('should reject empty agent name in block()', () => {
-      expect(() => enforcer.block('', 'Reason', [])).toThrow(
+    it('should reject empty agent name in block()', async () => {
+      await expect(enforcer.block('', 'Reason', [])).rejects.toThrow(
         'block: Agent name is required'
       );
     });
 
-    it('should reject whitespace-only agent name in block()', () => {
-      expect(() => enforcer.block('   ', 'Reason', [])).toThrow(
+    it('should reject whitespace-only agent name in block()', async () => {
+      await expect(enforcer.block('   ', 'Reason', [])).rejects.toThrow(
         'block: Agent name cannot be empty'
       );
     });
 
-    it('should reject invalid characters in agent name', () => {
-      expect(() => enforcer.block('agent<script>', 'Reason', [])).toThrow(
+    it('should reject invalid characters in agent name', async () => {
+      await expect(enforcer.block('agent<script>', 'Reason', [])).rejects.toThrow(
         'block: Agent name contains invalid characters'
       );
-      expect(() => enforcer.block('agent/path', 'Reason', [])).toThrow(
+      await expect(enforcer.block('agent/path', 'Reason', [])).rejects.toThrow(
         'block: Agent name contains invalid characters'
       );
     });
 
-    it('should reject overly long agent names', () => {
+    it('should reject overly long agent names', async () => {
       const longName = 'a'.repeat(257);
-      expect(() => enforcer.block(longName, 'Reason', [])).toThrow(
+      await expect(enforcer.block(longName, 'Reason', [])).rejects.toThrow(
         'block: Agent name exceeds maximum length'
       );
     });
 
-    it('should reject empty agent name in unblock()', () => {
-      expect(() => enforcer.unblock('')).toThrow(
+    it('should reject empty agent name in unblock()', async () => {
+      await expect(enforcer.unblock('')).rejects.toThrow(
         'unblock: Agent name is required'
       );
     });
 
-    it('should reject empty agent name in check()', () => {
-      expect(() => enforcer.check('')).toThrow(
+    it('should reject empty agent name in check()', async () => {
+      await expect(enforcer.check('')).rejects.toThrow(
         'check: Agent name is required'
       );
     });
 
-    it('should trim whitespace from agent names', () => {
+    it('should trim whitespace from agent names', async () => {
       enforcer.block('  test-agent  ', 'Reason', []);
 
       // Should find it with trimmed name
-      const result = enforcer.check(TEST_AGENT_NAME);
+      const result = (await enforcer.check(TEST_AGENT_NAME));
       expect(result.blocked).toBe(true);
 
       // Should also find it with whitespace (will be trimmed)
-      const result2 = enforcer.check('  test-agent  ');
+      const result2 = (await enforcer.check('  test-agent  '));
       expect(result2.blocked).toBe(true);
     });
   });
@@ -434,9 +437,9 @@ describe('DangerZoneEnforcer', () => {
       expect(metrics.totalBlocksSinceStartup).toBe(2);
     });
 
-    it('should track unblock count', () => {
+    it('should track unblock count', async () => {
       enforcer.block('agent1', 'Reason', []);
-      enforcer.unblock('agent1');
+      (await enforcer.unblock('agent1'));
 
       const metrics = enforcer.getMetrics();
       expect(metrics.currentBlockedCount).toBe(0);
@@ -444,10 +447,10 @@ describe('DangerZoneEnforcer', () => {
       expect(metrics.totalUnblocksSinceStartup).toBe(1);
     });
 
-    it('should track clearAll calls', () => {
+    it('should track clearAll calls', async () => {
       enforcer.block('agent1', 'Reason', []);
-      enforcer.clearAll(TEST_ADMIN_TOKEN);
-      enforcer.clearAll(TEST_ADMIN_TOKEN);
+      await enforcer.clearAll(TEST_ADMIN_TOKEN);
+      await enforcer.clearAll(TEST_ADMIN_TOKEN);
 
       const metrics = enforcer.getMetrics();
       expect(metrics.totalClearAllCalls).toBe(2);
@@ -459,7 +462,7 @@ describe('DangerZoneEnforcer', () => {
       // Wait a tiny bit to ensure duration > 0
       await new Promise(resolve => setTimeout(resolve, 10));
 
-      enforcer.unblock('agent1');
+      (await enforcer.unblock('agent1'));
 
       const metrics = enforcer.getMetrics();
       expect(metrics.averageBlockDurationMs).toBeGreaterThan(0);
@@ -483,10 +486,10 @@ describe('DangerZoneEnforcer', () => {
       });
 
       const fileOps = createMockFileOps({ readFileResult: persistedData });
-      const instance = new DangerZoneEnforcer(fileOps, TEST_SECURITY_DIR);
+      const instance = new DangerZoneEnforcer(new FileDangerZoneBlockStore(fileOps, TEST_SECURITY_DIR));
       await instance.initialize();
 
-      const result = instance.check('agent-x');
+      const result = (await instance.check('agent-x'));
       expect(result.blocked).toBe(true);
       expect(result.reason).toBe('Previous session block');
       expect(result.verificationId).toBe('v-abc');
@@ -509,10 +512,10 @@ describe('DangerZoneEnforcer', () => {
       });
 
       const fileOps = createMockFileOps({ readFileResult: persistedData });
-      const instance = new DangerZoneEnforcer(fileOps, TEST_SECURITY_DIR);
+      const instance = new DangerZoneEnforcer(new FileDangerZoneBlockStore(fileOps, TEST_SECURITY_DIR));
       await instance.initialize();
 
-      expect(instance.check('agent-invalid-time')).toEqual(expect.objectContaining({
+      expect((await instance.check('agent-invalid-time'))).toEqual(expect.objectContaining({
         blocked: true,
         blockedAt: '1970-01-01T00:00:00.000Z',
         verificationId: 'v-invalid-time',
@@ -523,37 +526,38 @@ describe('DangerZoneEnforcer', () => {
       const fileOps = createMockFileOps({
         readFileError: Object.assign(new Error('ENOENT'), { code: 'ENOENT' }),
       });
-      const instance = new DangerZoneEnforcer(fileOps, TEST_SECURITY_DIR);
+      const instance = new DangerZoneEnforcer(new FileDangerZoneBlockStore(fileOps, TEST_SECURITY_DIR));
       await instance.initialize();
 
-      expect(instance.hasBlockedAgents()).toBe(false);
+      expect((await instance.hasBlockedAgents())).toBe(false);
     });
 
-    it('should start with empty blocks on corrupt JSON', async () => {
+    it('should hold agent calls on corrupt JSON', async () => {
       const fileOps = createMockFileOps({ readFileResult: 'NOT VALID JSON{{{' });
-      const instance = new DangerZoneEnforcer(fileOps, TEST_SECURITY_DIR);
+      const instance = new DangerZoneEnforcer(new FileDangerZoneBlockStore(fileOps, TEST_SECURITY_DIR));
       await instance.initialize();
 
-      expect(instance.hasBlockedAgents()).toBe(false);
+      expect((await instance.check('agent')).blocked).toBe(true);
 
       // Should log a security event about corruption
       expect(mockLogSecurityEvent).toHaveBeenCalledWith(
         expect.objectContaining({
           source: 'DangerZoneEnforcer.initialize',
-          details: expect.stringContaining('possible data corruption'),
+          severity: 'HIGH',
+          details: expect.stringContaining('unavailable'),
         })
       );
     });
 
-    it('should survive disk read errors', async () => {
+    it('should hold agent calls after disk read errors', async () => {
       const fileOps = createMockFileOps({
         readFileError: new Error('Permission denied'),
       });
-      const instance = new DangerZoneEnforcer(fileOps, TEST_SECURITY_DIR);
+      const instance = new DangerZoneEnforcer(new FileDangerZoneBlockStore(fileOps, TEST_SECURITY_DIR));
       await instance.initialize();
 
       // Should not throw, should start with empty blocks
-      expect(instance.hasBlockedAgents()).toBe(false);
+      expect((await instance.check('agent')).blocked).toBe(true);
     });
   });
 
@@ -568,7 +572,8 @@ describe('DangerZoneEnforcer', () => {
           return Promise.resolve();
         });
 
-      const instance1 = new DangerZoneEnforcer(writeFileOps, TEST_SECURITY_DIR);
+      const instance1 = new DangerZoneEnforcer(new FileDangerZoneBlockStore(writeFileOps, TEST_SECURITY_DIR));
+      await instance1.initialize();
       instance1.block(
         'agent-survive',
         'Persist test',
@@ -584,10 +589,10 @@ describe('DangerZoneEnforcer', () => {
 
       // Create new instance that reads what was written
       const readFileOps = createMockFileOps({ readFileResult: writtenContent });
-      const instance2 = new DangerZoneEnforcer(readFileOps, TEST_SECURITY_DIR);
+      const instance2 = new DangerZoneEnforcer(new FileDangerZoneBlockStore(readFileOps, TEST_SECURITY_DIR));
       await instance2.initialize();
 
-      const result = instance2.check('agent-survive');
+      const result = (await instance2.check('agent-survive'));
       expect(result.blocked).toBe(true);
       expect(result.reason).toBe('Persist test');
       expect(result.verificationId).toBe('verify-survive');
@@ -602,7 +607,8 @@ describe('DangerZoneEnforcer', () => {
       const fileOps = createMockFileOps({
         writeFileError: new Error('Disk full'),
       });
-      const instance = new DangerZoneEnforcer(fileOps, TEST_SECURITY_DIR);
+      const instance = new DangerZoneEnforcer(new FileDangerZoneBlockStore(fileOps, TEST_SECURITY_DIR));
+      await instance.initialize();
 
       // Block should work even though disk write will fail
       instance.block('agent-disk-fail', 'Disk failure test', ['pattern']);
@@ -611,18 +617,18 @@ describe('DangerZoneEnforcer', () => {
       await new Promise(resolve => setTimeout(resolve, 50));
 
       // In-memory enforcement still works
-      const result = instance.check('agent-disk-fail');
+      const result = (await instance.check('agent-disk-fail'));
       expect(result.blocked).toBe(true);
-      expect(result.reason).toBe('Disk failure test');
+      expect(result.reason).toContain('unavailable');
     });
   });
 
   describe('verification ID mismatch security event', () => {
-    it('should log VERIFICATION_FAILED / HIGH on verification ID mismatch', () => {
+    it('should log VERIFICATION_FAILED / HIGH on verification ID mismatch', async () => {
       enforcer.block(TEST_AGENT_NAME, 'Blocked', ['pattern'], 'correct-id');
       mockLogSecurityEvent.mockClear();
 
-      enforcer.unblock(TEST_AGENT_NAME, 'wrong-id');
+      (await enforcer.unblock(TEST_AGENT_NAME, 'wrong-id'));
 
       expect(mockLogSecurityEvent).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -640,21 +646,22 @@ describe('DangerZoneEnforcer', () => {
       );
     });
 
-    it('should NOT fire security event when unblocking a non-blocked agent', () => {
+    it('should NOT fire security event when unblocking a non-blocked agent', async () => {
       mockLogSecurityEvent.mockClear();
 
-      enforcer.unblock('never-blocked');
+      (await enforcer.unblock('never-blocked'));
 
       expect(mockLogSecurityEvent).not.toHaveBeenCalled();
     });
   });
 
-  describe('disk persist failure security event', () => {
-    it('should log DANGER_ZONE_OPERATION / MEDIUM on disk persist failure', async () => {
+  describe('storage persist failure security event', () => {
+    it('should report unavailable enforcement on storage persist failure', async () => {
       const fileOps = createMockFileOps({
         writeFileError: new Error('Disk full'),
       });
-      const instance = new DangerZoneEnforcer(fileOps, TEST_SECURITY_DIR);
+      const instance = new DangerZoneEnforcer(new FileDangerZoneBlockStore(fileOps, TEST_SECURITY_DIR));
+      await instance.initialize();
       instance.setAdminToken(null);
 
       instance.block('agent-disk', 'Reason', ['pattern']);
@@ -667,7 +674,7 @@ describe('DangerZoneEnforcer', () => {
           type: 'DANGER_ZONE_OPERATION',
           severity: 'MEDIUM',
           source: 'DangerZoneEnforcer.persistAsync',
-          details: expect.stringContaining('Failed to persist'),
+          details: expect.stringContaining('enforcement is unavailable and agents are denied'),
           additionalData: expect.objectContaining({
             error: expect.stringContaining('Disk full'),
             activeBlocks: 1,
@@ -678,12 +685,12 @@ describe('DangerZoneEnforcer', () => {
   });
 
   describe('rolling window metrics', () => {
-    it('should cap blockDurations at 1000 entries and still compute valid metrics', () => {
+    it('should cap blockDurations at 1000 entries and still compute valid metrics', async () => {
       // Block and unblock 1005 times to exceed the window
       for (let i = 0; i < 1005; i++) {
         const name = `agent-${i}`;
         enforcer.block(name, 'Reason', []);
-        enforcer.unblock(name);
+        (await enforcer.unblock(name));
       }
 
       const metrics = enforcer.getMetrics();
@@ -801,15 +808,17 @@ describe('DangerZoneEnforcer', () => {
   });
 
   describe('test isolation', () => {
-    it('should have independent state per instance', () => {
-      const enforcer1 = new DangerZoneEnforcer(mockFileOps, TEST_SECURITY_DIR);
-      const enforcer2 = new DangerZoneEnforcer(mockFileOps, TEST_SECURITY_DIR);
+    it('should have independent state per instance', async () => {
+      const enforcer1 = new DangerZoneEnforcer(new FileDangerZoneBlockStore(mockFileOps, TEST_SECURITY_DIR));
+      await enforcer1.initialize();
+      const enforcer2 = new DangerZoneEnforcer(new FileDangerZoneBlockStore(mockFileOps, TEST_SECURITY_DIR));
+      await enforcer2.initialize();
 
       enforcer1.block('agent-1', 'Reason', []);
 
       // enforcer2 should NOT see enforcer1's block
-      expect(enforcer2.check('agent-1').blocked).toBe(false);
-      expect(enforcer1.check('agent-1').blocked).toBe(true);
+      expect((await enforcer2.check('agent-1')).blocked).toBe(false);
+      expect((await enforcer1.check('agent-1')).blocked).toBe(true);
     });
   });
 });

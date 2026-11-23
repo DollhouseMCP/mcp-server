@@ -1,3 +1,4 @@
+import { isolatedServerEnv } from '../../../helpers/isolated-server-env.cjs';
 /** Owned compiled CLI driver. IPC is test-only and never supplies a tenant or authority. */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID, randomBytes } from 'node:crypto';
@@ -43,8 +44,8 @@ export class CompiledMemoryRuntime {
       cwd: directory,
       // Deliberately omit Jest/test and repository .env variables. This is the
       // actual main entrypoint, not an exported startup helper or TEST_MODE.
-      env: { PATH: process.env.PATH, HOME: directory, ...environment,
-        DOLLHOUSE_PROOF_COMPILED_ROOT: path.join(root, 'dist') },
+      env: isolatedServerEnv(directory, { PATH: process.env.PATH, HOME: directory, ...environment,
+        DOLLHOUSE_PROOF_COMPILED_ROOT: path.join(root, 'dist') }),
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     });
     this.child.stdout!.on('data', () => undefined);
@@ -88,7 +89,7 @@ export class CompiledMemoryRuntime {
     const end = Date.now() + milliseconds;
     while (!check()) {
       if (Date.now() >= end) throw new Error('Owned proof condition did not settle within its bound');
-      await new Promise(resolve => setTimeout(resolve, 20));
+      await new Promise(resolve => setTimeout(resolve, 20)); // NOSONAR S9382: bounded readiness polling must wait between observations.
     }
   }
   async rpc(command: string, fields: Frame = {}): Promise<Frame> {

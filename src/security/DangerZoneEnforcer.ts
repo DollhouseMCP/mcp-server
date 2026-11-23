@@ -8,30 +8,35 @@
  * This addresses Issue #110 - the semantic-only approach is insufficient
  * for the highest risk tier, as a compromised LLM could ignore warnings.
  *
- * Issue #402: Refactored from singleton to DI-managed class with
- * file-based persistence. Blocks survive server restarts via
- * ~/.dollhouse/security/blocked-agents.json.
+ * A DI-managed store abstraction persists blocks in files or PostgreSQL.
  *
  * @since v2.0.0 - Agentic Loop Completion (Epic #380)
- * @since v2.1.0 - File-based persistence (Issue #402)
+ * @since v2.1.0 - Durable block storage (Issue #402)
  */
 
-import os from 'node:os';
-import path from 'node:path';
-import fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
+import { validateAgentName } from './validateAgentName.js';
 import { logger } from '../utils/logger.js';
 import { SecurityMonitor } from './securityMonitor.js';
 import { EvictingQueue } from '../utils/EvictingQueue.js';
-import type { FileOperationsService } from '../services/FileOperationsService.js';
+import type { IDangerZoneBlockStore, PersistedBlock } from '../state/IDangerZoneBlockStore.js';
+import { BlockPersistenceQueue } from './BlockPersistenceQueue.js';
+import { isStateObject } from '../state/persistence-utils.js';
 
 /** Rolling-window size for block-duration metrics (matches SecurityMonitor/LogManager). */
 const METRICS_WINDOW_SIZE = 1000;
+
+export type BlockReleaseReason = 'unavailable' | 'admin-only' | 'session' | 'declined';
+export type BlockReleaseResult =
+  | { released: true; agentName?: string }
+  | { released: false; reason: BlockReleaseReason; agentName?: string };
 
 /**
  * Blocked execution context
  */
 interface BlockedContext {
+  originalRecord?: { value: unknown };
+  requiresAdmin?: boolean;
   /** Stable identity for this block event */
   eventId?: string;
   /** Agent name that triggered danger zone */
@@ -47,24 +52,6 @@ interface BlockedContext {
   /** Issue #1947: Session that created this block. Undefined = globally verifiable (backward compat). */
   sessionId?: string;
   /** Goal whose autonomy evaluation created this block. */
-  goalId?: string;
-}
-
-/**
- * Persisted format for blocked-agents.json
- */
-interface PersistedBlocks {
-  version: number;
-  blocks: Record<string, PersistedBlock>;
-}
-
-interface PersistedBlock {
-  eventId?: string;
-  reason: string;
-  triggeredPatterns?: string[];
-  blockedAt: string;
-  verificationId?: string;
-  sessionId?: string;
   goalId?: string;
 }
 
@@ -126,38 +113,16 @@ export interface DangerZoneMetrics {
   longestBlockDurationMs: number;
 }
 
-/**
- * Validates agent name input
- * @throws Error if agent name is invalid
- */
-function validateAgentName(agentName: string, operation: string): void {
-  if (!agentName || typeof agentName !== 'string') {
-    throw new Error(`${operation}: Agent name is required`);
-  }
-  const trimmed = agentName.trim();
-  if (trimmed.length === 0) {
-    throw new Error(`${operation}: Agent name cannot be empty or whitespace`);
-  }
-  // Prevent path traversal and special characters that could cause issues
-  // eslint-disable-next-line no-control-regex -- Intentionally checking for control chars as security measure
-  if (/[<>:"/\\|?*\x00-\x1f]/.test(trimmed)) {
-    throw new Error(`${operation}: Agent name contains invalid characters`);
-  }
-  if (trimmed.length > 256) {
-    throw new Error(`${operation}: Agent name exceeds maximum length of 256 characters`);
-  }
-}
 
 /**
- * DI-managed class for danger zone enforcement with file-based persistence.
+ * DI-managed enforcement with user-scoped durable block storage.
  *
  * Thread-safety note: This uses a Map which is not inherently thread-safe,
  * but in a Node.js single-threaded environment this is acceptable.
- * For multi-process deployments, consider Redis or similar.
+ * Shared stores reconcile state before an enforcement decision.
  *
- * Persistence: Blocks are persisted to ~/.dollhouse/security/blocked-agents.json.
- * The in-memory Map is the hot path for check(); disk is the durable backing store.
- * Disk writes are fire-and-forget — disk failure does not block enforcement.
+ * Persistence is owned by the selected store. Checks reconcile its current state;
+ * local changes are serialized before publication or release.
  */
 export class DangerZoneEnforcer {
   private readonly blockedContexts: Map<string, BlockedContext> = new Map();
@@ -172,73 +137,149 @@ export class DangerZoneEnforcer {
   private adminToken: string | null = process.env.DOLLHOUSE_DANGER_ZONE_ADMIN_TOKEN || null;
 
   // Persistence
-  private readonly fileOps: FileOperationsService;
-  private readonly securityDir: string;
-  private readonly persistPath: string;
-  private persistenceTail: Promise<void> = Promise.resolve();
-
-  constructor(fileOps: FileOperationsService, securityDir?: string) {
-    this.fileOps = fileOps;
-    this.securityDir = securityDir ?? path.join(os.homedir(), '.dollhouse', 'security');
-    this.persistPath = path.join(this.securityDir, 'blocked-agents.json');
+  private readonly persistence: BlockPersistenceQueue;
+  private readiness: 'loading' | 'ready' | 'unavailable' = 'loading';
+  private retryable = false;
+  private retryAfter = 0;
+  private loading: Promise<void> | undefined;
+  private refreshing: Promise<void> | undefined;
+  constructor(private readonly store: IDangerZoneBlockStore) {
+    this.persistence = new BlockPersistenceQueue(store, () => this.readiness === 'ready',
+      error => this.reportWriteFailure(error), () => this.readSnapshot(false));
   }
 
-  /**
-   * Load persisted blocks from disk.
-   * Call once after construction to restore state from a previous session.
-   * If the file is missing or corrupt, starts with empty blocks.
-   *
-   * @example
-   * ```ts
-   * const enforcer = new DangerZoneEnforcer(fileOps);
-   * await enforcer.initialize(); // restores blocks from ~/.dollhouse/security/blocked-agents.json
-   * ```
-   */
-  async initialize(): Promise<void> {
+  private reportWriteFailure(error: unknown): void {
+    this.markUnavailable('write failed', true);
+    logger.warn('Block-state storage write failed; enforcement is unavailable and agents are denied', { error });
+    SecurityMonitor.logSecurityEvent({
+      type: 'DANGER_ZONE_OPERATION', severity: 'MEDIUM', source: 'DangerZoneEnforcer.persistAsync',
+      details: `Block-state storage write failed for ${this.blockedContexts.size} block(s); enforcement is unavailable and agents are denied`,
+      additionalData: { error: String(error), activeBlocks: this.blockedContexts.size },
+    });
+  }
+
+  /** Load and validate a complete snapshot before publishing it. Also supports repair/reload. */
+  initialize(): Promise<void> {
+    if (this.refreshing) return this.refreshing.then(() => this.initialize());
+    return this.startLoad(false);
+  }
+
+  private ensureInitialized(): Promise<void> {
+    if (this.loading) return this.loading;
+    return this.readiness === 'loading' ? this.initialize() : Promise.resolve();
+  }
+
+  private startLoad(refresh: boolean): Promise<void> {
+    if (this.loading) return this.loading;
+    this.readiness = 'loading';
+    const operation = this.load(refresh).finally(() => {
+      if (this.loading === operation) this.loading = undefined;
+    });
+    this.loading = operation;
+    return operation;
+  }
+
+  /** Join routine reads; retry storage failures with a bounded per-owner backoff. */
+  async refresh(): Promise<void> {
+    if (this.loading || this.readiness === 'loading') {
+      await this.ensureInitialized();
+      return;
+    }
+    const retry = this.readiness === 'unavailable' && this.retryable && Date.now() >= this.retryAfter;
+    if (!this.refreshing && (this.readiness === 'ready' || retry)) {
+      this.refreshing = this.load(!retry).finally(() => { this.refreshing = undefined; });
+    }
+    await this.refreshing;
+  }
+
+  private async load(refresh: boolean): Promise<void> {
+    const recovering = this.readiness === 'unavailable';
+    await this.persistence.pause();
+    if (!recovering && this.readiness === 'unavailable') return;
+    if (!await this.readSnapshot(refresh)) return;
+    this.readiness = 'ready';
+    await this.persistence.resume();
+    if (this.readiness !== 'ready') return;
+    this.retryable = false;
+    if (recovering) logger.info('Block-state storage recovered; enforcement is ready');
+  }
+
+  /** Called with writes paused or by the queue between ordered mutations. */
+  private async readSnapshot(refresh: boolean): Promise<boolean> {
     try {
-      const content = await this.fileOps.readFile(this.persistPath);
-      const data = JSON.parse(content) as Partial<PersistedBlocks>;
-
-      if (data.version === 1 && data.blocks && typeof data.blocks === 'object') {
-        for (const [name, block] of Object.entries(data.blocks)) {
-          this.blockedContexts.set(name, this.restoreBlockedContext(name, block));
-        }
-
-        if (this.blockedContexts.size > 0) {
-          const names = Array.from(this.blockedContexts.keys());
-          logger.warn(
-            `Restored ${this.blockedContexts.size} danger zone block(s) from disk: ${names.join(', ')}`
-          );
-
-          SecurityMonitor.logSecurityEvent({
-            type: 'AUTONOMY_DENIED',
-            severity: 'MEDIUM',
-            source: 'DangerZoneEnforcer.initialize',
-            details: `Restored ${this.blockedContexts.size} danger zone block(s) from disk: ${names.join(', ')}`,
-            additionalData: { restoredAgents: names, count: this.blockedContexts.size },
-          });
-        }
+      const result = await this.store.load(refresh);
+      if (result.status !== 'loaded' && result.status !== 'absent') {
+        this.markUnavailable(result.status, result.status === 'unreadable');
+        return false;
       }
+      const restored = new Map<string, BlockedContext>();
+      for (const [name, value] of Object.entries(result.status === 'loaded' ? result.value : {})) {
+        validateAgentName(name, 'restore');
+        const normalized = name.trim();
+        if (restored.has(normalized)) {
+          throw new Error('Duplicate persisted agent name');
+        }
+        restored.set(normalized, this.restoreBlockedContext(normalized, value));
+      }
+      this.blockedContexts.clear();
+      for (const [name, block] of restored) {
+        this.blockedContexts.set(name, block);
+      }
+      this.persistence.replace(this.snapshot());
+      this.restoreProjected();
+      return true;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        logger.debug('No blocked-agents.json found, starting with empty blocks');
-      } else {
-        logger.warn('Failed to load blocked-agents.json, starting with empty blocks', { error });
-
-        SecurityMonitor.logSecurityEvent({
-          type: 'AUTONOMY_DENIED',
-          severity: 'MEDIUM',
-          source: 'DangerZoneEnforcer.initialize',
-          details: 'Failed to load blocked-agents.json — starting with empty blocks (possible data corruption)',
-          additionalData: { error: String(error) },
-        });
-      }
+      logger.warn('Blocked-agent snapshot could not be restored', { error });
+      this.markUnavailable('invalid');
+      return false;
     }
   }
 
-  private restoreBlockedContext(agentName: string, block: PersistedBlock): BlockedContext {
+  private restoreProjected(): void {
+    this.blockedContexts.clear();
+    for (const [name, value] of Object.entries(this.persistence.projected())) {
+      this.blockedContexts.set(name, this.restoreBlockedContext(name, value));
+    }
+  }
+
+  private markUnavailable(reason: string, retryable = false): void {
+    const entering = this.readiness !== 'unavailable';
+    this.retryable = retryable;
+    this.retryAfter = Date.now() + 1000;
+    this.readiness = 'unavailable';
+    this.persistence.unavailable();
+    this.restoreProjected();
+    if (!entering) return;
+    const diagnostics = {
+      reason, location: this.store.location,
+      recovery: 'Repair the store and reload or restart; an administrator may reset it with clearAll.',
+    };
+    logger.warn('Blocked-agent state is unavailable', diagnostics);
+    SecurityMonitor.logSecurityEvent({
+      type: 'AUTONOMY_DENIED', severity: 'HIGH', source: 'DangerZoneEnforcer.initialize',
+      details: 'Blocked-agent state is unavailable', additionalData: diagnostics,
+    });
+  }
+
+  private restoreBlockedContext(agentName: string, value: unknown): BlockedContext {
+    const optionalStrings = ['eventId', 'verificationId', 'sessionId', 'goalId'];
+    const valid = isStateObject(value) && typeof value.reason === 'string'
+      && optionalStrings.every(key => value[key] === undefined || typeof value[key] === 'string')
+      && (value.triggeredPatterns === undefined || (Array.isArray(value.triggeredPatterns)
+        && value.triggeredPatterns.every(pattern => typeof pattern === 'string')))
+      && (value.requiresAdmin === undefined || typeof value.requiresAdmin === 'boolean');
+    if (!valid) {
+      return {
+        agentName,
+        reason: 'Persisted block could not be read',
+        triggeredPatterns: [],
+        blockedAt: new Date(0),
+        requiresAdmin: true,
+        originalRecord: { value },
+      };
+    }
+    const block = value as unknown as PersistedBlock;
     return {
-      // Legacy records predate eventId; their challenge ID is the only stable identity available.
       eventId: block.eventId ?? block.verificationId,
       agentName,
       reason: block.reason,
@@ -247,11 +288,12 @@ export class DangerZoneEnforcer {
       verificationId: block.verificationId,
       sessionId: block.sessionId,
       goalId: block.goalId,
+      requiresAdmin: block.requiresAdmin,
     };
   }
 
-  private restoreBlockedAt(agentName: string, value: string): Date {
-    const parsed = new Date(value);
+  private restoreBlockedAt(agentName: string, value: unknown): Date {
+    const parsed = new Date(typeof value === 'string' ? value : Number.NaN);
     if (!Number.isNaN(parsed.getTime())) {
       return parsed;
     }
@@ -272,18 +314,18 @@ export class DangerZoneEnforcer {
    *
    * @example
    * ```ts
-   * enforcer.block('code-reviewer', 'Danger zone pattern matched', ['rm -rf'], 'verify-abc');
-   * enforcer.check('code-reviewer').blocked; // true
+   * await enforcer.block('code-reviewer', 'Danger zone pattern matched', ['rm -rf'], 'verify-abc');
+   * (await enforcer.check('code-reviewer')).blocked; // true
    * ```
    */
-  block(
+  async block(
     agentName: string,
     reason: string,
     triggeredPatterns: string[],
     verificationId?: string,
     auditContext?: DangerZoneAuditContext,
     sessionId?: string,
-  ): void {
+  ): Promise<boolean> {
     validateAgentName(agentName, 'block');
 
     const trimmed = agentName.trim();
@@ -292,7 +334,7 @@ export class DangerZoneEnforcer {
       agentName: trimmed,
       reason,
       triggeredPatterns,
-      blockedAt: new Date(),
+      blockedAt: new Date(Date.now()),
       verificationId,
       sessionId,
       goalId: auditContext?.goalId,
@@ -335,7 +377,21 @@ export class DangerZoneEnforcer {
       },
     });
 
-    this.persistAsync();
+    const receipt = this.persistence.admit({ kind: 'put', name: trimmed, block: this.serializeBlock(context) });
+    void this.ensureInitialized();
+    return receipt.then(saved => {
+      if (!saved) {
+        const details = 'Agent block was not confirmed';
+        const additionalData = { agentName: trimmed, verificationId,
+          reason: this.readiness === 'ready' ? 'declined' : 'unavailable' };
+        logger.warn(details, additionalData);
+        SecurityMonitor.logSecurityEvent({
+          type: 'AUTONOMY_DENIED', severity: 'HIGH', source: 'DangerZoneEnforcer.block',
+          details, additionalData,
+        });
+      }
+      return saved;
+    });
   }
 
   /**
@@ -348,14 +404,16 @@ export class DangerZoneEnforcer {
    *
    * @example
    * ```ts
-   * enforcer.block('code-reviewer', 'Blocked', ['rm -rf'], 'verify-abc');
+   * await enforcer.block('code-reviewer', 'Blocked', ['rm -rf'], 'verify-abc');
    *
-   * enforcer.unblock('code-reviewer', 'wrong-id');  // false — mismatch
-   * enforcer.unblock('code-reviewer', 'verify-abc'); // true  — success
+   * await enforcer.unblock('code-reviewer', 'wrong-id');  // false — mismatch
+   * await enforcer.unblock('code-reviewer', 'verify-abc'); // true  — success
    * ```
    */
-  unblock(agentName: string, verificationId?: string, sessionId?: string): boolean {
+  async unblock(agentName: string, verificationId?: string, sessionId?: string): Promise<boolean> {
     validateAgentName(agentName, 'unblock');
+    await this.refresh();
+    if (this.readiness !== 'ready') return false;
 
     const normalizedName = agentName.trim();
     const context = this.blockedContexts.get(normalizedName);
@@ -367,6 +425,8 @@ export class DangerZoneEnforcer {
       );
       return true; // Not blocked, so "successfully" unblocked
     }
+
+    if (context.requiresAdmin) return false;
 
     // Issue #1947: If the block has a sessionId, only the same session can unblock it.
     // If the block has a sessionId but the caller doesn't provide one, reject (prevents bypass).
@@ -417,7 +477,9 @@ export class DangerZoneEnforcer {
     }
 
     const blockDuration = Date.now() - context.blockedAt.getTime();
-    this.blockedContexts.delete(normalizedName);
+    const removed = await this.persistence.admit({ kind: 'remove', name: normalizedName, eventId: context.eventId });
+    this.restoreProjected();
+    if (!removed || this.blockedContexts.has(normalizedName)) return false;
     this.totalUnblocksSinceStartup++;
     this.blockDurations.push(blockDuration);
 
@@ -441,8 +503,33 @@ export class DangerZoneEnforcer {
       },
     });
 
-    this.persistAsync();
     return true;
+  }
+
+  /** Release a challenge-owned block only after current storage state is available. */
+  async releaseChallenge(challengeId: string, sessionId?: string): Promise<BlockReleaseResult> {
+    await this.refresh();
+    if (this.readiness !== 'ready') return { released: false, reason: 'unavailable' };
+    const block = Array.from(this.blockedContexts.values()).find(context => {
+      const original = context.originalRecord?.value;
+      return context.verificationId === challengeId
+        || (isStateObject(original) && original.verificationId === challengeId);
+    });
+    if (!block) return { released: true };
+    const restricted = this.releaseRestriction(block, sessionId);
+    if (restricted) return { released: false, reason: restricted, agentName: block.agentName };
+    if (await this.unblock(block.agentName, challengeId, sessionId)) {
+      return { released: true, agentName: block.agentName };
+    }
+    const reason = this.readiness !== 'ready' ? 'unavailable'
+      : this.releaseRestriction(this.blockedContexts.get(block.agentName), sessionId) ?? 'declined';
+    return { released: false, reason, agentName: block.agentName };
+  }
+
+  private releaseRestriction(block: BlockedContext | undefined, sessionId?: string): BlockReleaseReason | undefined {
+    if (block?.requiresAdmin) return 'admin-only';
+    if (block?.sessionId && block.sessionId !== sessionId) return 'session';
+    return undefined;
   }
 
   /**
@@ -454,15 +541,22 @@ export class DangerZoneEnforcer {
    *
    * @example
    * ```ts
-   * const result = enforcer.check('code-reviewer');
+   * const result = await enforcer.check('code-reviewer');
    * if (result.blocked) {
    *   console.log(result.reason);     // why it was blocked
    *   console.log(result.resolution); // how to unblock
    * }
    * ```
    */
-  check(agentName: string): BlockCheckResult {
+  async check(agentName: string): Promise<BlockCheckResult> {
     validateAgentName(agentName, 'check');
+    await this.refresh();
+    if (this.readiness !== 'ready') {
+      return {
+        blocked: true, reason: 'Blocked-agent state is unavailable.',
+        resolution: 'Contact an administrator.',
+      };
+    }
 
     const context = this.blockedContexts.get(agentName.trim());
 
@@ -491,12 +585,13 @@ export class DangerZoneEnforcer {
    *
    * @example
    * ```ts
-   * if (enforcer.hasBlockedAgents()) {
-   *   console.log('Blocked agents:', enforcer.getBlockedAgents());
+   * if (await enforcer.hasBlockedAgents()) {
+   *   console.log('Blocked agents:', await enforcer.getBlockedAgents());
    * }
    * ```
    */
-  hasBlockedAgents(): boolean {
+  async hasBlockedAgents(): Promise<boolean> {
+    await this.ensureInitialized();
     return this.blockedContexts.size > 0;
   }
 
@@ -506,10 +601,11 @@ export class DangerZoneEnforcer {
    *
    * @example
    * ```ts
-   * const agents = enforcer.getBlockedAgents(); // ['code-reviewer', 'data-agent']
+   * const agents = await enforcer.getBlockedAgents(); // ['code-reviewer', 'data-agent']
    * ```
    */
-  getBlockedAgents(): string[] {
+  async getBlockedAgents(): Promise<string[]> {
+    await this.ensureInitialized();
     return Array.from(this.blockedContexts.keys());
   }
 
@@ -525,14 +621,14 @@ export class DangerZoneEnforcer {
    * @example
    * ```ts
    * // Without admin token configured
-   * enforcer.clearAll(); // false
+   * await enforcer.clearAll(); // false
    *
    * // With admin token configured
-   * enforcer.clearAll('wrong-token'); // false
-   * enforcer.clearAll('correct-token'); // true
+   * await enforcer.clearAll('wrong-token'); // false
+   * await enforcer.clearAll('correct-token'); // true
    * ```
    */
-  clearAll(adminToken?: string): boolean {
+  async clearAll(adminToken?: string): Promise<boolean> {
     if (!this.adminToken || adminToken !== this.adminToken) {
       logger.warn(
         'clearAll denied: configured admin token required',
@@ -551,9 +647,23 @@ export class DangerZoneEnforcer {
       return false;
     }
 
+    if (this.loading || this.readiness === 'loading') await this.ensureInitialized();
+    if (this.readiness === 'ready' || this.refreshing) await this.refresh();
+    if (this.readiness === 'loading') return false;
+    if (this.readiness === 'unavailable') return this.resetUnavailable();
     const count = this.blockedContexts.size;
     const clearedAgents = Array.from(this.blockedContexts.keys());
-    this.blockedContexts.clear();
+    const cleared = await this.persistence.admit({ kind: 'clear' });
+    this.restoreProjected();
+    if (!cleared) {
+      const details = 'Danger zone block clear was not confirmed';
+      logger.warn(details, { count, clearedAgents });
+      SecurityMonitor.logSecurityEvent({
+        type: 'DANGER_ZONE_OPERATION', severity: 'HIGH', source: 'DangerZoneEnforcer.clearAll',
+        details, additionalData: { count, clearedAgents, authorized: true },
+      });
+      return false;
+    }
     this.totalClearAllCalls++;
 
     const agentLabel = count === 1 ? 'agent' : 'agents';
@@ -572,8 +682,50 @@ export class DangerZoneEnforcer {
       additionalData: { clearedAgents, count, authorized: true },
     });
 
-    this.persistAsync();
     return true;
+  }
+
+  private resetUnavailable(): Promise<boolean> {
+    this.readiness = 'loading';
+    const clearPreceding = this.persistence.resetBoundary();
+    const reset = this.resetSnapshot(clearPreceding);
+    const operation = reset.then(() => undefined).finally(() => {
+      if (this.loading === operation) this.loading = undefined;
+    });
+    this.loading = operation;
+    return reset;
+  }
+
+  private async resetSnapshot(clearPreceding: () => void): Promise<boolean> {
+    try {
+      await this.persistence.pause();
+      SecurityMonitor.logSecurityEvent({
+        type: 'DANGER_ZONE_OPERATION', severity: 'HIGH', source: 'DangerZoneEnforcer.clearAll',
+        details: 'Administrative block-state reset authorized',
+      });
+      const evidence = await this.store.reset();
+      SecurityMonitor.logSecurityEvent({
+        type: 'DANGER_ZONE_OPERATION', severity: 'HIGH', source: 'DangerZoneEnforcer.clearAll',
+        details: evidence ? 'Administrative block-state reset authorized; evidence preserved'
+          : 'Administrative block-state reset authorized; no evidence to preserve',
+        additionalData: { evidence },
+      });
+      clearPreceding();
+      this.restoreProjected();
+      this.readiness = 'ready';
+      await this.persistence.resume();
+      if (this.readiness !== 'ready') return false;
+      this.retryable = false;
+      this.totalClearAllCalls++;
+      SecurityMonitor.logSecurityEvent({
+        type: 'AUTONOMY_PAUSED', severity: 'HIGH', source: 'DangerZoneEnforcer.clearAll',
+        details: 'Administrative block-state reset completed', additionalData: { evidence },
+      });
+      return true;
+    } catch {
+      this.markUnavailable('reset failed', true);
+      return false;
+    }
   }
 
   /**
@@ -625,48 +777,26 @@ export class DangerZoneEnforcer {
   }
 
   /**
-   * Fire-and-forget persistence. Disk failure does not block enforcement.
+   * Capture block state while preserving unparsed records.
    */
-  private persistAsync(): void {
-    // Order the complete snapshot/write operation, including asynchronous directory setup.
-    // A failed write must not prevent later state from being persisted.
-    const operation = this.persistenceTail.then(() => this.persist());
-    this.persistenceTail = operation.catch(() => undefined);
-    void operation.catch(error => {
-      logger.warn('Failed to persist danger zone blocks to disk', { error });
-
-      SecurityMonitor.logSecurityEvent({
-        type: 'DANGER_ZONE_OPERATION',
-        severity: 'MEDIUM',
-        source: 'DangerZoneEnforcer.persistAsync',
-        details: `Failed to persist ${this.blockedContexts.size} danger zone block(s) to disk — enforcement continues in-memory only`,
-        additionalData: { error: String(error), activeBlocks: this.blockedContexts.size },
-      });
-    });
+  private snapshot(): Record<string, unknown> {
+    const blocks: Record<string, unknown> = Object.create(null);
+    for (const [name, ctx] of this.blockedContexts) {
+      blocks[name] = ctx.originalRecord ? ctx.originalRecord.value : this.serializeBlock(ctx);
+    }
+    return blocks;
   }
 
-  /**
-   * Write current block state to disk.
-   */
-  private async persist(): Promise<void> {
-    const data: PersistedBlocks = {
-      version: 1,
-      blocks: {},
-    };
+  private serializeBlock(context: BlockedContext): PersistedBlock {
+    const { agentName: _agentName, originalRecord: _originalRecord, ...block } = context;
+    return { ...block, blockedAt: block.blockedAt.toISOString() };
+  }
 
-    for (const [name, ctx] of this.blockedContexts) {
-      data.blocks[name] = {
-        eventId: ctx.eventId,
-        reason: ctx.reason,
-        triggeredPatterns: ctx.triggeredPatterns,
-        blockedAt: ctx.blockedAt.toISOString(),
-        verificationId: ctx.verificationId,
-        sessionId: ctx.sessionId,
-        goalId: ctx.goalId,
-      };
-    }
-
-    await fs.mkdir(this.securityDir, { recursive: true });
-    await this.fileOps.writeFile(this.persistPath, JSON.stringify(data, null, 2));
+  /** Wait for this owner's queued snapshots before shutdown. */
+  async flush(): Promise<boolean> {
+    const fence = this.persistence.fence();
+    await this.ensureInitialized();
+    await this.refreshing;
+    return (await fence) && this.readiness === 'ready';
   }
 }

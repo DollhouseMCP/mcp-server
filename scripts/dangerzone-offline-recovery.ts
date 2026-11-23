@@ -1,5 +1,6 @@
 #!/usr/bin/env tsx
 /** Human operator CLI only. It does not stop services or prove external writer exclusion. */
+import { env } from '../src/config/env.js';
 import { userInfo } from 'node:os';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stderr } from 'node:process';
@@ -33,6 +34,7 @@ export async function readRecoveryCredential(): Promise<string> {
 }
 
 export async function runOfflineRecoveryCli(argv: readonly string[]): Promise<void> {
+  if (env.DOLLHOUSE_STORAGE_BACKEND === 'database') throw new Error('Offline recovery changes only the file backend. In database mode, use the administrator reset.');
   if (!stdin.isTTY || !stderr.isTTY || typeof process.getuid !== 'function') throw new Error('Interactive POSIX operator terminal required');
   const values = new Map<string, string>();
   for (let i = 0; i < argv.length; i += 2) {
@@ -64,7 +66,9 @@ export async function runOfflineRecoveryCli(argv: readonly string[]): Promise<vo
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try { await runOfflineRecoveryCli(process.argv.slice(2)); }
   catch {
-    stderr.write('Offline recovery did not complete. Preserve evidence and keep writers stopped.\n');
+    stderr.write(env.DOLLHOUSE_STORAGE_BACKEND === 'database'
+      ? 'Offline recovery changes only the file backend. In database mode, use the administrator reset.\n'
+      : 'Offline recovery did not complete. Preserve evidence and keep writers stopped.\n');
     process.exitCode = 1;
   }
 }

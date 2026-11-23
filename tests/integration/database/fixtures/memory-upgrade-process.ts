@@ -1,3 +1,4 @@
+import { isolatedServerEnv } from '../../../helpers/isolated-server-env.cjs';
 /** Owned OFF-mode compiled process proof. No production endpoint or force-kill cleanup. */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -138,7 +139,7 @@ export class MemoryUpgradeRuntime {
     this.controlDirectory = environment.DOLLHOUSE_MEMORY_UPGRADE_CONTROL_DIR;
     this.child = spawn(process.execPath, ['--import', preloader, path.join(root, 'dist/index.js'), '--http', '--port=0'], {
       cwd: directory,
-      env: { PATH: process.env.PATH, HOME: directory, ...environment, DOLLHOUSE_UPGRADE_PROOF_ROOT: path.join(root, 'dist') },
+      env: isolatedServerEnv(directory, { PATH: process.env.PATH, HOME: directory, ...environment, DOLLHOUSE_UPGRADE_PROOF_ROOT: path.join(root, 'dist') }),
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     });
     console.info(`[memory-upgrade:child] pid=${this.child.pid} spawned`);
@@ -165,7 +166,7 @@ export class MemoryUpgradeRuntime {
     const end = Date.now() + bound;
     while (!check()) {
       if (Date.now() >= end) throw new Error('Owned upgrade condition did not settle within its bound');
-      await new Promise(resolve => setTimeout(resolve, 20));
+      await new Promise(resolve => setTimeout(resolve, 20)); // NOSONAR S9382: bounded readiness polling must wait between observations.
     }
   }
   async ready(): Promise<void> {

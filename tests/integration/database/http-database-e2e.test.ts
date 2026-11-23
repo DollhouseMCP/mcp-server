@@ -1,3 +1,4 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
 /**
  * HTTP + Database E2E Tests
  *
@@ -86,7 +87,7 @@ function spawnHttpServer(env: Record<string, string>, portfolioDir: string): Pro
 }> {
   return new Promise((resolve, reject) => {
     const child = spawn('node', ['dist/index.js', '--http', '--port=0'], { // NOSONAR — E2E test spawns server
-      env: { ...env },
+      env: isolatedServerEnv(portfolioDir, { ...env }),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 

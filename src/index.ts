@@ -1369,7 +1369,7 @@ function isEmbeddedOAuthProvider(value: unknown): value is {
  * degradation. Returns the container and resolved services, or fallback
  * sinks if the container fails to initialize.
  */
-async function bootstrapWebContainer(): Promise<{
+export async function bootstrapWebContainer(): Promise<{
   container?: DollhouseContainer;
   mcpAqlHandler?: MCPAQLHandler;
   memorySink: MemoryLogSink;
@@ -1398,6 +1398,10 @@ async function bootstrapWebContainer(): Promise<{
     try { metricsSink = container.resolve<MemoryMetricsSink>('MemoryMetricsSink'); } catch { /* not registered */ }
     try { logManager = container.resolve<LogManager>('LogManager'); } catch { /* not registered */ }
   } catch (err) {
+    if (env.DOLLHOUSE_STORAGE_BACKEND === 'database') {
+      const { DangerZoneBlockMigrationError } = await import('./storage/migration/DangerZoneBlockMigrationError.js');
+      if (err instanceof DangerZoneBlockMigrationError) throw err;
+    }
     console.error("[DollhouseMCP] Container bootstrap failed — web routes will use direct filesystem access.");
     console.error("[DollhouseMCP] Reason:", (err as Error).message || err);
   }

@@ -16,7 +16,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { logger } from '../utils/logger.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
-import { fireAndForgetPersist, handleInitializeError } from './persistence-utils.js';
+import { fireAndForgetPersist, logPersistedStateIssue, readValidatedState, isStateObject } from './persistence-utils.js';
 import type { FileOperationsService } from '../services/FileOperationsService.js';
 import {
   ACTIVATION_SESSION_ID_PATTERN,
@@ -140,8 +140,11 @@ export class FileActivationStateStore implements IActivationStateStore {
     }
 
     try {
-      const content = await this.fileOps.readFile(this.persistPath);
-      const data = JSON.parse(content) as PersistedActivationState;
+      const data = await readValidatedState(() => this.fileOps.readFile(this.persistPath), value => {
+        if (!isStateObject(value.activations)) throw new Error('Invalid activation state');
+        return value as unknown as PersistedActivationState;
+      }, status => logPersistedStateIssue(status, STORE_NAME, this.sessionId));
+      if (!data) return;
 
       if (data.version === 1 && data.activations && typeof data.activations === 'object') {
         this.state.activations = normalizePersistedActivationMap(data.activations);
@@ -164,8 +167,8 @@ export class FileActivationStateStore implements IActivationStateStore {
           });
         }
       }
-    } catch (error) {
-      handleInitializeError(error, STORE_NAME, 'activation', this.sessionId);
+    } catch {
+      logPersistedStateIssue('invalid', STORE_NAME, this.sessionId);
     }
   }
 

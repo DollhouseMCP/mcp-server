@@ -4,7 +4,7 @@
  * Durable JSON-on-disk backend. Single file at `<rootDir>/signing-keys.json`
  * holds the full set of keys (active + rotated). Atomic write-temp + rename
  * via `FileLockManager`; reads tolerate ENOENT (returns empty set) and
- * malformed JSON (logs and returns empty set).
+ * malformed snapshots are reported to callers and preserved.
  *
  * Single-file (rather than file-per-kid) because:
  *   - Rotation is a multi-row update (mark old inactive + insert new),
@@ -19,7 +19,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
 import { FileLockManager } from '../../security/fileLockManager.js';
-import { logger } from '../../utils/logger.js';
+import { isStateObject, readPersistedState } from '../../state/persistence-utils.js';
 import type {
   ISigningKeyStore,
   SigningKey,
@@ -165,29 +165,13 @@ export class FilesystemSigningKeyStore implements ISigningKeyStore {
   }
 
   private async readAllRaw(): Promise<SigningKey[]> {
-    try {
-      const raw = await fs.readFile(this.filePath, 'utf8');
-      const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) {
-        logger.warn(
-          '[SigningKeyStore:fs] signing-keys.json is not an array; treating as empty',
-          { path: this.filePath },
-        );
-        return [];
-      }
-      return parsed as SigningKey[];
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === 'ENOENT') return [];
-      if (err instanceof SyntaxError) {
-        logger.warn(
-          '[SigningKeyStore:fs] signing-keys.json failed to parse; treating as empty',
-          { path: this.filePath, error: err.message },
-        );
-        return [];
-      }
-      throw err;
-    }
+    const result = await readPersistedState(() => fs.readFile(this.filePath, 'utf8'), value => {
+      if (!Array.isArray(value) || !value.every(isSigningKey)) throw new Error('Invalid signing-key snapshot');
+      return value as SigningKey[];
+    });
+    if (result.status === 'absent') return [];
+    if (result.status === 'loaded') return result.value;
+    throw new Error(`Signing-key state is ${result.status}`);
   }
 
   private async ensureRoot(): Promise<void> {
@@ -197,4 +181,12 @@ export class FilesystemSigningKeyStore implements ISigningKeyStore {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
     }
   }
+}
+
+function isSigningKey(value: unknown): boolean {
+  return isStateObject(value) && typeof value.kid === 'string'
+    && ['jwks', 'cookie', 'invite'].includes(String(value.kind))
+    && isStateObject(value.payload) && typeof value.active === 'boolean'
+    && typeof value.createdAt === 'number'
+    && [value.rotatedAt, value.retiredAt].every(time => time === undefined || typeof time === 'number');
 }

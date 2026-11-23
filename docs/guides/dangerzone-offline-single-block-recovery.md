@@ -1,5 +1,11 @@
 # Offline single-block DangerZone recovery
 
+This tool changes only the file backend. When `DOLLHOUSE_STORAGE_BACKEND=database` is configured, it refuses before reading or changing recovery files. Use the administrator reset for database-mode block state. Preserve legacy files retained during database upgrade for operator review.
+
+For database-mode startup import failures, see [Blocked-agent persistence](../security/architecture.md#22-persistence), including “If database-mode start-up stops on a blocked-agent file”.
+
+For retained `.unattributed-*` files, per-user layouts support moving the file to `<portfolio>/users/<uuid>/security/blocked-agents.json` for the intended user and restarting for import with the normal receipt; in flat layouts, keep it for operator review and use the administrator reset.
+
 This operator tool implements the offline workaround in #2431 and #3000. It removes one explicitly selected block from an existing version 1 `blocked-agents.json`; it does not clear activation state, reset all agents, prove an orphan's liveness, stop processes, or implement online recovery. Online recovery remains open under #2431.
 
 ## Obtain operational authorization first

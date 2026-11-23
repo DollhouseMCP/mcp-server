@@ -1,3 +1,4 @@
+import { FileDangerZoneBlockStore } from '../../../src/state/FileDangerZoneBlockStore.js';
 /** Real autonomy generation, human display and MCP-AQL verification contract (#2656). */
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import fs from 'node:fs/promises';
@@ -59,7 +60,8 @@ describe('Autonomy challenge verification end to end', () => {
     const securityDir = path.join(env.testDir, 'security');
     persistPath = path.join(securityDir, 'blocked-agents.json');
     fileOps = container.resolve<FileOperationsService>('FileOperationsService');
-    enforcer = new DangerZoneEnforcer(fileOps, securityDir);
+    enforcer = new DangerZoneEnforcer(new FileDangerZoneBlockStore(fileOps, securityDir));
+    await enforcer.initialize();
     enforcer.setAdminToken('integration-cleanup');
     container.register('DangerZoneEnforcer', () => enforcer, { override: true });
     server = new DollhouseMCPServer(container);
@@ -72,7 +74,7 @@ describe('Autonomy challenge verification end to end', () => {
 
   afterEach(async () => {
     store.clear();
-    enforcer.clearAll('integration-cleanup');
+    await enforcer.clearAll('integration-cleanup');
     await persistedAgents([]);
     await server.dispose();
     await env.cleanup();
@@ -103,13 +105,13 @@ describe('Autonomy challenge verification end to end', () => {
 
     const result = await verify(challengeId, code);
     expect(result).toEqual(expect.objectContaining({ success: true, data: expect.objectContaining({ verified: true, unblockedAgent: 'blocked-agent' }) }));
-    expect(enforcer.check('blocked-agent').blocked).toBe(false);
-    expect(enforcer.check('other-agent').blocked).toBe(true);
+    expect((await enforcer.check('blocked-agent')).blocked).toBe(false);
+    expect((await enforcer.check('other-agent')).blocked).toBe(true);
     expect(store.get(challengeId)).toBeUndefined();
     await persistedAgents(['other-agent']);
-    const restored = new DangerZoneEnforcer(fileOps, path.dirname(persistPath));
+    const restored = new DangerZoneEnforcer(new FileDangerZoneBlockStore(fileOps, path.dirname(persistPath)));
     await restored.initialize();
-    expect(restored.getBlockedAgents()).toEqual(['other-agent']);
+    expect((await restored.getBlockedAgents())).toEqual(['other-agent']);
     expect((await verify(challengeId, code)).success).toBe(false);
   });
 
@@ -120,7 +122,7 @@ describe('Autonomy challenge verification end to end', () => {
     await persistedAgents(['legacy-agent']);
     expect((await verify(id, 'ABC123', 'different-session')).success).toBe(false);
     expect(store.get(id)?.code).toBe('ABC123');
-    expect(enforcer.check('legacy-agent').blocked).toBe(true);
+    expect((await enforcer.check('legacy-agent')).blocked).toBe(true);
     expect((await verify(id, 'ABC123')).success).toBe(true);
     expect((await verify(id, 'ABC123')).success).toBe(false);
     await persistedAgents([]);
@@ -134,7 +136,7 @@ describe('Autonomy challenge verification end to end', () => {
     const result = await verify(id, failure === 'wrong' ? 'WRONG1' : 'ABC123');
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain(failure === 'wrong' ? 'incorrect code' : 'challenge not found');
-    expect(enforcer.check('legacy-agent').blocked).toBe(true);
+    expect((await enforcer.check('legacy-agent')).blocked).toBe(true);
     if (failure === 'wrong') expect(store.get(id)).toBeUndefined();
     await persistedAgents(['legacy-agent']);
   });

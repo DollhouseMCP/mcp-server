@@ -317,23 +317,24 @@ describe('Phase 3.4 — Negative Isolation Tests (Adversarial)', () => {
     }).catch(() => {});
   }, ISOLATION_TIMEOUT);
 
-  it('DangerZoneEnforcer blocks are session-scoped (unit-level verification)', () => {
+  it('DangerZoneEnforcer blocks are session-scoped (unit-level verification)', async () => {
     // This test verifies at the service level that DangerZoneEnforcer
     // blocks from one session cannot be unblocked by another session.
     // Full HTTP-level DangerZone tests require agent execution which
     // is covered by the existing GatekeeperSessionIsolation.test.ts.
-    const enforcer = env.container.resolve<import('../../../src/security/DangerZoneEnforcer.js').DangerZoneEnforcer>('DangerZoneEnforcer');
+    const registry = env.container.resolve<import('../../../src/di/SessionContainerRegistry.js').SessionContainerRegistry>('SessionContainerRegistry');
+    const enforcer = registry.get(env.sessionContexts[0].sessionId)!.resolve<import('../../../src/security/DangerZoneEnforcer.js').DangerZoneEnforcer>('DangerZoneEnforcer');
     expect(enforcer).toBeDefined();
 
     // Block from a synthetic session A
-    enforcer.block('test-agent-neg', 'danger', ['rm -rf'], 'challenge-neg-123', undefined, 'neg-session-a');
+    await enforcer.block('test-agent-neg', 'danger', ['rm -rf'], 'challenge-neg-123', undefined, 'neg-session-a');
 
     // Session B cannot unblock
-    const crossResult = enforcer.unblock('test-agent-neg', 'challenge-neg-123', 'neg-session-b');
+    const crossResult = await enforcer.unblock('test-agent-neg', 'challenge-neg-123', 'neg-session-b');
     expect(crossResult).toBe(false);
 
     // Session A can unblock
-    const sameResult = enforcer.unblock('test-agent-neg', 'challenge-neg-123', 'neg-session-a');
+    const sameResult = await enforcer.unblock('test-agent-neg', 'challenge-neg-123', 'neg-session-a');
     expect(sameResult).toBe(true);
   });
 });

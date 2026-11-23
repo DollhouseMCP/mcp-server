@@ -32,6 +32,9 @@ import { SecurityTelemetry } from '../../security/telemetry/SecurityTelemetry.js
 import { TokenManager } from '../../security/tokenManager.js';
 import type { ITokenStore } from '../../security/tokenStores/ITokenStore.js';
 import { PathValidator } from '../../security/pathValidator.js';
+import type { DatabaseDangerZoneBlockStore } from '../../state/DatabaseDangerZoneBlockStore.js';
+import type { DangerZoneBlockStoreFactory } from '../../state/IDangerZoneBlockStore.js';
+import { FileDangerZoneBlockStore } from '../../state/FileDangerZoneBlockStore.js';
 import { DangerZoneEnforcer } from '../../security/DangerZoneEnforcer.js';
 import { ContentValidator } from '../../security/contentValidator.js';
 import { SessionActivationRegistry } from '../../state/SessionActivationState.js';
@@ -114,9 +117,18 @@ export class SecurityServiceRegistrar {
       return instance;
     });
 
-    // Issue #402: DangerZoneEnforcer as DI-managed singleton (replaces module-level singleton)
+    container.register('DangerZoneBlockStoreFactory', (): DangerZoneBlockStoreFactory => (userId, directory) => {
+      if (container.hasRegistration('DatabaseInstance')) {
+        const Store = container.resolve<typeof DatabaseDangerZoneBlockStore>('DatabaseDangerZoneBlockStoreClass');
+        return new Store(container.resolve<DatabaseInstance>('DatabaseInstance'), userId ?? container.resolve<string>('CurrentUserId'));
+      }
+      return new FileDangerZoneBlockStore(container.resolve('FileOperationsService'), directory);
+    });
+    container.register('DangerZoneBlockStore', () => container.resolve<DangerZoneBlockStoreFactory>('DangerZoneBlockStoreFactory')(
+      container.hasRegistration('CurrentUserId') ? container.resolve<string>('CurrentUserId') : undefined
+    ));
     container.register('DangerZoneEnforcer', () => new DangerZoneEnforcer(
-      container.resolve('FileOperationsService')
+      container.resolve('DangerZoneBlockStore')
     ));
 
     // Issue #598, #1945, #1886: Per-session state stores — database or file-backed.

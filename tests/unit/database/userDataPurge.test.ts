@@ -14,6 +14,8 @@ import {
   authKv,
   consoleLoginTransactions,
   consoleSessions,
+  dangerZoneBlocks,
+  dangerZoneBlockEvidence,
   elements,
   integrationProviderDescriptors,
   portfolioSyncJobs,
@@ -172,7 +174,7 @@ describe('purgeUserScopedData', () => {
       sessionActivityEvents, portfolioSyncJobs, userIntegrations, userOauthTokens,
       integrationProviderDescriptors, securityInvalidationEvents, runtimeSessionPresence,
       sessionActivationEvents, approvalAuditEvents, consoleLoginTransactions, consoleSessions,
-      sessions, userSettings, elements,
+      sessions, userSettings, elements, dangerZoneBlocks, dangerZoneBlockEvidence,
     ]) {
       expect(tables).toContain(table);
     }

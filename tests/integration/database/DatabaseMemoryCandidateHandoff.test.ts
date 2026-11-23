@@ -138,15 +138,15 @@ async function migrationFixture(name: string) {
   await f.maintenance`DROP SCHEMA public CASCADE`;
   await f.maintenance`DROP SCHEMA drizzle CASCADE`;
   await f.maintenance`CREATE SCHEMA public`;
-  const sourceDirectory = path.join(process.cwd(), 'src/database/migrations');
-  const journal = JSON.parse(await readFile(path.join(sourceDirectory, 'meta/_journal.json'), 'utf8')) as {
+  const sourceDirectory = path.join(process.cwd(), 'src', 'database', 'migrations');
+  const journal = JSON.parse(await readFile(path.join(sourceDirectory, 'meta', '_journal.json'), 'utf8')) as {
     version: string; dialect: string;
     entries: { idx: number; version: string; when: number; tag: string; breakpoints: boolean }[];
   };
   async function install(selected: typeof journal.entries) {
     const folder = path.join(item.directory!, `subset-${randomUUID()}`);
     await mkdir(path.join(folder, 'meta'), { recursive: true });
-    await writeFile(path.join(folder, 'meta/_journal.json'), JSON.stringify({ ...journal, entries: selected }));
+    await writeFile(path.join(folder, 'meta', '_journal.json'), JSON.stringify({ ...journal, entries: selected }));
     const expected = [];
     for (const entry of selected) {
       const bytes = await readFile(path.join(sourceDirectory, `${entry.tag}.sql`));
@@ -183,8 +183,13 @@ required('owned candidate migration prerequisite acceptance on PostgreSQL', () =
     const applied = await f.ledger();
     expect(applied.map(({ hash, created_at }) => ({ hash, created_at }))).toEqual(expected);
     expect(applied.slice(0, prefix.length)).toEqual(before);
-    expect(f.journal.entries.slice(-3).map(({ idx }) => idx)).toEqual([59, 60, 61]);
-    expect(applied.slice(-3).map(({ created_at }) => created_at)).toEqual(['1791417600000', '1791504000000', '1791504001000']);
+    const prerequisites = f.journal.entries.filter(({ idx }) => idx >= 59 && idx <= 61);
+    expect(prerequisites.map(({ idx }) => idx)).toEqual([59, 60, 61]);
+    const prerequisiteTimes = prerequisites.map(({ when }) => String(when));
+    expect(prerequisiteTimes).toEqual(['1791417600000', '1791504000000', '1791504001000']);
+    expect(applied.filter(({ created_at }) => prerequisiteTimes.includes(created_at))
+      .map(({ hash, created_at }) => ({ hash, created_at })))
+      .toEqual(expected.filter(({ created_at }) => prerequisiteTimes.includes(created_at)));
     const [tables] = await f.maintenance`SELECT to_regclass('public.memory_candidate_handoffs')::text AS handoffs,
       to_regclass('public.memory_candidate_quotas')::text AS quotas`;
     expect(tables).toEqual({ handoffs: 'memory_candidate_handoffs', quotas: 'memory_candidate_quotas' });
@@ -265,8 +270,8 @@ required('owned candidate migration prerequisite acceptance on PostgreSQL', () =
     const before = { ledger: await f.ledger(), guard: await f.guardState() };
     const modeEntry = f.journal.entries.find(entry => entry.idx === 60)!;
     const handoffEntry = f.journal.entries.find(entry => entry.idx === 61)!;
-    const modeHash = createHash('sha256').update(await readFile(path.join(process.cwd(), 'src/database/migrations', `${modeEntry.tag}.sql`))).digest('hex');
-    const handoffHash = createHash('sha256').update(await readFile(path.join(process.cwd(), 'src/database/migrations', `${handoffEntry.tag}.sql`))).digest('hex');
+    const modeHash = createHash('sha256').update(await readFile(path.join(process.cwd(), 'src', 'database', 'migrations', `${modeEntry.tag}.sql`))).digest('hex');
+    const handoffHash = createHash('sha256').update(await readFile(path.join(process.cwd(), 'src', 'database', 'migrations', `${handoffEntry.tag}.sql`))).digest('hex');
     // Descriptive test-local assessment of actual records and installed guard, not a shipped qualifier.
     const assess = (observed: typeof before) => {
       const handoffApplied = observed.ledger.some(row => row.hash === handoffHash && row.created_at === String(handoffEntry.when));
@@ -275,7 +280,7 @@ required('owned candidate migration prerequisite acceptance on PostgreSQL', () =
       const legacyAllowed = observed.guard.constraint.includes('legacy');
       return handoffApplied && !modeApplied && !guardedDowngrade && !legacyAllowed ? 'repair-needed' : 'unclassified';
     };
-    expect(before.ledger.at(-1)?.created_at).toBe(String(handoffEntry.when));
+    expect(before.ledger.find(row => row.hash === handoffHash)?.created_at).toBe(String(handoffEntry.when));
     expect(assess(before)).toBe('repair-needed');
     expect(before.guard.trigger).toContain('BEFORE INSERT OR DELETE OR UPDATE');
     await f.install(f.journal.entries);

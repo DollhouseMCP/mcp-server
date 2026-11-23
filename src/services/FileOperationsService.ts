@@ -48,6 +48,10 @@ export interface FileOperationOptions {
   source?: string;
 }
 
+export interface FileCopyOptions extends FileOperationOptions {
+  exclusive?: boolean;
+}
+
 export interface FileOperationsConfig {
   /** Enable verbose audit logging for read operations (default: false) */
   verboseAudit?: boolean;
@@ -92,7 +96,7 @@ export interface IFileOperationsService {
    * Create a directory if it doesn't exist
    * @param directoryPath - Absolute path to directory
    */
-  createDirectory(directoryPath: string): Promise<void>;
+  createDirectory(directoryPath: string, mode?: number): Promise<void>;
 
   /**
    * List files in a directory
@@ -157,7 +161,7 @@ export interface IFileOperationsService {
    * @param destPath - Absolute path to destination
    * @param options - Operation options
    */
-  copyFile(sourcePath: string, destPath: string, options?: FileOperationOptions): Promise<void>;
+  copyFile(sourcePath: string, destPath: string, options?: FileCopyOptions): Promise<void>;
 
   /**
    * Change file permissions
@@ -279,10 +283,10 @@ export class FileOperationsService implements IFileOperationsService {
     }
   }
 
-  async createDirectory(directoryPath: string): Promise<void> {
+  async createDirectory(directoryPath: string, mode?: number): Promise<void> {
     try {
       const validatedPath = await this.enforceWriteAllowlist(directoryPath, 'createDirectory');
-      await fs.mkdir(validatedPath, { recursive: true });
+      await fs.mkdir(validatedPath, { recursive: true, mode });
     } catch (error) {
       logger.error(`Failed to create directory: ${directoryPath}`, error);
       throw error;
@@ -403,13 +407,13 @@ export class FileOperationsService implements IFileOperationsService {
     }
   }
 
-  async copyFile(sourcePath: string, destPath: string, options: FileOperationOptions = {}): Promise<void> {
+  async copyFile(sourcePath: string, destPath: string, options: FileCopyOptions = {}): Promise<void> {
     try {
       const validatedDestPath = await this.enforceWriteAllowlist(destPath, 'copyFile:destination');
       // Ensure destination directory exists
       await this.createDirectory(path.dirname(validatedDestPath));
 
-      await fs.copyFile(sourcePath, validatedDestPath);
+      await fs.copyFile(sourcePath, validatedDestPath, options.exclusive ? fs.constants.COPYFILE_EXCL : 0);
 
       SecurityMonitor.logSecurityEvent({
         type: 'FILE_WRITTEN',

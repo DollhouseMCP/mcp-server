@@ -506,3 +506,21 @@ describe('FileConfirmationStore', () => {
     });
   });
 });
+
+describe('approval snapshot ordering', () => {
+  it('restores valid entries in file order around invalid entries', async () => {
+    const approval = (toolName: string) => ({
+      requestId: 'request', toolName, toolInput: {}, riskLevel: 'low', riskScore: 0,
+      irreversible: false, requestedAt: new Date().toISOString(), consumed: false,
+      scope: 'single', denyReason: 'Review required',
+    });
+    const fileOps = createMockFileOps({ readFileResult: JSON.stringify({
+      version: 1, confirmations: [], cliSessionApprovals: [],
+      cliApprovals: [['request', approval('first')], null, ['request', approval('last')]],
+    }) });
+    const store = new FileConfirmationStore(fileOps, TEST_STATE_DIR, TEST_SESSION_ID, auditResolver);
+    await store.initialize();
+    expect(store.getAllCliApprovals()).toHaveLength(1);
+    expect(store.getCliApproval('request')?.toolName).toBe('last');
+  });
+});
