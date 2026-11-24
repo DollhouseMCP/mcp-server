@@ -15,15 +15,18 @@ import { ELEMENT_TYPE_MAP } from './elementTypeNormalization.js';
  * Interface for managers passed to resolveElementTypes().
  * Each manager is optional — only available managers are searched.
  *
- * PersonaManager uses findPersona() (synchronous) instead of the standard
- * findByName() — both are supported.
+ * PersonaManager uses findPersonaAsync() for storage-backed lookups.
+ * Older manager implementations may supply the synchronous findPersona().
  */
 export interface ElementManagersForResolution {
   skillManager?: { findByName(name: string): Promise<any> };
   templateManager?: { findByName(name: string): Promise<any> };
   agentManager?: { findByName(name: string): Promise<any> };
   memoryManager?: { findByName(name: string): Promise<any> };
-  personaManager?: { findPersona?(name: string): any };
+  personaManager?: {
+    findPersonaAsync?(name: string): Promise<unknown>;
+    findPersona?(name: string): unknown;
+  };
   ensembleManager?: { findByName(name: string): Promise<any> };
 }
 
@@ -101,8 +104,10 @@ export async function resolveElementTypes(
     for (const [typeName, manager] of typeMap) {
       if (!manager) continue;
       try {
-        if (typeName === 'persona' && manager.findPersona) {
-          const found = manager.findPersona(elementName);
+        if (typeName === 'persona') {
+          const found = manager.findPersonaAsync
+            ? await manager.findPersonaAsync(elementName)
+            : manager.findPersona?.(elementName);
           if (found) matches.push(typeName);
         } else if (manager.findByName) {
           const found = await manager.findByName(elementName);

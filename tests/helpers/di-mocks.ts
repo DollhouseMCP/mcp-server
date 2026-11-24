@@ -76,6 +76,7 @@ export function createMockPersonaManager(overrides: Partial<any> = {}) {
     delete: jest.fn().mockResolvedValue(undefined),
     getActivePersona: jest.fn().mockReturnValue(null),
     getActivePersonas: jest.fn().mockReturnValue([]),
+    resolveActivePersonas: jest.fn().mockResolvedValue([]),
     activatePersona: jest.fn().mockResolvedValue(undefined),
     deactivatePersona: jest.fn().mockResolvedValue(undefined),
     getCurrentUserForAttribution: jest.fn().mockReturnValue('test-user'),

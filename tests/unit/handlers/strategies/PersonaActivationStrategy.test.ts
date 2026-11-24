@@ -16,6 +16,8 @@ describe('PersonaActivationStrategy', () => {
       // Issue #281: Add getActivePersonas for multiple active personas support
       getActivePersonas: jest.fn().mockReturnValue([]),
       findPersona: jest.fn(),
+      findPersonaAsync: (name: string) => Promise.resolve(mockPersonaManager.findPersona(name)),
+      resolveActivePersonas: () => Promise.resolve(mockPersonaManager.getActivePersonas()),
     } as unknown as jest.Mocked<PersonaManager>;
 
     mockPersonaIndicatorService = {

@@ -8,7 +8,7 @@ import type { TemplateRenderer } from '../../../src/utils/TemplateRenderer.js';
 import type { AgentManager } from '../../../src/elements/agents/AgentManager.js';
 import type { MemoryManager } from '../../../src/elements/memories/MemoryManager.js';
 import type { EnsembleManager } from '../../../src/elements/ensembles/EnsembleManager.js';
-import type { PersonaHandler } from '../../../src/handlers/PersonaHandler.js';
+import type { PersonaManager } from '../../../src/persona/PersonaManager.js';
 import type { PortfolioManager } from '../../../src/portfolio/PortfolioManager.js';
 import type { InitializationService } from '../../../src/services/InitializationService.js';
 import type { PersonaIndicatorService } from '../../../src/services/PersonaIndicatorService.js';
@@ -23,7 +23,7 @@ describe('ElementCRUDHandler (DI)', () => {
   let agentManager: jest.Mocked<AgentManager>;
   let memoryManager: jest.Mocked<MemoryManager>;
   let ensembleManager: jest.Mocked<EnsembleManager>;
-  let personaHandler: jest.Mocked<PersonaHandler>;
+  let personaHandler: jest.Mocked<PersonaManager>;
   let portfolioManager: jest.Mocked<PortfolioManager>;
   let initService: jest.Mocked<InitializationService>;
   let indicatorService: jest.Mocked<PersonaIndicatorService>;
@@ -71,8 +71,10 @@ describe('ElementCRUDHandler (DI)', () => {
       getActivePersonas: jest.fn().mockReturnValue([]),
       deactivatePersona: jest.fn().mockReturnValue({ success: true, message: 'deactivated' }),
       findPersona: jest.fn(),
+      findPersonaAsync: (name: string) => Promise.resolve(personaHandler.findPersona(name)),
+      resolveActivePersonas: () => Promise.resolve(personaHandler.getActivePersonas()),
       list: jest.fn().mockReturnValue([]),
-    } as unknown as jest.Mocked<PersonaHandler>;
+    } as unknown as jest.Mocked<PersonaManager>;
 
     portfolioManager = {
       getElementDir: jest.fn(),

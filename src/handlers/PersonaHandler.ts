@@ -538,11 +538,7 @@ export class PersonaHandler {
       };
     }
 
-    const persona = await this.personaManager.find(p =>
-      p.filename === personaIdentifier ||
-      p.metadata.name.toLowerCase() === personaIdentifier.toLowerCase() ||
-      slugify(p.metadata.name || '') === slugify(personaIdentifier)
-    );
+    const persona = await this.personaManager.findPersonaAsync(personaIdentifier);
 
     if (!persona) {
       return {
@@ -558,7 +554,7 @@ export class PersonaHandler {
     }
 
     const indicator = this.indicatorService.getPersonaIndicator();
-    const validationResult = this.personaManager.validatePersona(personaIdentifier);
+    const validationResult = this.personaManager.validatePersona(persona);
     const issues = validationResult.report.errors ?? [];
     const warnings = validationResult.report.warnings ?? [];
     const statusLine = validationResult.success ? '✅ Status: Valid' : '❌ Status: Invalid';

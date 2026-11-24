@@ -435,7 +435,7 @@ export class ElementCRUDHandler {
     const result: PolicyElement[] = [];
     const seen = new Set<string>();
 
-    this.appendActivePersonas(result, seen);
+    await this.appendActivePersonas(result, seen);
     await this.appendActiveSkills(result, seen);
     await this.appendActiveAgents(result, seen, indexOptions);
     await this.appendActiveEnsembles(result, seen, indexOptions);
@@ -443,9 +443,9 @@ export class ElementCRUDHandler {
     return result;
   }
 
-  private appendActivePersonas(result: PolicyElement[], seen: Set<string>): void {
+  private async appendActivePersonas(result: PolicyElement[], seen: Set<string>): Promise<void> {
     try {
-      for (const persona of this.personaManager.getActivePersonas()) {
+      for (const persona of await this.personaManager.resolveActivePersonas()) {
         seen.add(this.policyElementKey('persona', persona.metadata.name));
         result.push({
           type: 'persona',
@@ -849,7 +849,7 @@ export class ElementCRUDHandler {
   private async collectActiveElementsForDeadlockRelief(): Promise<DeadlockReliefElement[]> {
     const activeElements: DeadlockReliefElement[] = [];
 
-    const activePersonas = this.personaManager.getActivePersonas();
+    const activePersonas = await this.personaManager.resolveActivePersonas();
     activeElements.push(...activePersonas.map((persona) => ({
       type: ElementType.PERSONA,
       name: persona.metadata.name,
@@ -961,7 +961,7 @@ export class ElementCRUDHandler {
 
   private async getStableActivationFilename(type: string, name: string): Promise<string | undefined> {
     if (type === ElementType.PERSONA) {
-      return this.personaManager.findPersona(name)?.filename;
+      return (await this.personaManager.findPersonaAsync(name))?.filename;
     }
     if (type === ElementType.AGENT) {
       return this.agentManager.getStableActivationFilename(name);

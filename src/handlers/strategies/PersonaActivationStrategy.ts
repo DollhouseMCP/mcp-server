@@ -85,7 +85,7 @@ export class PersonaActivationStrategy extends BaseActivationStrategy implements
     }
 
     // Issue #275: Verify the named persona exists before deactivating
-    const persona = this.personaManager.findPersona(name);
+    const persona = await this.personaManager.findPersonaAsync(name);
     if (!persona) {
       throw new ElementNotFoundError('Persona', name);
     }
@@ -116,7 +116,7 @@ export class PersonaActivationStrategy extends BaseActivationStrategy implements
    * Issue #281: Updated to show all active personas (supports multiple)
    */
   async getActiveElements(): Promise<MCPResponse> {
-    const activePersonas = this.personaManager.getActivePersonas();
+    const activePersonas = await this.personaManager.resolveActivePersonas();
     const indicator = this.getPersonaIndicator();
 
     if (activePersonas.length === 0) {
@@ -168,7 +168,7 @@ export class PersonaActivationStrategy extends BaseActivationStrategy implements
    * @see Issue #275 - Handlers return success=true for missing elements
    */
   async getElementDetails(name: string): Promise<MCPResponse> {
-    const persona = this.personaManager.findPersona(name);
+    const persona = await this.personaManager.findPersonaAsync(name);
     const indicator = this.getPersonaIndicator();
 
     if (!persona) {

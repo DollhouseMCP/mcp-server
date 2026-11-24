@@ -346,8 +346,8 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    * Issue #843: findPersona() is synchronous and cache-only. After LRU eviction
    * or direct filesystem edits followed by scan(), personas become invisible even
    * though the file exists on disk. This async method tries the fast cache path
-   * first, then falls back to BaseElementManager.findByName() which has the full
-   * cache → storage index → direct file load → list scan fallback chain.
+   * first, then resolves explicit storage filenames or looks up the display
+   * name using BaseElementManager.findByName().
    *
    * Includes request deduplication: concurrent lookups for the same identifier
    * share a single disk read to avoid redundant I/O in bridge/swarm scenarios.
@@ -387,7 +387,11 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    */
   private async performDiskLookup(identifier: string): Promise<PersonaElement | undefined> {
     try {
-      const fromDisk = await this.findByName(identifier);
+      const normalizedIdentifier = identifier.trim();
+      const byFilename = normalizedIdentifier.toLowerCase().endsWith(this.getFileExtension())
+        ? await this.findByFilename(normalizedIdentifier)
+        : undefined;
+      const fromDisk = byFilename ?? await this.findByName(normalizedIdentifier);
       if (fromDisk && this.matchesIdentifier(fromDisk, identifier)) {
         this.cacheMissMetrics.diskRecoveries++;
         logger.info(`[PersonaManager] Cache miss recovered from disk: "${identifier}" (total recoveries: ${this.cacheMissMetrics.diskRecoveries}, miss rate: ${this.cacheMissMetrics.cacheMisses}/${this.cacheMissMetrics.cacheHits + this.cacheMissMetrics.cacheMisses})`);
@@ -537,6 +541,18 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     for (const filename of this.activePersonas) {
       const persona = this.findPersona(filename);
       if (persona) {
+        personas.push(persona);
+      }
+    }
+    return personas;
+  }
+
+  /** Resolve active personas by their stored filenames, including after cache eviction. */
+  async resolveActivePersonas(): Promise<PersonaElement[]> {
+    const personas: PersonaElement[] = [];
+    for (const filename of this.activePersonas) {
+      const persona = await this.findPersonaAsync(filename);
+      if (persona && this.activePersonas.has(filename)) {
         personas.push(persona);
       }
     }
@@ -1130,16 +1146,18 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
   /**
    * Validate a persona and return a formatted report
    */
-  validatePersona(personaIdentifier: string) {
+  validatePersona(personaIdentifier: string | PersonaElement) {
     if (!personaIdentifier) {
       throw new Error('Missing Persona Identifier. Usage: validate_persona "persona_name"');
     }
 
-    const persona = this.findPersona(personaIdentifier);
+    const persona = typeof personaIdentifier === 'string'
+      ? this.findPersona(personaIdentifier)
+      : personaIdentifier;
 
     if (!persona) {
       // SECURITY: Sanitize user input before including in error messages
-      const sanitizedId = sanitizeInput(personaIdentifier, 100);
+      const sanitizedId = sanitizeInput(String(personaIdentifier), 100);
       throw new Error(`Persona not found: "${sanitizedId}"`);
     }
 

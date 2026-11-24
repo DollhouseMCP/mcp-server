@@ -1390,9 +1390,8 @@ describe('Ensemble Element', () => {
         { element_name: 'my-memory', element_type: 'memory', role: 'monitor', activation: 'always' },
       ], metadataService);
 
-      // PersonaManager uses findPersona, not list+find
-      mockManagers.personaManager.findPersona = jest.fn().mockImplementation((name: string) =>
-        ({ metadata: { name }, id: name, activate: jest.fn().mockResolvedValue(undefined) })
+      mockManagers.personaManager.findPersonaAsync = jest.fn().mockImplementation((name: string) =>
+        Promise.resolve({ metadata: { name }, id: name, activate: jest.fn().mockResolvedValue(undefined) })
       );
       // Other managers use list() → find by metadata.name
       const mkElement = (name: string) => ({ metadata: { name }, id: name, activate: jest.fn().mockResolvedValue(undefined) });

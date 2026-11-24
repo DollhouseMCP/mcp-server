@@ -1385,9 +1385,8 @@ export class Ensemble extends BaseElement implements IElement {
     elementName: string,
     elementType: string
   ): Promise<IElement> {
-    // Special handling for PersonaManager which has findPersona method
-    if (elementType === 'persona' && manager.findPersona) {
-      const persona = manager.findPersona(elementName);
+    if (elementType === 'persona' && manager.findPersonaAsync) {
+      const persona = await manager.findPersonaAsync(elementName);
       if (!persona) {
         throw new Error(`${this.capitalizeFirst(elementType)} '${elementName}' not found`);
       }
