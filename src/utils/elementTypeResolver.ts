@@ -63,22 +63,20 @@ export async function resolveElementTypes(
   elements: any[],
   managers: ElementManagersForResolution
 ): Promise<ResolveElementTypesResult> {
-  const resolved = [];
+  const resolved: ResolveElementTypesResult['resolved'] = [];
   const ambiguous: Array<{ element_name: string; found_in: string[] }> = [];
   const notFound: string[] = [];
 
-  for (let i = 0; i < elements.length; i++) {
-    const elem = elements[i];
-
+  const resolveElement = async (elem: any, index: number): Promise<void> => {
     // Issue #507: Guard against non-object elements (e.g., bare strings like "my-skill")
     if (typeof elem !== 'object' || elem === null) {
       const valueType = elem === null ? 'null' : typeof elem;
       logger.warn(
-        `[resolveElementTypes] Element at index ${i} is a ${valueType} ("${String(elem).substring(0, 50)}"), ` +
+        `[resolveElementTypes] Element at index ${index} is a ${valueType} ("${String(elem).substring(0, 50)}"), ` +
         `but must be an object with { element_name, element_type }. Skipping.`
       );
       notFound.push(String(elem));
-      continue;
+      return;
     }
 
     const elementName = elem.element_name || elem.name;
@@ -87,36 +85,10 @@ export async function resolveElementTypes(
     if (elementType || !elementName) {
       // Type is already known, or no name to search for — pass through as-is
       resolved.push(elem);
-      continue;
+      return;
     }
 
-    // Search all managers for this element name
-    const typeMap: [string, any][] = [
-      ['skill', managers.skillManager],
-      ['template', managers.templateManager],
-      ['agent', managers.agentManager],
-      ['memory', managers.memoryManager],
-      ['persona', managers.personaManager],
-      ['ensemble', managers.ensembleManager],
-    ];
-
-    const matches: string[] = [];
-    for (const [typeName, manager] of typeMap) {
-      if (!manager) continue;
-      try {
-        if (typeName === 'persona') {
-          const found = manager.findPersonaAsync
-            ? await manager.findPersonaAsync(elementName)
-            : manager.findPersona?.(elementName);
-          if (found) matches.push(typeName);
-        } else if (manager.findByName) {
-          const found = await manager.findByName(elementName);
-          if (found) matches.push(typeName);
-        }
-      } catch {
-        // Manager lookup failed — skip this type silently
-      }
-    }
+    const matches = await findMatchingTypes(elementName, managers);
 
     if (matches.length === 1) {
       const resolvedType = matches[0];
@@ -126,7 +98,7 @@ export async function resolveElementTypes(
           `[resolveElementTypes] Element '${elementName}': resolved to unrecognized type '${resolvedType}'. Skipping element.`
         );
         notFound.push(elementName);
-        continue;
+        return;
       }
       resolved.push({ ...elem, element_type: resolvedType });
     } else if (matches.length > 1) {
@@ -142,7 +114,45 @@ export async function resolveElementTypes(
         `Provide element_type explicitly or ensure the element exists in the portfolio. Skipping element.`
       );
     }
-  }
+  };
+
+  const entries = elements.entries();
+  const resolveNext = async (): Promise<void> => {
+    const next = entries.next();
+    if (next.done) return;
+
+    const [index, element] = next.value;
+    await resolveElement(element, index);
+    await resolveNext();
+  };
+  await resolveNext();
 
   return { resolved, ambiguous, notFound };
+}
+
+async function findMatchingTypes(elementName: string, managers: ElementManagersForResolution): Promise<string[]> {
+  const typeMap: [string, any][] = [
+    ['skill', managers.skillManager],
+    ['template', managers.templateManager],
+    ['agent', managers.agentManager],
+    ['memory', managers.memoryManager],
+    ['persona', managers.personaManager],
+    ['ensemble', managers.ensembleManager],
+  ];
+
+  const matches: string[] = [];
+  await typeMap.reduce(async (previous, [typeName, manager]) => {
+    await previous;
+    if (!manager) return;
+
+    try {
+      const found = typeName === 'persona'
+        ? await (manager.findPersonaAsync?.(elementName) ?? manager.findPersona?.(elementName))
+        : await manager.findByName?.(elementName);
+      if (found) matches.push(typeName);
+    } catch {
+      // Manager lookup failed — skip this type silently
+    }
+  }, Promise.resolve());
+  return matches;
 }

@@ -550,12 +550,18 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
   /** Resolve active personas by their stored filenames, including after cache eviction. */
   async resolveActivePersonas(): Promise<PersonaElement[]> {
     const personas: PersonaElement[] = [];
-    for (const filename of this.activePersonas) {
-      const persona = await this.findPersonaAsync(filename);
-      if (persona && this.activePersonas.has(filename)) {
+    const filenames = this.activePersonas.values();
+    const resolveNext = async (): Promise<void> => {
+      const next = filenames.next();
+      if (next.done) return;
+
+      const persona = await this.findPersonaAsync(next.value);
+      if (persona && this.activePersonas.has(next.value)) {
         personas.push(persona);
       }
-    }
+      await resolveNext();
+    };
+    await resolveNext();
     return personas;
   }
 
@@ -1151,16 +1157,21 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
       throw new Error('Missing Persona Identifier. Usage: validate_persona "persona_name"');
     }
 
-    const persona = typeof personaIdentifier === 'string'
-      ? this.findPersona(personaIdentifier)
-      : personaIdentifier;
+    if (typeof personaIdentifier !== 'string') {
+      return this.formatPersonaValidation(personaIdentifier);
+    }
 
+    const persona = this.findPersona(personaIdentifier);
     if (!persona) {
       // SECURITY: Sanitize user input before including in error messages
-      const sanitizedId = sanitizeInput(String(personaIdentifier), 100);
+      const sanitizedId = sanitizeInput(personaIdentifier, 100);
       throw new Error(`Persona not found: "${sanitizedId}"`);
     }
 
+    return this.formatPersonaValidation(persona);
+  }
+
+  private formatPersonaValidation(persona: PersonaElement) {
     const validationResult = persona.validate();
     const statusLine = validationResult.valid ? '✅ Status: Valid' : '❌ Status: Invalid';
 
