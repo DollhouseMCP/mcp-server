@@ -414,14 +414,10 @@ export class FileOperationsService implements IFileOperationsService {
   /** Serialize cooperating writers across processes without stealing a slow writer's lock. */
   async withWriteLock<T>(filePath: string, operation: () => Promise<T>): Promise<T> {
     const validatedPath = await this.enforceWriteAllowlist(filePath, 'withWriteLock');
-    await this.enforceWriteAllowlist(`${validatedPath}.lock`, 'withWriteLock');
-    const { FileLock } = await import('../utils/FileLock.js');
-    const lock = new FileLock(validatedPath);
-    const result = await lock.withLock(operation, { stale: Infinity });
-    if (result === null) {
-      throw new Error('Could not acquire file write lock. If its owner has exited, stop all writers before removing the lock.');
-    }
-    return result;
+    const lockPath = `${validatedPath}.lock`;
+    await this.enforceWriteAllowlist(lockPath, 'withWriteLock');
+    const { withRecoverableFileWriteLock } = await import('../utils/RecoverableFileWriteLock.js');
+    return withRecoverableFileWriteLock(lockPath, operation);
   }
 
   async createFileExclusive(filePath: string, content: string, options: FileCreateOptions = {}): Promise<boolean> {
