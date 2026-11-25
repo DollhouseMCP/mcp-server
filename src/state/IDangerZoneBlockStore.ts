@@ -19,16 +19,16 @@ export type BlockMutation =
 /** Durable block snapshots, scoped to one user by the composition root. */
 export interface IDangerZoneBlockStore {
   readonly location: string;
-  /**
-   * True is a routine refresh that may return the live in-memory snapshot;
-   * false or omitted forces a full read from storage.
-   */
+  /** A routine refresh can reuse a snapshot if the backing file is unchanged. */
   load(refresh?: boolean): Promise<PersistedStateRead<Record<string, unknown>>>;
+  /** Optional notification used to force a fresh read during file-backed recovery. */
+  watchForRecovery?(retry: () => Promise<void>): () => void;
   /**
-   * True means applied; false means declined by authoritative concurrent state.
+   * True means applied. A snapshot carries the committed state when writers share storage.
+   * False means declined by authoritative concurrent state.
    * A declined mutation must not be retried. Storage failures throw instead.
    */
-  apply(mutation: BlockMutation, snapshot: Record<string, unknown>): Promise<boolean>;
+  apply(mutation: BlockMutation, snapshot: Record<string, unknown>): Promise<boolean | { snapshot: Record<string, unknown> }>;
   /** Preserve the snapshot before an administrative reset; empty string means no evidence existed. */
   reset(): Promise<string>;
 }

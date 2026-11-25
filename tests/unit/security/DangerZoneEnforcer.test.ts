@@ -67,6 +67,8 @@ function createMockReadFile(options?: MockFileOpsOptions) {
 function createMockFileOps(options?: MockFileOpsOptions) {
   return {
     readFile: createMockReadFile(options),
+    createFileExclusive: jest.fn<() => Promise<boolean>>().mockResolvedValue(true),
+    withWriteLock: async (_path: string, operation: () => Promise<unknown>) => operation(),
     writeFile: options?.writeFileError
       ? jest.fn<() => Promise<void>>().mockRejectedValue(options.writeFileError)
       : jest.fn<() => Promise<void>>().mockResolvedValue(),

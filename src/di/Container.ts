@@ -2426,10 +2426,10 @@ export class DollhouseContainer {
       cleanups.forEach(fn => fn());
     } catch { /* hooks not yet wired */ }
 
-    const blockReceipts = await Promise.all(Array.from(this.userDangerZoneEnforcers.values(), async pending => (await pending).flush()));
+    const blockReceipts = await Promise.all(Array.from(this.userDangerZoneEnforcers.values(), async pending => (await pending).shutdown()));
     this.userDangerZoneEnforcers.clear();
     const rootEnforcer = this.services.get('DangerZoneEnforcer')?.instance as DangerZoneEnforcer | undefined;
-    if (rootEnforcer) blockReceipts.push(await rootEnforcer.flush());
+    if (rootEnforcer) blockReceipts.push(await rootEnforcer.shutdown());
     if (blockReceipts.some(saved => !saved)) {
       logger.error('Block-state storage did not finish saving before shutdown');
     }

@@ -31,7 +31,7 @@ async function observer() {
     written.push(agents);
     if (written.length === 2) completed.resolve();
   });
-  const enforcer = new DangerZoneEnforcer(new FileDangerZoneBlockStore({ createDirectory: async (directory: string) => { await fs.mkdir(directory, { recursive: true }); }, writeFile, readFile: async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); } } as unknown as FileOperationsService, path.join(os.tmpdir(), `isolated-test-security-${randomUUID()}`)));
+  const enforcer = new DangerZoneEnforcer(new FileDangerZoneBlockStore({ withWriteLock: async (_file: string, operation: () => Promise<unknown>) => operation(), createDirectory: async (directory: string) => { await fs.mkdir(directory, { recursive: true }); }, writeFile, readFile: async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); } } as unknown as FileOperationsService, path.join(os.tmpdir(), `isolated-test-security-${randomUUID()}`)));
   await enforcer.initialize();
   enforcer.setAdminToken('fixture-admin');
   return { enforcer, firstEntered, releaseFirst, completed, attempted, written };
@@ -76,7 +76,7 @@ describe('DangerZoneEnforcer persistence ordering', () => {
       }
       completed.resolve();
     });
-    const enforcer = new DangerZoneEnforcer(new FileDangerZoneBlockStore({ createDirectory: async (directory: string) => { await fs.mkdir(directory, { recursive: true }); }, writeFile, readFile: async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); } } as unknown as FileOperationsService, path.join(os.tmpdir(), `isolated-test-security-${randomUUID()}`)));
+    const enforcer = new DangerZoneEnforcer(new FileDangerZoneBlockStore({ withWriteLock: async (_file: string, operation: () => Promise<unknown>) => operation(), createDirectory: async (directory: string) => { await fs.mkdir(directory, { recursive: true }); }, writeFile, readFile: async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); } } as unknown as FileOperationsService, path.join(os.tmpdir(), `isolated-test-security-${randomUUID()}`)));
     await enforcer.initialize();
     const first = enforcer.block('first-agent', 'fixture', ['test']);
     await firstEntered.promise;

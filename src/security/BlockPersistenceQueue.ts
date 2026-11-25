@@ -106,9 +106,9 @@ export class BlockPersistenceQueue {
       try {
         const applied = await this.store.apply(entry.mutation, snapshot);
         this.entries.shift();
-        if (applied) this.state = snapshot;
+        if (applied) this.state = typeof applied === 'object' ? applied.snapshot : snapshot;
         else await this.reconcile();
-        entry.settle(applied && this.ready());
+        entry.settle(Boolean(applied) && this.ready());
       } catch (error) {
         entry.settle(false);
         this.failed(error);

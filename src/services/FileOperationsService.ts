@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { FileLockManager, type WrittenFileVersion } from '../security/fileLockManager.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { logger } from '../utils/logger.js';
+import { FileLock } from '../utils/FileLock.js';
 import { ElementType } from '../portfolio/types.js';
 import { validatePath } from '../security/InputValidator.js';
 
@@ -61,6 +62,11 @@ export interface FileWriteOptions {
   maxSize?: number;
   /** Receives the created file's (mtime, size), observed on the exclusive handle before it closes. */
   onWritten?: (version: WrittenFileVersion) => void;
+}
+
+export interface FileCreateOptions extends FileWriteOptions {
+  /** Permissions applied before writing any data to the new file. */
+  mode?: number;
 }
 
 export interface FileOperationOptions {
@@ -176,7 +182,9 @@ export interface IFileOperationsService {
    * @param options - Write options
    * @returns true if created, false if file already existed
    */
-  createFileExclusive(filePath: string, content: string, options?: FileWriteOptions): Promise<boolean>;
+  createFileExclusive(filePath: string, content: string, options?: FileCreateOptions): Promise<boolean>;
+
+  withWriteLock<T>(filePath: string, operation: () => Promise<T>): Promise<T>;
 
   /**
    * Copy a file from source to destination
@@ -404,7 +412,19 @@ export class FileOperationsService implements IFileOperationsService {
     }
   }
 
-  async createFileExclusive(filePath: string, content: string, options: FileWriteOptions = {}): Promise<boolean> {
+  /** Serialize cooperating writers across processes without stealing a slow writer's lock. */
+  async withWriteLock<T>(filePath: string, operation: () => Promise<T>): Promise<T> {
+    const validatedPath = await this.enforceWriteAllowlist(filePath, 'withWriteLock');
+    await this.enforceWriteAllowlist(`${validatedPath}.lock`, 'withWriteLock');
+    const lock = new FileLock(validatedPath);
+    const result = await lock.withLock(operation, { stale: Infinity });
+    if (result === null) {
+      throw new Error('Could not acquire file write lock. If its owner has exited, stop all writers before removing the lock.');
+    }
+    return result;
+  }
+
+  async createFileExclusive(filePath: string, content: string, options: FileCreateOptions = {}): Promise<boolean> {
     try {
       const validatedPath = await this.enforceWriteAllowlist(filePath, 'createFileExclusive');
       const maxSize = options.maxSize ?? this.defaultMaxFileSize;
@@ -414,7 +434,7 @@ export class FileOperationsService implements IFileOperationsService {
 
       // Use 'wx' flag for atomic creation - fails if file already exists
       // This prevents TOCTOU race conditions
-      const fileHandle = await fs.open(validatedPath, 'wx');
+      const fileHandle = await fs.open(validatedPath, 'wx', options.mode);
       try {
         await fileHandle.writeFile(content, { encoding: options.encoding ?? 'utf-8' });
         if (options.onWritten) {
