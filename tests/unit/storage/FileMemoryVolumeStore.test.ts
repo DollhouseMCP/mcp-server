@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { afterEach, describe, expect, it as jestIt } from '@jest/globals';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
@@ -221,7 +223,7 @@ it.each(['reserved-volume', 'reserved-generation', 'partial-payload', 'partial-m
       }});
       await store.createExclusive(snapshot.token, {minimumVolume:1,rawContent:'entries: []\\n',entryCount:0,sealedAt:new Date('2026-09-29')});
     `;
-    const child = spawn(process.execPath, [...(extension === 'ts' ? ['--import', 'tsx'] : []), '--input-type=module', '-e', script, f.root, USER, phase], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [...(extension === 'ts' ? ['--import', 'tsx'] : []), '--input-type=module', '-e', script, f.root, USER, phase], { env: isolatedServerEnv(testHomeDirectory(), process.env), stdio: ['pipe', 'pipe', 'pipe'] });
     let stderr = '';
     child.stderr.on('data', chunk => { stderr += String(chunk); });
     const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
@@ -381,7 +383,7 @@ it('bounds committed collision probes without allocating beyond the limit', asyn
     child = spawn(process.execPath, [...(extension === 'ts' ? ['--import', pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href] : []), worker,
       ...['FileMemoryFence', 'FileMemoryTransactionCoordinator', 'FileMemoryOwnerSnapshots', 'FileMemoryVolumeStore']
         .map(name => new URL(`${name}.${extension}`, moduleRoot).href), f.root, USER],
-    { cwd: f.root, stdio: ['ignore', 'pipe', 'pipe'] });
+    { env: isolatedServerEnv(testHomeDirectory(), process.env), cwd: f.root, stdio: ['ignore', 'pipe', 'pipe'] });
     let exitCode: number | null = null;
     let signal: NodeJS.Signals | null = null;
     closed = new Promise(resolve => {

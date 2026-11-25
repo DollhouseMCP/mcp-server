@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { describe, expect, it } from '@jest/globals';
 import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -31,12 +33,12 @@ function run(source: string, overrides: Record<string, string> = {}) {
     }
     npm() { printf 'NPM_COMMAND=%s\\n' "$*"; }
     ${source}
-  `], { encoding: 'utf8', timeout: 10000, env: {
+  `], { encoding: 'utf8', timeout: 10000, env: isolatedServerEnv(testHomeDirectory(), {
     PATH: process.env.PATH, SAFETY_ONLY: 'true', EVENT_NAME: 'workflow_dispatch',
     SOURCE_REPOSITORY: 'DollhouseMCP/mcp-server', SOURCE_REF: 'refs/heads/main',
     SOURCE_SHA: sha, EXPECTED_SHA: sha, CHECKOUT_SHA: sha, MAIN_SHA: sha, FETCH_STATUS: '0',
     ...overrides,
-  } });
+  }) });
 }
 function enabled(expression: string, event: string, inputs: Record<string, unknown> = {}): boolean {
   return Boolean(runInNewContext(expression.replace(/^\$\{\{\s*|\s*\}\}$/g, ''), {

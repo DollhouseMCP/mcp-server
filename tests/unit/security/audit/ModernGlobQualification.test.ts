@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { afterEach, beforeEach, describe, expect, test } from '@jest/globals';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
@@ -52,7 +54,7 @@ describe('modern glob consumer qualification', () => {
       "console.log(new (require('glob').Glob)(pattern,{...options,cwd:process.argv[1]}).patterns.length);",
       "console.log(new (require('minimatch').Minimatch)(pattern,options).globParts.length);"
     ]) {
-      const child = spawnSync(process.execPath, ['-e', setup + expression, dir], { cwd: process.cwd(), encoding: 'utf8', timeout: 3000 });
+      const child = spawnSync(process.execPath, ['-e', setup + expression, dir], { env: isolatedServerEnv(testHomeDirectory(), process.env), cwd: process.cwd(), encoding: 'utf8', timeout: 3000 });
       expect(child.error).toBeUndefined(); expect(child.status).toBe(0);
       expect(Number(child.stdout)).toBeGreaterThan(0); expect(Number(child.stdout)).toBeLessThanOrEqual(64);
     }
@@ -130,7 +132,7 @@ describe('modern glob consumer qualification', () => {
       "console.log(JSON.stringify(new (require('glob').Glob)(pattern,{cwd:process.argv[1]}).walkSync()));",
       "console.log(JSON.stringify(require('minimatch').minimatch('a'.repeat(80)+'c',pattern)));"
     ]) {
-      const child = spawnSync(process.execPath, ['-e', pattern + expression, dir], { cwd: process.cwd(), encoding: 'utf8', timeout: 3000 });
+      const child = spawnSync(process.execPath, ['-e', pattern + expression, dir], { env: isolatedServerEnv(testHomeDirectory(), process.env), cwd: process.cwd(), encoding: 'utf8', timeout: 3000 });
       expect(child.error).toBeUndefined(); expect(child.status).toBe(0);
       expect(JSON.parse(child.stdout)).toEqual(expression.includes('Glob') ? [] : false);
     }
@@ -143,7 +145,7 @@ describe('modern glob consumer qualification', () => {
       fs.writeFileSync(testFile, "require('./target'); test('fixture', () => {});\n");
       fs.writeFileSync(path.join(dir, 'target.xyz'), 'fixture');
       const jest = rootRequire.resolve('jest/bin/jest');
-      const result = spawnSync(process.execPath, [jest, '--runInBand', '--no-cache', '--config', JSON.stringify({ rootDir: dir, testRegex: 'suggest\\.test\\.js$', moduleFileExtensions: ['js'] })], { encoding: 'utf8', timeout: 8000, env: { ...process.env, NODE_OPTIONS: '' } });
+      const result = spawnSync(process.execPath, [jest, '--runInBand', '--no-cache', '--config', JSON.stringify({ rootDir: dir, testRegex: 'suggest\\.test\\.js$', moduleFileExtensions: ['js'] })], { encoding: 'utf8', timeout: 8000, env: isolatedServerEnv(testHomeDirectory(), { ...process.env, NODE_OPTIONS: '' }) });
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain('./target.xyz');
     } else {

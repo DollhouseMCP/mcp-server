@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -37,11 +39,11 @@ function run(overrides: Record<string, string> = {}) {
       fi
     }
     ${script}
-  `], { encoding: 'utf8', timeout: 10000, env: { ...process.env,
+  `], { encoding: 'utf8', timeout: 10000, env: isolatedServerEnv(testHomeDirectory(), { ...process.env,
     GITHUB_REPOSITORY: 'DollhouseMCP/mcp-server', TAG_NAME: 'v2.1.0-beta.2',
     NPM_PUBLISH_COMPLETE: 'false', NPM_RUN_ID: '101', PACKAGES_RUN_ID: '202', MCPB_RUN_ID: '303',
     API_FAIL: 'false', FAILED_WORKFLOW: 'no-matching-workflow', FAILED_RUN: '',
-    COMMAND_LOG: log, ...overrides } });
+    COMMAND_LOG: log, ...overrides }) });
   return { ...result, commands: readFileSync(log, 'utf8').trim().split('\n') };
 }
 
@@ -129,8 +131,8 @@ describe('beta publisher source safety', () => {
         [[ "$2" != "$FAILED_SOURCE:.github/workflows/publish-npm.yml" ]]
       }
       ${guard}
-    `], { encoding: 'utf8', timeout: 10000, env: { ...process.env,
-      GITHUB_SHA: selectedSha, MISSING_SOURCE: '', MISSING_WORKFLOW: '', FAILED_SOURCE: '', FETCH_FAIL: 'false', ...overrides } });
+    `], { encoding: 'utf8', timeout: 10000, env: isolatedServerEnv(testHomeDirectory(), { ...process.env,
+      GITHUB_SHA: selectedSha, MISSING_SOURCE: '', MISSING_WORKFLOW: '', FAILED_SOURCE: '', FETCH_FAIL: 'false', ...overrides }) });
   }
 
   it('requires both exact selected source and main before any release mutation', () => {

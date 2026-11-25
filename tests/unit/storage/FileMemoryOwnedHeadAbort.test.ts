@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { fileMetadataProof } from './helpers/fileProof.js';
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { createHash, randomUUID } from 'node:crypto';
@@ -228,7 +230,7 @@ describe('dormant explicit original PREPARED abort', () => {
 
   it('rejects exact stage FIFO in a bounded subprocess', async () => {
     const setup = await fixture();
-    execFileSync('mkfifo', [setup.stagePath]);
+    execFileSync('mkfifo', [setup.stagePath], { env: isolatedServerEnv(testHomeDirectory(), process.env) });
     await fs.chmod(setup.stagePath, 0o600);
     const script = childScript.replace('await store.abortPreparedOwnedUpdate(JSON.parse(requestJson));',
       `try { await store.abortPreparedOwnedUpdate(JSON.parse(requestJson)); process.exitCode=2; }
@@ -236,7 +238,7 @@ describe('dormant explicit original PREPARED abort', () => {
     const output = execFileSync(process.execPath, [
       ...(extension === 'ts' ? ['--import', 'tsx'] : []), '--input-type=module', '-e', script,
       setup.tenantRoot, USER, JSON.stringify(setup.request), 'no-stop',
-    ], { timeout: 8000, encoding: 'utf8' });
+    ], { env: isolatedServerEnv(testHomeDirectory(), process.env), timeout: 8000, encoding: 'utf8' });
     expect(output).toContain('EOWNERRECOVERY');
     expect((await fs.lstat(setup.stagePath)).isFIFO()).toBe(true);
     expect(await fs.readFile(setup.headPath, 'utf8')).toContain('Original');
@@ -495,7 +497,7 @@ describe('dormant explicit original PREPARED abort', () => {
     const child = spawn(process.execPath, [
       ...(extension === 'ts' ? ['--import', 'tsx'] : []), '--input-type=module', '-e', childScript,
       setup.tenantRoot, USER, JSON.stringify(setup.request), stop,
-    ], { stdio: ['pipe', 'pipe', 'pipe'] });
+    ], { env: isolatedServerEnv(testHomeDirectory(), process.env), stdio: ['pipe', 'pipe', 'pipe'] });
     try {
       await new Promise<void>((resolve, reject) => {
         let output = '';

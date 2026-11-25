@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { spawn } from 'node:child_process';
 import fsSync from 'node:fs';
@@ -110,7 +112,7 @@ const liveOwnerChildScript = `
 
 function observedChild(args: string[], onClose?: () => void) {
   const child = spawn(process.execPath, ['--input-type=module', '--eval', liveOwnerChildScript, ...args],
-    { stdio: ['ignore', 'ignore', 'pipe'] });
+    { env: isolatedServerEnv(testHomeDirectory(), process.env), stdio: ['ignore', 'ignore', 'pipe'] });
   const started = performance.now();
   let probe: ReturnType<typeof decodeLiveOwnerLockProbe> = null;
   let diagnostic: { phase: string; name: string; code: string | null; reason: string } | null = null;
@@ -589,7 +591,7 @@ describe('OAuthStateCoordinator', () => {
       childScript,
       stateFile,
       claimStartedFile
-    ], { stdio: 'ignore' });
+    ], { env: isolatedServerEnv(testHomeDirectory(), process.env), stdio: 'ignore' });
     const childExit = new Promise<void>((resolve, reject) => {
       child.once('error', reject);
       child.once('exit', code => code === 0 ? resolve() : reject(new Error(`Claim child exited ${code}`)));
@@ -852,7 +854,7 @@ describe('OAuthStateCoordinator', () => {
         childScript,
         stateFile,
         counterFile
-      ], { stdio: 'ignore' });
+      ], { env: isolatedServerEnv(testHomeDirectory(), process.env), stdio: 'ignore' });
       child.once('error', reject);
       child.once('exit', code => code === 0
         ? resolve()

@@ -1,7 +1,7 @@
 /** @type {import('jest').Config} */
 const config = {
   preset: 'ts-jest/presets/default-esm',
-  testEnvironment: 'node',
+  testEnvironment: '<rootDir>/tests/helpers/isolated-node-environment.cjs',
   rootDir: '..',
   extensionsToTreatAsEsm: ['.ts'],
   transform: {

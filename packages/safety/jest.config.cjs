@@ -8,7 +8,7 @@
 /** @type {import('jest').Config} */
 module.exports = {
   preset: 'ts-jest/presets/default-esm',
-  testEnvironment: 'node',
+  testEnvironment: require.resolve('./tests/helpers/isolated-node-environment.cjs'),
   extensionsToTreatAsEsm: ['.ts'],
   transform: {
     '^.+\\.tsx?$': ['ts-jest', {

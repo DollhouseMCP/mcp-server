@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it as jestIt } from '@jest/globals';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
@@ -126,7 +128,7 @@ await new Promise(resolve=>setTimeout(resolve,25));process.stdout.write('OBSERVE
       mark('child-operation');
       const childStarted = performance.now();
       const child = spawn(process.execPath, ['--unhandled-rejections=strict', ...loader, '--input-type=module', '-e', source,
-        ...modules, fixture.root, fixture.token.userId, JSON.stringify(fixture.request)], { cwd: fixture.root, stdio: ['ignore', 'pipe', 'pipe'] });
+        ...modules, fixture.root, fixture.token.userId, JSON.stringify(fixture.request)], { env: isolatedServerEnv(testHomeDirectory(), process.env), cwd: fixture.root, stdio: ['ignore', 'pipe', 'pipe'] });
       let output = '', diagnostics = '';
       child.stdout.on('data', chunk => { output = (output + String(chunk)).slice(0, 512); });
       child.stderr.on('data', chunk => { diagnostics = (diagnostics + String(chunk)).slice(0, 4096); });
@@ -173,7 +175,7 @@ await new Promise(resolve=>setTimeout(resolve,25));process.stdout.write('OBSERVE
       // failure can retain them; only explicit profiling emits successful phases.
       const child = spawn(process.execPath, [...loader, '--input-type=module', '-e', childSource, ...modules,
         fixture.root, fixture.token.userId, JSON.stringify(fixture.request), stop], {
-        cwd: fixture.root, env: { ...process.env, ERASURE_CHILD_PROFILE: '1' }, stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
+        cwd: fixture.root, env: isolatedServerEnv(testHomeDirectory(), { ...process.env, ERASURE_CHILD_PROFILE: '1' }), stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
       });
       child.on('message', message => childPhases.observe(message));
       let dead = false, signal: NodeJS.Signals | null = null, exitCode: number | null = null;

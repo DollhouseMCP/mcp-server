@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { createHash } from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';
@@ -244,7 +246,7 @@ describe('exact existing RESERVED pair recovery', () => {
   });
   it('rejects exact named FIFO stage without blocking', async () => {
     const setup = await fixture();
-    execFileSync('mkfifo', ['-m', '600', setup.registryStage]);
+    execFileSync('mkfifo', ['-m', '600', setup.registryStage], { env: isolatedServerEnv(testHomeDirectory(), process.env) });
     const before = await residual(setup);
     await expect(setup.store.recoverReservedAdoption(setup.request)).rejects.toMatchObject({ code: 'EADOPTIONPENDING' });
     expect(await residual(setup)).toEqual(before);
@@ -270,7 +272,7 @@ describe('exact existing RESERVED pair recovery', () => {
       new URL(`FileMemoryOwnerSnapshots.${extension}`, moduleRoot).href,
       new URL(`FileMemoryTransactionCoordinator.${extension}`, moduleRoot).href,
       new URL(`FileMemoryFence.${extension}`, moduleRoot).href,
-      setup.tenantRoot, USER, JSON.stringify(setup.request), stop], { stdio: ['pipe', 'pipe', 'pipe'] });
+      setup.tenantRoot, USER, JSON.stringify(setup.request), stop], { env: isolatedServerEnv(testHomeDirectory(), process.env), stdio: ['pipe', 'pipe', 'pipe'] });
     try {
       await new Promise<void>((resolve, reject) => {
         let output = ''; let errors = '';

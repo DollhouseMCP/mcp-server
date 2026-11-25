@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -30,12 +32,12 @@ function run(name: string, overrides: Record<string, string> = {}) {
     ${step(name).run}
   `], {
     encoding: 'utf8', timeout: 10000,
-    env: { ...process.env, GITHUB_REF: 'refs/heads/beta', GITHUB_OUTPUT: output,
+    env: isolatedServerEnv(testHomeDirectory(), { ...process.env, GITHUB_REF: 'refs/heads/beta', GITHUB_OUTPUT: output,
       INPUT_ACTION: 'update', INPUT_GIT_REF: 'beta', INPUT_LOG_LEVEL: 'info',
       INPUT_DRY_RUN: 'true', INPUT_SKIP_BACKUP: 'false', DOLLHOUSE_REMOTE_SSH_TARGET: 'fixture@example.invalid',
       HAS_SSH_PRIVATE_KEY: 'true', DOLLHOUSE_ALPHA_KNOWN_HOSTS: 'fixture',
       DOLLHOUSE_REMOTE_SSH_IDENTITY_FILE: '/fixture/key', DOLLHOUSE_REMOTE_KNOWN_HOSTS_FILE: '/fixture/hosts',
-      DOLLHOUSE_HOSTED_HOSTNAME: 'mcp.example.invalid', ...overrides }
+      DOLLHOUSE_HOSTED_HOSTNAME: 'mcp.example.invalid', ...overrides })
   });
   return { ...result, output: result.status === 0 && name === 'Validate deployment request' ? readFileSync(output, 'utf8') : '' };
 }
@@ -73,7 +75,7 @@ describe('manual beta deployment dispatch', () => {
     const env = { ...process.env, RUNNER_TEMP: directory.replaceAll('\\', '/'),
       GITHUB_ENV: join(directory, 'environment').replaceAll('\\', '/'),
       DOLLHOUSE_ALPHA_SSH_PRIVATE_KEY: 'fixture-only-key', DOLLHOUSE_ALPHA_KNOWN_HOSTS: 'fixture-only-hosts' };
-    const execute = (name: string) => spawnSync('bash', ['-euo', 'pipefail', '-c', step(name).run ?? 'exit 99'], { env, encoding: 'utf8' });
+    const execute = (name: string) => spawnSync('bash', ['-euo', 'pipefail', '-c', step(name).run ?? 'exit 99'], { env: isolatedServerEnv(testHomeDirectory(), env), encoding: 'utf8' });
     expect(execute('Prepare SSH material').status).toBe(0);
     expect(readFileSync(key, 'utf8')).toBe('fixture-only-key\n');
     expect(readFileSync(hosts, 'utf8')).toBe('fixture-only-hosts\n');

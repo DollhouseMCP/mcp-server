@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { expect, it, jest } from '@jest/globals';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -52,7 +54,7 @@ it('isolates actual timed-out Jest callbacks before cleanup and subsequent admis
     const result = spawnSync(process.execPath, [require.resolve('jest/bin/jest'),
       '--config', 'tests/jest.config.cjs', '--runInBand', '--no-coverage',
       '--testMatch', '**/storageCaseTimeout.fixture.ts', '--json', '--outputFile', path.join(root, 'result.json')], {
-      cwd: process.cwd(), env: { ...process.env, STORAGE_CASE_PROOF_ROOT: root },
+      cwd: process.cwd(), env: isolatedServerEnv(testHomeDirectory(), { ...process.env, STORAGE_CASE_PROOF_ROOT: root }),
       encoding: 'utf8', timeout: 25000, maxBuffer: 4 * 1024 * 1024,
     });
     expect(result.error).toBeUndefined(); expect(result.signal).toBeNull(); expect(result.status).toBe(1);
@@ -81,9 +83,9 @@ it('isolates actual timed-out Jest callbacks before cleanup and subsequent admis
       const result = spawnSync(process.execPath, [require.resolve('jest/bin/jest'), '--config', 'tests/jest.config.cjs',
         '--runInBand', '--no-coverage', '--testMatch', '**/createOwnership.fixture.ts',
         '--testNamePattern', selected, '--json', '--outputFile', path.join(root, 'result.json')], {
-        cwd: process.cwd(), env: { PATH: process.env.PATH, HOME: process.env.HOME,
+        cwd: process.cwd(), env: isolatedServerEnv(process.env.HOME, { PATH: process.env.PATH, HOME: process.env.HOME,
           SystemRoot: process.env.SystemRoot ?? process.env.SYSTEMROOT, TMPDIR: root, TEMP: root, TMP: root,
-          NODE_OPTIONS: '--experimental-vm-modules --no-warnings', CREATE_OWNERSHIP_PROOF_ROOT: root, CREATE_OWNERSHIP_PROOF_MODE: mode },
+          NODE_OPTIONS: '--experimental-vm-modules --no-warnings', CREATE_OWNERSHIP_PROOF_ROOT: root, CREATE_OWNERSHIP_PROOF_MODE: mode }),
         encoding: 'utf8', timeout: 30000, maxBuffer: 4 * 1024 * 1024,
       });
       expect(result.error).toBeUndefined(); expect(result.signal).toBeNull(); expect(result.status).toBe(1);

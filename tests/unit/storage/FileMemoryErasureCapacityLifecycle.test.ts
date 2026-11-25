@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { describe, expect, it } from '@jest/globals';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
@@ -114,7 +116,7 @@ await runErasureCapacityLifecycle({deadlineMs:Number(deadline),...(Number(deadli
 });
 await fs.writeFile(root+'/next-case','MUST NOT EXIST');
 `;
-    const child = spawn(process.execPath, [...loader, '--input-type=module', '-e', source, moduleUrl, root, phase, String(deadlineMs)], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [...loader, '--input-type=module', '-e', source, moduleUrl, root, phase, String(deadlineMs)], { env: isolatedServerEnv(testHomeDirectory(), process.env), stdio: ['ignore', 'pipe', 'pipe'] });
     let diagnostics = '';
     let selectedWatchdog = '';
     child.stdout.on('data', chunk => { selectedWatchdog = (selectedWatchdog + String(chunk)).slice(0, 100); });

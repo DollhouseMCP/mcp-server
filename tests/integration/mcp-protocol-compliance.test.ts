@@ -1,3 +1,4 @@
+import { isolatedServerEnv } from '../helpers/isolated-server-env.cjs';
 /**
  * Integration tests for MCP Protocol Compliance
  * Issue #10: Ensure server adheres to MCP protocol stdout/stderr requirements
@@ -62,7 +63,7 @@ describe('MCP Protocol Compliance', () => {
     let stderrData = '';
 
     const proc: ChildProcess = spawn('node', [serverPath], {
-      env,
+      env: isolatedServerEnv(testDir, env),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
@@ -124,7 +125,7 @@ describe('MCP Protocol Compliance', () => {
     let stdoutData = '';
 
     const proc: ChildProcess = spawn('node', [serverPath], {
-      env,
+      env: isolatedServerEnv(testDir, env),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
@@ -169,7 +170,7 @@ describe('MCP Protocol Compliance', () => {
     let encryptionError = false;
 
     const proc: ChildProcess = spawn('node', [serverPath], {
-      env,
+      env: isolatedServerEnv(testDir, env),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
@@ -237,7 +238,7 @@ describe('MCP Protocol Compliance', () => {
     let hasEncryptionError = false;
 
     const proc: ChildProcess = spawn('node', [serverPath], {
-      env,
+      env: isolatedServerEnv(testDir, env),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 

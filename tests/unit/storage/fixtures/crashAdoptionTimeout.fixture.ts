@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { afterAll, afterEach, beforeEach, expect, it, jest } from '@jest/globals';
 import { spawn, type ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs/promises';
@@ -27,7 +29,7 @@ it('retains the original timeout while child work and callback cleanup settle', 
   await fs.mkdir(path.join(root, 'crash'));
   await fs.mkdir(path.join(root, 'adoption'));
   jest.spyOn(observer, 'read').mockReturnValue('installed');
-  child = spawn(process.execPath, ['-e', 'process.stdin.resume();process.stdin.on("end",()=>process.exit(0))'], { stdio: ['pipe', 'ignore', 'ignore'] });
+  child = spawn(process.execPath, ['-e', 'process.stdin.resume();process.stdin.on("end",()=>process.exit(0))'], { env: isolatedServerEnv(testHomeDirectory(), process.env), stdio: ['pipe', 'ignore', 'ignore'] });
   const closed = new Promise<void>((resolve, reject) => { child!.once('error', reject); child!.once('close', () => { childClosed = true; resolve(); }); });
   try {
     await closed;

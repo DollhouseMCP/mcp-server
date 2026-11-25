@@ -10,7 +10,7 @@ const {
 const config = {
   displayName: 'Web Console E2E',
   rootDir: '../',
-  testEnvironment: 'node',
+  testEnvironment: '<rootDir>/tests/helpers/isolated-node-environment.cjs',
   transformIgnorePatterns: ESM_TRANSFORM_IGNORE,
   resolver: 'ts-jest-resolver',
   moduleNameMapper: { ...MODULE_NAME_MAPPER },

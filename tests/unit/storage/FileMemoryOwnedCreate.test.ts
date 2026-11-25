@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -1081,7 +1083,7 @@ describe('exclusive owned CREATE', () => {
         .map(name => new URL(`../../../src/storage/${name}.${extension}`, import.meta.url).href);
       const loader = extension === 'ts' ? ['--import', pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href] : [];
       const child = spawn(process.execPath, [...loader, '--input-type=module', '-e', crashChild,
-        ...modules, f.tenantRoot, USER, JSON.stringify(f.request), stop], { cwd: f.tenantRoot, stdio: ['pipe', 'pipe', 'pipe'] });
+        ...modules, f.tenantRoot, USER, JSON.stringify(f.request), stop], { env: isolatedServerEnv(testHomeDirectory(), process.env), cwd: f.tenantRoot, stdio: ['pipe', 'pipe', 'pipe'] });
       let didClose = false, output = '';
       const closed = new Promise<void>(resolve => child.once('close', () => { didClose = true; resolve(); }));
       const ready = new Promise<void>((resolve, reject) => {

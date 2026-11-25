@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { describe, expect, it } from '@jest/globals';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -16,7 +18,7 @@ describe('hosted graceful-stop observation cadence', () => {
     const result = spawnSync(modelPythonCommand(process.platform, process.arch, process.env), [
       fileURLToPath(new URL('./fixtures/hosted_graceful_stop_polling.py', import.meta.url)),
       fileURLToPath(new URL('../../../scripts/hosted-graceful-stop.py', import.meta.url)),
-    ], { encoding: 'utf8', timeout: PROCESS_LIMIT_MS, maxBuffer: 64 * 1024 });
+    ], { env: isolatedServerEnv(testHomeDirectory(), process.env), encoding: 'utf8', timeout: PROCESS_LIMIT_MS, maxBuffer: 64 * 1024 });
     const elapsedMs = Date.now() - started;
     try {
       expect(result.error).toBeUndefined();

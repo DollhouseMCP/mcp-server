@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { describe, expect, it } from '@jest/globals';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -36,8 +38,8 @@ function run(source: string, env: Record<string, string> = {}) {
     ${source}
   `], {
     encoding: 'utf8', timeout: 10000,
-    env: { ...process.env, GITHUB_OUTPUT: outputPath.replace(/\\/g, '/'), PACKAGE_VERSION: '2.0.42',
-      EVENT_NAME: 'release', RELEASE_PRERELEASE: 'false', GITHUB_RUN_ID: '123', ...env }
+    env: isolatedServerEnv(testHomeDirectory(), { ...process.env, GITHUB_OUTPUT: outputPath.replace(/\\/g, '/'), PACKAGE_VERSION: '2.0.42',
+      EVENT_NAME: 'release', RELEASE_PRERELEASE: 'false', GITHUB_RUN_ID: '123', ...env })
     });
     return { ...result, githubOutput: readFileSync(outputPath, 'utf8') };
   } finally {

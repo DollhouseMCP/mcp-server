@@ -1,3 +1,4 @@
+import { isolatedServerEnv } from './helpers/isolated-server-env.cjs';
 /**
  * Global setup for integration tests
  *
@@ -7,6 +8,7 @@
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import * as os from 'node:os';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -98,12 +100,15 @@ export default async function globalSetup() {
     // Run Drizzle migrations on the test database
     const { execFileSync } = await import('node:child_process');
     const drizzleKitEntry = path.join(path.dirname(require.resolve('drizzle-kit')), 'bin.cjs');
-    execFileSync(process.execPath, [drizzleKitEntry, 'migrate'], {
-      stdio: 'pipe',
-      cwd: process.cwd(),
-      timeout: 30000,
-      env: { ...process.env, DOLLHOUSE_DATABASE_ADMIN_URL: TEST_DB_ADMIN_URL },
-    });
+    const migrationHome = await fs.mkdtemp(path.join(os.tmpdir(), 'dollhouse-test-migration-'));
+    try {
+      execFileSync(process.execPath, [drizzleKitEntry, 'migrate'], {
+        stdio: 'pipe',
+        cwd: process.cwd(),
+        timeout: 30000,
+        env: isolatedServerEnv(migrationHome, { ...process.env, DOLLHOUSE_DATABASE_ADMIN_URL: TEST_DB_ADMIN_URL }),
+      });
+    } finally { await fs.rm(migrationHome, { recursive: true, force: true }); }
 
     // Re-run grants after migrations (tables now exist)
     const postMigSql = pg.default(TEST_DB_ADMIN_URL, { max: 1 });

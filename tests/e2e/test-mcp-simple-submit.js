@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 
+import { isolateNativeHome } from '../helpers/isolated-server-env.cjs';
+import { findGitHubUrl } from '../helpers/submit-test-utils.mjs';
+import { randomBytes } from 'node:crypto';
+
 /**
  * Simple test of REAL MCP submit_content tool
  * This tests what actually happens when a user uses submit_content in Claude
@@ -20,15 +24,17 @@ console.log('This is the REAL MCP tool, not GitHub API.\n');
 
 async function testMCPSubmit() {
   // Set up isolated test directory
-  const fs = await import('fs/promises');
-  const path = await import('path');
-  const os = await import('os');
+  const fs = await import('node:fs/promises');
+  const path = await import('node:path');
+  const os = await import('node:os');
 
   // Create unique temporary portfolio directory
   const timestamp = Date.now();
-  const random = Math.random().toString(36).substring(2, 8);
+  const random = randomBytes(3).toString('hex');
   const testPortfolioDir = path.join(os.tmpdir(), `dollhouse-test-e2e-simple-${timestamp}-${random}`);
 
+  let server;
+  let restoreHome = () => {};
   try {
     // Check for test credentials
     if (!hasTestCredentials()) {
@@ -39,6 +45,7 @@ async function testMCPSubmit() {
     // Create isolated test portfolio directory structure
     console.log('0️⃣ Setting up isolated test portfolio...');
     await fs.mkdir(path.join(testPortfolioDir, 'personas'), { recursive: true });
+    restoreHome = isolateNativeHome(testPortfolioDir);
     process.env.DOLLHOUSE_PORTFOLIO_DIR = testPortfolioDir;
     console.log(`   Test portfolio: ${testPortfolioDir}\n`);
 
@@ -53,45 +60,30 @@ async function testMCPSubmit() {
     console.log('Token available:', token ? 'Yes' : 'No');
 
     const container = new DollhouseContainer();
-    const server = new DollhouseMCPServer(container);
-  
+    server = new DollhouseMCPServer(container);
+
   console.log('\n1️⃣ Testing submitContent (this is what submit_content MCP tool calls)...\n');
-  
+
   try {
     const result = await server.submitContent('mcp-test-simple');
-    
+
     // The result should be an MCP response object
     console.log('\n📊 MCP Tool Response:');
     console.log(JSON.stringify(result, null, 2).substring(0, 500));
-    
+
     const text = result?.content?.[0]?.text || JSON.stringify(result);
-    
+
     // Check for success indicators
     const hasUploadedText = text.includes('uploaded');
-    
-    // Properly validate GitHub URLs using URL parsing
-    let hasValidGitHubUrl = false;
-    const urlMatches = text.match(/https?:\/\/[^\s]+/g);
-    if (urlMatches) {
-      for (const urlStr of urlMatches) {
-        try {
-          const parsedUrl = new URL(urlStr);
-          if (parsedUrl.hostname === 'github.com' || parsedUrl.hostname === 'www.github.com') {
-            hasValidGitHubUrl = true;
-            break;
-          }
-        } catch (e) {
-          // Invalid URL, ignore
-        }
-      }
-    }
-    
+
+    const hasValidGitHubUrl = Boolean(findGitHubUrl(text));
+
     if (hasValidGitHubUrl || hasUploadedText) {
       console.log('\n✅ SUCCESS! The REAL MCP tool uploaded to GitHub!');
       console.log('This proves the actual submit_content MCP tool works.\n');
     } else if (text.includes('not found')) {
       console.log('\n❌ Persona not found in test portfolio');
-      console.log(`File should be at: ${path.join(testPortfolioDir, 'personas/mcp-test-simple.md')}`);
+      console.log(`File should be at: ${path.join(testPortfolioDir, 'personas', 'mcp-test-simple.md')}`);
     } else {
       console.log('\n⚠️ Unexpected result from MCP tool');
     }
@@ -101,6 +93,7 @@ async function testMCPSubmit() {
   }
 
   } finally {
+    await server?.dispose();
     // Clean up isolated test directory
     console.log('\n🧹 Cleaning up test portfolio...');
     try {
@@ -109,6 +102,7 @@ async function testMCPSubmit() {
     } catch (cleanupError) {
       console.warn('   ⚠️ Could not clean up test directory:', cleanupError.message);
     }
+    restoreHome();
     // Restore environment
     delete process.env.DOLLHOUSE_PORTFOLIO_DIR;
   }
@@ -122,4 +116,8 @@ setTimeout(() => {
   process.exit(1);
 }, 10000);
 
-testMCPSubmit().catch(console.error);
+try {
+  await testMCPSubmit();
+} catch (error) {
+  console.error(error);
+}

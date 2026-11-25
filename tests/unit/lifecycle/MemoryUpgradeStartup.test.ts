@@ -1,3 +1,4 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
 /** Compiled default-entrypoint admission gate; fixture cleanup is not a product drain. */
 import { describe, expect, it } from '@jest/globals';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -63,12 +64,12 @@ process.send?.({event:'observer-ready'});
   const transport = profile ? profile.transport : 'streamable-http';
   const transportEnv = transport ? {DOLLHOUSE_TRANSPORT: transport} : {};
   const child = spawn(process.execPath, ['--import', preloader, path.join(root, 'dist/index.js'), ...(profile?.args ?? ['--http', '--port=0'])], {
-    cwd: directory, env: {PATH: process.env.PATH, HOME: directory, NODE_ENV: 'production',
+    cwd: directory, env: isolatedServerEnv(directory, {PATH: process.env.PATH, HOME: directory, NODE_ENV: 'production',
       DOLLHOUSE_MEMORY_UPGRADE_CONTROL_DIR: control,
       ...transportEnv,
       npm_command: 'exec', DOLLHOUSE_WEB_CONSOLE: 'false',
       DOLLHOUSE_HTTP_WEB_CONSOLE: 'false', DOLLHOUSE_PORTFOLIO_DIR: path.join(directory, 'portfolio'),
-      DOLLHOUSE_LOG_DIR: path.join(directory, 'logs')}, stdio: ['ignore','pipe','pipe','ipc'],
+      DOLLHOUSE_LOG_DIR: path.join(directory, 'logs')}), stdio: ['ignore','pipe','pipe','ipc'],
   });
   let rootAttempts = 0; let observerReady = false; let closed = false; let stderr = '';
   child.stdout!.resume();

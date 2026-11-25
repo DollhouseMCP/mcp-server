@@ -5,8 +5,16 @@
  * This tests the dollhouse_config and sync_portfolio MCP tools
  */
 
-import { DollhouseMCPServer } from '../../dist/index.js';
-import { DollhouseContainer } from '../../dist/di/Container.js';
+import { isolateNativeHome } from '../helpers/isolated-server-env.cjs';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
+const fixtureHome = mkdtempSync(path.join(tmpdir(), 'config-tools-home-'));
+isolateNativeHome(fixtureHome);
+process.once('exit', () => rmSync(fixtureHome, { recursive: true, force: true }));
+const { DollhouseMCPServer } = await import('../../dist/index.js');
+const { DollhouseContainer } = await import('../../dist/di/Container.js');
 
 /**
  * Extract text content from MCP tool response
@@ -133,7 +141,9 @@ async function main() {
   process.exit(0);
 }
 
-main().catch(error => {
+try {
+  await main();
+} catch (error) {
   console.error('Fatal error:', error);
   process.exit(1);
-});
+}

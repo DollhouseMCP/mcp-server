@@ -1,4 +1,4 @@
-const path = require('path');
+const path = require('node:path');
 const {
   hasVMModules,
   ROOT_DIR,
@@ -15,7 +15,7 @@ if (!hasVMModules) {
 /** @type {import('jest').Config} */
 const config = {
   displayName: 'Unit Tests',
-  testEnvironment: 'node',
+  testEnvironment: '<rootDir>/tests/helpers/isolated-node-environment.cjs',
   rootDir: ROOT_DIR,
   moduleNameMapper: { ...MODULE_NAME_MAPPER },
   testMatch: [
@@ -60,8 +60,8 @@ if (hasVMModules) {
   // Exclude ESM-only tests that crash in CJS mode
   config.testPathIgnorePatterns = [
     ...(config.testPathIgnorePatterns || []),
-    'autonomyEvaluator\\.test\\.ts$',  // Uses jest.unstable_mockModule + top-level await
-    'AgentManager\\.test\\.ts$',        // Auto-mock of FileLockManager causes stack overflow in CJS
+    String.raw`autonomyEvaluator\.test\.ts$`,  // Uses jest.unstable_mockModule + top-level await
+    String.raw`AgentManager\.test\.ts$`,        // Auto-mock of FileLockManager causes stack overflow in CJS
   ];
 }
 

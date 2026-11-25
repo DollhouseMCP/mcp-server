@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { OwnedStorageCase } from './fixtures/ownedStorageCase.js';
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { spawn } from 'node:child_process';
@@ -262,7 +264,7 @@ describe('dormant same-parent managed RENAME', () => {
       .map(name => new URL(`../../../src/storage/${name}.${extension}`, import.meta.url).href);
     const loader = extension === 'ts' ? ['--import', pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href] : [];
     const child = spawn(process.execPath, [...loader, '--input-type=module', '-e', causeProgram, ...modules, f.root, USER, JSON.stringify(f.request), seam],
-      { cwd: f.root, stdio: ['ignore', 'pipe', 'pipe'] });
+      { env: isolatedServerEnv(testHomeDirectory(), process.env), cwd: f.root, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '', diagnostics = '', didClose = false;
     child.stdout.on('data', chunk => { output += String(chunk); if (output.length > 1024) child.kill('SIGKILL'); });
     child.stderr.on('data', chunk => { diagnostics += String(chunk); if (diagnostics.length > 1024) child.kill('SIGKILL'); });
@@ -708,7 +710,7 @@ describe('dormant same-parent managed RENAME', () => {
         .map(name => new URL(`../../../src/storage/${name}.${extension}`, import.meta.url).href);
       const loader = extension === 'ts' ? ['--import', pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href] : [];
       const child = spawn(process.execPath, [...loader, '--input-type=module', '-e', childProgram,
-        ...modules, f.root, USER, JSON.stringify(f.request), stop], { cwd: f.root, stdio: ['pipe', 'pipe', 'pipe'] });
+        ...modules, f.root, USER, JSON.stringify(f.request), stop], { env: isolatedServerEnv(testHomeDirectory(), process.env), cwd: f.root, stdio: ['pipe', 'pipe', 'pipe'] });
       let didClose = false, output = '';
       const closed = new Promise<void>(resolve => child.once('close', () => { didClose = true; resolve(); }));
       const ready = new Promise<void>((resolve, reject) => {

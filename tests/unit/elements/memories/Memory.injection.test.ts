@@ -3,7 +3,6 @@
  * Addresses Issue #1269: Memory Prompt Injection Protection for Multi-Agent Swarms
  * Updated for Issue #1315: Non-blocking memory creation (background validation)
  *
- * @jest-environment node
  */
 
 import { describe, it, expect, beforeEach } from '@jest/globals';
@@ -183,7 +182,7 @@ describe('Memory Injection Protection', () => {
 
       // Entry should load with UNTRUSTED trust level
       const entries = Array.from(newMemory['entries'].values());
-      expect(entries.length).toBe(1);
+      expect(entries).toHaveLength(1);
       expect(entries[0].trustLevel).toBe(TRUST_LEVELS.UNTRUSTED);
     });
 
@@ -358,7 +357,7 @@ describe('Memory Injection Protection', () => {
 
       // FIX #1315: Quarantined entries are skipped (not loaded)
       const entries = Array.from(quarantineMemory['entries'].values());
-      expect(entries.length).toBe(0); // Quarantined entry skipped
+      expect(entries).toHaveLength(0); // Quarantined entry skipped
     });
 
     // FIX #1315: addEntry() doesn't throw anymore, but still logs to SecurityMonitor

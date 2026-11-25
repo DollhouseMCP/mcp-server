@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { describe, it as jestIt, expect, afterEach, jest } from '@jest/globals';
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
@@ -259,7 +261,7 @@ describe('dormant verified file archive observation', () => {
     `;
     const stdout = await new Promise<string>((resolve, reject) => execFile(process.execPath,
       [...(extension === 'ts' ? ['--import', 'tsx'] : []), '--input-type=module', '-e', script, moduleRoot, JSON.stringify(f.token)],
-      { timeout: 5000 }, (cause, output) => cause ? reject(cause) : resolve(output)));
+      { env: isolatedServerEnv(testHomeDirectory(), process.env), timeout: 5000 }, (cause, output) => cause ? reject(cause) : resolve(output)));
     expect(stdout.trim()).toBe('EARCHIVEUNSAFE');
   }, 10000);
 

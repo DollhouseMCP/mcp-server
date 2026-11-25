@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { expect, it, jest } from '@jest/globals';
 import { spawnSync } from 'node:child_process';
 import { observeLiveOwnerLockCalls, decodeLiveOwnerLockProbe } from './fixtures/liveOwnerLockProbe.js';
@@ -91,7 +93,7 @@ it('binds and restores the actual Node named export in an isolated child without
       console.log(JSON.stringify({ delegated, sameResult, count: probe.snapshot().providers.wmic.count, restored: execFileSync === stub }));
     } finally { probe.restore(); cp.execFileSync = original; syncBuiltinESMExports(); }
   `;
-  const result = spawnSync(process.execPath, ['--input-type=module', '--eval', source], { encoding: 'utf8', timeout: 2000, maxBuffer: 4096 });
+  const result = spawnSync(process.execPath, ['--input-type=module', '--eval', source], { env: isolatedServerEnv(testHomeDirectory(), process.env), encoding: 'utf8', timeout: 2000, maxBuffer: 4096 });
   expect(result.error).toBeUndefined(); expect(result.signal).toBeNull(); expect(result.status).toBe(0);
   expect(JSON.parse(result.stdout)).toEqual({ delegated: true, sameResult: true, count: 1, restored: true });
 });

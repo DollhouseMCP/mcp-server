@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { afterEach, describe, expect, it as jestIt } from '@jest/globals';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
@@ -65,7 +67,7 @@ describe('actual process interruption of dormant head DELETE', () => {
     const extension = import.meta.url.endsWith('.js') ? 'js' : 'ts';
     const modules = ['FileMemoryOwnerSnapshots', 'FileMemoryTransactionCoordinator', 'FileMemoryFence'].map(name => new URL(`../../../src/storage/${name}.${extension}`, import.meta.url).href);
     const loader = extension === 'ts' ? ['--import', pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href] : [];
-    const child = spawn(process.execPath, [...loader, '--input-type=module', '-e', childSource, ...modules, root, USER, JSON.stringify(request), stop], { cwd: root, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [...loader, '--input-type=module', '-e', childSource, ...modules, root, USER, JSON.stringify(request), stop], { env: isolatedServerEnv(testHomeDirectory(), process.env), cwd: root, stdio: ['pipe', 'pipe', 'pipe'] });
     let didClose = false, signal: NodeJS.Signals | null = null, output = '', diagnostics = '';
     const closed = new Promise<void>(resolve => child.once('close', (_code, stoppedBy) => { didClose = true; signal = stoppedBy; resolve(); }));
     const ready = new Promise<void>((resolve, reject) => {

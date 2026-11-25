@@ -1,3 +1,4 @@
+import { isolatedServerEnv } from '../helpers/isolated-server-env.cjs';
 /**
  * MCP Protocol Smoke Tests
  *
@@ -191,7 +192,7 @@ describe('MCP Protocol Smoke Tests', () => {
     transport = new StdioClientTransport({
       command: 'node',
       args: ['dist/index.js'],
-      env: {
+      env: isolatedServerEnv(testDir, {
         ...filteredEnv,
         TEST_MODE: 'true',
         NODE_ENV: 'test',
@@ -202,7 +203,7 @@ describe('MCP Protocol Smoke Tests', () => {
         GITHUB_TOKEN: '',
         TEST_GITHUB_TOKEN: '',
         GITHUB_TEST_TOKEN: '',
-      },
+      }),
     });
 
     client = new Client(

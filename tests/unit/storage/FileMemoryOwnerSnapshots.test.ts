@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -195,7 +197,7 @@ describe('FileMemoryOwnerSnapshots local POSIX primitive', () => {
     const { tenantRoot, locator, makeStore } = await fixture();
     const child = spawn(process.execPath, [
       '--import', 'tsx', '--input-type=module', '--eval', adoptionChild, tenantRoot, locator, USER_ID,
-    ], { cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'] });
+    ], { env: isolatedServerEnv(testHomeDirectory(), process.env), cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'] });
     try {
       await new Promise<void>((resolve, reject) => {
         let output = '';

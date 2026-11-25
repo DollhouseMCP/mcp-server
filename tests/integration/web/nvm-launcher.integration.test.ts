@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 /**
  * NVM Launcher — Integration Tests
  *
@@ -54,7 +56,7 @@ beforeAll(async () => {
 
   // 1. Is bash in PATH?
   try {
-    await execFileAsync('bash', ['--version'], { timeout: 5_000 });
+    await execFileAsync('bash', ['--version'], { env: isolatedServerEnv(testHomeDirectory(), process.env), timeout: 5_000 });
     bashAvailable = true;
   } catch {
     return; // no bash — all bash-dependent tests will be skipped gracefully
@@ -78,7 +80,7 @@ beforeAll(async () => {
     await writeFile(probe, '#!/bin/bash\ntrue\n', 'utf-8');
     await chmod(probe, 0o755);
     // Call bash explicitly so we only test the exec of the probe, not the shebang
-    await execFileAsync('bash', [probe], { timeout: 5_000 });
+    await execFileAsync('bash', [probe], { env: isolatedServerEnv(testHomeDirectory(), process.env), timeout: 5_000 });
     tmpExec = true;
   } catch {
     // noexec or other execution restriction
@@ -108,7 +110,7 @@ describe('Generated script — bash syntax', () => {
   it('passes bash -n (no syntax errors)', async () => {
     if (isWindows || !bashAvailable) return;
     const wrapperPath = await ensureNvmLauncher(tempDir);
-    await expect(execFileAsync('bash', ['-n', wrapperPath])).resolves.not.toThrow();
+    await expect(execFileAsync('bash', ['-n', wrapperPath], { env: isolatedServerEnv(testHomeDirectory(), process.env) })).resolves.not.toThrow();
   });
 
   it('script has Unix line endings (no CRLF)', async () => {
@@ -153,7 +155,7 @@ describe('Generated script — execution', () => {
       PATH: `${fakeBinDir}${delimiter}${process.env.PATH ?? ''}`,
     };
 
-    await execFileAsync('bash', [wrapperPath, '@dollhousemcp/mcp-server@latest'], { env, timeout: 10_000 });
+    await execFileAsync('bash', [wrapperPath, '@dollhousemcp/mcp-server@latest'], { env: isolatedServerEnv(env.HOME, env), timeout: 10_000 });
 
     const logged = await readFile(logFile, 'utf-8');
     expect(logged).toBe('@dollhousemcp/mcp-server@latest');
@@ -178,7 +180,7 @@ describe('Generated script — execution', () => {
       PATH: `${fakeBinDir}${delimiter}${process.env.PATH ?? ''}`,
     };
 
-    await execFileAsync('bash', [wrapperPath, '@dollhousemcp/mcp-server@rc', '--yes'], { env, timeout: 10_000 });
+    await execFileAsync('bash', [wrapperPath, '@dollhousemcp/mcp-server@rc', '--yes'], { env: isolatedServerEnv(env.HOME, env), timeout: 10_000 });
 
     const logged = await readFile(logFile, 'utf-8');
     const args = logged.trim().split('\n');
@@ -204,7 +206,7 @@ describe('Generated script — execution', () => {
       PATH: `${fakeBinDir}${delimiter}${process.env.PATH ?? ''}`,
     };
 
-    await execFileAsync('bash', [wrapperPath, 'test-arg'], { env, timeout: 10_000 });
+    await execFileAsync('bash', [wrapperPath, 'test-arg'], { env: isolatedServerEnv(env.HOME, env), timeout: 10_000 });
 
     const logged = await readFile(logFile, 'utf-8');
     expect(logged.trim()).toBe('ok');
@@ -232,7 +234,7 @@ describe('Generated script — execution', () => {
       PATH: `${fakeBinDir}${delimiter}${process.env.PATH ?? ''}`,
     };
 
-    await execFileAsync('bash', [wrapperPath, 'dummy'], { env, timeout: 10_000 });
+    await execFileAsync('bash', [wrapperPath, 'dummy'], { env: isolatedServerEnv(env.HOME, env), timeout: 10_000 });
     const logged = await readFile(logFile, 'utf-8');
     expect(logged.trim()).toBe('reached');
   });
@@ -288,7 +290,7 @@ describe('Non-standard NVM_DIR', () => {
       PATH: `${fakeBinDir}${delimiter}${process.env.PATH ?? ''}`,
     };
 
-    await execFileAsync('bash', [wrapperPath, 'test'], { env, timeout: 10_000 });
+    await execFileAsync('bash', [wrapperPath, 'test'], { env: isolatedServerEnv(env.HOME, env), timeout: 10_000 });
     expect((await readFile(logFile, 'utf-8')).trim()).toBe('ok');
   });
 });
@@ -336,7 +338,7 @@ describe('End-to-end NVM mitigation sequence', () => {
 
     // 7. Bash syntax check — requires bash but NOT tmpExec (bash -n only parses)
     if (bashAvailable) {
-      await expect(execFileAsync('bash', ['-n', wrapperPath])).resolves.not.toThrow();
+      await expect(execFileAsync('bash', ['-n', wrapperPath], { env: isolatedServerEnv(testHomeDirectory(), process.env) })).resolves.not.toThrow();
     }
   });
 
@@ -389,7 +391,7 @@ describe('Generated script — shell compatibility', () => {
       PATH: `${fakeBinDir}${delimiter}${process.env.PATH ?? ''}`,
     };
     await expect(
-      execFileAsync('bash', [wrapperPath, 'dummy'], { env, timeout: 10_000 })
+      execFileAsync('bash', [wrapperPath, 'dummy'], { env: isolatedServerEnv(env.HOME, env), timeout: 10_000 })
     ).resolves.not.toThrow();
   });
 
@@ -400,7 +402,7 @@ describe('Generated script — shell compatibility', () => {
 
     let shPath: string;
     try {
-      const { stdout } = await execFileAsync('which', ['sh'], { timeout: 5_000 });
+      const { stdout } = await execFileAsync('which', ['sh'], { env: isolatedServerEnv(testHomeDirectory(), process.env), timeout: 5_000 });
       shPath = stdout.trim();
       if (!shPath) return;
     } catch {
@@ -421,7 +423,7 @@ describe('Generated script — shell compatibility', () => {
       PATH: `${fakeBinDir}${delimiter}${process.env.PATH ?? ''}`,
     };
     await expect(
-      execFileAsync(shPath, [wrapperPath, 'dummy'], { env, timeout: 10_000 })
+      execFileAsync(shPath, [wrapperPath, 'dummy'], { env: isolatedServerEnv(env.HOME, env), timeout: 10_000 })
     ).resolves.not.toThrow();
   });
 });

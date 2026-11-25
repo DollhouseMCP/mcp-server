@@ -15,7 +15,7 @@ import { seedWorld } from '../harness/seed.js';
 export default async function globalSetup(): Promise<void> {
   await provisionDatabase();
   const runDir = path.join(process.cwd(), '.console-e2e-pw');
-  const { child, opaqueHmacKey, logPath } = bootApp(runDir);
+  const { child, opaqueHmacKey, logPath } = bootApp(runDir, { fresh: true });
 
   // db()/seedWorld read these via the harness config.
   process.env.E2E_DATABASE_ADMIN_URL = superuserUrlFor(DB_NAME);

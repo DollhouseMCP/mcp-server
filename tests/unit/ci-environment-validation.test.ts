@@ -1,6 +1,8 @@
+import { isolatedServerEnv } from '../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 /**
  * CI Environment Validation Tests
- * 
+ *
  * These tests verify that our CI environment is properly configured
  * across all platforms (Windows, macOS, Linux) and that the fixes
  * implemented in PR #89 continue to work correctly.
@@ -60,7 +62,7 @@ describe('CI Environment Validation', () => {
     it('should have valid TEST_PERSONAS_DIR path format', () => {
       if (isCI && process.env.TEST_PERSONAS_DIR) {
         const testDir = process.env.TEST_PERSONAS_DIR;
-        
+
         // Check for valid path separators based on platform
         if (isWindows) {
           // Windows can use both forward and backslashes
@@ -75,21 +77,21 @@ describe('CI Environment Validation', () => {
     it('should be able to create TEST_PERSONAS_DIR', () => {
       if (isCI && process.env.TEST_PERSONAS_DIR) {
         const testDir = process.env.TEST_PERSONAS_DIR;
-        
+
         // Try to create the directory
         expect(() => {
           fs.mkdirSync(testDir, { recursive: true });
         }).not.toThrow();
-        
+
         // Verify it exists
         expect(fs.existsSync(testDir)).toBe(true);
-        
+
         // Verify we can write to it
         const testFile = path.join(testDir, 'test-write.txt');
         expect(() => {
           fs.writeFileSync(testFile, 'test content');
         }).not.toThrow();
-        
+
         // Clean up
         if (fs.existsSync(testFile)) {
           fs.unlinkSync(testFile);
@@ -107,7 +109,7 @@ describe('CI Environment Validation', () => {
 
       // Test basic bash command
       expect(() => {
-        execSync('echo "Hello from bash"', { 
+        execSync('echo "Hello from bash"', { env: isolatedServerEnv(testHomeDirectory(), process.env),
           shell: 'bash',
           encoding: 'utf8'
         });
@@ -121,11 +123,11 @@ describe('CI Environment Validation', () => {
       }
 
       // Test stderr redirection (2>/dev/null)
-      const result = execSync('ls nonexistent-file-12345 2>/dev/null || echo "handled"', {
+      const result = execSync('ls nonexistent-file-12345 2>/dev/null || echo "handled"', { env: isolatedServerEnv(testHomeDirectory(), process.env),
         shell: 'bash',
         encoding: 'utf8'
       }).trim();
-      
+
       expect(result).toBe('handled');
     });
 
@@ -136,11 +138,11 @@ describe('CI Environment Validation', () => {
       }
 
       // Test bash [[ ]] conditionals
-      const result = execSync('[[ -n "$HOME" ]] && echo "yes" || echo "no"', {
+      const result = execSync('[[ -n "$HOME" ]] && echo "yes" || echo "no"', { env: isolatedServerEnv(testHomeDirectory(), process.env),
         shell: 'bash',
         encoding: 'utf8'
       }).trim();
-      
+
       expect(result).toBe('yes');
     });
 
@@ -151,11 +153,11 @@ describe('CI Environment Validation', () => {
       }
 
       // Test $() command substitution
-      const result = execSync('echo "Current dir: $(pwd)"', {
+      const result = execSync('echo "Current dir: $(pwd)"', { env: isolatedServerEnv(testHomeDirectory(), process.env),
         shell: 'bash',
         encoding: 'utf8'
       });
-      
+
       expect(result).toContain('Current dir:');
       expect(result.length).toBeGreaterThan(13); // More than just the prefix
     });
@@ -175,7 +177,7 @@ describe('CI Environment Validation', () => {
           'C:\\Program Files (x86)\\Git\\bin\\bash.exe',
           'C:\\Windows\\System32\\bash.exe'
         ];
-        
+
         const bashExists = bashPaths.some(path => {
           try {
             return fs.existsSync(path);
@@ -183,24 +185,24 @@ describe('CI Environment Validation', () => {
             return false;
           }
         });
-        
+
         // Or check if bash is in PATH
         const bashInPath = (() => {
           try {
-            execSync('where bash', { encoding: 'utf8' });
+            execSync('where bash', { env: isolatedServerEnv(testHomeDirectory(), process.env), encoding: 'utf8' });
             return true;
           } catch {
             return false;
           }
         })();
-        
+
         expect(bashExists || bashInPath).toBe(true);
       }
     });
 
     it('should handle platform-specific paths correctly', () => {
       const testPath = path.join('dir', 'subdir', 'file.txt');
-      
+
       if (isWindows) {
         expect(testPath).toContain('\\');
       } else {
@@ -223,7 +225,7 @@ describe('CI Environment Validation', () => {
     it('should match runner OS with Node.js platform', () => {
       if (isCI && process.env.RUNNER_OS) {
         const runnerOS = process.env.RUNNER_OS.toLowerCase();
-        
+
         if (runnerOS === 'windows') {
           expect(isWindows).toBe(true);
         } else if (runnerOS === 'macos') {
@@ -253,7 +255,7 @@ describe('CI Environment Validation', () => {
       if (isCI) {
         // Store the value
         const originalValue = process.env.TEST_PERSONAS_DIR;
-        
+
         // Verify it persists (Jest doesn't reset it)
         expect(process.env.TEST_PERSONAS_DIR).toBe(originalValue);
       }

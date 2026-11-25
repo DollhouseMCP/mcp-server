@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { describe, expect, it } from '@jest/globals';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -33,13 +35,13 @@ function runDryRun(tag: string) {
   `], {
     encoding: 'utf8',
     timeout: 10000,
-    env: {
+    env: isolatedServerEnv(testHomeDirectory(), {
       ...process.env,
       DIST_TAG: tag,
       GITHUB_RUN_ID: '123456789',
       TEST_NODE: process.execPath,
       TEST_GUARD: resolve('scripts/verify-publish-channel.mjs')
-    }
+    })
   });
 }
 
@@ -60,7 +62,7 @@ describe('npm workflow dry-run and lifecycle channel contract', () => {
   it.each([['rc', 0], ['next', 1], ['latest', 1], ['beta', 1]])('enforces the real RC prepublish guard for tag %s', (tag, status) => {
     const result = spawnSync(process.execPath, [resolve('scripts/verify-publish-channel.mjs')], {
       encoding: 'utf8', timeout: 10000,
-      env: { ...process.env, npm_package_version: '2.1.0-rc.1', npm_config_tag: String(tag) }
+      env: isolatedServerEnv(testHomeDirectory(), { ...process.env, npm_package_version: '2.1.0-rc.1', npm_config_tag: String(tag) })
     });
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(status);

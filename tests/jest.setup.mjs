@@ -29,7 +29,7 @@ process.env.MCP_INTERFACE_MODE = 'discrete';
 // a dollhousemcp `command` that points under os.tmpdir(), or at a
 // `dollhousemcp-nvm.sh` wrapper that does not exist. No real app produces that;
 // only a leaking test does. Detect-only, read-only, prefix-independent.
-import { homedir, platform, tmpdir } from 'node:os';
+import { userInfo, platform, tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
 
@@ -40,9 +40,9 @@ import { existsSync, readFileSync } from 'node:fs';
 // the mapping is replicated; a drift would only make the guard miss a path, never
 // false-positive.
 const REAL_CLIENT_CONFIG_PATHS = (() => {
-  const home = homedir();
+  const home = userInfo().homedir;
   const plat = platform();
-  const appData = process.env.APPDATA || join(home, 'AppData', 'Roaming');
+  const appData = globalThis[Symbol.for('dollhouse.test.accountAppData')] || join(home, 'AppData', 'Roaming');
   const byPlatform = (darwinPath, win32Path, linuxPath) => {
     if (plat === 'darwin') return darwinPath;
     if (plat === 'win32') return win32Path;

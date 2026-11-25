@@ -75,16 +75,13 @@ const ALLOWED_CLIENTS = new Set([
   'lmstudio',
 ]);
 
-type ConfigPathClient =
-  | 'claude'
-  | typeof CLAUDE_CODE_CLIENT_ID
-  | 'cursor'
-  | 'vscode'
-  | 'windsurf'
-  | 'cline'
-  | 'lmstudio'
-  | typeof GEMINI_CLI_CLIENT_ID
-  | 'codex';
+/** Clients with a config path resolved directly by the setup layer. */
+export const CONFIG_PATH_CLIENTS = [
+  'claude', CLAUDE_CODE_CLIENT_ID, 'cursor', 'vscode', 'windsurf',
+  'cline', 'lmstudio', GEMINI_CLI_CLIENT_ID, 'codex',
+] as const;
+
+type ConfigPathClient = typeof CONFIG_PATH_CLIENTS[number];
 
 type SetupSupportLevel =
   | 'full_native'
@@ -120,10 +117,10 @@ const installLimiter = new SlidingWindowRateLimiter(5, 60_000);
  *               without this override, NVM helpers driven by a fake home still
  *               resolved to the real client configs and patched them.
  */
-function getConfigPath(client: string, home = homedir()): string | null {
+export function getConfigPath(client: string, home = homedir()): string | null {
   const plat = platform();
 
-  const paths: Partial<Record<ConfigPathClient, () => string | null>> = {
+  const paths: Record<ConfigPathClient, () => string | null> = {
     'claude': () => {
       if (plat === 'darwin') return join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json');
       if (plat === 'win32') return join(process.env.APPDATA || join(home, 'AppData', 'Roaming'), 'Claude', 'claude_desktop_config.json');
