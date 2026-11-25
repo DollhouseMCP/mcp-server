@@ -140,6 +140,49 @@ it('preserves the exact malformed bytes before recovery', async () => {
   expect(await fs.readFile(path.join(directory, evidence!))).toEqual(rejected);
 });
 
+it.each([
+  { first: 'a', second: 'b' },
+  { first: 'b', second: 'a' },
+])('chooses the same block when $first is replayed before $second', async ({ first, second }) => {
+  await replace(snapshot({ stored: block }));
+  const replay = (eventId: string) => store.apply({
+    kind: 'put', name: 'shared', block: { ...block, eventId }, replay: true,
+  });
+  await replay(first);
+  await replay(second);
+
+  const writes = jest.spyOn(fileOps, 'writeFile');
+  const expected = { stored: block, shared: { ...block, eventId: 'b' } };
+  await expect(replay('b')).resolves.toEqual({ snapshot: expected });
+  expect(writes).not.toHaveBeenCalled();
+  expect(await store.load()).toEqual({ status: 'loaded', value: expected });
+});
+
+it('uses the recovery tie-break for a block admitted during the repair read', async () => {
+  const watcher = interceptWatcher();
+  const timestamp = Date.now();
+  jest.spyOn(Date, 'now').mockReturnValue(timestamp);
+  await fs.writeFile(store.location, rejected);
+  await enforcer.initialize();
+  expect(await enforcer.block('queued', 'Queued review', [])).toBe(false);
+  // A valid legacy block with no event ID uses its verification ID for comparison.
+  const repaired = { ...block, blockedAt: new Date(timestamp).toISOString(), verificationId: 'z-existing' };
+  await replace(snapshot({ shared: repaired }));
+  const read = fileOps.readFile.bind(fileOps);
+  let pending: Promise<boolean> | undefined;
+  jest.spyOn(fileOps, 'readFile').mockImplementationOnce(async (...args) => {
+    const bytes = await read(...args);
+    pending = enforcer.block('shared', 'Concurrent review', []);
+    return bytes;
+  });
+
+  await watcher.retry();
+  expect(pending).toBeDefined();
+  await expect(pending).resolves.toBe(false);
+  expect(await enforcer.check('shared')).toMatchObject({ blocked: true, eventId: 'z-existing' });
+  expect(await enforcer.check('queued')).toMatchObject({ blocked: true, reason: 'Queued review' });
+});
+
 async function waitForMarkers(homes: string[]) {
   for (let attempt = 0; attempt < 500; attempt++) {
     if ((await Promise.all(homes.map(home => fs.access(path.join(home, 'ready')).then(() => true, () => false)))).every(Boolean)) return;

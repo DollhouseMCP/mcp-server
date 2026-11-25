@@ -12,7 +12,7 @@ export interface PersistedBlock {
 }
 
 export type BlockMutation =
-  | { kind: 'put'; name: string; block: unknown }
+  | { kind: 'put'; name: string; block: unknown; replay?: true }
   | { kind: 'remove'; name: string; eventId?: string }
   | { kind: 'clear' };
 
@@ -24,7 +24,7 @@ export interface IDangerZoneBlockStore {
   /** Optional notification used to force a fresh read during file-backed recovery. */
   watchForRecovery?(retry: () => Promise<void>): () => void;
   /**
-   * True means applied. A snapshot carries the committed state when writers share storage.
+   * True means applied. A snapshot carries the authoritative state after applying or merging a mutation.
    * False means declined by authoritative concurrent state.
    * A declined mutation must not be retried. Storage failures throw instead.
    */

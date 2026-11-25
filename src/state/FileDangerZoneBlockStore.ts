@@ -233,6 +233,9 @@ export class FileDangerZoneBlockStore implements IDangerZoneBlockStore {
         throw new Error('Blocked-agent snapshot could not be validated before writing');
       }
       const blocks: Record<string, unknown> = Object.assign(Object.create(null), loaded.status === 'loaded' ? loaded.value : {});
+      const replayOrder = compareReplayToDisk(blocks, mutation);
+      if (replayOrder < 0) return false;
+      if (replayOrder === 0) return { snapshot: blocks };
       const next = applyMutation(blocks, mutation);
       if (!next) return false;
       await this.writeSnapshot(next);
@@ -294,6 +297,23 @@ function eventIdOf(block: unknown): unknown {
 function blockedAtOf(block: unknown): number {
   const date = isStateObject(block) && typeof block.blockedAt === 'string' ? Date.parse(block.blockedAt) : Number.NaN;
   return Number.isNaN(date) ? 0 : date;
+}
+
+function replayEventIdOf(block: unknown): string {
+  const id = eventIdOf(block);
+  return typeof id === 'string' ? id : '';
+}
+
+function compareReplayToDisk(blocks: Record<string, unknown>, mutation: BlockMutation): number {
+  if (mutation.kind !== 'put' || !mutation.replay || !Object.hasOwn(blocks, mutation.name)) return 1;
+  const current = blocks[mutation.name];
+  const difference = blockedAtOf(mutation.block) - blockedAtOf(current);
+  if (difference !== 0) return difference;
+  const incomingId = replayEventIdOf(mutation.block);
+  const currentId = replayEventIdOf(current);
+  // Use code-unit order so processes with different locales choose the same event.
+  if (incomingId === currentId) return 0;
+  return incomingId > currentId ? 1 : -1;
 }
 
 function applyMutation(blocks: Record<string, unknown>, mutation: BlockMutation): Record<string, unknown> | undefined {

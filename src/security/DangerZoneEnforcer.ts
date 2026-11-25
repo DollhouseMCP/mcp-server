@@ -212,8 +212,9 @@ export class DangerZoneEnforcer {
     if (!recovering && this.readiness === 'unavailable') return;
     if (!await this.readSnapshot(refresh)) return;
     this.readiness = 'ready';
-    await this.persistence.resume();
+    const drained = await this.persistence.resume();
     if (this.readiness !== 'ready') return;
+    if (drained) this.restoreProjected();
     this.retryable = false;
     this.stopFileRecovery();
     if (recovering) logger.info('Block-state storage recovered; enforcement is ready');
