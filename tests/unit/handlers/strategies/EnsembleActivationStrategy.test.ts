@@ -38,7 +38,8 @@ describe('EnsembleActivationStrategy', () => {
       deactivateMemory: jest.fn(),
     } as unknown as jest.Mocked<MemoryManager>;
     mockPersonaManager = {
-      deactivatePersona: jest.fn(),
+      findPersonaAsync: jest.fn().mockResolvedValue(undefined),
+      deactivatePersona: jest.fn().mockReturnValue({ success: true, message: 'deactivated' }),
     } as unknown as jest.Mocked<PersonaManager>;
 
     strategy = new EnsembleActivationStrategy(

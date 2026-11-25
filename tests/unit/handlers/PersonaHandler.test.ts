@@ -81,6 +81,9 @@ This is a sample persona with enough instructional content to satisfy validation
       editExistingPersona: jest.fn(),
       exportElement: jest.fn(),
       importPersona: jest.fn(),
+      findPersonaAsync: (identifier: string) => mockPersonaManager.find((persona: any) =>
+        persona.filename === `${identifier}.md` || persona.metadata.name === identifier
+      ),
       validatePersona: jest.fn(),
       deletePersona: jest.fn(),
     };

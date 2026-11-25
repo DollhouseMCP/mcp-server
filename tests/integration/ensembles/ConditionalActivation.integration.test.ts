@@ -55,7 +55,7 @@ describe('Ensemble Conditional Activation Integration', () => {
 
   const mockPersonaManager = {
     list: jest.fn(() => Promise.resolve([])),
-    findPersona: jest.fn(),
+    findPersonaAsync: jest.fn().mockResolvedValue(undefined),
     save: jest.fn()
   };
 

@@ -16,6 +16,7 @@ import { BaseActivationStrategy } from './BaseActivationStrategy.js';
 import { ElementActivationStrategy, MCPResponse } from './ElementActivationStrategy.js';
 import type { Ensemble } from '../../elements/ensembles/Ensemble.js';
 import type { ElementManagers, EnsembleElement } from '../../elements/ensembles/types.js';
+import { logger } from '../../utils/logger.js';
 
 export class EnsembleActivationStrategy extends BaseActivationStrategy implements ElementActivationStrategy {
   constructor(
@@ -150,9 +151,17 @@ export class EnsembleActivationStrategy extends BaseActivationStrategy implement
         await this.skillManager.deactivateSkill(element.element_name);
         return;
       case 'persona':
-      case 'personas':
-        await Promise.resolve(this.personaManager.deactivatePersona(element.element_name));
+      case 'personas': {
+        await this.personaManager.findPersonaAsync(element.element_name);
+        const result = this.personaManager.deactivatePersona(element.element_name);
+        if (!result.success) {
+          logger.warn('Persona member deactivation failed; continuing ensemble deactivation', {
+            memberName: element.element_name,
+            message: result.message,
+          });
+        }
         return;
+      }
       case 'agent':
       case 'agents':
         await this.agentManager.deactivateAgent(element.element_name);
