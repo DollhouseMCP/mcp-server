@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { afterEach, describe, expect, it as jestIt } from '@jest/globals';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
@@ -114,7 +116,7 @@ describe('file archive cleanup actual process crashes', () => {
     const loader = extension === 'ts' ? ['--import', pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href] : [];
     const child = spawn(process.execPath, [...loader, '--input-type=module', '-e', childSource,
       ...modules, f.root, USER, f.locator, JSON.stringify(f.receipt), stop satisfies CrashStop],
-    { cwd: f.root, stdio: ['pipe', 'pipe', 'pipe'] });
+    { env: isolatedServerEnv(testHomeDirectory(), process.env), cwd: f.root, stdio: ['pipe', 'pipe', 'pipe'] });
     let didClose = false, output = '', stderr = '', signal: NodeJS.Signals | null = null;
     const closed = new Promise<void>(resolve => child.once('close', (_code, stoppedBy) => {
       didClose = true; signal = stoppedBy; resolve();

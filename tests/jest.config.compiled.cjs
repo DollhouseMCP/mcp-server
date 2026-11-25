@@ -5,7 +5,7 @@
  * are related to TypeScript/ESM module resolution issues
  */
 const config = {
-  testEnvironment: 'node',
+  testEnvironment: '<rootDir>/tests/helpers/isolated-node-environment.cjs',
   rootDir: '..',
   
   // Look for test files in the compiled output directory
@@ -27,12 +27,12 @@ const config = {
     '<rootDir>/src/',
     '<rootDir>/tests/',  // Ignore source test files, not compiled ones
     // These tests have issues that cause failures or hanging in CI:
-    'convertToGit\\.test\\.js$',
-    'UpdateManager\\.npm\\.test\\.js$',
-    'BackupManager\\.npm\\.test\\.js$',
-    'InstallationDetector\\.test\\.js$',
-    '**/GitHubAuthManager\\.test\\.js',  // Match anywhere in path
-    'CollectionCache\\.test\\.js$'  // ESM mocking issues with fs/promises
+    String.raw`convertToGit\.test\.js$`,
+    String.raw`UpdateManager\.npm\.test\.js$`,
+    String.raw`BackupManager\.npm\.test\.js$`,
+    String.raw`InstallationDetector\.test\.js$`,
+    String.raw`**/GitHubAuthManager\.test\.js`,  // Match anywhere in path
+    String.raw`CollectionCache\.test\.js$`  // ESM mocking issues with fs/promises
   ],
   
   // Setup file - use the original .mjs since it's just setting env vars

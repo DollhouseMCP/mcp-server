@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { afterEach, describe, expect, it } from '@jest/globals';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -62,7 +64,7 @@ describe('secure ZIP extraction', () => {
         ], {
             cwd: process.cwd(),
             encoding: 'utf8',
-            env: { ...process.env, TMPDIR: tempDir, TMP: tempDir, TEMP: tempDir },
+            env: isolatedServerEnv(testHomeDirectory(), { ...process.env, TMPDIR: tempDir, TMP: tempDir, TEMP: tempDir }),
         });
 
         expect(cliResult.stderr).toBe('');
@@ -396,7 +398,7 @@ describe('main conversion ZIP safety', () => {
         if (scenario === 'dry-run') args.push('--dry-run');
         const child = spawnSync(process.execPath, args, {
             cwd: process.cwd(), encoding: 'utf8',
-            env: { ...process.env, TMPDIR: tempParent, TMP: tempParent, TEMP: tempParent },
+            env: isolatedServerEnv(testHomeDirectory(), { ...process.env, TMPDIR: tempParent, TMP: tempParent, TEMP: tempParent }),
         });
         expect(child.error).toBeUndefined();
         expect(child.status).toBe(scenario === 'refusal' ? 1 : 0);

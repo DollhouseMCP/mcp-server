@@ -1,7 +1,6 @@
 /**
  * Tests for OAuth scope handling in TokenManager
  * Validates that OAuth tokens with 'public_repo' are properly handled
- * @jest-environment node
  */
 
 import { describe, it, expect, beforeEach } from '@jest/globals';
@@ -18,29 +17,12 @@ describe('TokenManager - OAuth Scope Handling', () => {
   });
 
   describe('getRequiredScopes', () => {
-    it('should require public_repo for read operations (OAuth compatible)', () => {
-      const scopes = tokenManager.getRequiredScopes('read');
-      expect(scopes.required).toEqual(['public_repo']);
-      expect(scopes.required).not.toContain('repo');
-    });
-
-    it('should require public_repo for write operations (OAuth compatible)', () => {
-      const scopes = tokenManager.getRequiredScopes('write');
-      expect(scopes.required).toEqual(['public_repo']);
-      expect(scopes.required).not.toContain('repo');
-    });
-
-    it('should require public_repo for collection operations (OAuth compatible)', () => {
-      const scopes = tokenManager.getRequiredScopes('collection');
-      expect(scopes.required).toEqual(['public_repo']);
-      expect(scopes.required).not.toContain('repo');
-    });
-
-    it('should require public_repo for marketplace operations (backward compat)', () => {
-      const scopes = tokenManager.getRequiredScopes('marketplace');
-      expect(scopes.required).toEqual(['public_repo']);
-      expect(scopes.required).not.toContain('repo');
-    });
+    it.each(['read', 'write', 'collection', 'marketplace'])(
+      'should require public_repo rather than repo for %s operations', operation => {
+        const scopes = tokenManager.getRequiredScopes(operation);
+        expect(scopes.required).toEqual(['public_repo']);
+        expect(scopes.required).not.toContain('repo');
+      });
 
     it('should require gist scope for gist operations', () => {
       const scopes = tokenManager.getRequiredScopes('gist');

@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from '@jest/globals';
 import { execFileSync } from 'node:child_process';
 import { appendFile, chmod, cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
@@ -39,7 +41,7 @@ const helperUrl = pathToFileURL(
 const { checkSafetyPackageVersion, compareRecordedSafetyTree } = await import(helperUrl) as SafetyVersionModule;
 
 function git(repo: string, args: string[], input?: string): string {
-  return execFileSync('git', args, {
+  return execFileSync('git', args, { env: isolatedServerEnv(testHomeDirectory(), process.env),
     cwd: repo,
     encoding: 'utf8',
     stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],

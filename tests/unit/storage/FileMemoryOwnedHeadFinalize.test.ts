@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -263,7 +265,7 @@ describe('dormant finalization of a fully published owned UPDATE', () => {
       const child = spawn(process.execPath, [
         '--import', 'tsx', '--input-type=module', '--eval', finalizeChild,
         tenantRoot, USER, JSON.stringify(request), phase,
-      ], { cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'] });
+      ], { env: isolatedServerEnv(testHomeDirectory(), process.env), cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'] });
       try {
         await new Promise<void>((resolve, reject) => {
           let output = '';

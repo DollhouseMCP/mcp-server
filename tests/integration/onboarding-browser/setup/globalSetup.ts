@@ -1,3 +1,5 @@
+import { freshFixtureHome, withMigrationHome } from '../../../helpers/fixtureHomes.cjs';
+import { isolatedServerEnv } from '../../../helpers/isolated-server-env.cjs';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { createServer } from 'node:net';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -8,10 +10,12 @@ import postgres from 'postgres';
 
 const execFileAsync = promisify(execFile);
 const runDirectory = path.join(process.cwd(), '.onboarding-browser');
+const homeDirectory = path.join(runDirectory, 'home');
 const statePath = path.join(runDirectory, 'state.json');
 
 export default async function globalSetup(): Promise<void> {
   mkdirSync(runDirectory, { recursive: true });
+  freshFixtureHome(runDirectory);
   const databaseName = `dollhousemcp_onboarding_browser_${randomBytes(4).toString('hex')}`;
   const adminTemplate = postgresAdminTemplate();
   const databaseUrl = withDatabase(adminTemplate, databaseName);
@@ -19,8 +23,8 @@ export default async function globalSetup(): Promise<void> {
   try { await admin.unsafe(`CREATE DATABASE ${databaseName}`); } finally { await admin.end({ timeout: 5 }); }
   const children: ChildProcess[] = [];
   try {
-    await execFileAsync('npx', ['drizzle-kit', 'migrate'], { cwd: process.cwd(),
-      env: { ...process.env, DOLLHOUSE_DATABASE_ADMIN_URL: databaseUrl }, maxBuffer: 32 * 1024 * 1024 });
+    await withMigrationHome(migrationHome => execFileAsync(process.execPath, [path.join(process.cwd(), 'node_modules/drizzle-kit/bin.cjs'), 'migrate'], { cwd: process.cwd(),
+      env: isolatedServerEnv(migrationHome, { ...process.env, DOLLHOUSE_DATABASE_ADMIN_URL: databaseUrl }), maxBuffer: 32 * 1024 * 1024 }));
     const [firstPort, secondPort, proxyPort] = await Promise.all([freePort(), freePort(), freePort()]);
     const origin = `https://127.0.0.1:${proxyPort}`;
     const controlSecret = randomBytes(32).toString('base64url');
@@ -65,7 +69,7 @@ export default async function globalSetup(): Promise<void> {
 async function boot(label: string, port: number, env: NodeJS.ProcessEnv): Promise<ChildProcess> {
   const runner = path.join(process.cwd(), 'tests/integration/onboarding-browser/fixture/runner.ts');
   const child = spawn(process.execPath, [path.join(process.cwd(), 'node_modules/tsx/dist/cli.mjs'), runner], {
-    cwd: process.cwd(), detached: true, env: { ...env, ONBOARDING_BROWSER_PORT: String(port) }, stdio: ['ignore', 'pipe', 'pipe'],
+    cwd: process.cwd(), detached: true, env: isolatedServerEnv(homeDirectory, { ...env, ONBOARDING_BROWSER_PORT: String(port) }), stdio: ['ignore', 'pipe', 'pipe'],
   });
   child.stderr?.resume();
   try {
@@ -113,10 +117,18 @@ async function freePort(): Promise<number> {
 
 function postgresAdminTemplate(): string {
   return process.env.ONBOARDING_BROWSER_PG_ADMIN_URL ?? process.env.DOLLHOUSE_TEST_DATABASE_ADMIN_URL ??
-    process.env.DOLLHOUSE_TEST_DATABASE_URL ?? 'postgres://dollhouse:dollhouse@127.0.0.1:5432/postgres';
+    process.env.DOLLHOUSE_TEST_DATABASE_URL ?? localPostgresAdminUrl();
 }
 function withDatabase(template: string, database: string): string { const url = new URL(template); url.pathname = `/${database}`; return url.toString(); }
 async function dropDatabase(template: string, database: string): Promise<void> {
   const admin = postgres(withDatabase(template, 'postgres'), { ssl: false, max: 1, onnotice: () => {} });
   try { await admin.unsafe(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`); } finally { await admin.end({ timeout: 5 }); }
+}
+
+function localPostgresAdminUrl(): string {
+  const url = new URL('postgres://127.0.0.1:5432/postgres');
+  const localRole = 'dollhouse';
+  url.username = localRole;
+  url.password = localRole;
+  return url.toString();
 }

@@ -6,7 +6,6 @@
  *
  * Issue #1358: Add minimal installation telemetry for v1.9.19
  *
- * @jest-environment node
  */
 
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
@@ -119,44 +118,13 @@ describe('OperationalTelemetry', () => {
       expect(telemetry.isEnabled()).toBe(false);
     });
 
-    it('should return false when DOLLHOUSE_TELEMETRY=false', () => {
-      process.env.DOLLHOUSE_TELEMETRY = 'false';
-      expect(telemetry.isEnabled()).toBe(false);
-    });
-
-    it('should return false when DOLLHOUSE_TELEMETRY=FALSE (case insensitive)', () => {
-      process.env.DOLLHOUSE_TELEMETRY = 'FALSE';
-      expect(telemetry.isEnabled()).toBe(false);
-    });
-
-    it('should return false when DOLLHOUSE_TELEMETRY=0', () => {
-      process.env.DOLLHOUSE_TELEMETRY = '0';
-      expect(telemetry.isEnabled()).toBe(false);
-    });
-
-    it('should return true when DOLLHOUSE_TELEMETRY=true', () => {
-      process.env.DOLLHOUSE_TELEMETRY = 'true';
-      expect(telemetry.isEnabled()).toBe(true);
-    });
-
-    it('should return true when DOLLHOUSE_TELEMETRY=TRUE (case insensitive)', () => {
-      process.env.DOLLHOUSE_TELEMETRY = 'TRUE';
-      expect(telemetry.isEnabled()).toBe(true);
-    });
-
-    it('should return true when DOLLHOUSE_TELEMETRY=1', () => {
-      process.env.DOLLHOUSE_TELEMETRY = '1';
-      expect(telemetry.isEnabled()).toBe(true);
-    });
-
-    it('should return false for unrecognized values (opt-in model)', () => {
-      process.env.DOLLHOUSE_TELEMETRY = 'maybe';
-      expect(telemetry.isEnabled()).toBe(false);
-    });
-
-    it('should return false for empty string', () => {
-      process.env.DOLLHOUSE_TELEMETRY = '';
-      expect(telemetry.isEnabled()).toBe(false);
+    it.each([
+      ['false', false], ['FALSE', false], ['0', false],
+      ['true', true], ['TRUE', true], ['1', true],
+      ['maybe', false], ['', false],
+    ])('returns %s telemetry setting as enabled=%s', (setting, enabled) => {
+      process.env.DOLLHOUSE_TELEMETRY = String(setting);
+      expect(telemetry.isEnabled()).toBe(enabled);
     });
   });
 

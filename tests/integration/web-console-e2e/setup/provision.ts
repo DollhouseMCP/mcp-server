@@ -1,3 +1,4 @@
+import { appHome, withMigrationHome } from '../../../helpers/fixtureHomes.cjs';
 import { isolatedServerEnv } from '../../../helpers/isolated-server-env.cjs';
 /**
  * Importable provision + boot helpers, shared by the Playwright real-auth config.
@@ -73,10 +74,10 @@ export async function provisionDatabase(): Promise<void> {
   } finally {
     await admin.end({ timeout: 5 });
   }
-  const { stderr } = await execFileAsync('npx', ['drizzle-kit', 'migrate'], {
-    env: { ...process.env, DOLLHOUSE_DATABASE_ADMIN_URL: superuserUrlFor(DB_NAME) },
+  const { stderr } = await withMigrationHome(migrationHome => execFileAsync(process.execPath, [path.join(process.cwd(), 'node_modules/drizzle-kit/bin.cjs'), 'migrate'], {
+    env: isolatedServerEnv(migrationHome, { ...process.env, DOLLHOUSE_DATABASE_ADMIN_URL: superuserUrlFor(DB_NAME) }),
     cwd: process.cwd(), maxBuffer: 32 * 1024 * 1024,
-  });
+  }));
   if (process.env.E2E_DEBUG && stderr) console.log('[pw migrate]', stderr);
 
   const onDb = postgres(superuserUrlFor(DB_NAME), { ssl: false, max: 1, onnotice: () => {} });
@@ -100,8 +101,10 @@ export interface BootedApp {
   logPath: string;
 }
 
-export function bootApp(runDir: string): BootedApp {
-  for (const d of ['cwd', 'run', 'portfolio', 'cache', 'logs']) mkdirSync(path.join(runDir, d), { recursive: true });
+export function bootApp(runDir: string, options: { fresh?: boolean } = {}): BootedApp {
+  const homeDir = appHome(runDir, options);
+  mkdirSync(path.join(runDir, 'logs'), { recursive: true });
+  for (const d of ['cwd', 'run', 'portfolio', 'cache', 'logs']) mkdirSync(path.join(homeDir, d), { recursive: true });
   const b64 = () => randomBytes(32).toString('base64');
   const hex = () => randomBytes(32).toString('hex');
   const opaqueHmacKey = b64();
@@ -139,10 +142,10 @@ export function bootApp(runDir: string): BootedApp {
     DOLLHOUSE_INVITE_TOKEN_SECRET: hex(),
     DOLLHOUSE_MASTER_ENCRYPTION_KEY: b64(),
     DOLLHOUSE_SECURITY_MODE: 'strict',
-    DOLLHOUSE_RUN_DIR: `${runDir}/run`,
-    DOLLHOUSE_PORTFOLIO_DIR: `${runDir}/portfolio`,
-    DOLLHOUSE_CACHE_DIR: `${runDir}/cache`,
-    DOLLHOUSE_LOG_DIR: `${runDir}/logs`,
+    DOLLHOUSE_RUN_DIR: path.join(homeDir, 'run'),
+    DOLLHOUSE_PORTFOLIO_DIR: path.join(homeDir, 'portfolio'),
+    DOLLHOUSE_CACHE_DIR: path.join(homeDir, 'cache'),
+    DOLLHOUSE_LOG_DIR: path.join(homeDir, 'logs'),
     GITHUB_TOKEN: '',
     GITHUB_TEST_TOKEN: '',
     TEST_GITHUB_TOKEN: '',
@@ -157,7 +160,7 @@ export function bootApp(runDir: string): BootedApp {
     ? [path.resolve(process.cwd(), 'node_modules/tsx/dist/cli.mjs'), resolvedEntry, '--streamable-http']
     : [resolvedEntry, '--streamable-http'];
   const child = spawn(command, args, {
-    cwd: path.join(runDir, 'cwd'), env: isolatedServerEnv(runDir, env), stdio: ['ignore', 'pipe', 'pipe'], detached: true,
+    cwd: path.join(homeDir, 'cwd'), env: isolatedServerEnv(homeDir, env), stdio: ['ignore', 'pipe', 'pipe'], detached: true,
   });
   child.stdout.pipe(logStream);
   child.stderr.pipe(logStream);

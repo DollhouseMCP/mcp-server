@@ -1,3 +1,4 @@
+import { isolatedServerEnv } from '../helpers/isolated-server-env.cjs';
 import { describe, expect, it } from '@jest/globals';
 import { createRequire } from 'node:module';
 import { mkdtemp, mkdir, writeFile, readFile, readlink, lstat, rm, symlink } from 'node:fs/promises';
@@ -14,7 +15,7 @@ const root = fileURLToPath(new URL('../../', import.meta.url));
 
 function runNode(directory: string, args: string[]) {
   const env = { PATH: process.env.PATH, HOME: directory, USERPROFILE: directory, TMPDIR: directory, TMP: directory, TEMP: directory, NO_COLOR: '1' };
-  const result = spawnSync(process.execPath, args, { cwd: directory, env, encoding: 'utf8', timeout: 8_000, maxBuffer: 1024 * 1024 });
+  const result = spawnSync(process.execPath, args, { cwd: directory, env: isolatedServerEnv(directory, env), encoding: 'utf8', timeout: 8_000, maxBuffer: 1024 * 1024 });
   if (result.error) throw result.error;
   if (result.status !== 0) {
     throw new Error(`Owned Node fixture exited ${result.status}: ${[result.stderr, result.stdout].join('\n').slice(0, 2048)}`);

@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';
@@ -393,7 +395,7 @@ describe('dormant final RESERVED adoption recovery', () => {
   });
   it('rejects a nonregular exact-named FIFO stage without hanging', async () => {
     const setup = await fixture();
-    execFileSync('mkfifo', ['-m', '600', setup.stagePath]);
+    execFileSync('mkfifo', ['-m', '600', setup.stagePath], { env: isolatedServerEnv(testHomeDirectory(), process.env) });
     await expect(setup.store.recoverReservedAdoption(setup.request)).rejects.toMatchObject({ code: 'EADOPTIONPENDING' });
     expect((await fs.lstat(setup.stagePath)).isFIFO()).toBe(true);
   });
@@ -489,7 +491,7 @@ describe('dormant final RESERVED adoption recovery', () => {
       new URL(`FileMemoryOwnerSnapshots.${extension}`, moduleRoot).href,
       new URL(`FileMemoryTransactionCoordinator.${extension}`, moduleRoot).href,
       new URL(`FileMemoryFence.${extension}`, moduleRoot).href,
-      setup.tenantRoot, USER, JSON.stringify(setup.request), stop], { stdio: ['pipe', 'pipe', 'pipe'] });
+      setup.tenantRoot, USER, JSON.stringify(setup.request), stop], { env: isolatedServerEnv(testHomeDirectory(), process.env), stdio: ['pipe', 'pipe', 'pipe'] });
     try {
       await new Promise<void>((resolve, reject) => {
         let output = ''; let errors = '';

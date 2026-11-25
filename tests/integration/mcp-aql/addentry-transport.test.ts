@@ -1,3 +1,4 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
 import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -63,7 +64,7 @@ describe('Memory addEntry Transport Regression', () => {
     transport = new StdioClientTransport({
       command: 'node',
       args: ['dist/index.js'],
-      env: {
+      env: isolatedServerEnv(testDir, {
         ...childEnv,
         TEST_MODE: 'true',
         NODE_ENV: 'test',
@@ -76,7 +77,7 @@ describe('Memory addEntry Transport Regression', () => {
         GITHUB_TOKEN: '',
         GITHUB_TEST_TOKEN: '',
         TEST_GITHUB_TOKEN: '',
-      },
+      }),
     });
 
     client = new Client(

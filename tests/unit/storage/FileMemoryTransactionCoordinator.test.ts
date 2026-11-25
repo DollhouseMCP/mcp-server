@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -483,7 +485,7 @@ describe('FileMemoryTransactionCoordinator', () => {
         await new Promise(resolve => process.stdin.once('end', resolve));
       });
     `;
-    const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '--eval', script, tenantRoot], {
+    const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '--eval', script, tenantRoot], { env: isolatedServerEnv(testHomeDirectory(), process.env),
       cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'],
     });
     children.push(child);
@@ -522,7 +524,7 @@ describe('FileMemoryTransactionCoordinator', () => {
     `;
     const child = spawn(process.execPath, [
       '--unhandled-rejections=strict', '--import', 'tsx', '--input-type=module', '--eval', script, tenantRoot,
-    ], { cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'] });
+    ], { env: isolatedServerEnv(testHomeDirectory(), process.env), cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'] });
     children.push(child);
     await waitForOutput(child, 'TRACKED_FAILURE\n');
     await expect(childExit(child)).resolves.toBe(0);
@@ -583,7 +585,7 @@ describe('FileMemoryTransactionCoordinator', () => {
     `;
     const child = spawn(process.execPath, [
       '--unhandled-rejections=strict', '--import', 'tsx', '--input-type=module', '--eval', script, tenantRoot,
-    ], { cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'] });
+    ], { env: isolatedServerEnv(testHomeDirectory(), process.env), cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'] });
     children.push(child);
     await waitForOutput(child, 'TRACKED_DELETE_FAILURE\n');
     await expect(childExit(child)).resolves.toBe(0);

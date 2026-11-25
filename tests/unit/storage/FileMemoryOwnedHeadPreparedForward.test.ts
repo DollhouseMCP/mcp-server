@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { fileMetadataProof } from './helpers/fileProof.js';
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { createHash, randomUUID } from 'node:crypto';
@@ -325,14 +327,14 @@ describe('dormant already-renamed PREPARED forward completion', () => {
       const fifoPath = kind === 'stage' ? `${setup.journalPath}.update-${setup.request.operationId}.tmp` :
         kind === 'journal' ? setup.journalPath : setup.headPath;
       if (kind !== 'stage') await fs.rename(fifoPath, path.join(setup.tenantRoot, 'saved-artifact'));
-      execFileSync('mkfifo', [fifoPath]);
+      execFileSync('mkfifo', [fifoPath], { env: isolatedServerEnv(testHomeDirectory(), process.env) });
       const script = finalizeChild.replace('await store.forwardPreparedRenamedOwnedUpdate(JSON.parse(requestJson));',
         `try { await store.forwardPreparedRenamedOwnedUpdate(JSON.parse(requestJson)); process.exitCode = 2; }
         catch (error) { process.stdout.write(error.code); }`);
       const child = spawn(process.execPath, [
         ...(extension === 'ts' ? ['--import', 'tsx'] : []), '--input-type=module', '-e', script,
         setup.tenantRoot, USER, JSON.stringify(setup.request), 'no-stop',
-      ], { stdio: ['pipe', 'pipe', 'pipe'] });
+      ], { env: isolatedServerEnv(testHomeDirectory(), process.env), stdio: ['pipe', 'pipe', 'pipe'] });
       let output = '';
       try {
         const code = await new Promise<number | null>((resolve, reject) => {
@@ -456,7 +458,7 @@ describe('dormant already-renamed PREPARED forward completion', () => {
       ...(extension === 'ts' ? ['--import', 'tsx'] : []), '--input-type=module', '-e', childScript,
       setup.tenantRoot, USER, JSON.stringify(phase === 'writer:renamed-head' ? setup.owned : setup.request),
       phase === 'writer:renamed-head' ? 'renamed-head' : phase,
-    ], { stdio: ['pipe', 'pipe', 'pipe'] });
+    ], { env: isolatedServerEnv(testHomeDirectory(), process.env), stdio: ['pipe', 'pipe', 'pipe'] });
     try {
       await new Promise<void>((resolve, reject) => {
         let output = '';

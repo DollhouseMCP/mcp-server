@@ -1,3 +1,4 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
 /**
  * Integration tests for the permission server chain.
  *
@@ -184,7 +185,7 @@ describe('Permission Server Integration', () => {
       const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'dollhouse-hook-home-'));
       const { code, stdout } = await new Promise<{ code: number; stdout: string }>((resolve) => {
         const hookProc = spawn(BASH_BINARY, [HOOK_SCRIPT], {
-          env: { HOME: tempHome, PATH: SAFE_TEST_PATH },
+          env: isolatedServerEnv(tempHome, { HOME: tempHome, PATH: SAFE_TEST_PATH }),
           stdio: ['pipe', 'pipe', 'pipe'],
         });
         let out = '';
@@ -230,7 +231,7 @@ describe('Permission Server Integration', () => {
 
       const { code, stdout } = await new Promise<{ code: number; stdout: string }>((resolve) => {
         const hookProc = spawn(BASH_BINARY, [HOOK_SCRIPT], {
-          env: { HOME: tempHome, PATH: SAFE_TEST_PATH },
+          env: isolatedServerEnv(tempHome, { HOME: tempHome, PATH: SAFE_TEST_PATH }),
           stdio: ['pipe', 'pipe', 'pipe'],
         });
         let out = '';
@@ -289,12 +290,12 @@ describe('Permission Server Integration', () => {
       const { spawn } = await import('node:child_process');
       const { code, stdout } = await new Promise<{ code: number; stdout: string }>((resolve) => {
         const hookProc = spawn(BASH_BINARY, [HOOK_SCRIPT], {
-          env: {
+          env: isolatedServerEnv(tempHome, {
             HOME: tempHome,
             PATH: SAFE_TEST_PATH,
             DOLLHOUSE_SESSION_ID: 'session-hook-test',
             DOLLHOUSE_RUN_DIR: tempRunDir,
-          },
+          }),
           stdio: ['pipe', 'pipe', 'pipe'],
         });
         let out = '';
@@ -351,11 +352,11 @@ describe('Permission Server Integration', () => {
 
       const { code, stdout } = await new Promise<{ code: number; stdout: string }>((resolve) => {
         const hookProc = spawn(BASH_BINARY, [HOOK_SCRIPT], {
-          env: {
+          env: isolatedServerEnv(tempHome, {
             HOME: tempHome,
             PATH: SAFE_TEST_PATH,
             DOLLHOUSE_HOOK_PLATFORM: 'codex',
-          },
+          }),
           stdio: ['pipe', 'pipe', 'pipe'],
         });
         let out = '';
@@ -643,11 +644,11 @@ describe('Permission Server Integration', () => {
 
       const { code, stdout } = await new Promise<{ code: number; stdout: string }>((resolve) => {
         const hookProc = spawn(BASH_BINARY, [codexScript], {
-          env: {
+          env: isolatedServerEnv(tempHome, {
             HOME: tempHome,
             PATH: SAFE_TEST_PATH,
             DOLLHOUSE_HOOK_DIAGNOSTICS_LOG: diagnosticsLog,
-          },
+          }),
           stdio: ['pipe', 'pipe', 'pipe'],
         });
         let out = '';
@@ -1152,7 +1153,7 @@ function runHookScript(
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const hookProc = spawn(BASH_BINARY, [scriptPath], {
-      env: {
+      env: isolatedServerEnv(os.homedir(), {
         HOME: os.homedir(),
         PATH: SAFE_TEST_PATH,
         DOLLHOUSE_SESSION_ID: 'session-hook-test',
@@ -1162,7 +1163,7 @@ function runHookScript(
         ),
         DOLLHOUSE_RUN_DIR: process.env.DOLLHOUSE_RUN_DIR ?? '',
         ...envOverrides,
-      },
+      }),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let out = '';

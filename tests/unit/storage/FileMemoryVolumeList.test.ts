@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { afterEach, describe, expect, it as test, jest } from '@jest/globals';
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -72,7 +74,7 @@ async function listInChild(f: Fixture): Promise<string> {
     console.log(JSON.stringify({complete:result.complete,volumes:result.entries.map(entry=>entry.volume),payloadOpens}));
   `);
   return execFileSync(process.execPath, [...(extension === 'ts' ? ['--import', 'tsx'] : []), script, input],
-    { timeout: 8000, encoding: 'utf8', maxBuffer: 16384 });
+    { env: isolatedServerEnv(testHomeDirectory(), process.env), timeout: 8000, encoding: 'utf8', maxBuffer: 16384 });
 }
 afterEach(async () => { jest.restoreAllMocks(); for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
 
@@ -169,7 +171,7 @@ describe('bounded dormant file archive metadata observations', () => {
   });
   it('never opens a FIFO archived payload in a bounded subprocess', async () => {
     const f = await fixture(); const a = await archive(f);
-    await fs.unlink(a.payload); execFileSync('mkfifo', [a.payload]);
+    await fs.unlink(a.payload); execFileSync('mkfifo', [a.payload], { env: isolatedServerEnv(testHomeDirectory(), process.env) });
     const output = await listInChild(f);
     expect(output).toContain('"complete":true,"volumes":[1]');
     expect(output).toContain('"payloadOpens":0');
@@ -177,7 +179,7 @@ describe('bounded dormant file archive metadata observations', () => {
   });
   it('rejects FIFO metadata without blocking or deleting it', async () => {
     const f = await fixture(); const a = await archive(f);
-    await fs.rename(a.meta, path.join(f.root, 'held-meta')); execFileSync('mkfifo', [a.meta]); await fs.chmod(a.meta, 0o600);
+    await fs.rename(a.meta, path.join(f.root, 'held-meta')); execFileSync('mkfifo', [a.meta], { env: isolatedServerEnv(testHomeDirectory(), process.env) }); await fs.chmod(a.meta, 0o600);
     const output = await listInChild(f);
     expect(output).toContain('"complete":false,"volumes":[]'); expect(output).toContain('"payloadOpens":0');
     expect((await fs.lstat(a.meta)).isFIFO()).toBe(true);

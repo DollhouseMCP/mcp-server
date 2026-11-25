@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 /**
  * MCP Tool Integration Tests
  * Tests the complete flow using actual MCP tools, not direct function calls
@@ -41,12 +43,12 @@ class MCPTestServer {
     
     return new Promise((resolve, reject) => {
       this.process = spawn('node', [this.serverPath], {
-        env: {
+        env: isolatedServerEnv(testHomeDirectory(), {
           ...process.env,
           GITHUB_TOKEN: this.env.githubToken,
           DOLLHOUSE_USER: this.env.githubUser,
           NODE_ENV: 'test'
-        },
+        }),
         stdio: ['pipe', 'pipe', 'pipe']
       });
       

@@ -3,7 +3,6 @@
  *
  * Issue #1269: Enhanced telemetry for memory injection protection
  * DI REFACTOR: Adapted for instance-based architecture
- * @jest-environment node
  */
 
 import { describe, it, expect, beforeEach } from '@jest/globals';
@@ -180,7 +179,7 @@ describe('SecurityTelemetry', () => {
       expect(exported).toHaveProperty('history');
       expect(exported).toHaveProperty('vectors');
       expect(exported).toHaveProperty('metrics');
-      expect(exported.history.length).toBe(1);
+      expect(exported.history).toHaveLength(1);
     });
 
     it('should maintain circular buffer for attack history', () => {

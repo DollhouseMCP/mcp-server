@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
@@ -358,7 +360,7 @@ describe('dormant owned file head conditional UPDATE', () => {
     const child = spawn(process.execPath, [
       '--import', 'tsx', '--input-type=module', '--eval', updateChild,
       tenantRoot, USER, JSON.stringify(owned), 'none', stage, point,
-    ], { cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'] });
+    ], { env: isolatedServerEnv(testHomeDirectory(), process.env), cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'] });
     try {
       await new Promise<void>((resolve, reject) => {
         let output = '';
@@ -398,7 +400,7 @@ describe('dormant owned file head conditional UPDATE', () => {
       const probe = JSON.parse(execFileSync(process.execPath, [
         '--import', 'tsx', '--input-type=module', '--eval', inspectChild,
         tenantRoot, USER, locator,
-      ], { cwd: process.cwd(), encoding: 'utf8', timeout: 8_000 })) as {
+      ], { env: isolatedServerEnv(testHomeDirectory(), process.env), cwd: process.cwd(), encoding: 'utf8', timeout: 8_000 })) as {
         readCode: string; kind: string; evidenceComplete: boolean; artifactCount: number | null;
         artifactNamesRedacted: boolean;
       };
@@ -413,7 +415,7 @@ describe('dormant owned file head conditional UPDATE', () => {
       const afterQuiescence = JSON.parse(execFileSync(process.execPath, [
         '--import', 'tsx', '--input-type=module', '--eval', inspectChild,
         tenantRoot, USER, locator,
-      ], { cwd: process.cwd(), encoding: 'utf8', timeout: 8_000 })) as typeof probe;
+      ], { env: isolatedServerEnv(testHomeDirectory(), process.env), cwd: process.cwd(), encoding: 'utf8', timeout: 8_000 })) as typeof probe;
       expect(afterQuiescence).toMatchObject({
         readCode: 'EOWNERRECOVERY', kind: 'unknown-manual-review',
         evidenceComplete: true, artifactNamesRedacted: true,
@@ -533,7 +535,7 @@ describe('dormant owned file head conditional UPDATE', () => {
     const child = spawn(process.execPath, [
       '--import', 'tsx', '--input-type=module', '--eval', updateChild,
       tenantRoot, USER, JSON.stringify(owned), phase,
-    ], { cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'] });
+    ], { env: isolatedServerEnv(testHomeDirectory(), process.env), cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'] });
     try {
       await new Promise<void>((resolve, reject) => {
         let output = '';

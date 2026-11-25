@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -363,7 +365,7 @@ function runScenario(scenario: Scenario): {
   const result = spawnSync(bashExecutable, ['-e', '-o', 'pipefail', shellPath(scriptPath)], {
     cwd: directory,
     encoding: 'utf8',
-    env: {
+    env: isolatedServerEnv(testHomeDirectory(), {
       ...process.env,
       FAKE_BIN_DIRECTORY: shellPath(binDirectory),
       GITHUB_REF: scenario.sourceRef ?? 'refs/heads/beta',
@@ -385,7 +387,7 @@ function runScenario(scenario: Scenario): {
       FAKE_NPM_EXISTS: scenario.npmExists ? 'true' : 'false',
       FAKE_NPM_BETA_VERSION: scenario.npmBetaVersion ?? '',
       FAKE_NPM_LATEST_VERSION: scenario.npmLatestVersion ?? '',
-    },
+    }),
   });
   if (result.error) throw result.error;
 

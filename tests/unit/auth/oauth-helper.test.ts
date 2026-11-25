@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { spawn } from 'node:child_process';
@@ -58,7 +60,7 @@ function spawnHelper(helperPath: string, tokenUrl: string, homeDir: string, extr
     '20',
     TEST_CLIENT_ID
   ], {
-    env: {
+    env: isolatedServerEnv(homeDir, {
       ...process.env,
       DOLLHOUSE_HOME_DIR: homeDir,
       DOLLHOUSE_OAUTH_TOKEN_URL: tokenUrl,
@@ -70,7 +72,7 @@ function spawnHelper(helperPath: string, tokenUrl: string, homeDir: string, extr
       TEST_GITHUB_TOKEN: '',
       GITHUB_TEST_TOKEN: '',
       ...extraEnv
-    },
+    }),
     stdio: ['ignore', 'pipe', 'pipe']
   });
 
@@ -203,7 +205,7 @@ describe(HELPER_FILENAME, () => {
     );
 
     try {
-      const child = spawn(process.execPath, [helperPath], { stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(process.execPath, [helperPath], { env: isolatedServerEnv(testHomeDirectory(), process.env), stdio: ['ignore', 'pipe', 'pipe'] });
       let stderr = '';
       child.stderr.on('data', chunk => { stderr += String(chunk); });
       const code = await new Promise<number | null>((resolve, reject) => {

@@ -1,3 +1,4 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
 /**
  * Integration Test Suite for Collection Submission via MCP
  * 
@@ -44,7 +45,7 @@ describe('Collection Submission Integration via MCP', () => {
     transport = new StdioClientTransport({
       command: 'node',
       args: ['dist/index.js'],
-      env: {
+      env: isolatedServerEnv(testDir, {
         ...filteredEnv, // Use the filtered environment
         TEST_MODE: 'true',
         DOLLHOUSE_PORTFOLIO_DIR: testDir,
@@ -55,7 +56,7 @@ describe('Collection Submission Integration via MCP', () => {
         GITHUB_TOKEN: '',
         GITHUB_TEST_TOKEN: '',
         TEST_GITHUB_TOKEN: '',
-      }
+      })
     });
 
     stderrStream = transport.stderr;

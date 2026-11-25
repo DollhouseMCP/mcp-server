@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { readFileSync } from 'node:fs';
 import { createServer, type Socket } from 'node:net';
 import { createSecureContext, TLSSocket } from 'node:tls';
@@ -69,7 +71,7 @@ it.each([false, true])('observes the real TLS startup with sanitized=%s', async 
   const settings = sanitized ? migrationTlsOptions(original) : { url: original, ssl: 'verify-full' };
   expect(settings.ssl).toBe('verify-full');
   const child = spawn(process.execPath, ['tests/fixtures/postgres/startup-client.mjs', settings.url, String(settings.ssl)], {
-    env: { ...process.env, NODE_EXTRA_CA_CERTS: certificate },
+    env: isolatedServerEnv(testHomeDirectory(), { ...process.env, NODE_EXTRA_CA_CERTS: certificate }),
     stdio: ['ignore', 'ignore', 'pipe'],
   });
   child.once('error', rejectPacket);

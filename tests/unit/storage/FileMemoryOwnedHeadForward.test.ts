@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { fileMetadataProof } from './helpers/fileProof.js';
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { createHash, randomUUID } from 'node:crypto';
@@ -269,14 +271,14 @@ describe('dormant PUBLISHED forward completion', () => {
       const fifoPath = kind === 'stage' ? `${registry}.update-${setup.request.operationId}.tmp` :
         kind === 'journal' ? setup.journalPath : setup.headPath;
       if (kind !== 'stage') await fs.rename(fifoPath, path.join(setup.tenantRoot, 'saved-artifact'));
-      execFileSync('mkfifo', [fifoPath]);
+      execFileSync('mkfifo', [fifoPath], { env: isolatedServerEnv(testHomeDirectory(), process.env) });
       const script = finalizeChild.replace('await store.forwardPublishedOwnedUpdate(JSON.parse(requestJson));',
         `try { await store.forwardPublishedOwnedUpdate(JSON.parse(requestJson)); process.exitCode = 2; }
         catch (error) { process.stdout.write(error.code); }`);
       const child = spawn(process.execPath, [
         ...(extension === 'ts' ? ['--import', 'tsx'] : []), '--input-type=module', '-e', script,
         setup.tenantRoot, USER, JSON.stringify(setup.request), 'no-stop',
-      ], { stdio: ['pipe', 'pipe', 'pipe'] });
+      ], { env: isolatedServerEnv(testHomeDirectory(), process.env), stdio: ['pipe', 'pipe', 'pipe'] });
       let output = '';
       try {
         const code = await new Promise<number | null>((resolve, reject) => {
@@ -395,7 +397,7 @@ describe('dormant PUBLISHED forward completion', () => {
     const child = spawn(process.execPath, [
       ...(extension === 'ts' ? ['--import', 'tsx'] : []), '--input-type=module', '-e', finalizeChild,
       setup.tenantRoot, USER, JSON.stringify(setup.request), phase,
-    ], { stdio: ['pipe', 'pipe', 'pipe'] });
+    ], { env: isolatedServerEnv(testHomeDirectory(), process.env), stdio: ['pipe', 'pipe', 'pipe'] });
     try {
       await new Promise<void>((resolve, reject) => {
         let output = '';

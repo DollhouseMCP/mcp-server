@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { ElementMissingError } from '../../../src/elements/base/ElementReadError.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { PortfolioService } from '../../../src/web-console/modules/portfolio/PortfolioService.js';
@@ -469,7 +471,7 @@ posix('dormant central owned memory UPDATE', () => {
     try {
       const { manager } = f.makeManager(); const memory = await manager.load('head.yaml');
       const worker = new URL('../../fixtures/memory-head-update-worker.ts', import.meta.url);
-      child = spawn(process.execPath, ['--import', pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href, worker.pathname, f.tenantRoot, USER], { stdio: ['ignore', 'pipe', 'pipe'] });
+      child = spawn(process.execPath, ['--import', pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href, worker.pathname, f.tenantRoot, USER], { env: isolatedServerEnv(testHomeDirectory(), process.env), stdio: ['ignore', 'pipe', 'pipe'] });
       let spawnFailure: Error | undefined;
       child.once('error', error => { spawnFailure = error; });
       let code: number | null = null, output = '', error = '';
@@ -494,7 +496,7 @@ posix('dormant central owned memory UPDATE', () => {
 });
 async function externalOwnedUpdate(tenantRoot: string): Promise<void> {
   const worker = new URL('../../fixtures/memory-head-update-worker.ts', import.meta.url);
-  const child = spawn(process.execPath, ['--import', pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href, worker.pathname, tenantRoot, USER], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, ['--import', pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href, worker.pathname, tenantRoot, USER], { env: isolatedServerEnv(testHomeDirectory(), process.env), stdio: ['ignore', 'pipe', 'pipe'] });
   let code: number | null = null, output = '', error = '', spawnFailure: Error | undefined;
   child.once('error', cause => { spawnFailure = cause; });
   child.stdout.on('data', chunk => { output = (output + String(chunk)).slice(0, 1024); });

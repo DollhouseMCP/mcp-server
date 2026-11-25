@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -49,7 +51,7 @@ async function holdingChild(tenantRoot: string, memoryLocator = 'notes/example.y
 Promise<ChildProcessWithoutNullStreams> {
   const child = spawn(process.execPath, [
     '--import', 'tsx', '--input-type=module', '--eval', childScript, tenantRoot, memoryLocator, scope,
-  ], {
+  ], { env: isolatedServerEnv(testHomeDirectory(), process.env),
     cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'],
   });
   children.push(child);

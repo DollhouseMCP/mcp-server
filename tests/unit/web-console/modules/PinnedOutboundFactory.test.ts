@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
@@ -245,7 +247,7 @@ function trustedTlsFetch(port: number, mode: 'factory' | 'rewritten'): Promise<T
     TRUSTED_FETCH_CHILD,
   ], {
     cwd: fileURLToPath(new URL('../../../..', import.meta.url)),
-    env: {
+    env: isolatedServerEnv(testHomeDirectory(), {
       ...process.env,
       DOLLHOUSE_PINNED_TLS_ADDRESS: LOOPBACK,
       DOLLHOUSE_PINNED_TLS_FACTORY_MODULE: PINNED_FACTORY_MODULE_URL,
@@ -253,7 +255,7 @@ function trustedTlsFetch(port: number, mode: 'factory' | 'rewritten'): Promise<T
       DOLLHOUSE_PINNED_TLS_MODE: mode,
       DOLLHOUSE_PINNED_TLS_PORT: String(port),
       NODE_EXTRA_CA_CERTS: fileURLToPath(new URL('ca.pem', TLS_FIXTURE_DIRECTORY)),
-    },
+    }),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   return new Promise((resolve, reject) => {

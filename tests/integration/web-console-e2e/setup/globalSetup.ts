@@ -1,3 +1,4 @@
+import { freshFixtureHome, withMigrationHome } from '../../../helpers/fixtureHomes.cjs';
 import { isolatedServerEnv } from '../../../helpers/isolated-server-env.cjs';
 /**
  * Global setup for the web-console e2e suite. Self-contained on purpose: jest
@@ -86,11 +87,11 @@ async function provisionDatabase(): Promise<void> {
   }
 
   // drizzle.config.ts reads DOLLHOUSE_DATABASE_ADMIN_URL for the migrate target.
-  const { stdout, stderr } = await execFileAsync('npx', ['drizzle-kit', 'migrate'], {
-    env: { ...process.env, DOLLHOUSE_DATABASE_ADMIN_URL: superuserUrlFor(DB_NAME) },
+  const { stdout, stderr } = await withMigrationHome(migrationHome => execFileAsync(process.execPath, [path.join(process.cwd(), 'node_modules/drizzle-kit/bin.cjs'), 'migrate'], {
+    env: isolatedServerEnv(migrationHome, { ...process.env, DOLLHOUSE_DATABASE_ADMIN_URL: superuserUrlFor(DB_NAME) }),
     cwd: process.cwd(),
     maxBuffer: 32 * 1024 * 1024,
-  });
+  }));
   if (process.env.E2E_DEBUG) {
     console.log('[console-e2e] migrate:', { stdout, stderr });
   }
@@ -162,10 +163,10 @@ function buildAppEnv(secrets: Record<string, string>, runDir: string): NodeJS.Pr
     DOLLHOUSE_INVITE_TOKEN_SECRET: secrets.inviteTokenSecret,
     DOLLHOUSE_MASTER_ENCRYPTION_KEY: secrets.masterEncryptionKey,
     DOLLHOUSE_SECURITY_MODE: 'strict',
-    DOLLHOUSE_RUN_DIR: `${runDir}/run`,
-    DOLLHOUSE_PORTFOLIO_DIR: `${runDir}/portfolio`,
-    DOLLHOUSE_CACHE_DIR: `${runDir}/cache`,
-    DOLLHOUSE_LOG_DIR: `${runDir}/logs`,
+    DOLLHOUSE_RUN_DIR: path.join(runDir, 'run'),
+    DOLLHOUSE_PORTFOLIO_DIR: path.join(runDir, 'portfolio'),
+    DOLLHOUSE_CACHE_DIR: path.join(runDir, 'cache'),
+    DOLLHOUSE_LOG_DIR: path.join(runDir, 'logs'),
     GITHUB_TOKEN: '',
     GITHUB_TEST_TOKEN: '',
     TEST_GITHUB_TOKEN: '',
@@ -186,7 +187,9 @@ export default async function globalSetup(): Promise<void> {
 
   const root = process.cwd();
   const runDir = path.join(root, '.console-e2e');
-  for (const d of ['cwd', 'run', 'portfolio', 'cache', 'logs']) mkdirSync(path.join(runDir, d), { recursive: true });
+  const homeDir = freshFixtureHome(runDir);
+  mkdirSync(path.join(runDir, 'logs'), { recursive: true });
+  for (const d of ['cwd', 'run', 'portfolio', 'cache', 'logs']) mkdirSync(path.join(homeDir, d), { recursive: true });
 
   await provisionDatabase();
 
@@ -201,8 +204,8 @@ export default async function globalSetup(): Promise<void> {
   const logStream = createWriteStream(logPath, { flags: 'a' });
   const tsxCliPath = path.join(root, 'node_modules', 'tsx', 'dist', 'cli.mjs');
   const child = spawn(process.execPath, [tsxCliPath, path.join(root, 'src/index.ts'), '--streamable-http'], {
-    cwd: path.join(runDir, 'cwd'),
-    env: isolatedServerEnv(runDir, buildAppEnv(secrets, runDir)),
+    cwd: path.join(homeDir, 'cwd'),
+    env: isolatedServerEnv(homeDir, buildAppEnv(secrets, homeDir)),
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true,
   });

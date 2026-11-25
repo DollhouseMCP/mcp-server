@@ -14,7 +14,7 @@ if (!hasVMModules) {
 const config = {
   displayName: 'Integration Tests',
   rootDir: '../',
-  testEnvironment: 'node',
+  testEnvironment: '<rootDir>/tests/helpers/isolated-node-environment.cjs',
   transformIgnorePatterns: ESM_TRANSFORM_IGNORE,
   resolver: 'ts-jest-resolver',
 

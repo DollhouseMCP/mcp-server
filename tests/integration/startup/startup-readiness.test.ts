@@ -1,3 +1,4 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
 /**
  * Integration tests for MCP Startup Race Hardening (Issue #706)
  *
@@ -154,7 +155,7 @@ describe('Startup Readiness (Issue #706)', () => {
     delete cleanEnv.NODE_OPTIONS;
 
     const proc = spawn('node', [SERVER_PATH], {
-      env: {
+      env: isolatedServerEnv(testDir, {
         ...cleanEnv,
         NODE_ENV: 'production',
         DOLLHOUSE_DISABLE_ENCRYPTION: 'true',
@@ -164,7 +165,7 @@ describe('Startup Readiness (Issue #706)', () => {
         GITHUB_TOKEN: '',
         GITHUB_TEST_TOKEN: '',
         TEST_GITHUB_TOKEN: '',
-      },
+      }),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     activeServers.add(proc);

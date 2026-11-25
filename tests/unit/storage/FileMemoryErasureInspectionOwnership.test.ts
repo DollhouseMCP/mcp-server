@@ -1,3 +1,4 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
 import { expect, it as jestIt } from '@jest/globals';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -13,8 +14,8 @@ it('keeps an actual inspection timeout failed while settling before mock and roo
     const require = createRequire(import.meta.url);
     const result = spawnSync(process.execPath, [require.resolve('jest/bin/jest'), '--config', 'tests/jest.config.cjs',
       '--runInBand', '--no-coverage', '--testMatch', '**/erasureInspectionTimeout.fixture.ts', '--json', '--outputFile', path.join(root, 'result.json')], {
-      cwd: process.cwd(), env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: root,
-        NODE_OPTIONS: '--experimental-vm-modules --no-warnings', STORAGE_CASE_PROOF_ROOT: root }, encoding: 'utf8', timeout: 25000, maxBuffer: 4 * 1024 * 1024,
+      cwd: process.cwd(), env: isolatedServerEnv(process.env.HOME, { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: root,
+        NODE_OPTIONS: '--experimental-vm-modules --no-warnings', STORAGE_CASE_PROOF_ROOT: root }), encoding: 'utf8', timeout: 25000, maxBuffer: 4 * 1024 * 1024,
     });
     expect(result.error).toBeUndefined(); expect(result.signal).toBeNull(); expect(result.status).toBe(1);
     const report = JSON.parse(await fs.readFile(path.join(root, 'result.json'), 'utf8'));

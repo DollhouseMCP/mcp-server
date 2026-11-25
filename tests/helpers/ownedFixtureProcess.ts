@@ -1,10 +1,18 @@
+import { isolatedServerEnv } from './isolated-server-env.cjs';
+import { homedir } from 'node:os';
 /** Test-only process ownership; never use this for an application process. */
 import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import { rm } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
 import { types } from 'node:util';
+
 import { LinuxOwnedGroup } from './linuxOwnedGroup.js';
 import { OwnedWindowsJob } from './ownedWindowsJob.js';
+
+// Error.isError is the replacement on newer Node versions. Node 22 still needs
+// the native util predicate to recognize errors originating in a Jest VM realm.
+const isNativeError: (value: unknown) => boolean =
+  Reflect.get(Error, 'isError') ?? Reflect.get(types, 'isNativeError');
 
 export const FIXTURE_CLEANUP_MS = 2500;
 
@@ -64,7 +72,8 @@ export class OwnedFixtureProcess {
       this.windowsJob = new OwnedWindowsJob(this.directory);
     }
     const child = spawn(command, args, { ...options,
-      ...(this.windowsJob ? { env: { ...(options.env ?? process.env), ...this.windowsJob.environment() } } : {}),
+      env: isolatedServerEnv(options.env?.HOME ?? homedir(), {
+        ...(options.env ?? process.env), ...this.windowsJob?.environment() }),
       detached: process.platform !== 'win32' });
     this.child = child;
     // A successful spawn returns its PID before the next-tick spawn event.
@@ -239,7 +248,7 @@ export class OwnedFixtureRegistry {
       if (failed) {
         failure = new AggregateError([failure, error], 'Owned fixture operation and cleanup both failed', {
           // Jest's ordinary test formatter follows cause, not AggregateError.errors.
-          cause: types.isNativeError(error) || error instanceof Error ? error : new Error('Owned fixture cleanup rejected with a non-Error payload'),
+          cause: isNativeError(error) || error instanceof Error ? error : new Error('Owned fixture cleanup rejected with a non-Error payload'),
         });
       } else { failure = error; failed = true; }
     }

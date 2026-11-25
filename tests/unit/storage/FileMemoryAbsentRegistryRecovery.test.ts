@@ -1,3 +1,5 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { homedir as testHomeDirectory } from 'node:os';
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -332,7 +334,7 @@ describe('exact missing-registry adoption recovery', () => {
       new URL(`FileMemoryOwnerSnapshots.${extension}`, moduleRoot).href,
       new URL(`FileMemoryTransactionCoordinator.${extension}`, moduleRoot).href,
       new URL(`FileMemoryFence.${extension}`, moduleRoot).href,
-      setup.tenantRoot, USER, JSON.stringify(setup.request), stop], { stdio: ['pipe', 'pipe', 'pipe'] });
+      setup.tenantRoot, USER, JSON.stringify(setup.request), stop], { env: isolatedServerEnv(testHomeDirectory(), process.env), stdio: ['pipe', 'pipe', 'pipe'] });
     let childError: Error | undefined;
     child.once('error', cause => { childError = cause; });
     const closed = new Promise<void>(resolve => child.once('close', () => resolve()));
