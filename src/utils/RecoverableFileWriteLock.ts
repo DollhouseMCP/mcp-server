@@ -9,7 +9,8 @@ const WAIT_LIMIT_MS = 10 * 60 * 1000;
 const RETRY_MS = 100;
 const HOST = createHash('sha256').update(hostname()).digest('hex');
 const OWNER_NAME = /^owner-([1-9]\d{0,9})-([0-9a-f]{64})-[0-9a-f-]{36}$/u;
-const RENAME_CONFLICT = new Set(['EEXIST', 'ENOTEMPTY', 'EACCES', 'EPERM', 'EBUSY']);
+const SHARING_CONFLICT = new Set(['EACCES', 'EPERM', 'EBUSY']);
+const RENAME_CONFLICT = new Set(['EEXIST', 'ENOTEMPTY', ...SHARING_CONFLICT]);
 const DIRECTORY_IN_USE = new Set(['ENOENT', 'ENOTEMPTY', 'EEXIST']);
 
 function errorCode(error: unknown): string {
@@ -44,7 +45,8 @@ async function removeEmptyDirectory(directory: string): Promise<void> {
     await fs.rmdir(directory);
   } catch (error) {
     // A new owner may have already published a nonempty directory here.
-    if (!DIRECTORY_IN_USE.has(errorCode(error))) throw error;
+    const code = errorCode(error);
+    if (!DIRECTORY_IN_USE.has(code) && !SHARING_CONFLICT.has(code)) throw error;
   }
 }
 
@@ -84,7 +86,12 @@ async function acquire(staging: string, lockPath: string, deadline: number): Pro
     if (!RENAME_CONFLICT.has(errorCode(error))) throw error;
   }
 
-  await reclaim(lockPath);
+  try {
+    await reclaim(lockPath);
+  } catch (error) {
+    // Windows can report a sharing conflict while another reclaimer is removing the marker.
+    if (!SHARING_CONFLICT.has(errorCode(error))) throw error;
+  }
   await delay(Math.min(RETRY_MS, Math.max(0, deadline - performance.now())));
   return acquire(staging, lockPath, deadline);
 }

@@ -43,7 +43,11 @@ it('reclaims an exited writer and keeps two reclaimers mutually exclusive', asyn
     env: isolatedServerEnv(childHome, { ...process.env, DOLLHOUSE_PORTFOLIO_DIR: path.join(childHome, 'portfolio') }),
     timeout: 10000,
   });
-  expect(await fs.readdir(lockPath)).toHaveLength(1);
+  const markers = await fs.readdir(lockPath);
+  expect(markers).toHaveLength(1);
+  const unlink = jest.spyOn(fs, 'unlink').mockRejectedValueOnce(
+    Object.assign(new Error('Marker deletion is pending'), { code: 'EPERM' }),
+  );
 
   const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
   let active = 0;
@@ -61,6 +65,7 @@ it('reclaims an exited writer and keeps two reclaimers mutually exclusive', asyn
     withRecoverableFileWriteLock(lockPath, write, 5000),
   ]);
 
+  expect(unlink).toHaveBeenNthCalledWith(1, path.join(lockPath, markers[0]));
   expect(audit).toHaveBeenCalledWith(expect.objectContaining({
     severity: 'HIGH',
     source: 'RecoverableFileWriteLock',
