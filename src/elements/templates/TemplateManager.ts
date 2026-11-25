@@ -1,4 +1,5 @@
 import type { ElementSaveOptions } from '../../storage/IStorageLayer.js';
+import type { CollectionReport } from '../base/CollectionReport.js';
 /**
  * TemplateManager - Refactored to extend BaseElementManager, keeping
  * template-specific validation, import/export logic, and analytics helpers.
@@ -10,6 +11,7 @@ import { ElementType } from '../../portfolio/types.js';
 import { toSingularLabel } from '../../utils/elementTypeNormalization.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
+import { ELEMENT_FILE_EXTENSIONS, canonicalElementName, defaultElementName } from '../../storage/ElementNameKeys.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { logger } from '../../utils/logger.js';
 import { BaseElementManager, ElementManagerDeps } from '../base/BaseElementManager.js';
@@ -57,14 +59,15 @@ export class TemplateManager extends BaseElementManager<Template> {
     return 'template';
   }
 
-  override async load(filePath: string): Promise<Template> {
-    const template = await super.load(filePath);
+  /** Every template definition read, by reference or through a name lookup, is audited. */
+  protected override async loadStoredReference(reference: string): Promise<Template> {
+    const template = await super.loadStoredReference(reference);
 
     SecurityMonitor.logSecurityEvent({
       type: 'TEMPLATE_LOADED',
       severity: 'LOW',
       source: 'TemplateManager.load',
-      details: `Template loaded: ${template.metadata.name} from ${path.basename(filePath)}`
+      details: `Template loaded: ${template.metadata.name} from ${path.basename(reference)}`
     });
 
     return template;
@@ -94,17 +97,17 @@ export class TemplateManager extends BaseElementManager<Template> {
     logger.info(`Template saved: ${template.metadata.name}`);
   }
 
-  override async delete(filePath: string, onCommitted?: () => void): Promise<void> {
-    await super.delete(filePath, onCommitted);
-
+  protected override afterDelete(filePath: string, displayName?: string): Promise<void> {
+    const label = displayName ? `${displayName} (${filePath})` : path.basename(filePath);
     SecurityMonitor.logSecurityEvent({
       type: 'TEMPLATE_DELETED',
       severity: 'MEDIUM',
-      source: 'TemplateManager.delete',
-      details: `Template deleted: ${path.basename(filePath)}`
+      source: 'TemplateManager.afterDelete',
+      details: `Template deleted: ${label}`
     });
 
-    logger.info(`Template deleted: ${path.basename(filePath)}`);
+    logger.info(`Template deleted: ${label}`);
+    return Promise.resolve();
   }
 
   async create(data: {
@@ -142,14 +145,7 @@ export class TemplateManager extends BaseElementManager<Template> {
     const filename = this.getElementFilename(sanitizedName);
 
     // FIX: Issue #20 - Check for duplicate before creating
-    const existingTemplates = await this.list();
-    const duplicate = existingTemplates.some(t =>
-      t.metadata.name.toLowerCase() === sanitizedName.toLowerCase()
-    );
-
-    if (duplicate) {
-      throw new Error(`A template named "${sanitizedName}" already exists`);
-    }
+    await this.assertNameAvailable(sanitizedName);
 
     const template = new Template(
       {
@@ -286,19 +282,19 @@ export class TemplateManager extends BaseElementManager<Template> {
     }
   }
 
-  async findByCategory(category: string): Promise<Template[]> {
+  async findByCategory(category: string): Promise<CollectionReport<Template>> {
     const sanitizedCategory = sanitizeInput(category, 50);
-    const templates = await this.list();
-    return templates.filter(t => t.metadata.category === sanitizedCategory);
+    const report = await this.listReport();
+    return { ...report, items: report.items.filter(t => t.metadata.category === sanitizedCategory) };
   }
 
-  async findByTag(tag: string): Promise<Template[]> {
+  async findByTag(tag: string): Promise<CollectionReport<Template>> {
     const sanitizedTag = sanitizeInput(tag, 50);
-    const templates = await this.list();
-    return templates.filter(t => t.metadata.tags?.includes(sanitizedTag));
+    const report = await this.listReport();
+    return { ...report, items: report.items.filter(t => t.metadata.tags?.includes(sanitizedTag)) };
   }
 
-  async getMostUsed(limit: number = 10): Promise<Template[]> {
+  async getMostUsed(limit: number = 10): Promise<CollectionReport<Template>> {
     const MIN_LIMIT = 1;
     const MAX_LIMIT = 100;
     const validatedLimit = Math.max(MIN_LIMIT, Math.min(MAX_LIMIT, Math.floor(limit)));
@@ -307,13 +303,14 @@ export class TemplateManager extends BaseElementManager<Template> {
       logger.warn(`getMostUsed: limit ${limit} adjusted to ${validatedLimit} (valid range: ${MIN_LIMIT}-${MAX_LIMIT})`);
     }
 
-    const templates = await this.list();
+    const report = await this.listReport();
+    const templates = report.items;
     templates.sort((a, b) => (b.metadata.usage_count || 0) - (a.metadata.usage_count || 0));
-    return templates.slice(0, validatedLimit);
+    return { ...report, items: templates.slice(0, validatedLimit) };
   }
 
   override getFileExtension(): string {
-    return '.md';
+    return ELEMENT_FILE_EXTENSIONS.templates;
   }
 
   protected override parseMetadata(data: any): Promise<TemplateMetadata> {
@@ -400,7 +397,8 @@ export class TemplateManager extends BaseElementManager<Template> {
     const metadata: Partial<TemplateMetadata> = {};
 
     if (data.name) {
-      metadata.name = this.sanitizeMetadataText(data.name, 100);
+      // The one canonical name (idempotent, so the constructor's own canonicalisation is a no-op).
+      metadata.name = canonicalElementName(String(data.name));
     }
 
     if (data.description) {
@@ -466,7 +464,7 @@ export class TemplateManager extends BaseElementManager<Template> {
     // Issue #524 — Gatekeeper policy (all element types)
     metadata.gatekeeper = sanitizeGatekeeperPolicy(data.gatekeeper, metadata.name || 'unknown', 'template', metadata as Record<string, unknown>);
 
-    metadata.name = metadata.name ?? 'Untitled Template';
+    metadata.name = metadata.name ?? defaultElementName(ElementType.TEMPLATE);
     metadata.description = metadata.description ?? '';
 
     return metadata;

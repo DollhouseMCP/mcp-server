@@ -1,4 +1,5 @@
 import yaml from 'js-yaml';
+import { markContentRejection } from './contentRejection.js';
 import { z } from 'zod';
 import { logger } from '../utils/logger.js';
 import DOMPurify from 'dompurify';
@@ -40,12 +41,12 @@ export class YamlValidator {
 
   static parsePersonaMetadataSafely(yamlContent: string): any {
     if (!yamlContent || typeof yamlContent !== 'string') {
-      throw new Error('YAML content must be a non-empty string');
+      throw markContentRejection(new Error('YAML content must be a non-empty string'));
     }
     
     // Size check
     if (yamlContent.length > SECURITY_LIMITS.MAX_YAML_LENGTH) {
-      throw new Error(`YAML content too large: ${yamlContent.length} bytes (max: ${SECURITY_LIMITS.MAX_YAML_LENGTH})`);
+      throw markContentRejection(new Error(`YAML content too large: ${yamlContent.length} bytes (max: ${SECURITY_LIMITS.MAX_YAML_LENGTH})`));
     }
     
     // Check for dangerous tags - expanded from Issue #164
@@ -58,7 +59,7 @@ export class YamlValidator {
     
     for (const tag of dangerousTags) {
       if (yamlContent.includes(tag)) {
-        throw new Error(`Dangerous YAML tag detected: ${tag}`);
+        throw markContentRejection(new Error(`Dangerous YAML tag detected: ${tag}`));
       }
     }
     
@@ -72,13 +73,13 @@ export class YamlValidator {
         aliasCount > this.YAML_BOMB_LIMITS.MAX_ALIASES || 
         mergeKeyCount > this.YAML_BOMB_LIMITS.MAX_MERGE_KEYS || 
         documentCount > this.YAML_BOMB_LIMITS.MAX_DOCUMENTS) {
-      throw new Error(`Potential YAML bomb detected: anchors=${anchorCount}, aliases=${aliasCount}, merges=${mergeKeyCount}, documents=${documentCount}`);
+      throw markContentRejection(new Error(`Potential YAML bomb detected: anchors=${anchorCount}, aliases=${aliasCount}, merges=${mergeKeyCount}, documents=${documentCount}`));
     }
     
     // Check for nested tag combinations
     const nestedTagPattern = /[&*]\w+\s*!!/;
     if (nestedTagPattern.test(yamlContent)) {
-      throw new Error('Dangerous nested YAML tag combination detected');
+      throw markContentRejection(new Error('Dangerous nested YAML tag combination detected'));
     }
     
     let rawData: unknown;
@@ -93,11 +94,11 @@ export class YamlValidator {
       
     } catch (error) {
       if (!(error instanceof yaml.YAMLException)) throw error;
-      throw new Error(`Invalid YAML syntax: ${error.message}`, { cause: error });
+      throw markContentRejection(new Error(`Invalid YAML syntax: ${error.message}`, { cause: error }));
     }
     const result = PersonaMetadataSchema.safeParse(rawData);
     if (!result.success) {
-      throw new Error(`Invalid persona metadata: ${result.error.message}`, { cause: result.error });
+      throw markContentRejection(new Error(`Invalid persona metadata: ${result.error.message}`, { cause: result.error }));
     }
     return this.sanitizeMetadata(result.data);
   }

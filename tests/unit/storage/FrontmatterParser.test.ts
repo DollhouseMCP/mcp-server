@@ -3,8 +3,27 @@
  */
 
 import { FrontmatterParser } from '../../../src/storage/FrontmatterParser.js';
+import { SecureYamlParser } from '../../../src/security/secureYamlParser.js';
+import { isContentRejection } from '../../../src/security/contentRejection.js';
 
 describe('FrontmatterParser', () => {
+  it('uses the same body policy as the authoritative element loader', () => {
+    const source = '---\nname: Context fixture\n---\n<template>Page</template><style>h1 {color: blue}</style><script>alert("test");</script>';
+    expect(FrontmatterParser.extractMetadata(source, 'templates').name).toBe('Context fixture');
+    expect(() => SecureYamlParser.safeMatter(source, undefined, { contentContext: 'template' })).not.toThrow();
+    expect(() => FrontmatterParser.extractMetadata(source, 'personas')).toThrow('Security threat');
+    expect(() => SecureYamlParser.safeMatter(source, undefined, { contentContext: 'persona' })).toThrow('Security threat');
+  });
+
+  it('preserves marked structural refusals in both index and load parsing', () => {
+    const source = '---\nname: [unfinished\n---\n';
+    for (const parse of [() => FrontmatterParser.extractMetadata(source, 'templates'),
+      () => SecureYamlParser.safeMatter(source, undefined, { contentContext: 'template' })]) {
+      let failure: unknown;
+      try { parse(); } catch (cause) { failure = cause; }
+      expect(isContentRejection(failure)).toBe(true);
+    }
+  });
   describe('extractMetadata', () => {
     it('should extract all fields from valid frontmatter', () => {
       const raw = `---

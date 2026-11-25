@@ -119,13 +119,10 @@ describe('Empty Directory Handling', () => {
       const agents = await manager.list();
       expect(agents).toEqual([]);
       
-      // Should log debug message
-      expect(logger.debug).toHaveBeenCalledWith(
-        'Agents directory does not exist yet, returning empty array'
-      );
+      expect(await manager.listReport()).toMatchObject({ items: [], complete: true });
     });
 
-    it('should handle EACCES permission errors gracefully', async () => {
+    it('refuses an inaccessible existing agents directory', async () => {
       // Mock PortfolioManager to throw EACCES for listElements
       mockPortfolioManager.listElements.mockRejectedValueOnce(
         Object.assign(new Error('Permission denied'), { code: 'EACCES' })
@@ -150,10 +147,10 @@ describe('Empty Directory Handling', () => {
     storageLayerFactory: createTestStorageFactory(),
       }));
       const manager = container.resolve<AgentManager>('AgentManager');
-
-      const agents = await manager.list();
-      expect(agents).toEqual([]);
-      expect(logger.error).toHaveBeenCalled();
+      jest.spyOn(manager['storageLayer'], 'readCollection').mockRejectedValue(
+        Object.assign(new Error('Permission denied'), { code: 'EACCES' }));
+      await expect(manager.list()).rejects.toThrow('EACCES');
+      expect(await manager.listReport()).toMatchObject({ complete: false });
     });
   });
 

@@ -32,6 +32,31 @@ import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispa
 import type { ExecuteAgentResult } from '../../../../src/elements/agents/types.js';
 import { AGENT_LIMITS } from '../../../../src/elements/agents/constants.js';
 import { createTestStorageFactory } from '../../../helpers/createTestStorageFactory.js';
+import { acceptsDirectDefinition, selectNamedCandidate } from '../../../../src/elements/base/ElementNameEvidence.js';
+import { normalizeElementStorageIdentity } from '../../../../src/utils/filesystem.js';
+
+type ListingManager = { list: () => Promise<Array<{ metadata: { name: string } }>> } & Record<string, unknown>;
+/**
+ * The mock managers below only list; a real manager answers findByName through the shared
+ * resolver: the shared name rule over its definitions, then the filename fallback, which reads
+ * the file the name derives and accepts it only by the shared acceptance rule. Each mock gets
+ * exactly that, with every listed definition saved under the filename its name derives.
+ */
+function namedLookup(resolver: (managerName: string) => ListingManager | null | undefined) {
+  const filenameOf = (name: string) => `${normalizeElementStorageIdentity(name)}.md`;
+  return (managerName: string) => {
+    const manager = resolver(managerName);
+    if (!manager) return null;
+    return { ...manager, findByName: async (name: string) => {
+      const listed = await manager.list();
+      const selected = selectNamedCandidate(name, listed.map((item, index) => ({ reference: String(index), name: item.metadata.name, item })));
+      if (selected) return selected.item;
+      const reference = filenameOf(name);
+      return listed.find(item => filenameOf(item.metadata.name) === reference &&
+        acceptsDirectDefinition(name, reference, item.metadata.name, filenameOf));
+    } };
+  };
+}
 
 const metadataService: MetadataService = createTestMetadataService();
 
@@ -97,6 +122,10 @@ describe('AgentManager.executeAgent', () => {
     // BaseElementManager.load uses readElementFile. Wire dynamically so tests
     // that reassign readFile later propagate to the element-read path.
     mockFileOperations.readElementFile = jest.fn((...args: unknown[]) => mockFileOperations.readFile(...args));
+    // The storage layer shares this service: definition reads go through it under the scan policy.
+    mockFileOperations.auditElementRead = jest.fn();
+    mockFileOperations.stat = mockFileOperations.stat ?? jest.fn().mockResolvedValue({ isDirectory: () => true, isFile: () => false, mtimeMs: 0, size: 0 });
+    mockFileOperations.listDirectoryWithTypes = mockFileOperations.listDirectoryWithTypes ?? jest.fn().mockResolvedValue([]);
     container.replace<FileOperationsService>('FileOperationsService', () => mockFileOperations as any);
 
     // Register DI services
@@ -195,8 +224,8 @@ describe('AgentManager.executeAgent', () => {
       serializationService: container.resolve('SerializationService'),
       metadataService: container.resolve('MetadataService'),
       eventDispatcher: new ElementEventDispatcher(),
-    storageLayerFactory: createTestStorageFactory(),
-      elementManagerResolver,
+    storageLayerFactory: createTestStorageFactory(container.resolve('FileOperationsService')),
+      elementManagerResolver: namedLookup(elementManagerResolver) as never,
     });
 
     container.replace('AgentManager', () => agentManagerInstance);
@@ -565,7 +594,7 @@ Project context memory.`;
       // The shipped defaults reference elements by slug (e.g. 'security-analyst')
       // while the element files carry display names (name: "Security Analyst").
       // Before #2432, this lookup failed for every such element.
-      agentManager.setElementManagerResolver((managerName: string) => {
+      agentManager.setElementManagerResolver(namedLookup((managerName: string) => {
         if (managerName === 'PersonaManager') {
           return {
             list: async () => [
@@ -587,7 +616,7 @@ Project context memory.`;
           } as any;
         }
         return null;
-      });
+      }));
 
       fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
         if (filePath.includes('slug-ref-agent.md')) {
@@ -634,7 +663,7 @@ activates:
     });
 
     it('should still resolve exact display-name references unchanged', async () => {
-      agentManager.setElementManagerResolver((managerName: string) => {
+      agentManager.setElementManagerResolver(namedLookup((managerName: string) => {
         if (managerName === 'PersonaManager') {
           return {
             list: async () => [
@@ -646,7 +675,7 @@ activates:
           } as any;
         }
         return null;
-      });
+      }));
 
       fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
         if (filePath.includes('display-ref-agent.md')) {
@@ -686,7 +715,7 @@ activates:
       // 'Code Review' slugifies to 'code-review' and is listed FIRST; an element
       // literally named 'code-review' follows. The exact match must win regardless
       // of list order (Codex review on PR #2433).
-      agentManager.setElementManagerResolver((managerName: string) => {
+      agentManager.setElementManagerResolver(namedLookup((managerName: string) => {
         if (managerName === 'PersonaManager') {
           return {
             list: async () => [
@@ -702,7 +731,7 @@ activates:
           } as any;
         }
         return null;
-      });
+      }));
 
       fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
         if (filePath.includes('precedence-agent.md')) {
@@ -743,7 +772,7 @@ activates:
       // camelCase), so activates: references use 'bug-report'. Plain slugify
       // would produce 'bugreport' and miss — the lookup must use the managers'
       // canonical normalization (Codex review on PR #2433, round 2).
-      agentManager.setElementManagerResolver((managerName: string) => {
+      agentManager.setElementManagerResolver(namedLookup((managerName: string) => {
         if (managerName === 'PersonaManager') {
           return {
             list: async () => [
@@ -755,7 +784,7 @@ activates:
           } as any;
         }
         return null;
-      });
+      }));
 
       fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
         if (filePath.includes('camelcase-agent.md')) {
@@ -796,7 +825,7 @@ activates:
       // yields '' and the || 'unnamed' fallback applies). The lookup must use the
       // identical slug derivation on both sides so the canonical reference
       // 'unnamed' resolves the element (Codex review on PR #2433, round 3).
-      agentManager.setElementManagerResolver((managerName: string) => {
+      agentManager.setElementManagerResolver(namedLookup((managerName: string) => {
         if (managerName === 'PersonaManager') {
           return {
             list: async () => [
@@ -808,7 +837,7 @@ activates:
           } as any;
         }
         return null;
-      });
+      }));
 
       fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
         if (filePath.includes('unnamed-ref-agent.md')) {
@@ -847,7 +876,7 @@ activates:
     it('should not resolve unrelated references against separator-only-named elements', async () => {
       // The unnamed fallback must only answer to the canonical 'unnamed' slug —
       // a real reference like 'security-analyst' still warns when absent.
-      agentManager.setElementManagerResolver((managerName: string) => {
+      agentManager.setElementManagerResolver(namedLookup((managerName: string) => {
         if (managerName === 'PersonaManager') {
           return {
             list: async () => [
@@ -859,7 +888,7 @@ activates:
           } as any;
         }
         return null;
-      });
+      }));
 
       fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
         if (filePath.includes('missing-ref-agent.md')) {
@@ -900,7 +929,7 @@ activates:
       // the lookup. An empty reference must stay unresolved — not ride the
       // 'unnamed' fallback onto a separator-only-named element (Codex review on
       // PR #2433, round 4).
-      agentManager.setElementManagerResolver((managerName: string) => {
+      agentManager.setElementManagerResolver(namedLookup((managerName: string) => {
         if (managerName === 'PersonaManager') {
           return {
             list: async () => [
@@ -912,7 +941,7 @@ activates:
           } as any;
         }
         return null;
-      });
+      }));
 
       fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
         if (filePath.includes('empty-ref-agent.md')) {
@@ -1689,7 +1718,7 @@ activates:
 
     it('should still activate other elements when one fails (partial failure)', async () => {
       // Issue #1948: Use instance method to reconfigure resolver for this test
-      agentManager.setElementManagerResolver((managerName: string) => {
+      agentManager.setElementManagerResolver(namedLookup((managerName: string) => {
         if (managerName === 'PersonaManager') {
           return {
             list: async () => [
@@ -1701,7 +1730,7 @@ activates:
           } as any;
         }
         return null;
-      });
+      }));
 
       fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
         const stored = fileStore.get(filePath);

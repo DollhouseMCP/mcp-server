@@ -26,6 +26,9 @@ import { BASE_OPERATION_REGISTRY } from '../../../src/handlers/mcp-aql/Operation
  */
 
 import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+import { writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import type { SkillManager } from '../../../src/elements/skills/SkillManager.js';
 import { DollhouseMCPServer } from '../../../src/index.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
 import { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
@@ -74,6 +77,32 @@ describe('Gatekeeper allowElementPolicyOverrides kill switch (Issue #679/#683)',
   afterEach(async () => {
     await server.dispose();
     await env.cleanup();
+  });
+
+  it('serves a healthy active skill through MCP-AQL despite an unrelated malformed definition', async () => {
+    preConfirmAllOperations(container);
+    const created = await mcpAqlHandler.handleCreate({ operation: 'create_element', params: {
+      element_type: 'skills', element_name: 'healthy-policy', description: 'Healthy policy fixture',
+      content: 'Detailed healthy skill content.', instructions: 'Detailed healthy skill instructions.',
+    } });
+    expect(created.success).toBe(true);
+    expect((created as any).data?.isError).not.toBe(true);
+    await writeFile(path.join(env.testDir, 'skills', 'unrelated-broken.md'), '---\nname: [unfinished\n---');
+    const manager = container.resolve<SkillManager>('SkillManager');
+    await manager.scanAndEvict();
+    const activated = await mcpAqlHandler.handleRead({ operation: 'activate_element', params: {
+      element_type: 'skills', element_name: 'healthy-policy',
+    } });
+    expect(activated.success).toBe(true);
+    expect((activated as any).data?.isError).not.toBe(true);
+    for (const operation of ['get_element', 'get_element_details']) {
+      const result = await mcpAqlHandler.handleRead({ operation, params: {
+        element_type: 'skills', element_name: 'healthy-policy',
+      } });
+      expect(result.success).toBe(true);
+      expect((result as any).data?.isError).not.toBe(true);
+      expect(JSON.stringify(result)).toContain('healthy-policy');
+    }
   });
 
   /**

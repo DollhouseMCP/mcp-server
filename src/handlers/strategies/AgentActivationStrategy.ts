@@ -32,7 +32,7 @@ export class AgentActivationStrategy extends BaseActivationStrategy implements E
     const result = await this.agentManager.activateAgent(name);
 
     if (!result.success || !result.agent) {
-      return this.createNotFoundResponse(name, 'Agent');
+      return this.createErrorResponse(`❌ Agent '${name}' not found`);
     }
 
     const agent = result.agent;
@@ -48,52 +48,7 @@ export class AgentActivationStrategy extends BaseActivationStrategy implements E
     // Track if we need to rollback activation on critical failure
     let criticalFailure = false;
 
-    if (goal) {
-      // If goal provided, add it to the agent's goals
-      try {
-        agent.addGoal({
-          description: goal.description || goal,
-          priority: goal.priority || 'medium',
-          importance: goal.importance || 5,
-          urgency: goal.urgency || 5
-        });
-        executionSummary.push(`Goal added: ${goal.description || goal}`);
-      } catch (error) {
-        // FIX: Enhanced error logging with security monitoring (Issue #24)
-        const errorMessage = error instanceof Error ? error.message : 'Could not add goal';
-
-        // Log to security monitor for audit trail
-        SecurityMonitor.logSecurityEvent({
-          type: 'AGENT_ACTIVATION_FAILED',
-          severity: 'MEDIUM',
-          source: 'AgentActivationStrategy.activate',
-          details: `Failed to add goal during agent activation: ${errorMessage}`,
-          additionalData: {
-            agentName: name,
-            goalDescription: goal.description || goal,
-            error: errorMessage
-          }
-        });
-
-        // Log to standard logger for debugging
-        logger.warn(`Goal addition failed during agent activation`, {
-          agentName: name,
-          error: errorMessage
-        });
-
-        executionSummary.push(`Note: ${errorMessage}`);
-
-        // Determine if this is a critical failure requiring rollback
-        // Critical failures: validation errors that indicate bad input or security issues
-        if (error instanceof Error && (
-          errorMessage.includes('harmful content') ||
-          errorMessage.includes('security') ||
-          errorMessage.includes('Maximum number of goals')
-        )) {
-          criticalFailure = true;
-        }
-      }
-    }
+    if (goal) criticalFailure = this.addActivationGoal(agent, goal, name, executionSummary);
 
     // FIX: Rollback activation on critical failures (Issue #24)
     if (criticalFailure) {
@@ -176,25 +131,19 @@ export class AgentActivationStrategy extends BaseActivationStrategy implements E
     } else {
       parts.push('Agent becomes active, increments session count');
     }
-    parts.push('');
-
-    parts.push(`**Session**: #${state.sessionCount + 1}`);
-    parts.push(...this.formatV1Fields(agent.metadata as any, agent.extensions as any));
+    parts.push('', `**Session**: #${state.sessionCount + 1}`, ...this.formatV1Fields(agent.metadata as any, agent.extensions as any));
 
     if (executionSummary.length > 0) {
-      parts.push('');
-      parts.push('**Execution Summary**:');
+      parts.push('', '**Execution Summary**:');
       executionSummary.forEach(line => parts.push(`- ${line}`));
     }
 
     const activeGoals = agent.getState().goals.filter((g: { status: string }) => g.status === 'in_progress');
     if (activeGoals.length > 0) {
-      parts.push('');
-      parts.push(`**Active Goals**: ${activeGoals.length}`);
+      parts.push('', `**Active Goals**: ${activeGoals.length}`);
     }
 
-    parts.push('');
-    parts.push('Agent execution completed');
+    parts.push('', 'Agent execution completed');
 
     // Issue #642: Fail-safe warning for CLI restrictions
     const restrictionWarning = this.formatRestrictionWarning(agent.metadata as unknown as Record<string, unknown>);
@@ -246,7 +195,7 @@ export class AgentActivationStrategy extends BaseActivationStrategy implements E
    */
   async getActiveElements(): Promise<MCPResponse> {
     // Use the manager's method to get active agents directly
-    const activeAgents = await this.agentManager.getActiveAgents();
+    return this.renderCollectionReport(await this.agentManager.getActiveReferenceReport(), activeAgents => {
 
     if (activeAgents.length === 0) {
       return {
@@ -269,6 +218,7 @@ export class AgentActivationStrategy extends BaseActivationStrategy implements E
         text: `Active agents:\n${agentList}`
       }]
     };
+    });
   }
 
   /**
@@ -310,30 +260,9 @@ export class AgentActivationStrategy extends BaseActivationStrategy implements E
    * Get detailed information about an agent
    * Extracted from ElementCRUDHandler.ts lines 730-770
    */
-  async getElementDetails(name: string): Promise<MCPResponse> {
-    // Use flexible finding to support both display name and filename
-    const allAgents = await this.agentManager.list();
-    const agent = await this.findElementFlexibly(name, allAgents);
-    if (!agent) {
-      this.throwNotFoundError(name, 'Agent');
-    }
-
-    const metadata = agent.metadata as any;
-
-    const details = [
-      `🤖 **${agent.metadata.name}**`,
-      `${agent.metadata.description}`,
-      ``,
-      `**Status**: ${agent.getStatus()}`
-    ];
-
-    details.push(...this.formatV1Fields(metadata));
-
-    // V2 fields
+  private appendGoalDetails(metadata: any, details: string[]): void {
     if (metadata.goal) {
-      details.push('');
-      details.push('**Goal Configuration**:');
-      details.push(`- Template: ${metadata.goal.template}`);
+      details.push('', '**Goal Configuration**:', `- Template: ${metadata.goal.template}`);
       if (metadata.goal.parameters && metadata.goal.parameters.length > 0) {
         details.push(`- Parameters: ${metadata.goal.parameters.length} defined`);
         metadata.goal.parameters.forEach((param: any) => {
@@ -347,10 +276,11 @@ export class AgentActivationStrategy extends BaseActivationStrategy implements E
         details.push(`- Success Criteria: ${metadata.goal.successCriteria.length} defined`);
       }
     }
+  }
 
+  private appendActivatesDetails(metadata: any, details: string[]): void {
     if (metadata.activates) {
-      details.push('');
-      details.push('**Activates**:');
+      details.push('', '**Activates**:');
       const elementTypes = Object.keys(metadata.activates);
       elementTypes.forEach(type => {
         const elements = metadata.activates[type];
@@ -359,10 +289,11 @@ export class AgentActivationStrategy extends BaseActivationStrategy implements E
         }
       });
     }
+  }
 
+  private appendToolsDetails(metadata: any, details: string[]): void {
     if (metadata.tools) {
-      details.push('');
-      details.push('**Tools**:');
+      details.push('', '**Tools**:');
       if (metadata.tools.allowed && metadata.tools.allowed.length > 0) {
         details.push(`- Allowed: ${metadata.tools.allowed.length} tools`);
       }
@@ -370,19 +301,11 @@ export class AgentActivationStrategy extends BaseActivationStrategy implements E
         details.push(`- Denied: ${metadata.tools.denied.length} tools`);
       }
     }
+  }
 
-    if (metadata.systemPrompt) {
-      details.push('');
-      details.push('**System Prompt**:');
-      const truncated = metadata.systemPrompt.length > 100
-        ? `${metadata.systemPrompt.substring(0, 100)}...`
-        : metadata.systemPrompt;
-      details.push(truncated);
-    }
-
+  private appendAutonomyDetails(metadata: any, details: string[]): void {
     if (metadata.autonomy) {
-      details.push('');
-      details.push('**Autonomy Configuration**:');
+      details.push('', '**Autonomy Configuration**:');
       if (metadata.autonomy.riskTolerance) {
         details.push(`- Risk Tolerance: ${metadata.autonomy.riskTolerance}`);
       }
@@ -397,11 +320,11 @@ export class AgentActivationStrategy extends BaseActivationStrategy implements E
         details.push(`- Auto Approve: ${metadata.autonomy.autoApprove.length} patterns`);
       }
     }
+  }
 
-    // Issue #722: Display resilience policy
+  private appendResilienceDetails(metadata: any, details: string[]): void {
     if (metadata.resilience) {
-      details.push('');
-      details.push('**Resilience Policy**:');
+      details.push('', '**Resilience Policy**:');
       if (metadata.resilience.onStepLimitReached) {
         details.push(`- On Step Limit Reached: ${metadata.resilience.onStepLimitReached}`);
       }
@@ -422,24 +345,106 @@ export class AgentActivationStrategy extends BaseActivationStrategy implements E
         details.push(`- Preserve State: ${metadata.resilience.preserveState}`);
       }
     }
+  }
+
+  private addActivationGoal(agent: any, goal: any, name: string, executionSummary: string[]): boolean {
+    let criticalFailure = false;
+    try {
+      agent.addGoal({
+        description: goal.description || goal,
+        priority: goal.priority || 'medium',
+        importance: goal.importance || 5,
+        urgency: goal.urgency || 5
+      });
+      executionSummary.push(`Goal added: ${goal.description || goal}`);
+    } catch (error) {
+      // FIX: Enhanced error logging with security monitoring (Issue #24)
+      const errorMessage = error instanceof Error ? error.message : 'Could not add goal';
+
+      // Log to security monitor for audit trail
+      SecurityMonitor.logSecurityEvent({
+        type: 'AGENT_ACTIVATION_FAILED',
+        severity: 'MEDIUM',
+        source: 'AgentActivationStrategy.activate',
+        details: `Failed to add goal during agent activation: ${errorMessage}`,
+        additionalData: {
+          agentName: name,
+          goalDescription: goal.description || goal,
+          error: errorMessage
+        }
+      });
+
+      // Log to standard logger for debugging
+      logger.warn(`Goal addition failed during agent activation`, {
+        agentName: name,
+        error: errorMessage
+      });
+
+      executionSummary.push(`Note: ${errorMessage}`);
+
+      // Determine if this is a critical failure requiring rollback
+      // Critical failures: validation errors that indicate bad input or security issues
+      if (error instanceof Error && (
+        errorMessage.includes('harmful content') ||
+        errorMessage.includes('security') ||
+        errorMessage.includes('Maximum number of goals')
+      )) {
+        criticalFailure = true;
+      }
+    }
+    return criticalFailure;
+  }
+
+  async getElementDetails(name: string): Promise<MCPResponse> {
+    const agent = await this.agentManager.findByName(name);
+    if (!agent) {
+      this.throwNotFoundError(name, 'Agent');
+    }
+    await this.agentManager.projectForDisplay(agent);
+
+    const metadata = agent.metadata as any;
+
+    const details = [
+      `🤖 **${agent.metadata.name}**`,
+      `${agent.metadata.description}`,
+      ``,
+      `**Status**: ${agent.getStatus()}`
+    ];
+
+    details.push(...this.formatV1Fields(metadata));
+
+    // V2 fields
+    this.appendGoalDetails(metadata, details);
+
+    this.appendActivatesDetails(metadata, details);
+
+    this.appendToolsDetails(metadata, details);
+
+    if (metadata.systemPrompt) {
+      details.push('', '**System Prompt**:');
+      const truncated = metadata.systemPrompt.length > 100
+        ? `${metadata.systemPrompt.substring(0, 100)}...`
+        : metadata.systemPrompt;
+      details.push(truncated);
+    }
+
+    this.appendAutonomyDetails(metadata, details);
+
+    // Issue #722: Display resilience policy
+    this.appendResilienceDetails(metadata, details);
 
     // Issue #722: Display tags and triggers
     if (metadata.tags && metadata.tags.length > 0) {
-      details.push('');
-      details.push(`**Tags**: ${metadata.tags.join(', ')}`);
+      details.push('', `**Tags**: ${metadata.tags.join(', ')}`);
     }
     if (metadata.triggers && metadata.triggers.length > 0) {
       details.push(`**Triggers**: ${metadata.triggers.join(', ')}`);
     }
 
-    details.push('');
-    details.push('**Instructions**:');
-    details.push((agent as any).instructions || (agent as any).extensions?.instructions || 'No instructions available');
+    details.push('', '**Instructions**:', (agent as any).instructions || (agent as any).extensions?.instructions || 'No instructions available');
 
     if ((agent as any).content?.trim()) {
-      details.push('');
-      details.push('**Reference:**');
-      details.push((agent as any).content);
+      details.push('', '**Reference:**', (agent as any).content);
     }
 
     const agentState = (agent as any).state;

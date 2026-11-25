@@ -1,3 +1,4 @@
+import { storageReferenceFromPath } from '../../storage/StorageReference.js';
 /**
  * ElementCache - LRU cache management for element managers.
  *
@@ -7,6 +8,7 @@
  * identical — no logic changed, only locality.
  */
 
+import type { StorageCacheVersion } from '../../storage/IStorageLayer.js';
 import { LRUCache } from '../../cache/LRUCache.js';
 import { logger } from '../../utils/logger.js';
 import { ElementType } from '../../portfolio/types.js';
@@ -29,7 +31,24 @@ export interface ElementCacheHost {
 declare const publicationLease: unique symbol;
 export interface CachePublicationLease { readonly [publicationLease]: true }
 
+
+/**
+ * The one eviction rule for a storage read's diff: every reference it reports changed or removed
+ * leaves the cache, so a later cache-first read cannot serve what that read saw change.
+ */
+export function evictChangedReferences(cache: Pick<ElementCache<IElement>, 'uncacheByPath'>,
+  diff: { readonly modified: readonly string[]; readonly removed: readonly string[] }): void {
+  for (const reference of [...diff.modified, ...diff.removed]) cache.uncacheByPath(reference);
+}
 export class ElementCache<T extends IElement> {
+  /** The storage version each cached instance was built from. */
+  private readonly versions = new WeakMap<T, StorageCacheVersion>();
+
+  /** The storage version a cached instance was built from, if one was recorded. */
+  versionOf(element: T): StorageCacheVersion | undefined {
+    return this.versions.get(element);
+  }
+
   /** Primary cache: namespace + runtime ID + storage path → Element. */
   readonly elements: LRUCache<T>;
   /**
@@ -286,14 +305,18 @@ export class ElementCache<T extends IElement> {
 
   /**
    * Adds an element to both caches (bidirectional mapping).
-   * Also stamps `filename` and `filePath` onto the element object.
+   * Also stamps `filename` and `filePath` onto the element object. `version` is the storage
+   * version the instance was built from (the loader's stat before the read, the persister's after
+   * the write); without one the storage layer never vouches for the instance and it is read again.
    */
-  cacheElement(element: T, filePath: string, lease: CachePublicationLease): void {
+  cacheElement(element: T, filePath: string, lease: CachePublicationLease, version?: StorageCacheVersion): void {
     this.assertPublicationLease(lease);
+    if (version) this.versions.set(element, version);
+    else this.versions.delete(element);
     const absolutePath = this.host.resolveAbsolutePath(filePath);
 
     const relativePath = path.isAbsolute(filePath)
-      ? path.relative(this.host.elementDir, filePath)
+      ? storageReferenceFromPath(path.relative(this.host.elementDir, filePath))
       : filePath;
     this.attachPathMetadata(element, relativePath);
 

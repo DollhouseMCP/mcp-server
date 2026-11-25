@@ -74,6 +74,7 @@ describe('PortfolioSyncManager conflict handling', () => {
     };
 
     const fileOperations = {
+      stat: jest.fn((filePath: string) => fs.stat(filePath)),
       readFile: jest.fn(async (filePath: string) => {
         return await fs.readFile(filePath, 'utf-8');
       }),

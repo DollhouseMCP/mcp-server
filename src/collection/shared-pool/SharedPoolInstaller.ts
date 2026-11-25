@@ -262,7 +262,7 @@ export class DatabaseSharedPoolWriteStrategy implements SharedPoolWriteStrategy 
     const { FrontmatterParser } = await import('../../storage/FrontmatterParser.js');
     const { sql } = await import('drizzle-orm');
 
-    const frontmatter = FrontmatterParser.extractMetadata(captured.content);
+    const frontmatter = FrontmatterParser.extractMetadata(captured.content, captured.elementType);
     const byteSize = Buffer.byteLength(captured.content, 'utf-8');
 
     const bodyContent = this.extractBody(captured.content);

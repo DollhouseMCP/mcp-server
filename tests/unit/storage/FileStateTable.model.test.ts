@@ -4,7 +4,7 @@ import type { ElementIndexEntry, ManifestDiffResult } from '../../../src/storage
 type ModelRecord = { status: 'indexed' | 'failed' | 'recheck'; key?: string; mtime?: number; pending?: boolean };
 const names = ['Shared', 'Σημειώσεις', 'Історія'];
 const keys = new Map(names.map(name => [name, nameKey(name)]));
-const failure = { name: 'Error', code: 'EACCES', reason: 'denied' };
+const failure = { name: 'Error', code: 'EACCES', reason: 'denied', candidateNames: [], unattributed: true };
 const entry = (filePath: string, name: string, mtimeMs: number): ElementIndexEntry => ({
   filePath, name, mtimeMs, description: '', author: '', version: '1', tags: [], sizeBytes: 1,
 });
@@ -71,7 +71,7 @@ it('matches an independent classifier and name model with mutations between begi
     expect(sorted(table.publishScan(token, outcomes).diff)).toEqual(sorted(expected));
     const pending = invalidated || [...model.values()].some(record => record.status === 'recheck' || record.pending);
     expect(table.pendingInvalidation).toBe(pending);
-    expect(table.isAuthoritative()).toBe(!pending && [...model.values()].every(record => record.status === 'indexed' && !record.pending));
+    expect(table.isAuthoritative()).toBe(!pending);
     expect([...table.unindexed().keys()].sort()).toEqual([...model].filter(([, record]) => record.status === 'failed').map(([path]) => path).sort());
     const servingOwners: string[] = [];
     for (const name of names) {

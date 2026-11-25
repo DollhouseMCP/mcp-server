@@ -40,6 +40,7 @@ describe('PersonaManager', () => {
 
     // Create mock portfolio manager using DI mock helper
     mockPortfolioManager = createMockPortfolioManager({
+      listElements: jest.fn().mockResolvedValue([]),
       getElementDir: jest.fn().mockReturnValue(mockPersonasDir)
     });
 
@@ -54,8 +55,9 @@ describe('PersonaManager', () => {
 
     // Mock FileOperationsService
     mockFileOperationsService = {
-      readFile: jest.fn().mockResolvedValue(''),
+      readFile: jest.fn((...args: unknown[]) => mockFileOperationsService.readElementFile(...args)),
       readElementFile: jest.fn().mockResolvedValue(''),
+      auditElementRead: jest.fn(),
       writeFile: jest.fn().mockResolvedValue(undefined),
       deleteFile: jest.fn().mockResolvedValue(undefined),
       exists: jest.fn().mockResolvedValue(false),
@@ -96,9 +98,17 @@ describe('PersonaManager', () => {
       serializationService: new SerializationService(),
       metadataService,
       eventDispatcher: new ElementEventDispatcher(),
-    storageLayerFactory: createTestStorageFactory(),
+    storageLayerFactory: createTestStorageFactory(mockFileOperationsService as any),
       personaImporter: mockPersonaImporter,
       notifier: mockNotifier,
+    });
+    jest.spyOn(personaManager['storageLayer'], 'readCollection').mockImplementation(async () => ({
+      entries: (await mockPortfolioManager.listElements()).map(filePath => ({ filePath })),
+      unindexed: new Map(), authoritative: true, complete: true, includesPublic: false,
+      diff: { added: [], modified: [], removed: [], unchanged: [] },
+    } as any));
+    jest.spyOn(personaManager['storageLayer'], 'readIndexedPath').mockResolvedValue({
+      path: undefined, authoritative: true, indexComplete: true, unindexed: [], failures: new Map(), candidates: [],
     });
   });
 
@@ -175,7 +185,8 @@ const seedPersonaCache = (entries: Array<[string, Persona]>) => {
 
       expect(result.success).toBe(true);
       expect(result.message).toContain('Test Persona');
-      expect(personaManager.getActivePersona()).toBe(testPersona);
+      // The active persona is the definition the read contract selected for the name.
+      expect(personaManager.getActivePersona()).toMatchObject({ filename: 'test-persona.md', metadata: expect.objectContaining({ name: 'Test Persona' }) });
     });
 
     it('should activate a persona by filename', async () => {
@@ -185,11 +196,12 @@ const seedPersonaCache = (entries: Array<[string, Persona]>) => {
       expect(result.message).toContain('Activated');
     });
 
-    it('should activate a persona by unique_id', async () => {
+    it('does not activate a persona by its unique_id: a generated id is not a name', async () => {
       const result = await personaManager.activatePersona('test-persona_20250101-120000_tester');
 
-      expect(result.success).toBe(true);
-      expect(result.message).toContain('Activated');
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('not found');
+      expect(personaManager.getActivePersonas()).toEqual([]);
     });
 
     it('should return error for non-existent persona', async () => {
@@ -289,9 +301,7 @@ const seedPersonaCache = (entries: Array<[string, Persona]>) => {
       // Make disk reads throw
       mockFileOperationsService.readElementFile.mockRejectedValue(new Error('Disk failure'));
 
-      const found = await (personaManager as any).findPersonaAsync('Evicted Persona');
-      // Should return undefined, not throw
-      expect(found).toBeUndefined();
+      await expect(personaManager.findPersonaAsync('Evicted Persona')).rejects.toMatchObject({ cause: expect.objectContaining({ message: 'Disk failure' }) });
     });
 
     it('should deduplicate concurrent lookups for the same identifier', async () => {
@@ -442,11 +452,8 @@ const seedPersonaCache = (entries: Array<[string, Persona]>) => {
       expect(result?.metadata.name).toBe('Persona 1');
     });
 
-    it('should find persona by unique_id', () => {
-      const result = personaManager.findPersona('p1');
-
-      expect(result).toBeDefined();
-      expect(result?.unique_id).toBe('p1');
+    it('does not find a persona by its unique_id: a generated id is not a name', () => {
+      expect(personaManager.findPersona('p1')).toBeUndefined();
     });
   });
 
@@ -616,7 +623,7 @@ const seedPersonaCache = (entries: Array<[string, Persona]>) => {
           serializationService: new SerializationService(),
           metadataService: freshMetadataService,
           eventDispatcher: new ElementEventDispatcher(),
-    storageLayerFactory: createTestStorageFactory(),
+    storageLayerFactory: createTestStorageFactory(mockFileOperationsService as any),
           personaImporter: mockPersonaImporter,
           notifier: mockNotifier,
         });
@@ -651,7 +658,7 @@ const seedPersonaCache = (entries: Array<[string, Persona]>) => {
 
       const active = personaManager.getActivePersona();
 
-      expect(active).toBe(testPersona);
+      expect(active).toMatchObject({ filename: 'test.md', metadata: expect.objectContaining({ name: 'Test' }) });
     });
 
     it('should return null when no persona is active', () => {
@@ -689,8 +696,9 @@ const seedPersonaCache = (entries: Array<[string, Persona]>) => {
         unique_id: 'test'
       };
 
-      jest.spyOn(personaManager, 'reload').mockResolvedValue(undefined);
-      jest.spyOn(personaManager, 'list').mockResolvedValue([testPersona]);
+      // reload() returns the collection it read; reloadPersonas reports it without a second read.
+      jest.spyOn(personaManager, 'reload').mockResolvedValue([testPersona] as any);
+      const list = jest.spyOn(personaManager, 'list');
 
       const result = await personaManager.reloadPersonas();
 
@@ -699,6 +707,7 @@ const seedPersonaCache = (entries: Array<[string, Persona]>) => {
       expect(result.content[0]).toHaveProperty('type', 'text');
       expect(result.content[0].text).toContain('Reloaded');
       expect(result.content[0].text).toContain('1 persona');
+      expect(list).not.toHaveBeenCalled();
     });
   });
 

@@ -7,6 +7,12 @@ import type { GitHubClient } from '../../../src/collection/GitHubClient.js';
 import type { UnifiedIndexManager } from '../../../src/portfolio/UnifiedIndexManager.js';
 import { ElementType } from '../../../src/portfolio/PortfolioManager.js';
 import { createTestFileOperationsService } from '../../helpers/di-mocks.js';
+import type { ElementManagerLookup } from '../../../src/elements/ElementManagerLookup.js';
+
+/** Every type's manager certifies the requested name absent. */
+function absentManagerLookup(): ElementManagerLookup {
+  return { managerFor: () => ({ findByName: async () => undefined }) } as unknown as ElementManagerLookup;
+}
 
 const TEST_PORTFOLIO_DIR = path.join(os.tmpdir(), 'fetch-and-validate-portfolio');
 
@@ -67,6 +73,7 @@ describe('ElementInstaller.fetchAndValidate', () => {
     const mockPortfolioManager = { getElementDir: jest.fn(() => TEST_PORTFOLIO_DIR) } as any;
     installer = new ElementInstaller(mockGitHubClient, {
       portfolioManager: mockPortfolioManager,
+      managerLookup: absentManagerLookup(),
       unifiedIndexManager: { search: jest.fn() } as unknown as UnifiedIndexManager,
       fileOperations: createTestFileOperationsService(),
     });
@@ -207,6 +214,7 @@ describe('ElementInstaller.installContent (all six element types)', () => {
     const mockPortfolioManager = { getElementDir: jest.fn(() => portfolioDir) } as any;
     installer = new ElementInstaller(mockGitHubClient, {
       portfolioManager: mockPortfolioManager,
+      managerLookup: absentManagerLookup(),
       unifiedIndexManager: { search: jest.fn() } as unknown as UnifiedIndexManager,
       fileOperations: createTestFileOperationsService(),
     });

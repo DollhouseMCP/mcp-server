@@ -17,7 +17,7 @@ import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { readFrontmatter } from '../security/readFrontmatter.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
-import { IFileOperationsService, isAbsentPathError, directoryExists } from '../services/FileOperationsService.js';
+import { IFileOperationsService, isAbsentKindError, directoryExists } from '../services/FileOperationsService.js';
 import { ContentValidator } from '../security/contentValidator.js';
 
 // File operation constants
@@ -225,7 +225,7 @@ export class DefaultElementProvider {
       await fs.access(filePath);
       return true;
     } catch (error) {
-      if (isAbsentPathError(error)) return false;
+      if (isAbsentKindError(error)) return false;
       throw error;
     }
   }
@@ -358,9 +358,9 @@ export class DefaultElementProvider {
     try {
       if (!(await this.statFile(candidate)).isDirectory()) return null;
       directory = path.join(candidate, 'personas');
-      const hasPersonas = await this.directoryExists(directory);
+      const hasPersonas = await this.holdsElementKind(directory);
       directory = path.join(candidate, 'skills');
-      const hasSkills = await this.directoryExists(directory);
+      const hasSkills = await this.holdsElementKind(directory);
       return hasPersonas || hasSkills ? candidate : null;
     } catch (error) {
       this.reportDataDirectoryFailure(candidate, directory, error);
@@ -368,8 +368,22 @@ export class DefaultElementProvider {
     }
   }
 
+  /**
+   * Each kind is probed on its own: a stray file named after a kind (ENOTDIR) only means this
+   * candidate does not hold that kind; any other failure still rejects the candidate.
+   */
+  private async holdsElementKind(directory: string): Promise<boolean> {
+    try {
+      return await this.directoryExists(directory);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOTDIR') return false;
+      throw error;
+    }
+  }
+
   private reportDataDirectoryFailure(candidate: string, directory: string, error: unknown): void {
-    if (isAbsentPathError(error)) return;
+    // A candidate probe: a missing or non-directory candidate is simply not a data directory.
+    if (isAbsentKindError(error)) return;
     logger.warn('[DefaultElementProvider] Cannot inspect bundled data candidate', {
       candidate, directory, code: (error as NodeJS.ErrnoException)?.code,
       error: error instanceof Error ? error.name : typeof error,
@@ -922,10 +936,6 @@ export class DefaultElementProvider {
     return copiedCount;
   }
   
-  /**
-   * Copy a file with integrity verification
-   * Ensures the file was copied correctly by comparing sizes
-   */
   /**
    * Calculate checksum of a file for integrity verification
    * @param filePath Path to the file

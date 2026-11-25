@@ -13,6 +13,7 @@ import type { IStorageBackend } from '../../../src/storage/IStorageBackend.js';
 import type { StorageItemMetadata } from '../../../src/storage/types.js';
 import type { FileOperationsService } from '../../../src/services/FileOperationsService.js';
 import type { MemoryIndexData } from '../../../src/storage/MemoryIndexFile.js';
+import { certifyNamedReference } from '../../../src/elements/base/ElementNameEvidence.js';
 
 // ---- Helpers ----
 
@@ -213,10 +214,10 @@ describe('MemoryStorageLayer', () => {
   });
 
   it('reads cold index status without scanning', async () => {
-    expect(await layer.readIndexedPath(['Baseline'])).toEqual({ path: undefined, indexComplete: false, authoritative: false, unindexed: [] });
+    expect(await layer.readIndexedPath(['Baseline'])).toMatchObject({ path: undefined, indexComplete: false, authoritative: false, unindexed: [] });
     expect(backend.statMany).not.toHaveBeenCalled();
-    expect(await layer.findIndexedPath(['Baseline'])).toBe('system/baseline.yaml');
-    expect(await layer.readIndexedPath(['Baseline'])).toEqual({ path: 'system/baseline.yaml', indexComplete: true, authoritative: true, unindexed: [] });
+    await layer.scan();
+    expect(await layer.readIndexedPath(['Baseline'])).toMatchObject({ path: 'system/baseline.yaml', indexComplete: true, authoritative: true, unindexed: [] });
   });
 
   it.each([false, true])('leaves warm modified diffs for refresh (invalidated: %s)', async invalidate => {
@@ -227,8 +228,7 @@ describe('MemoryStorageLayer', () => {
         ['system/baseline.yaml', makeMeta('system/baseline.yaml', 3000)],
       ]), failures: new Map() });
       if (invalidate) layer.invalidate();
-      expect(await layer.findIndexedPath(['Baseline'])).toBe('system/baseline.yaml');
-      expect(await layer.readIndexedPath(['Baseline'])).toMatchObject({ indexComplete: true, authoritative: !invalidate });
+      expect(await layer.readIndexedPath(['Baseline'])).toMatchObject({ path: 'system/baseline.yaml', indexComplete: true, authoritative: !invalidate });
       const diff = await layer.scan();
       expect(diff.modified).toContain('system/baseline.yaml');
     } finally {
@@ -494,10 +494,10 @@ describe('MemoryStorageLayer', () => {
   });
 
   // ----------------------------------------------------------------
-  // 7. scanMemorySnapshot(true)
+  // 7. readCollection()
   // ----------------------------------------------------------------
-  describe('scanMemorySnapshot(true)', () => {
-    it('should return only entries with autoLoad === true, sorted by priority', async () => {
+  describe('readCollection()', () => {
+    it('returns auto-load selection metadata alongside ordinary entries', async () => {
       (backend.listDirectories as jest.Mock<any>).mockResolvedValue(['system']);
 
       (backend.listFiles as jest.Mock<any>).mockImplementation(async (dir: string) => {
@@ -521,13 +521,13 @@ describe('MemoryStorageLayer', () => {
 
       await layer.scan();
 
-      const autoLoaded = (await layer.scanMemorySnapshot(true)).entries;
-      expect(autoLoaded).toHaveLength(2);
-      // Sorted by priority ascending: 5 before 10
-      expect(autoLoaded[0].name).toBe('UserNotes');
-      expect(autoLoaded[0].priority).toBe(5);
-      expect(autoLoaded[1].name).toBe('Core');
-      expect(autoLoaded[1].priority).toBe(10);
+      const entries = (await layer.readCollection()).entries;
+      expect(entries).toHaveLength(3);
+      expect(entries).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'UserNotes', autoLoad: true, priority: 5 }),
+        expect.objectContaining({ name: 'Core', autoLoad: true, priority: 10 }),
+        expect.objectContaining({ name: 'Optional', autoLoad: false }),
+      ]));
     });
 
     it('should preserve auto-load metadata when entry prose matches scanner patterns', async () => {
@@ -547,7 +547,7 @@ entries:
 
       await layer.scan();
 
-      expect((await layer.scanMemorySnapshot(true)).entries).toEqual([
+      expect((await layer.readCollection()).entries).toEqual([
         expect.objectContaining({
           name: 'Scanner Research',
           autoLoad: true,
@@ -556,7 +556,7 @@ entries:
       ]);
     });
 
-    it.each([false, true])('pins entries and failures together while the resolver changes (autoload: %s)', async autoLoad => {
+    it('pins entries and failures together while the resolver changes', async () => {
       let root = MEMORIES_DIR;
       const backend = createMockBackend({ listFiles: jest.fn<any>().mockResolvedValue(['bad.yaml']) });
       const files = makeMockFileOps();
@@ -568,15 +568,15 @@ entries:
         return { stats: new Map(), failures: new Map([['bad.yaml', Object.assign(new Error('denied'), { code: 'EACCES' })]]) };
       });
       try {
-        const snapshot = await layer.scanMemorySnapshot(autoLoad);
+        const snapshot = await layer.readCollection();
         expect(snapshot.entries).toEqual([]);
-        expect(snapshot.unindexed.get('bad.yaml')).toEqual({ name: 'Error', reason: 'Cannot inspect storage path "bad.yaml" (EACCES)', code: 'EACCES' });
+        expect(snapshot.unindexed.get('bad.yaml')).toMatchObject({ name: 'Error', reason: 'Cannot inspect storage path "bad.yaml" (EACCES)', code: 'EACCES', candidateNames: ['bad'], unattributed: true });
         expect(layer['getState']().table.unindexed().size).toBe(0);
         expect(state.table.unindexed().has('bad.yaml')).toBe(true);
       } finally { await layer.dispose(); }
     });
 
-    it('keeps auto-load reads on the scanned state while other directories are retained', async () => {
+    it('keeps collection reads on the scanned state while other directories are retained', async () => {
       await layer.dispose();
       layer = new MemoryStorageLayer(fileOps, {
         memoriesDir: MEMORIES_DIR, storageBackend: backend,
@@ -595,14 +595,14 @@ entries:
       // More than the cap are non-idle: even the caller's MRU state is evicted after scan.
       await layer.scan();
       expect(layer.hasCompletedScan()).toBe(false);
-      const entries = (await layer.scanMemorySnapshot(true)).entries;
+      const entries = (await layer.readCollection()).entries;
       expect(entries).toEqual([expect.objectContaining({
         filePath: 'hand-written.yaml', name: 'Core', autoLoad: true, priority: 1,
       })]);
       expect(layer.hasCompletedScan()).toBe(false);
     });
 
-    it('should return empty array when no entries have autoLoad === true', async () => {
+    it('returns ordinary memory metadata for manager-owned selection', async () => {
       (backend.listFiles as jest.Mock<any>).mockResolvedValue(['regular.yaml']);
       (backend.statMany as jest.Mock<any>).mockResolvedValue({ stats: new Map([
         ['regular.yaml', makeMeta('regular.yaml', 1000)],
@@ -611,7 +611,60 @@ entries:
 
       await layer.scan();
 
-      expect((await layer.scanMemorySnapshot(true)).entries).toEqual([]);
+      expect((await layer.readCollection()).entries).toEqual([expect.objectContaining({ name: 'Regular' })]);
+    });
+
+    describe('a change signalled while the read scans', () => {
+      const regularStats = () => ({ stats: new Map([['regular.yaml', makeMeta('regular.yaml', 1000)]]), failures: new Map() });
+
+      beforeEach(async () => {
+        (backend.listFiles as jest.Mock<any>).mockResolvedValue(['regular.yaml']);
+        (backend.statMany as jest.Mock<any>).mockResolvedValue(regularStats());
+        (backend.readFile as jest.Mock<any>).mockResolvedValue(makeYaml('Regular'));
+        await layer.readCollection();
+      });
+
+      it('certifies a listed name from the scan the read began, leaving the signal to the next read', async () => {
+        // The watcher's echo of an index write marks the table stale; the next echo lands mid-scan.
+        layer.invalidate();
+        (backend.statMany as jest.Mock<any>).mockImplementationOnce(() => {
+          layer.invalidate();
+          return Promise.resolve(regularStats());
+        });
+
+        await expect(certifyNamedReference(layer, 'Regular')).resolves.toMatchObject({
+          selected: { reference: 'regular.yaml', name: 'Regular' }, authoritative: true,
+        });
+        const scans = (backend.statMany as jest.Mock<any>).mock.calls.length;
+        expect((await layer.readIndexedPath(['Regular'])).authoritative).toBe(false);
+        expect(await layer.readCollection()).toMatchObject({ authoritative: true, complete: true });
+        expect(backend.statMany).toHaveBeenCalledTimes(scans + 1);
+      });
+
+      it('scans again when the only scan it joined began before the read and was invalidated', async () => {
+        let entered!: () => void;
+        let release!: () => void;
+        const scanning = new Promise<void>(resolve => { entered = resolve; });
+        const held = new Promise<void>(resolve => { release = resolve; });
+        (backend.statMany as jest.Mock<any>).mockImplementationOnce(async () => {
+          entered();
+          await held;
+          return regularStats();
+        });
+        layer.invalidate();
+        const earlier = layer.scan();
+        await scanning;
+
+        const read = layer.readCollection();
+        layer.invalidate();
+        release();
+        await earlier;
+        const scans = (backend.statMany as jest.Mock<any>).mock.calls.length;
+
+        await expect(read).resolves.toMatchObject({ authoritative: true, complete: true,
+          entries: [expect.objectContaining({ name: 'Regular' })] });
+        expect(backend.statMany).toHaveBeenCalledTimes(scans + 1);
+      });
     });
   });
 
@@ -796,9 +849,10 @@ entries:
 
       expect(layer.getPathByName('Baseline')).toBeUndefined();
 
-      // Summaries should be empty without a new scan
-      // The snapshot applies the normal scan cooldown.
-      expect((await layer.scanMemorySnapshot(true)).entries).toEqual([]);
+      // A fresh collection read must rebuild after clear, even inside the cooldown.
+      const snapshot = await layer.readCollection();
+      expect(snapshot.diff.added).toContain('system/baseline.yaml');
+      expect(snapshot.entries).toHaveLength(1);
     });
   });
 
@@ -851,6 +905,18 @@ entries:
       const summaries = await layer.listSummaries();
       expect(summaries).toHaveLength(1);
       expect(summaries[0].name).toBe('Core');
+    });
+
+    it('rejects the scan when a discovered subdirectory is not a directory (ENOTDIR)', async () => {
+      (backend.listDirectories as jest.Mock<any>).mockResolvedValue(['system', 'adapters']);
+      const notdir = Object.assign(new Error('ENOTDIR'), { code: 'ENOTDIR' });
+      (backend.listFiles as jest.Mock<any>).mockImplementation(async (dir: string) => {
+        if (dir.endsWith('adapters')) throw notdir;
+        if (dir.endsWith('system')) return ['core.yaml'];
+        return [];
+      });
+      await expect(layer.scan()).rejects.toMatchObject({ code: 'ENOTDIR' });
+      expect(backend.statMany).not.toHaveBeenCalled();
     });
   });
 
@@ -1071,6 +1137,23 @@ describe('guarded fresh metadata discovery', () => {
     } finally { await layer.dispose(); }
   });
 
+  it('returns the fresh inventory as a typed snapshot: readable entries plus each unreadable file as evidence', async () => {
+    const fileOps = makeMockFileOps(); const backend = createMockBackend();
+    (backend.listFiles as jest.Mock<any>).mockResolvedValue(['good.yaml', 'bad.yaml']);
+    (backend.readFile as jest.Mock<any>).mockImplementation(async (file: string) => {
+      if (file.endsWith('bad.yaml')) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      return makeYaml('Good');
+    });
+    const layer = new MemoryStorageLayer(fileOps, { memoriesDir: MEMORIES_DIR, storageBackend: backend });
+    try {
+      const snapshot = await layer.readFreshCollection({ preserveDuplicates: true });
+      expect(snapshot.entries.map(entry => entry.name)).toEqual(['Good']);
+      expect([...snapshot.unindexed.keys()]).toEqual(['bad.yaml']);
+      // The strict summaries read still refuses with the failure.
+      await expect(layer.listSummaries({ freshMetadata: true })).rejects.toBeDefined();
+    } finally { await layer.dispose(); }
+  });
+
   it.each(['discover', 'enumerate', 'read', 'stat'])('propagates %s failures rather than returning a partial inventory', async step => {
     const fileOps = makeMockFileOps(); const backend = createMockBackend();
     const cause = Object.assign(new Error(`Controlled ${step} failure`), { code: 'EIO' });
@@ -1240,7 +1323,7 @@ it.each(['Σημειώσεις', 'Історія'])('keeps %s in duplicate listi
     expect((await layer.listSummaries()).map(value => value.filePath)).toEqual(['b.yaml']);
     expect(await layer.getIndexedPaths()).toEqual(['b.yaml']);
     expect(layer.getPathByName(name)).toBe('b.yaml');
-    expect((await layer.scanMemorySnapshot(true)).entries.map(value => value.filePath)).toEqual(['b.yaml']);
+    expect((await layer.readCollection()).entries.map(value => value.filePath)).toEqual(['b.yaml']);
     expect((await layer.readFreshSummariesAtDirectory(MEMORIES_DIR)).map(value => value.filePath)).toEqual(['b.yaml']);
     jest.mocked(backend.stat).mockResolvedValue(makeMeta('b.yaml', 300));
     jest.mocked(backend.readFile).mockRejectedValue(new Error('unreadable'));
@@ -1273,7 +1356,7 @@ it('retains failed persistence under directory pressure and recovers without ano
     }
     dir = originalDir;
     expect(layer['getState']()).toBe(state);
-    expect(await layer.readIndexedPath(['Old'])).toMatchObject({ authoritative: false, path: undefined, unindexed: ['a.yaml'] });
+    expect(await layer.readIndexedPath(['Old'])).toMatchObject({ authoritative: true, path: undefined, unindexed: ['a.yaml'] });
     expect(warn.mock.calls.filter(([message]) => String(message).includes('beyond cache capacity'))).toHaveLength(1);
     jest.mocked(fileOps.writeFile).mockResolvedValue(undefined);
     await jest.advanceTimersByTimeAsync(100);

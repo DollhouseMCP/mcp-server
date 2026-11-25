@@ -96,7 +96,8 @@ export class MemoryIndexFile {
     else for (const [path, item] of Object.entries(value)) {
       if (this.isRelativeIndexPath(path) && typeof item?.nameKey === 'string' && item.nameKey.trim().length &&
           typeof item.mtimeMs === 'number' && Number.isFinite(item.mtimeMs)) {
-        blocked[path] = { nameKey: item.nameKey, mtimeMs: item.mtimeMs };
+        blocked[path] = { nameKey: item.nameKey, mtimeMs: item.mtimeMs,
+          ...(typeof item.elementName === 'string' ? { elementName: item.elementName } : {}) };
       } else skipped++;
     }
     if (skipped) logger.warn(`MemoryIndexFile: skipped ${skipped} malformed blocked entries during load`);

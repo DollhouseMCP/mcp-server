@@ -9,10 +9,14 @@ import type { PersonaManager } from '../../persona/PersonaManager.js';
 import type { SkillManager } from '../../elements/skills/SkillManager.js';
 import type { AgentManager } from '../../elements/agents/AgentManager.js';
 import type { EnsembleManager } from '../../elements/ensembles/EnsembleManager.js';
-import type { BaseElementManager } from '../../elements/base/BaseElementManager.js';
+import type { Ensemble } from '../../elements/ensembles/Ensemble.js';
+import type { ActiveReferenceFreshness, BaseElementManager } from '../../elements/base/BaseElementManager.js';
 import { ElementType } from '../../portfolio/PortfolioManager.js';
 import { normalizeElementTypeLenient } from '../../utils/elementTypeNormalization.js';
-import { logger } from '../../utils/logger.js';
+import { PolicyUnavailableError } from './PolicyUnavailableError.js';
+import { requireCompletePolicyReport, type PolicyReport, type PolicyReadFailure } from './PolicyReport.js';
+import { visitSequentially } from '../../utils/visitSequentially.js';
+import { clientReadFailureReason } from '../../elements/base/ElementReadError.js';
 
 export type PolicyElement = {
   type: string;
@@ -27,8 +31,9 @@ export type PolicyMemberElement = {
   filename?: string;
 };
 
-export type PolicyIndexOptions = { freshAfterInFlight?: boolean };
-export type IndexedPolicyManagers = Map<string, Promise<BaseElementManager<any> | undefined>>;
+/** Index freshness for one policy read; an advisory read (the coalesced digest) may refresh more cheaply. */
+export type PolicyIndexOptions = { freshAfterInFlight?: boolean; freshness?: ActiveReferenceFreshness };
+export type IndexedPolicyManagers = Map<string, Promise<BaseElementManager<any>>>;
 type PolicyMemberCandidate = { type: string; name: string; key: string };
 
 const ACTIVE_POLICY_LOOKUP_CONCURRENCY = 8;
@@ -87,10 +92,10 @@ export function policyElementKey(type: string, name: string, storageIdentity?: s
 }
 
 export interface ActivePolicyCollectorDeps {
-  personaManager: Pick<PersonaManager, 'getActivePersonas' | 'resolveActivePersonas'>;
-  skillManager: Pick<SkillManager, 'getActiveSkills'>;
-  agentManager: Pick<AgentManager, 'getActiveAgents' | 'getActivationIdentity'>;
-  ensembleManager: Pick<EnsembleManager, 'getActiveEnsembles'>;
+  personaManager: Pick<PersonaManager, 'getActivePersonas' | 'resolveActivePersonas' | 'getActiveReferenceReport'>;
+  skillManager: Pick<SkillManager, 'getActiveSkills' | 'getActiveReferenceReport'>;
+  agentManager: Pick<AgentManager, 'getActiveAgents' | 'getActivationIdentity' | 'getActiveReferenceReport'>;
+  ensembleManager: Pick<EnsembleManager, 'getActiveEnsembles' | 'getActiveReferenceReport'>;
   getManagerForType: (type: string) => BaseElementManager<any> | undefined;
   ensureInitialized: () => Promise<void>;
 }
@@ -103,106 +108,109 @@ export const createActivePolicyCollector: ActivePolicyCollectorFactory = deps =>
 export class ActivePolicyCollector {
   constructor(private readonly deps: ActivePolicyCollectorDeps) {}
 
-  async collectActiveElementsForPolicy(
-    indexOptions: PolicyIndexOptions = {},
-  ): Promise<PolicyElement[]> {
-    await this.deps.ensureInitialized();
-
-    const result: PolicyElement[] = [];
+  async collectActiveElementsForReport(indexOptions: PolicyIndexOptions = {}): Promise<PolicyReport<PolicyElement>> {
+    const items: PolicyElement[] = [];
+    const failures: PolicyReadFailure[] = [];
+    try {
+      await this.deps.ensureInitialized();
+    } catch (cause) {
+      return { items, failures: [{ type: 'collection', reason: this.failureReason(cause) }], complete: false };
+    }
+    const types = [ElementType.PERSONA, ElementType.SKILL, ElementType.AGENT, ElementType.ENSEMBLE];
     const seen = new Set<string>();
     const indexedManagers: IndexedPolicyManagers = new Map();
-    const requiresFreshIndex = indexOptions.freshAfterInFlight === true;
-
-    if (requiresFreshIndex) {
-      await Promise.all([
-        this.getIndexedPolicyManager(ElementType.PERSONA, indexedManagers, indexOptions),
-        this.getIndexedPolicyManager(ElementType.SKILL, indexedManagers, indexOptions),
-        this.getIndexedPolicyManager(ElementType.ENSEMBLE, indexedManagers, indexOptions),
-      ]);
-    }
-
-    await this.appendActivePersonas(result, seen, requiresFreshIndex);
-    await this.appendActiveSkills(result, seen);
-    await this.appendActiveAgents(result, seen, indexOptions);
-    await this.appendActiveEnsembles(result, seen, indexOptions, indexedManagers);
-
-    return result;
-  }
-
-  private async appendActivePersonas(
-    result: PolicyElement[],
-    seen: Set<string>,
-    resolveFromStorage: boolean,
-  ): Promise<void> {
-    try {
-      const personas = resolveFromStorage
-        ? await this.deps.personaManager.resolveActivePersonas()
-        : this.deps.personaManager.getActivePersonas();
-      for (const persona of personas) {
-        const storageIdentity = normalizeLookupValue(persona.filename) || undefined;
-        seen.add(policyElementKey('persona', persona.metadata.name, storageIdentity));
-        result.push({
-          type: 'persona',
-          name: persona.metadata.name,
-          metadata: persona.metadata as unknown as Record<string, unknown>,
-          ...(storageIdentity ? { storageIdentity } : {}),
-        });
+    let complete = true;
+    await visitSequentially(types.values(), async type => {
+      try {
+        if (type === ElementType.ENSEMBLE) {
+          const report = await this.collectEnsemblePolicies(indexOptions, indexedManagers, seen);
+          this.appendResolvedPolicyMembers(report.items, items, seen);
+          failures.push(...report.failures);
+          complete &&= report.complete;
+          return;
+        }
+        const manager = this.activeManager(type);
+        if (!manager) throw new PolicyUnavailableError('Policy manager is unavailable');
+        const report = await manager.getActiveReferenceReport({ scanOptions: indexOptions, freshness: indexOptions.freshness });
+        complete &&= report.complete;
+        failures.push(...report.failures.map(failure => ({ type, reference: failure.reference, reason: failure.error.message })));
+        for (const element of report.items) {
+          let storageIdentity: string | undefined;
+          if (type === ElementType.PERSONA) storageIdentity = element.filename;
+          if (type === ElementType.AGENT) storageIdentity = this.deps.agentManager.getActivationIdentity(element)?.value;
+          items.push({ type: toPolicyElementType(type), name: element.metadata.name, metadata: element.metadata, storageIdentity });
+          seen.add(policyElementKey(type, element.metadata.name, storageIdentity));
+        }
+      } catch (cause) {
+        complete = false;
+        failures.push({ type, reason: this.failureReason(cause) });
       }
-    } catch (error) {
-      logger.warn('Failed to gather active personas for policy evaluation', { error });
-    }
+    });
+    return { items, failures, complete };
   }
 
-  private async appendActiveSkills(result: PolicyElement[], seen: Set<string>): Promise<void> {
-    try {
-      for (const skill of await this.deps.skillManager.getActiveSkills()) {
-        seen.add(policyElementKey('skill', skill.metadata.name));
-        result.push({
-          type: 'skill',
-          name: skill.metadata.name,
-          metadata: skill.metadata as unknown as Record<string, unknown>,
+  private failureReason(cause: unknown): string { return clientReadFailureReason(cause); }
+
+  private async collectEnsemblePolicies(indexOptions: PolicyIndexOptions, indexedManagers: IndexedPolicyManagers,
+    seen: Set<string>): Promise<PolicyReport<PolicyElement>> {
+    const staged = new Map<Ensemble, PolicyReport<PolicyElement>>();
+    const memberLookups = new Map<string, Promise<PolicyMemberElement | undefined>>();
+    const active = await this.deps.ensembleManager.getActiveReferenceReport({ scanOptions: indexOptions, freshness: indexOptions.freshness,
+      afterLookup: async (ensemble, reference) => {
+        const items: PolicyElement[] = [];
+        const failures: PolicyReadFailure[] = [];
+        let complete = true;
+        const localSeen = new Set(seen);
+        // Definition members are bounded to this visit; activation membership stays live across awaits.
+        const candidates = this.appendEnsemblesAndCollectMembers([ensemble], items, localSeen);
+        const members = await mapPolicyLookups(candidates, async candidate => {
+          try {
+            const member = await this.findPolicyMember(candidate, indexedManagers, memberLookups, indexOptions);
+            // A member the index certifies absent contributes no policy; that is not a failure.
+            if (!member) return undefined;
+            return member.metadata?.['gatekeeper']
+              ? { type: toPolicyElementType(candidate.type), name: candidate.name, metadata: member.metadata } : undefined;
+          } catch (cause) {
+            complete = false;
+            failures.push({ type: ElementType.ENSEMBLE, reference,
+              reason: `Member ${JSON.stringify(candidate.name)}: ${this.failureReason(cause)}` });
+            return undefined;
+          }
         });
-      }
-    } catch (error) {
-      logger.warn('Failed to gather active skills for policy evaluation', { error });
+        this.appendResolvedPolicyMembers(members, items, localSeen);
+        staged.set(ensemble, { items, failures, complete });
+      },
+    });
+    const items: PolicyElement[] = [];
+    const failures: PolicyReadFailure[] = active.failures.map(failure => ({ type: ElementType.ENSEMBLE,
+      reference: failure.reference, reason: failure.error.message }));
+    const memberItems: PolicyElement[] = [];
+    let complete = active.complete;
+    for (const ensemble of active.items) {
+      const report = staged.get(ensemble);
+      if (!report) throw new PolicyUnavailableError('Ensemble member report is unavailable');
+      complete &&= report.complete;
+      const [parent, ...members] = report.items;
+      items.push(parent);
+      memberItems.push(...members);
+      failures.push(...report.failures);
+    }
+    items.push(...memberItems);
+    return { items, failures, complete };
+  }
+
+  private activeManager(type: ElementType): Pick<BaseElementManager<any>, 'getActiveReferenceReport'> | undefined {
+    switch (type) {
+      case ElementType.PERSONA: return this.deps.personaManager;
+      case ElementType.SKILL: return this.deps.skillManager;
+      case ElementType.AGENT: return this.deps.agentManager;
+      case ElementType.ENSEMBLE: return this.deps.ensembleManager;
+      default: return undefined;
     }
   }
 
-  private async appendActiveAgents(
-    result: PolicyElement[],
-    seen: Set<string>,
-    indexOptions: PolicyIndexOptions,
-  ): Promise<void> {
-    try {
-      for (const agent of await this.deps.agentManager.getActiveAgents(indexOptions)) {
-        const storageIdentity = this.deps.agentManager.getActivationIdentity(agent)?.value;
-        seen.add(policyElementKey('agent', agent.metadata.name, storageIdentity));
-        result.push({
-          type: 'agent',
-          name: agent.metadata.name,
-          metadata: agent.metadata as unknown as Record<string, unknown>,
-          ...(storageIdentity ? { storageIdentity } : {}),
-        });
-      }
-    } catch (error) {
-      logger.warn('Failed to gather active agents for policy evaluation', { error });
-    }
-  }
-
-  private async appendActiveEnsembles(
-    result: PolicyElement[],
-    seen: Set<string>,
-    indexOptions: PolicyIndexOptions,
-    indexedManagers: IndexedPolicyManagers,
-  ): Promise<void> {
-    try {
-      const ensembles = await this.deps.ensembleManager.getActiveEnsembles();
-      const candidates = this.appendEnsemblesAndCollectMembers(ensembles, result, seen);
-      const resolvedMembers = await this.resolvePolicyMembers(candidates, indexOptions, indexedManagers);
-      this.appendResolvedPolicyMembers(resolvedMembers, result, seen);
-    } catch (error) {
-      logger.warn('Failed to gather active ensembles for policy evaluation', { error });
-    }
+  async collectActiveElementsForPolicy(indexOptions: PolicyIndexOptions = {}): Promise<PolicyElement[]> {
+    return requireCompletePolicyReport(await this.collectActiveElementsForReport(indexOptions));
   }
 
   private appendEnsemblesAndCollectMembers(
@@ -239,34 +247,6 @@ export class ActivePolicyCollector {
     return candidates;
   }
 
-  private async resolvePolicyMembers(
-    candidates: PolicyMemberCandidate[],
-    indexOptions: PolicyIndexOptions,
-    indexedManagers: IndexedPolicyManagers,
-  ): Promise<Array<PolicyElement | undefined>> {
-    const memberLookups = new Map<string, Promise<PolicyMemberElement | undefined>>();
-    return mapPolicyLookups(candidates, async (candidate) => {
-      try {
-        const found = await this.findPolicyMember(
-          candidate,
-          indexedManagers,
-          memberLookups,
-          indexOptions,
-        );
-        if (found?.metadata?.['gatekeeper']) {
-          return {
-            type: toPolicyElementType(candidate.type),
-            name: candidate.name,
-            metadata: found.metadata,
-          };
-        }
-      } catch {
-        // A malformed or missing member must not break evaluation of others.
-      }
-      return undefined;
-    });
-  }
-
   private appendResolvedPolicyMembers(
     resolvedMembers: Array<PolicyElement | undefined>,
     result: PolicyElement[],
@@ -291,9 +271,8 @@ export class ActivePolicyCollector {
     if (existing) return existing;
 
     const lookup = this.getIndexedPolicyManager(candidate.type, indexedManagers, indexOptions)
-      .then(async (manager) => manager
-        ? manager.findByName(candidate.name) as Promise<PolicyMemberElement | undefined>
-        : undefined);
+      // The member's manager was refreshed for this report just before the lookup.
+      .then(manager => manager.findByName(candidate.name, { refreshed: true }) as Promise<PolicyMemberElement | undefined>);
     memberLookups.set(candidate.key, lookup);
     return lookup;
   }
@@ -303,16 +282,27 @@ export class ActivePolicyCollector {
     type: string,
     indexedManagers: IndexedPolicyManagers,
     indexOptions: PolicyIndexOptions,
-  ): Promise<BaseElementManager<any> | undefined> {
+  ): Promise<BaseElementManager<any>> {
     const normalizedType = normalizeElementTypeLenient(type);
     const existing = indexedManagers.get(normalizedType);
     if (existing) return existing;
 
-    const manager = this.deps.getManagerForType(normalizedType);
-    const indexed = manager
-      ? manager.refreshIndex(indexOptions).then(() => manager)
-      : Promise.resolve(undefined);
+    const indexed = Promise.resolve().then(async () => {
+      const manager = this.managerFor(normalizedType);
+      await manager.refreshForFreshness(indexOptions.freshness, indexOptions);
+      return manager;
+    });
     indexedManagers.set(normalizedType, indexed);
     return indexed;
+  }
+
+  /**
+   * The throwing manager lookup (as ElementManagerLookup): a member of an unknown element type is a
+   * typed failure that leaves the report incomplete, never an absent member.
+   */
+  private managerFor(type: string): BaseElementManager<any> {
+    const manager = this.deps.getManagerForType(type);
+    if (!manager) throw new PolicyUnavailableError(`No element manager is registered for type ${JSON.stringify(type)}`);
+    return manager;
   }
 }

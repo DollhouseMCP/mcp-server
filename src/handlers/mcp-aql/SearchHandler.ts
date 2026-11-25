@@ -3,7 +3,9 @@ import { PaginationService } from '../../services/query/PaginationService.js';
 import { normalizeElementType, ALL_ELEMENT_TYPES, formatElementTypesList } from '../../utils/elementTypeNormalization.js';
 import { aggregateElements, validateAggregationOptions } from '../../services/query/AggregationService.js';
 import type { IElement } from '../../types/elements/IElement.js';
-import { logger } from '../../utils/logger.js';
+import { collectionReportEvidence, type CollectionReport } from '../../elements/base/CollectionReport.js';
+import { ElementReadError } from '../../elements/base/ElementReadError.js';
+import { visitSequentially } from '../../utils/visitSequentially.js';
 import type { OperationInput } from './types.js';
 import type { HandlerRegistry } from './MCPAQLHandler.js';
 import { normalizePaginationParams, resolveInputElementType } from './shared.js';
@@ -36,18 +38,20 @@ export class SearchHandler {
       throw new Error('element_type is required for query_elements operation');
     }
 
-    const elements = (await this.handlers.elementCRUD.getElements(elementType)) as IElement[];
+    const report = await this.handlers.elementCRUD.getElements(elementType);
+    const elements = report.items as IElement[];
     const p = params as Record<string, unknown>;
     const queryOptions = this.buildQueryOptions(p);
 
     if (p.aggregate) {
-      return this.aggregateQuery(elements, elementType, p.aggregate, queryOptions.filters);
+      return { ...this.aggregateQuery(elements, elementType, p.aggregate, queryOptions.filters), ...collectionReportEvidence(report) };
     }
 
     queryOptions.pagination = normalizePaginationParams(p);
     const queryResult = this.handlers.elementQueryService.query(elements, queryOptions);
 
     return {
+      ...collectionReportEvidence(report),
       items: queryResult.items.map((item: IElement) => ({
         name: item.metadata?.name || 'Unknown',
         description: item.metadata?.description || '',
@@ -80,7 +84,7 @@ export class SearchHandler {
     elementType: string,
     aggregateInput: unknown,
     filters?: Record<string, unknown>
-  ): unknown {
+  ) {
     const aggregate = aggregateInput as { count?: boolean; group_by?: string };
     const aggError = validateAggregationOptions(aggregate);
     if (aggError) {
@@ -103,7 +107,8 @@ export class SearchHandler {
     const sortBy = sortParam?.sortBy ?? 'name';
     const sortOrder = (sortParam?.sortOrder ?? 'asc') as 'asc' | 'desc';
     const elementTypes = this.resolveSearchElementTypes(elementType);
-    const allResults = await this.collectMatches(elementTypes, query);
+    const report = await this.collectMatches(elementTypes, query);
+    const allResults = report.items;
 
     this.handlers.performanceMonitor?.recordSearch({
       query,
@@ -121,6 +126,7 @@ export class SearchHandler {
     const paginated = paginator.paginate(sortedResults, { page, pageSize });
 
     return {
+      ...collectionReportEvidence(report),
       items: paginated.items,
       pagination: paginated.pagination,
       sorting: { sortBy, sortOrder },
@@ -148,24 +154,27 @@ export class SearchHandler {
     return [normalized];
   }
 
-  private async collectMatches(elementTypes: string[], query: string): Promise<SearchResult[]> {
+  private async collectMatches(elementTypes: string[], query: string): Promise<CollectionReport<SearchResult>> {
     const allResults: SearchResult[] = [];
-    for (const type of elementTypes) {
-      const matches = await this.collectTypeMatches(type, query);
-      allResults.push(...matches);
-    }
-    return allResults;
+    const failures: CollectionReport<SearchResult>['failures'] = [];
+    await visitSequentially(elementTypes.values(), async type => {
+      const report = await this.collectTypeMatches(type, query);
+      allResults.push(...report.items);
+      failures.push(...report.failures.map(failure => ({ ...failure, reference: `${type}: ${failure.reference ?? 'collection'}` })));
+    });
+    return { items: allResults, failures, complete: failures.length === 0 };
   }
 
-  private async collectTypeMatches(type: string, query: string): Promise<SearchResult[]> {
+  private async collectTypeMatches(type: string, query: string): Promise<CollectionReport<SearchResult>> {
     try {
-      const elements = await this.handlers.elementCRUD.getElements(type);
-      return (elements as Array<Record<string, unknown>>)
+      const report = await this.handlers.elementCRUD.getElements(type);
+      const items = (report.items as Array<Record<string, unknown>>)
         .map((element) => this.matchElement(type, element, query))
         .filter((match): match is SearchResult => match !== undefined);
-    } catch (error) {
-      logger.debug(`Failed to load elements for search: ${type}`, { error });
-      return [];
+      return { ...report, items };
+    } catch (cause) {
+      if (!(cause instanceof ElementReadError)) throw cause;
+      return { items: [], failures: [{ reference: type, error: cause }], complete: false };
     }
   }
 

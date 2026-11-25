@@ -78,11 +78,12 @@ describe('FileStorageBackend', () => {
       expect(result.stats.get('b.md')?.mtimeMs).toBe(2000);
     });
 
-    it.each(['ENOENT', 'ENOTDIR'])('omits absent paths when stat returns %s', async code => {
+    it.each([['ENOENT', false], ['ENOTDIR', true]])('reports a %s stat as a failure only when it does not prove absence (%s)', async (code, reported) => {
+      const error = Object.assign(new Error('gone'), { code });
       const fileOps = createMockFileOps({
         stat: jest.fn<any>()
           .mockResolvedValueOnce({ mtimeMs: 1000, size: 100 } as Stats)
-          .mockRejectedValueOnce(Object.assign(new Error('gone'), { code })),
+          .mockRejectedValueOnce(error),
       });
       const backend = new FileStorageBackend(fileOps);
 
@@ -91,6 +92,21 @@ describe('FileStorageBackend', () => {
       expect(result.stats.size).toBe(1);
       expect(result.stats.has('a.md')).toBe(true);
       expect(result.stats.has('deleted.md')).toBe(false);
+      expect(result.failures.get('deleted.md')).toBe(reported ? error : undefined);
+    });
+
+    it('keeps an entry whose target stat is ENOTDIR so the scan reports it', async () => {
+      const fileOps = createMockFileOps({
+        listDirectoryWithTypes: jest.fn<any>().mockResolvedValue([
+          { name: 'absent.md', isFile: false, isDirectory: false },
+          { name: 'misplaced.md', isFile: false, isDirectory: false },
+        ]),
+        stat: jest.fn<any>().mockImplementation(async (target: string) => {
+          throw Object.assign(new Error('target'), { code: path.basename(target) === 'absent.md' ? 'ENOENT' : 'ENOTDIR' });
+        }),
+      });
+      const backend = new FileStorageBackend(fileOps);
+      expect(await backend.listFiles(path.resolve('dir'), '.md')).toEqual(['misplaced.md']);
     });
   });
 
@@ -123,11 +139,11 @@ describe('FileStorageBackend', () => {
   });
 
   describe('directoryExists', () => {
-    it('returns false for an ordinary file', async () => {
+    it('refuses an ordinary file at the directory path instead of calling it missing', async () => {
       const backend = new FileStorageBackend(createMockFileOps({
         stat: jest.fn<FileOperationsService['stat']>().mockResolvedValue({ isDirectory: () => false } as Stats),
       }));
-      expect(await backend.directoryExists(path.resolve('file'))).toBe(false);
+      await expect(backend.directoryExists(path.resolve('file'))).rejects.toMatchObject({ code: 'ENOTDIR' });
     });
 
     it.each(['ENOENT', 'ENOTDIR', 'EACCES', 'EIO'])('classifies directory stat error %s', async code => {
@@ -135,8 +151,9 @@ describe('FileStorageBackend', () => {
       const backend = new FileStorageBackend(createMockFileOps({
         stat: jest.fn<FileOperationsService['stat']>().mockRejectedValue(error),
       }));
-      if (code === 'ENOENT' || code === 'ENOTDIR') await expect(backend.directoryExists(path.resolve('dir'))).resolves.toBe(false);
-      else await expect(backend.directoryExists(path.resolve('dir'))).rejects.toMatchObject({ cause: error, code });
+      // Only a missing path is absence; a file where the directory should be, or any other failure, rejects the scan.
+      if (code === 'ENOENT') await expect(backend.directoryExists(path.resolve('dir'))).resolves.toBe(false);
+      else await expect(backend.directoryExists(path.resolve('dir'))).rejects.toBe(error);
     });
     it('should return true when directory exists', async () => {
       const fileOps = createMockFileOps({ stat: jest.fn<FileOperationsService['stat']>().mockResolvedValue({ isDirectory: () => true } as Stats) });

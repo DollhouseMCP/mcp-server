@@ -25,6 +25,7 @@ import { PerformanceMonitor } from '../../src/utils/PerformanceMonitor.js';
 import { ElementSource } from '../../src/config/sourcePriority.js';
 import { FileOperationsService } from '../../src/services/FileOperationsService.js';
 import { FileLockManager } from '../../src/security/fileLockManager.js';
+import { createIntegrationContainer, type IntegrationContainer } from '../helpers/integration-container.js';
 import {
   setupSourcePriorityTestEnv,
   createLocalElement,
@@ -44,6 +45,7 @@ describe('Element Installation Priority Integration Tests', () => {
   let apiCache: APICache;
   let portfolioManager: PortfolioManager;
   let unifiedIndexManager: UnifiedIndexManager;
+  let managers: IntegrationContainer;
   let rateLimitTracker: Map<string, number[]>;
 
   beforeEach(async () => {
@@ -81,9 +83,13 @@ describe('Element Installation Priority Integration Tests', () => {
       performanceMonitor
     });
 
+    // The owning managers certify local existence; resolve them from a container on the same portfolio.
+    managers = await createIntegrationContainer({ portfolioDir, initializePortfolio: false });
+
     // Initialize element installer
     elementInstaller = new ElementInstaller(githubClient, {
       portfolioManager,
+      managerLookup: managers.container.resolve('ElementManagerLookup'),
       unifiedIndexManager,
       fileOperations
     });
@@ -94,6 +100,7 @@ describe('Element Installation Priority Integration Tests', () => {
     resetSourcePriority();
 
     // Cleanup
+    await managers.dispose();
     await cleanup();
   });
 

@@ -14,12 +14,28 @@
  */
 
 import path from 'node:path';
+import { acceptedExtensions, ELEMENT_FILE_EXTENSIONS } from '../storage/elementFileExtensions.js';
 import fs from 'node:fs/promises';
 import { logger } from '../utils/logger.js';
 import { RegexValidator } from './regexValidator.js';
 import { SECURITY_LIMITS } from './constants.js';
 
 const PATH_ACCESS_DENIED_MESSAGE = 'Path access denied';
+
+/** `quiet`: the caller owns the log line (a storage index demotes repeats); the refusal itself is unchanged. */
+export interface ElementPathCheckOptions { quiet?: boolean }
+
+/** The validator's own evidence for a refusal, carried on the error so the owner of the log line reports it. */
+export interface PathRefusalDetail { path: string; allowedDir?: string; realPath?: string }
+
+export function pathRefusalDetail(error: unknown): PathRefusalDetail | undefined {
+  const detail = (error as { pathRefusal?: PathRefusalDetail } | null)?.pathRefusal;
+  return detail && typeof detail.path === 'string' ? detail : undefined;
+}
+
+function refusal(message: string, pathRefusal: PathRefusalDetail): Error {
+  return Object.assign(new Error(message), { pathRefusal });
+}
 
 /**
  * Per-user allowlist for session-scoped PathValidator instances.
@@ -315,10 +331,70 @@ export class PathValidator {
   }
 
   /**
-   * Validate element path without resolving symlinks.
+   * Validate a stored element path: traversal, containment, the symlink target, then the filename
+   * rules, in that order, so the reported refusal is the first policy the path breaks.
    * Pure — does not use class-level state. Takes allowedDir as parameter.
    */
-  static async validateElementPathOnly(absolutePath: string, allowedDir: string): Promise<void> {
+  static async validateElementPathOnly(absolutePath: string, allowedDir: string, options: ElementPathCheckOptions = {}): Promise<void> {
+    const normalizedPath = PathValidator.containReference(absolutePath, allowedDir, options);
+    await PathValidator.assertSymlinkWithinDirectory(normalizedPath, path.normalize(allowedDir), absolutePath, options);
+    PathValidator.validateFilenameExtension(normalizedPath);
+  }
+
+  /**
+   * Whether caller text is shaped like a path rather than a name: it carries a separator, is an
+   * absolute path or holds percent-encoded bytes (an encoded path, never a display name). Only such
+   * text is validated as a reference on its own syntax before a name lookup; anything else may be a
+   * stored display name ('..', 'Q&A', 'My Skill') and is certified through the index first.
+   * References themselves are never decoded.
+   */
+  static isPathShaped(text: string): boolean {
+    return /[\\/]/.test(text) || PathValidator.isPathSyntax(text);
+  }
+
+  /**
+   * Path syntax that can only address a location, never name an element: beside a separator, an
+   * empty or dots-only segment ('a//b', './x', '../x', '....//x'); an absolute path, a drive letter,
+   * percent-encoding or a NUL byte. A drive letter is one followed by a separator or the end of the
+   * text ('C:/x', 'C:\\x', 'C:'), or by a filename carrying the type's extension ('C:alpha.md');
+   * 'Q: Interview Prep' is a name. A separator alone is not path syntax: a stored
+   * display name may contain one ('CI/CD Helper', 'A/B Testing').
+   */
+  static isPathSyntax(text: string, fileExtension?: string): boolean {
+    return path.isAbsolute(text) || path.win32.isAbsolute(text) || PathValidator.isDrivePath(text, fileExtension)
+      || /%[0-9a-f]{2}/i.test(text) || text.includes('\0')
+      || (/[\\/]/.test(text) && text.split(/[\\/]/).some(segment => /^\.*$/.test(segment)));
+  }
+
+  /**
+   * A drive letter then a separator or nothing, or then a filename with the type's extension (any
+   * element file extension when none is given).
+   */
+  private static isDrivePath(text: string, fileExtension?: string): boolean {
+    if (/^[a-z]:(?:[\\/]|$)/i.test(text)) return true;
+    if (!/^[a-z]:/i.test(text)) return false;
+    const lower = text.toLowerCase();
+    const extensions = fileExtension
+      ? acceptedExtensions(fileExtension.toLowerCase())
+      : Object.values(ELEMENT_FILE_EXTENSIONS).flatMap(acceptedExtensions);
+    return extensions.some(extension => lower.endsWith(extension));
+  }
+
+  /**
+   * Validate the reference itself without touching storage: traversal, containment and filename
+   * rules. A caller can get only these wrong; whether the stored target (a symlink) stays inside
+   * the directory is storage state, checked by validateElementPathOnly on the read path.
+   * Returns the normalized path. A repeated storage-side check passes `quiet` so the index
+   * owns the (repeat-demoted) log line instead of the validator.
+   */
+  static validateElementReference(absolutePath: string, allowedDir: string, options: ElementPathCheckOptions = {}): string {
+    const normalizedPath = PathValidator.containReference(absolutePath, allowedDir, options);
+    PathValidator.validateFilenameExtension(normalizedPath);
+    return normalizedPath;
+  }
+
+  /** Traversal and containment: the normalized path, inside the directory, before any storage or filename check. */
+  private static containReference(absolutePath: string, allowedDir: string, options: ElementPathCheckOptions): string {
     if (!absolutePath || typeof absolutePath !== 'string') {
       throw new Error('Path must be a non-empty string');
     }
@@ -326,48 +402,59 @@ export class PathValidator {
       throw new Error('allowedDir must be a non-empty string');
     }
 
-    // Intentionally remove all null bytes before path normalization.
-    const cleanPath = absolutePath.replaceAll('\0', ''); // NOSONAR
-    const normalizedPath = path.normalize(cleanPath);
-    PathValidator.assertNoTraversal(normalizedPath, cleanPath, absolutePath);
-
-    const normalizedAllowedDir = path.normalize(allowedDir);
-    PathValidator.assertWithinDirectory(normalizedPath, normalizedAllowedDir, absolutePath);
-    await PathValidator.assertSymlinkWithinDirectory(normalizedPath, normalizedAllowedDir, absolutePath);
-    PathValidator.validateFilenameExtension(normalizedPath);
+    // A reference carrying a NUL is refused, never rewritten to the reference without it.
+    if (absolutePath.includes('\0')) {
+      if (!options.quiet) logger.warn('Null byte in path reference refused', { userPath: absolutePath });
+      throw refusal('Null bytes are not allowed in a path', { path: absolutePath });
+    }
+    const normalizedPath = path.normalize(absolutePath);
+    PathValidator.assertNoTraversal(normalizedPath, absolutePath, absolutePath, options);
+    PathValidator.assertWithinDirectory(normalizedPath, path.normalize(allowedDir), absolutePath, options);
+    return normalizedPath;
   }
 
-  private static assertNoTraversal(normalizedPath: string, cleanPath: string, userPath: string): void {
+  private static assertNoTraversal(normalizedPath: string, cleanPath: string, userPath: string, options: ElementPathCheckOptions): void {
     if (normalizedPath.includes('..') || cleanPath.includes('..')) {
-      logger.warn('Path traversal attempt detected', { userPath });
-      throw new Error('Path traversal detected');
+      if (!options.quiet) logger.warn('Path traversal attempt detected', { userPath });
+      throw refusal('Path traversal detected', { path: userPath });
     }
   }
 
-  private static assertWithinDirectory(normalizedPath: string, normalizedAllowedDir: string, userPath: string): void {
+  private static assertWithinDirectory(normalizedPath: string, normalizedAllowedDir: string, userPath: string, options: ElementPathCheckOptions): void {
     const pathWithSep = normalizedPath + path.sep;
     const allowedDirWithSep = normalizedAllowedDir + path.sep;
     if (!pathWithSep.startsWith(allowedDirWithSep) && normalizedPath !== normalizedAllowedDir) {
-      logger.error(PATH_ACCESS_DENIED_MESSAGE, { path: userPath, allowedDir: normalizedAllowedDir });
-      throw new Error(PATH_ACCESS_DENIED_MESSAGE);
+      if (!options.quiet) logger.error(PATH_ACCESS_DENIED_MESSAGE, { path: userPath, allowedDir: normalizedAllowedDir });
+      throw refusal(PATH_ACCESS_DENIED_MESSAGE, { path: userPath, allowedDir: normalizedAllowedDir });
     }
   }
 
-  private static async assertSymlinkWithinDirectory(normalizedPath: string, normalizedAllowedDir: string, userPath: string): Promise<void> {
+  private static async assertSymlinkWithinDirectory(normalizedPath: string, normalizedAllowedDir: string, userPath: string,
+    options: ElementPathCheckOptions): Promise<void> {
+    let stats;
     try {
-      const stats = await fs.lstat(normalizedPath);
-      if (!stats.isSymbolicLink()) return;
+      stats = await fs.lstat(normalizedPath);
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw cause;
+    }
+    if (!stats.isSymbolicLink()) return;
 
-      const realPath = await fs.realpath(normalizedPath);
-      const realPathWithSep = realPath + path.sep;
-      const allowedDirWithSep = normalizedAllowedDir + path.sep;
-
-      if (!realPathWithSep.startsWith(allowedDirWithSep) && realPath !== normalizedAllowedDir) {
-        logger.error('Symlink target outside allowed directory', { path: userPath, realPath, allowedDir: normalizedAllowedDir });
-        throw new Error(PATH_ACCESS_DENIED_MESSAGE);
+    let realPath: string;
+    try {
+      realPath = await fs.realpath(normalizedPath);
+    } catch (cause) {
+      // The reference exists: a missing target is a failed read, not absence of the reference.
+      if ((cause as NodeJS.ErrnoException).code === 'ENOENT') {
+        throw Object.assign(new Error('Symlink target is unavailable', { cause }), { code: 'EIO' });
       }
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      throw cause;
+    }
+    const realPathWithSep = realPath + path.sep;
+    const allowedDirWithSep = normalizedAllowedDir + path.sep;
+    if (!realPathWithSep.startsWith(allowedDirWithSep) && realPath !== normalizedAllowedDir) {
+      if (!options.quiet) logger.error('Symlink target outside allowed directory', { path: userPath, realPath, allowedDir: normalizedAllowedDir });
+      throw refusal(PATH_ACCESS_DENIED_MESSAGE, { path: userPath, realPath, allowedDir: normalizedAllowedDir });
     }
   }
 

@@ -303,6 +303,13 @@ export class DollhouseContainer {
   }
 
   /**
+   * Check whether a service has been registered (without resolving it).
+   */
+  public hasRegistration(name: string): boolean {
+    return this.services.has(name);
+  }
+
+  /**
    * Resolve a service from the DI container
    *
    * FIX: Type safety improved with explicit casting and validation
@@ -316,14 +323,6 @@ export class DollhouseContainer {
    * @returns The service instance
    * @throws Error if service is not registered
    */
-  /**
-   * Check whether a service has been registered (without resolving it).
-   */
-  public hasRegistration(name: string): boolean {
-    return this.services.has(name);
-  }
-
-
   public resolve<T>(name: string): T {
     const service = this.services.get(name);
     if (!service) {
@@ -1161,7 +1160,8 @@ export class DollhouseContainer {
       activePersonaAccessor
     );
 
-    await personaManager.reload();
+    await personaManager.initialize();
+    logger.debug('[Container] Persona definition reads deferred to the first caller-scoped operation');
 
     const memoryProvider = this.createTenantMemoryProvider();
     const elementCrudHandler = new ElementCRUDHandler(

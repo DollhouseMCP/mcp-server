@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { ElementMissingError } from '../../../src/elements/base/ElementReadError.js';
 /** Actual central manager commits on independently owned required-CI PostgreSQL fixtures. */
 import { describe, expect, it, jest } from '@jest/globals';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -70,6 +72,14 @@ async function isolated(body: (f: EquivalentFixture, makeManager: (getUser?: () 
 }
 
 requiredDescribe('dormant central memory UPDATE with owned PostgreSQL', () => {
+  it('keeps an actually missing database head absent through public, stored and resolver reads', () => isolated(async (_f, makeManager) => {
+    const { manager } = await makeManager();
+    const missing = randomUUID();
+    await expect(manager.load(missing)).rejects.toBeInstanceOf(ElementMissingError);
+    await expect(manager.loadStoredReference(missing)).rejects.toBeInstanceOf(ElementMissingError);
+    await expect(manager.findByName(missing)).resolves.toBeUndefined();
+  }));
+
   it('manager save and Memory.save commit captured content and refresh durable authority without legacy upsert', () => isolated(async (f, makeManager) => {
     const { manager, layer } = await makeManager();
     const legacy = jest.spyOn(layer, 'writeContent');

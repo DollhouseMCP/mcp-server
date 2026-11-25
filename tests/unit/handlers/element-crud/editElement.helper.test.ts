@@ -28,27 +28,27 @@ describe('editElement helper', () => {
   beforeEach(() => {
     mockContext = {
       skillManager: {
-        find: jest.fn().mockResolvedValue(null),
+        findByName: jest.fn().mockResolvedValue(null),
         save: jest.fn().mockResolvedValue(),
       },
       templateManager: {
-        find: jest.fn().mockResolvedValue(null),
+        findByName: jest.fn().mockResolvedValue(null),
         save: jest.fn().mockResolvedValue(),
       },
       agentManager: {
-        find: jest.fn().mockResolvedValue(null),
+        findByName: jest.fn().mockResolvedValue(null),
         save: jest.fn().mockResolvedValue(),
       },
       memoryManager: {
-        find: jest.fn().mockResolvedValue(null),
+        findByName: jest.fn().mockResolvedValue(null),
         save: jest.fn().mockResolvedValue(),
       },
       ensembleManager: {
-        list: jest.fn().mockResolvedValue([]),
+        findByName: jest.fn().mockResolvedValue(null),
         save: jest.fn().mockResolvedValue(),
       },
       personaManager: {
-        find: jest.fn().mockResolvedValue(null),
+        findByName: jest.fn().mockResolvedValue(null),
         save: jest.fn().mockResolvedValue(),
         editPersona: jest.fn().mockResolvedValue({
           success: true,
@@ -61,6 +61,24 @@ describe('editElement helper', () => {
       ensureInitialized: jest.fn().mockResolvedValue(),
       getPersonaIndicator: jest.fn().mockReturnValue('>> '),
     } as any;
+    mockContext.getManagerForType = (type: string) => ({
+      [ElementType.PERSONA]: mockContext.personaManager, [ElementType.SKILL]: mockContext.skillManager,
+      [ElementType.TEMPLATE]: mockContext.templateManager, [ElementType.AGENT]: mockContext.agentManager,
+      [ElementType.MEMORY]: mockContext.memoryManager, [ElementType.ENSEMBLE]: mockContext.ensembleManager,
+    } as Record<string, unknown>)[type];
+  });
+
+  describe('fork on edit', () => {
+    it('fails when the post-fork lookup cannot certify the forked element instead of editing the shared original', async () => {
+      const original = createMockElement(TEST_SKILL_NAME);
+      (mockContext.skillManager as any).findByName = jest.fn<any>().mockResolvedValueOnce(original).mockResolvedValueOnce(undefined);
+      mockContext.forkOnEditStrategy = { evaluateAndFork: jest.fn<any>().mockResolvedValue({ forked: true }) } as any;
+      mockContext.portfolioManager = { getElementDir: jest.fn(() => 'skills') } as any;
+
+      await expect(editElement(mockContext, { name: TEST_SKILL_NAME, type: ElementType.SKILL, input: { description: 'edited' } }))
+        .rejects.toBeInstanceOf(ElementNotFoundError);
+      expect((mockContext.skillManager as any).save).not.toHaveBeenCalled();
+    });
   });
 
   describe('input validation', () => {
@@ -137,7 +155,7 @@ describe('editElement helper', () => {
 
     it('should accept valid element type: skills', async () => {
       const element = createMockElement(TEST_SKILL_NAME);
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -151,7 +169,7 @@ describe('editElement helper', () => {
 
     it('should accept valid element type: templates', async () => {
       const element = createMockElement(TEST_TEMPLATE_NAME);
-      mockContext.templateManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.templateManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_TEMPLATE_NAME,
@@ -165,7 +183,7 @@ describe('editElement helper', () => {
 
     it('should accept valid element type: agents', async () => {
       const element = createMockElement(TEST_AGENT_NAME);
-      mockContext.agentManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.agentManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_AGENT_NAME,
@@ -179,7 +197,7 @@ describe('editElement helper', () => {
 
     it('should accept valid element type: memories', async () => {
       const element = createMockElement(TEST_MEMORY_NAME);
-      mockContext.memoryManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.memoryManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_MEMORY_NAME,
@@ -196,7 +214,7 @@ describe('editElement helper', () => {
       const oldest = await element.addEntry('Oldest');
       await element.addEntry('Newer');
       await expect(element.addEntry('Blocked')).rejects.toThrow('is full');
-      mockContext.memoryManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.memoryManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_MEMORY_NAME,
@@ -218,7 +236,7 @@ describe('editElement helper', () => {
     ])('rejects invalid onFull edit input without saving or changing the policy: %j', async input => {
       const element = new Memory({ name: TEST_MEMORY_NAME, maxEntries: 1 }, createTestMetadataService());
       await element.addEntry('Kept');
-      mockContext.memoryManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.memoryManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_MEMORY_NAME,
@@ -239,7 +257,7 @@ describe('editElement helper', () => {
       { metadata: { on_full: 'error' } },
     ])('rejects the load-only on_full alias in edits with actionable feedback: %j', async input => {
       const element = new Memory({ name: TEST_MEMORY_NAME, retentionDays: 30, maxEntries: 1 }, createTestMetadataService());
-      mockContext.memoryManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.memoryManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_MEMORY_NAME,
@@ -255,7 +273,7 @@ describe('editElement helper', () => {
     // Issue #1591: Memory content is append-only
     it('should reject attempts to edit memory content field', async () => {
       const element = createMockElement(TEST_MEMORY_NAME);
-      mockContext.memoryManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.memoryManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_MEMORY_NAME,
@@ -274,7 +292,7 @@ describe('editElement helper', () => {
 
   describe('element not found', () => {
     it('should throw ElementNotFoundError when skill not found', async () => {
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(null);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(null);
 
       await expect(
         editElement(mockContext, {
@@ -286,7 +304,7 @@ describe('editElement helper', () => {
     });
 
     it('should throw ElementNotFoundError when template not found', async () => {
-      mockContext.templateManager.find = jest.fn().mockResolvedValue(null);
+      mockContext.templateManager.findByName = jest.fn().mockResolvedValue(null);
 
       await expect(
         editElement(mockContext, {
@@ -298,7 +316,7 @@ describe('editElement helper', () => {
     });
 
     it('should throw ElementNotFoundError when agent not found', async () => {
-      mockContext.agentManager.find = jest.fn().mockResolvedValue(null);
+      mockContext.agentManager.findByName = jest.fn().mockResolvedValue(null);
 
       await expect(
         editElement(mockContext, {
@@ -310,7 +328,7 @@ describe('editElement helper', () => {
     });
 
     it('should throw ElementNotFoundError when memory not found', async () => {
-      mockContext.memoryManager.find = jest.fn().mockResolvedValue(null);
+      mockContext.memoryManager.findByName = jest.fn().mockResolvedValue(null);
 
       await expect(
         editElement(mockContext, {
@@ -327,7 +345,7 @@ describe('editElement helper', () => {
       const element = createMockElement(TEST_SKILL_NAME, {
         settings: { theme: 'light', verbose: false }
       });
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -352,7 +370,7 @@ describe('editElement helper', () => {
           rules: { enabled: true, mode: 'strict' },
         },
       });
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -388,7 +406,7 @@ describe('editElement helper', () => {
         version: '1.0.0',
         validate: () => ({ valid: true }),
       };
-      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([mockEnsemble]);
+      mockContext.ensembleManager.findByName = jest.fn().mockResolvedValue(mockEnsemble);
       mockContext.ensembleManager.save = jest.fn().mockResolvedValue(mockEnsemble);
 
       const result = await editElement(mockContext, {
@@ -410,7 +428,7 @@ describe('editElement helper', () => {
         version: '1.0.0',
         validate: () => ({ valid: true }),
       };
-      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([mockEnsemble]);
+      mockContext.ensembleManager.findByName = jest.fn().mockResolvedValue(mockEnsemble);
 
       const result = await editElement(mockContext, {
         name: TEST_ENSEMBLE_NAME,
@@ -441,7 +459,7 @@ describe('editElement helper', () => {
         createTestMetadataService()
       );
       const syncSpy = jest.spyOn(ensemble, 'syncElementsFromMetadata');
-      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([ensemble]);
+      mockContext.ensembleManager.findByName = jest.fn().mockResolvedValue(ensemble);
       mockContext.ensembleManager.save = jest.fn().mockResolvedValue(ensemble);
 
       const result = await editElement(mockContext, {
@@ -470,7 +488,7 @@ describe('editElement helper', () => {
         createTestMetadataService()
       );
       const syncSpy = jest.spyOn(ensemble, 'syncElementsFromMetadata');
-      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([ensemble]);
+      mockContext.ensembleManager.findByName = jest.fn().mockResolvedValue(ensemble);
       mockContext.ensembleManager.save = jest.fn().mockResolvedValue(ensemble);
 
       const result = await editElement(mockContext, {
@@ -495,7 +513,7 @@ describe('editElement helper', () => {
         [],
         createTestMetadataService()
       );
-      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([ensemble]);
+      mockContext.ensembleManager.findByName = jest.fn().mockResolvedValue(ensemble);
       mockContext.ensembleManager.save = jest.fn().mockResolvedValue(ensemble);
 
       const result = await editElement(mockContext, {
@@ -513,7 +531,7 @@ describe('editElement helper', () => {
       const element = createMockElement(TEST_SKILL_NAME, {
         tags: ['old1', 'old2']
       });
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -530,7 +548,7 @@ describe('editElement helper', () => {
 
     it('should update multiple fields in one call', async () => {
       const element = createMockElement(TEST_SKILL_NAME);
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -558,7 +576,7 @@ describe('editElement helper', () => {
         filename: 'test-persona.md'
       };
 
-      (mockContext.personaManager.find as jest.Mock).mockResolvedValueOnce(mockPersona);
+      (mockContext.personaManager.findByName as jest.Mock).mockResolvedValueOnce(mockPersona);
       (mockContext.personaManager.save as jest.Mock).mockResolvedValueOnce();
 
       const result = await editElement(mockContext, {
@@ -567,7 +585,7 @@ describe('editElement helper', () => {
         input: { description: 'Updated description' },
       });
 
-      expect(mockContext.personaManager.find).toHaveBeenCalled();
+      expect(mockContext.personaManager.findByName).toHaveBeenCalled();
       expect(mockContext.personaManager.save).toHaveBeenCalled();
       expect(result.content[0].text).toContain('✅');
       expect(result.content[0].text).toContain('Test Persona');
@@ -577,7 +595,7 @@ describe('editElement helper', () => {
   describe('post-edit metadata normalization (#911)', () => {
     it('should default description to empty string when null after edit', async () => {
       const element = createMockElement(TEST_SKILL_NAME, { description: null });
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -590,7 +608,7 @@ describe('editElement helper', () => {
 
     it('should default tags to empty array when undefined after edit', async () => {
       const element = createMockElement(TEST_SKILL_NAME, { tags: undefined });
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -603,7 +621,7 @@ describe('editElement helper', () => {
 
     it('should update modified timestamp on edit', async () => {
       const element = createMockElement(TEST_SKILL_NAME, { modified: '2020-01-01T00:00:00.000Z' });
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -620,7 +638,7 @@ describe('editElement helper', () => {
         description: 'Existing description',
         tags: ['tag1', 'tag2'],
       });
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -636,7 +654,7 @@ describe('editElement helper', () => {
   describe('version handling', () => {
     it('should auto-increment version when editing metadata without explicit version', async () => {
       const element = createMockElement(TEST_SKILL_NAME, { version: '1.0.0' });
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -653,7 +671,7 @@ describe('editElement helper', () => {
 
     it('should accept explicit version updates without auto-incrementing', async () => {
       const element = createMockElement(TEST_SKILL_NAME, { version: '1.0.0' });
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -669,7 +687,7 @@ describe('editElement helper', () => {
 
     it('should reject invalid version format', async () => {
       const element = createMockElement(TEST_SKILL_NAME, { version: '1.0.0' });
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -684,7 +702,7 @@ describe('editElement helper', () => {
 
     it('should reject non-string versions instead of stringifying them', async () => {
       const element = createMockElement(TEST_SKILL_NAME, { version: '1.0.0' });
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -701,7 +719,7 @@ describe('editElement helper', () => {
       const element = createMockElement(TEST_SKILL_NAME);
       element.version = '1.0.0-beta.1';
       element.metadata.version = '1.0.0-beta.1';
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -718,7 +736,7 @@ describe('editElement helper', () => {
   describe('value type handling', () => {
     it('should handle string values', async () => {
       const element = createMockElement(TEST_SKILL_NAME);
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -731,7 +749,7 @@ describe('editElement helper', () => {
 
     it('should handle number values', async () => {
       const element = createMockElement(TEST_SKILL_NAME);
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -746,7 +764,7 @@ describe('editElement helper', () => {
 
     it('should handle boolean values', async () => {
       const element = createMockElement(TEST_SKILL_NAME);
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -761,7 +779,7 @@ describe('editElement helper', () => {
 
     it('should handle array values', async () => {
       const element = createMockElement(TEST_SKILL_NAME);
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -776,7 +794,7 @@ describe('editElement helper', () => {
 
     it('should handle object values', async () => {
       const element = createMockElement(TEST_SKILL_NAME);
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -792,7 +810,7 @@ describe('editElement helper', () => {
 
   describe('error handling', () => {
     it('should handle manager.find errors gracefully', async () => {
-      mockContext.skillManager.find = jest.fn().mockRejectedValue(new Error('Find failed'));
+      mockContext.skillManager.findByName = jest.fn().mockRejectedValue(new Error('Find failed'));
 
       await expect(editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -803,7 +821,7 @@ describe('editElement helper', () => {
 
     it('should handle manager.save errors gracefully', async () => {
       const element = createMockElement(TEST_SKILL_NAME);
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
       mockContext.skillManager.save = jest.fn().mockRejectedValue(new Error('Save failed'));
 
       const result = await editElement(mockContext, {
@@ -820,7 +838,7 @@ describe('editElement helper', () => {
   describe('successful edits', () => {
     it('should edit skill successfully', async () => {
       const element = createMockElement(TEST_SKILL_NAME);
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -828,7 +846,7 @@ describe('editElement helper', () => {
         input: { description: 'Updated description' },
       });
 
-      expect(mockContext.skillManager.find).toHaveBeenCalled();
+      expect(mockContext.skillManager.findByName).toHaveBeenCalled();
       expect(mockContext.skillManager.save).toHaveBeenCalled();
       expect(result.content[0].text).toContain('✅');
       expect(result.content[0].text).toContain(TEST_SKILL_NAME);
@@ -836,7 +854,7 @@ describe('editElement helper', () => {
 
     it('should edit template successfully', async () => {
       const element = createMockElement(TEST_TEMPLATE_NAME);
-      mockContext.templateManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.templateManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_TEMPLATE_NAME,
@@ -850,7 +868,7 @@ describe('editElement helper', () => {
 
     it('should edit agent successfully', async () => {
       const element = createMockElement(TEST_AGENT_NAME);
-      mockContext.agentManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.agentManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_AGENT_NAME,
@@ -864,7 +882,7 @@ describe('editElement helper', () => {
 
     it('should edit memory successfully', async () => {
       const element = createMockElement(TEST_MEMORY_NAME);
-      mockContext.memoryManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.memoryManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_MEMORY_NAME,
@@ -880,7 +898,7 @@ describe('editElement helper', () => {
   describe('filename generation', () => {
     it('should generate .md extension for skills', async () => {
       const element = createMockElement(TEST_SKILL_NAME);
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -896,7 +914,7 @@ describe('editElement helper', () => {
 
     it('should generate .yaml extension for memories', async () => {
       const element = createMockElement(TEST_MEMORY_NAME);
-      mockContext.memoryManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.memoryManager.findByName = jest.fn().mockResolvedValue(element);
 
       await editElement(mockContext, {
         name: TEST_MEMORY_NAME,
@@ -912,7 +930,7 @@ describe('editElement helper', () => {
 
     it('should sanitize filenames with special characters', async () => {
       const element = createMockElement('Test Skill With Spaces!');
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       await editElement(mockContext, {
         name: 'Test Skill With Spaces!',
@@ -940,7 +958,7 @@ describe('editElement helper', () => {
 
     it('should update agent reference material via content field', async () => {
       const agent = createMockAgent(TEST_AGENT_NAME, 'old instructions');
-      mockContext.agentManager.find = jest.fn().mockResolvedValue(agent);
+      mockContext.agentManager.findByName = jest.fn().mockResolvedValue(agent);
 
       const result = await editElement(mockContext, {
         name: TEST_AGENT_NAME,
@@ -959,7 +977,7 @@ describe('editElement helper', () => {
     // Issue #602 resolved: 'instructions' is a first-class field for behavioral directives
     it('should accept instructions field in edit input and update extensions', async () => {
       const agent = createMockAgent(TEST_AGENT_NAME, 'old instructions');
-      mockContext.agentManager.find = jest.fn().mockResolvedValue(agent);
+      mockContext.agentManager.findByName = jest.fn().mockResolvedValue(agent);
 
       const result = await editElement(mockContext, {
         name: TEST_AGENT_NAME,
@@ -975,7 +993,7 @@ describe('editElement helper', () => {
 
     it('should accept instructions field combined with other fields', async () => {
       const agent = createMockAgent(TEST_AGENT_NAME, 'old instructions');
-      mockContext.agentManager.find = jest.fn().mockResolvedValue(agent);
+      mockContext.agentManager.findByName = jest.fn().mockResolvedValue(agent);
 
       const result = await editElement(mockContext, {
         name: TEST_AGENT_NAME,
@@ -1000,7 +1018,7 @@ describe('editElement helper', () => {
         content: '',
         validate: () => ({ valid: true }),
       };
-      mockContext.agentManager.find = jest.fn().mockResolvedValue(agent);
+      mockContext.agentManager.findByName = jest.fn().mockResolvedValue(agent);
 
       const result = await editElement(mockContext, {
         name: TEST_AGENT_NAME,
@@ -1021,7 +1039,7 @@ describe('editElement helper', () => {
         content: 'old content',
         validate: () => ({ valid: true }),
       };
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(skill);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(skill);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -1045,7 +1063,7 @@ describe('editElement helper', () => {
         extensions: { instructions: '' },
         validate: () => ({ valid: true }),
       };
-      mockContext.agentManager.find = jest.fn().mockResolvedValue(agent);
+      mockContext.agentManager.findByName = jest.fn().mockResolvedValue(agent);
 
       const result = await editElement(mockContext, {
         name: TEST_AGENT_NAME,
@@ -1068,7 +1086,7 @@ describe('editElement helper', () => {
         extensions: { instructions: '' },
         validate: () => ({ valid: true }),
       };
-      mockContext.agentManager.find = jest.fn().mockResolvedValue(agent);
+      mockContext.agentManager.findByName = jest.fn().mockResolvedValue(agent);
 
       const activatesObj = { skills: ['skill-a', 'skill-b'], personas: ['dev'] };
       const result = await editElement(mockContext, {
@@ -1091,7 +1109,7 @@ describe('editElement helper', () => {
         extensions: { instructions: '' },
         validate: () => ({ valid: true }),
       };
-      mockContext.agentManager.find = jest.fn().mockResolvedValue(agent);
+      mockContext.agentManager.findByName = jest.fn().mockResolvedValue(agent);
 
       const result = await editElement(mockContext, {
         name: TEST_AGENT_NAME,
@@ -1110,7 +1128,7 @@ describe('editElement helper', () => {
 
     it('should route skill domains field to metadata', async () => {
       const skill = createMockElement(TEST_SKILL_NAME);
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(skill);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(skill);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -1126,7 +1144,7 @@ describe('editElement helper', () => {
 
     it('should route skill category field to metadata', async () => {
       const skill = createMockElement(TEST_SKILL_NAME);
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(skill);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(skill);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -1141,7 +1159,7 @@ describe('editElement helper', () => {
 
     it('should route template variables field to metadata', async () => {
       const template = createMockElement(TEST_TEMPLATE_NAME);
-      mockContext.templateManager.find = jest.fn().mockResolvedValue(template);
+      mockContext.templateManager.findByName = jest.fn().mockResolvedValue(template);
 
       const result = await editElement(mockContext, {
         name: TEST_TEMPLATE_NAME,
@@ -1156,7 +1174,7 @@ describe('editElement helper', () => {
 
     it('should produce warning for truly unknown fields', async () => {
       const skill = createMockElement(TEST_SKILL_NAME);
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(skill);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(skill);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -1179,7 +1197,7 @@ describe('editElement helper', () => {
         extensions: { instructions: 'old' },
         validate: () => ({ valid: true }),
       };
-      mockContext.agentManager.find = jest.fn().mockResolvedValue(agent);
+      mockContext.agentManager.findByName = jest.fn().mockResolvedValue(agent);
 
       const result = await editElement(mockContext, {
         name: TEST_AGENT_NAME,
@@ -1201,7 +1219,7 @@ describe('editElement helper', () => {
         content: 'old content',
         validate: () => ({ valid: true }),
       };
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(skill);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(skill);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -1219,7 +1237,7 @@ describe('editElement helper', () => {
   describe('field type validation', () => {
     it('should reject dict where array is expected (tags)', async () => {
       const element = createMockElement(TEST_SKILL_NAME);
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -1236,7 +1254,7 @@ describe('editElement helper', () => {
 
     it('should reject string where array is expected (triggers)', async () => {
       const element = createMockElement(TEST_SKILL_NAME);
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -1252,7 +1270,7 @@ describe('editElement helper', () => {
 
     it('should reject array where object is expected (gatekeeper)', async () => {
       const element = createMockElement(TEST_SKILL_NAME);
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -1268,7 +1286,7 @@ describe('editElement helper', () => {
 
     it('should reject top-level externalRestrictions during edit', async () => {
       const element = createMockElement(TEST_SKILL_NAME);
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -1289,7 +1307,7 @@ describe('editElement helper', () => {
 
     it('should reject metadata gatekeeper without externalRestrictions description during edit', async () => {
       const element = createMockElement(TEST_SKILL_NAME);
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -1312,7 +1330,7 @@ describe('editElement helper', () => {
 
     it('should allow top-level metadata descriptions beyond the generic metadata field limit', async () => {
       const element = createMockElement(TEST_SKILL_NAME);
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const substantiveDescription = 'a'.repeat(SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH + 1);
       const result = await editElement(mockContext, {
@@ -1332,7 +1350,7 @@ describe('editElement helper', () => {
 
     it('should reject top-level metadata descriptions that consume reserved frontmatter overhead', async () => {
       const element = createMockElement(TEST_SKILL_NAME);
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const oversizedDescription = 'a'.repeat(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH + 1);
       const result = await editElement(mockContext, {
@@ -1353,7 +1371,7 @@ describe('editElement helper', () => {
 
     it('should reject nested descriptions that collectively exceed the frontmatter budget', async () => {
       const element = createMockElement(TEST_TEMPLATE_NAME);
-      mockContext.templateManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.templateManager.findByName = jest.fn().mockResolvedValue(element);
       const descriptionPart = 'a'.repeat(Math.floor(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH / 2) + 1);
 
       const result = await editElement(mockContext, {
@@ -1375,7 +1393,7 @@ describe('editElement helper', () => {
     it('should include existing descriptions in the aggregate frontmatter budget', async () => {
       const descriptionPart = 'a'.repeat(Math.floor(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH / 2) + 1);
       const element = createMockElement(TEST_TEMPLATE_NAME, { description: descriptionPart });
-      mockContext.templateManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.templateManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_TEMPLATE_NAME,
@@ -1394,7 +1412,7 @@ describe('editElement helper', () => {
 
     it('should format empty metadata keys without doubled path separators', async () => {
       const element = createMockElement(TEST_SKILL_NAME);
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const oversizedDescription = 'a'.repeat(SECURITY_LIMITS.MAX_DOCUMENTATION_FIELD_LENGTH + 1);
       const result = await editElement(mockContext, {
@@ -1425,7 +1443,7 @@ describe('editElement helper', () => {
           },
         ],
       });
-      mockContext.templateManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.templateManager.findByName = jest.fn().mockResolvedValue(element);
       const longDescription = 'Detailed variable documentation '.repeat(40).trim();
 
       const result = await editElement(mockContext, {
@@ -1452,7 +1470,7 @@ describe('editElement helper', () => {
 
     it('should reject number where string is expected (description)', async () => {
       const element = createMockElement(TEST_SKILL_NAME);
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -1468,7 +1486,7 @@ describe('editElement helper', () => {
 
     it('should reject string where number is expected (priority)', async () => {
       const element = createMockElement(TEST_SKILL_NAME);
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -1484,7 +1502,7 @@ describe('editElement helper', () => {
 
     it('should report multiple type errors in a single response', async () => {
       const element = createMockElement(TEST_SKILL_NAME);
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -1506,7 +1524,7 @@ describe('editElement helper', () => {
     it('should skip element-type-scoped rules for non-matching types', async () => {
       // goal is agent-only; should not reject for skills
       const element = createMockElement(TEST_SKILL_NAME);
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -1527,7 +1545,7 @@ describe('editElement helper', () => {
         extensions: { instructions: '' },
         validate: () => ({ valid: true }),
       };
-      mockContext.agentManager.find = jest.fn().mockResolvedValue(agent);
+      mockContext.agentManager.findByName = jest.fn().mockResolvedValue(agent);
 
       const result = await editElement(mockContext, {
         name: TEST_AGENT_NAME,
@@ -1543,7 +1561,7 @@ describe('editElement helper', () => {
 
     it('should allow null/undefined values (skip validation)', async () => {
       const element = createMockElement(TEST_SKILL_NAME);
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -1557,7 +1575,7 @@ describe('editElement helper', () => {
 
     it('should allow unknown fields to pass type validation (caught later)', async () => {
       const element = createMockElement(TEST_SKILL_NAME);
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -1575,7 +1593,7 @@ describe('editElement helper', () => {
       ['number', 2],
     ])('should accept version as %s', async (_label, version) => {
       const element = createMockElement(TEST_SKILL_NAME);
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,
@@ -1589,7 +1607,7 @@ describe('editElement helper', () => {
   describe('read-only fields', () => {
     it('should skip read-only fields like id', async () => {
       const element = createMockElement(TEST_SKILL_NAME);
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+      mockContext.skillManager.findByName = jest.fn().mockResolvedValue(element);
 
       const result = await editElement(mockContext, {
         name: TEST_SKILL_NAME,

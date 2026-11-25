@@ -12,6 +12,8 @@ import { ElementQueryService } from '../../services/query/ElementQueryService.js
 import { ValidationRegistry } from '../../services/validation/ValidationRegistry.js';
 import type { BackupService } from '../../services/BackupService.js';
 
+import type { ElementType } from '../../portfolio/types.js';
+
 export interface ElementCrudContext {
   ensureInitialized(): Promise<void>;
   /** Capture references before deletion; invoke the returned cleanup only after commit. */
@@ -30,4 +32,6 @@ export interface ElementCrudContext {
   validationRegistry: ValidationRegistry;
   backupService?: BackupService;
   forkOnEditStrategy?: import('../../collection/shared-pool/ForkOnEditStrategy.js').ForkOnEditStrategy;
+  /** The one type-to-manager resolution: the handler's registered lookup, never a per-operation map. */
+  getManagerForType(type: ElementType): import('../../elements/base/BaseElementManager.js').BaseElementManager<any> | undefined;
 }

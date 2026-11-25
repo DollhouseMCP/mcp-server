@@ -146,8 +146,13 @@ describe('BaseElementManager load() without naming convention enforcement', () =
     fileOperationsService = {
       createDirectory: jest.fn().mockResolvedValue(undefined),
       readElementFile: jest.fn().mockResolvedValue(''),
+      readFile: jest.fn((...args: unknown[]) => fileOperationsService.readElementFile(...(args as [string]))),
+      auditElementRead: jest.fn(),
+      stat: jest.fn().mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' })),
+      listDirectoryWithTypes: jest.fn().mockResolvedValue([]),
       writeFile: jest.fn().mockResolvedValue(undefined),
       exists: jest.fn().mockResolvedValue(false),
+      directoryExists: jest.fn().mockResolvedValue(false),
       deleteFile: jest.fn().mockResolvedValue(undefined)
     } as unknown as jest.Mocked<FileOperationsService>;
 

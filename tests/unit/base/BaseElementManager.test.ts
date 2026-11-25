@@ -1,3 +1,4 @@
+import { ElementMissingError } from '../../../src/elements/base/ElementReadError.js';
 /**
  * Unit tests for BaseElementManager
  * Tests the REQUIREMENTS and CONTRACT, not just the implementation
@@ -34,6 +35,8 @@ jest.mock('../../../src/utils/logger.js');
 
 import { logger as _logger } from '../../../src/utils/logger.js';
 import { createTestStorageFactory } from '../../helpers/createTestStorageFactory.js';
+import { ValidationError } from '../../../src/security/errors.js';
+import { DatabaseStorageLayer } from '../../../src/storage/DatabaseStorageLayer.js';
 
 // Test element for concrete implementation
 interface TestElementMetadata {
@@ -246,6 +249,31 @@ describe('BaseElementManager - Requirements & Contract', () => {
   });
 
   describe('Security Requirements', () => {
+    it('refuses a caller deletion reference on its own syntax, bare, before any read', async () => {
+      await expect(manager.delete(path.join('..', 'outside.md'))).rejects.toThrow(ValidationError);
+      await expect(manager.delete(path.join('..', 'outside.md'))).rejects.toThrow(/Invalid.*path/i);
+    });
+
+    it('accepts an update target read outside the index only when its metadata selects for the name', async () => {
+      await manager.save(new TestElement({ name: 'Bar' }, 'bar content'), 'foo.md');
+      await expect(manager.findForUpdate('Foo')).resolves.toBeUndefined();
+      expect((await manager.findForUpdate('Bar'))?.element.metadata.name).toBe('Bar');
+    });
+
+    it('never rewrites a stored reference: a sanitiser-stripped character refuses the caller and fails the stored record', async () => {
+      await manager.save(new TestElement({ name: 'Healthy' }, 'healthy content'), 'healthy.md');
+      await fs.copyFile(path.join(elementsDir, 'healthy.md'), path.join(elementsDir, 'Q&A.md'));
+      await expect(manager.load('Q&A.md')).rejects.toThrow(ValidationError);
+      const report = await manager.listReport();
+      expect(report.items.map(item => item.metadata.name)).toEqual(['Healthy']);
+      expect(report.failures).toEqual([expect.objectContaining({ reference: 'Q&A.md',
+        error: expect.objectContaining({ kind: 'unreadable' }) })]);
+      // The read contract refuses the stored reference under its real name; it never reads QA.md instead.
+      await expect(manager['_loader'].load('Q&A.md')).rejects.toMatchObject({ kind: 'unreadable',
+        failures: [expect.objectContaining({ reference: 'Q&A.md', reason: expect.stringContaining('not allowed') })] });
+      await expect(fs.stat(path.join(elementsDir, 'QA.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
     it('prevents path traversal with ../ sequences', async () => {
       const maliciousPath = '../../../etc/passwd';
 
@@ -282,42 +310,27 @@ describe('BaseElementManager - Requirements & Contract', () => {
       expect(fileLockManager.atomicWriteFile).toHaveBeenCalled();
     });
 
-    it('sanitizes file paths before use on save', async () => {
+    it('refuses a save reference the sanitiser would rewrite instead of writing elsewhere', async () => {
       const unsafePath = 'test\x00.md'; // Null byte injection attempt
       const element = new TestElement({ name: 'test' }, 'content');
 
-      await manager.save(element, unsafePath);
-
-      const sanitizedFilename = 'test.md';
-      const savedPath = path.join(elementsDir, sanitizedFilename);
-
-      // File should be written using sanitized filename
-      await expect(fs.readFile(savedPath, 'utf-8')).resolves.toContain('content');
-
-      // Atomic write should be invoked with sanitized path
-      const writeCalls = (fileLockManager.atomicWriteFile as jest.Mock).mock.calls;
-      const lastWriteCall = writeCalls[writeCalls.length - 1];
-      expect(lastWriteCall?.[0]).toContain(sanitizedFilename);
+      await expect(manager.save(element, unsafePath)).rejects.toThrow(/Invalid skill path.*not allowed/);
+      await expect(fs.stat(path.join(elementsDir, 'test.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(fileLockManager.atomicWriteFile).not.toHaveBeenCalled();
     });
 
-    it('sanitizes file paths before use on load', async () => {
-      const sanitizedFilename = 'load.md';
-      await fs.writeFile(
-        path.join(elementsDir, sanitizedFilename),
-        `---\nname: LoadTest\n---\n\nContent`
-      );
+    it('refuses a load reference the sanitiser would rewrite instead of reading another file', async () => {
+      await fs.writeFile(path.join(elementsDir, 'load.md'), `---\nname: LoadTest\n---\n\nContent`);
 
-      const element = await manager.load(`load\x00.md`);
-
-      expect(element.metadata.name).toBe('LoadTest');
-      expect(element.content.trim()).toBe('Content');
+      await expect(manager.load(`load\x00.md`)).rejects.toThrow(/Invalid skill path.*not allowed/);
+      expect((await manager.load('load.md')).metadata.name).toBe('LoadTest');
     });
 
     it('rejects file paths that sanitize to an empty string', async () => {
       const element = new TestElement({ name: 'test' }, 'content');
       const emptyingPath = '\x00\x00';
 
-      await expect(manager.save(element, emptyingPath)).rejects.toThrow(/empty path/i);
+      await expect(manager.save(element, emptyingPath)).rejects.toThrow(/Invalid skill path/);
     });
 
     it('logs security events for the audit trail', async () => {
@@ -346,6 +359,21 @@ describe('BaseElementManager - Requirements & Contract', () => {
 
       // Restore
       (manager as any).serializeElement = originalSerialize;
+    });
+
+    it('refuses metadata its own reader rejects and leaves the stored definition untouched', async () => {
+      await manager.save(new TestElement({ name: 'kept' }, 'Kept content'), 'kept.md');
+      const tooLong = 'a'.repeat(101);
+
+      await expect(manager.save(new TestElement({ name: tooLong }, 'Replaced'), 'kept.md'))
+        .rejects.toThrow("Invalid value for field 'name'");
+      await expect(manager.save(new TestElement({ name: tooLong }, 'New'), 'fresh.md'))
+        .rejects.toThrow("Invalid value for field 'name'");
+
+      expect(await fs.readFile(path.join(elementsDir, 'kept.md'), 'utf8')).toContain('name: kept');
+      await expect(fs.stat(path.join(elementsDir, 'fresh.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(() => (manager as any).parseContent(`---\nname: ${tooLong}\n---\n\nNew`))
+        .toThrow("Invalid value for field 'name'");
     });
 
     it('should allow content without frontmatter (no validation crash)', async () => {
@@ -490,6 +518,20 @@ describe('BaseElementManager - Requirements & Contract', () => {
       expect(fileExists).toBe(false);
     });
 
+    it('reports a vanished database deletion target as typed absence without deleting', async () => {
+      const storage = manager['storageLayer'];
+      const remove = jest.fn();
+      Object.assign(storage, {
+        writeContent: jest.fn(),
+        resolveReference: async (requested: string) => ({ kind: 'identity', storageIdentity: requested, requested }),
+        resolveContentIdentity: async () => undefined,
+        deleteContentByIdentity: remove,
+      });
+      await expect(manager.deleteResolved({ kind: 'repair', repair: 'rejected-definition',
+        storageIdentity: 'db-id', reason: 'Previously observed rejected definition' })).rejects.toBeInstanceOf(ElementMissingError);
+      expect(remove).not.toHaveBeenCalled();
+    });
+
     it.each(['file', 'backup', 'database'])('contains a throwing delete observer for %s and completes commit actions', async backend => {
       const filename = 'observer.md';
       const file = path.join(elementsDir, filename);
@@ -504,10 +546,12 @@ describe('BaseElementManager - Requirements & Contract', () => {
       if (backend === 'database') {
         Object.assign(storage, {
           writeContent: jest.fn(),
+          readContent: jest.fn(async () => '---\nname: Observer\n---\nContent'),
+          resolveReference: jest.fn(async () => ({ kind: 'identity', storageIdentity: 'db-id', requested: filename })),
           resolveContentIdentity: jest.fn<() => Promise<{ id: string }>>().mockResolvedValue({ id: 'db-id' }),
           deleteContentByIdentity: jest.fn<() => Promise<{ id: string }>>().mockResolvedValue({ id: 'db-id' }),
         });
-        jest.spyOn(manager['_loader'], 'loadElementSnapshotFromDb').mockResolvedValue(element);
+        jest.spyOn(manager['_loader'], 'loadElementSnapshot').mockResolvedValue(element);
       } else if (backend === 'backup') {
         manager['createBackupBeforeDelete'] = async (source, notifyCommit) => {
           await fs.rename(source, `${source}.backup`);
@@ -526,6 +570,45 @@ describe('BaseElementManager - Requirements & Contract', () => {
         expect(notify).toHaveBeenCalledWith(filename);
         await expect(fs.access(file)).rejects.toMatchObject({ code: 'ENOENT' });
       }
+    });
+
+    it('addresses a resolved element only by the full reference the cache attached, never a bare basename', () => {
+      const memoryInDateFolder = { metadata: { name: 'notes' }, filePath: path.join('2026-10-27', 'notes.yaml'), filename: 'notes.yaml' };
+      expect(manager.storageReferenceOf(memoryInDateFolder as never)).toBe(path.join('2026-10-27', 'notes.yaml'));
+      expect(() => manager.storageReferenceOf({ metadata: { name: 'notes' }, filename: 'notes.yaml' } as never))
+        .toThrow('Resolved element has no storage identity');
+    });
+
+    it('refuses a database deletion by path syntax, never strips a separated name, and deletes nothing at the target or the persister entry', async () => {
+      const storage = manager['storageLayer'];
+      const deleteContentByIdentity = jest.fn();
+      const resolveContentIdentity = jest.fn(async (_type: string, identifier: string) => identifier === 'notes' ? { id: 'db-id', name: 'notes' } : undefined);
+      const dbLayer = new DatabaseStorageLayer({ transaction: jest.fn() } as never, () => '11111111-1111-4111-8111-111111111111', 'skills');
+      jest.spyOn(dbLayer, 'resolveContentIdentity').mockResolvedValue({ id: 'db-id', name: 'notes' });
+      Object.assign(storage, {
+        writeContent: jest.fn(),
+        // The database layer's own reference shape: a row id.
+        cachedInstanceCurrency: 'unverifiable',
+        isExactStorageReference: (reference: string) => dbLayer.isExactStorageReference(reference, '.md'),
+        resolveReference: (reference: string) => dbLayer.resolveReference(reference),
+        // The row named 'notes' answers only to that name, as the selector does.
+        resolveContentIdentity,
+        deleteContentByIdentity,
+      });
+      // Path syntax is refused at the deletion entry and at the persister entry.
+      for (const reference of ['../notes', String.raw`..\notes`]) {
+        await expect(manager.delete(reference)).rejects.toBeInstanceOf(ValidationError);
+        await expect(manager.deleteResolved({ kind: 'element', storageIdentity: 'db-id', requestedReference: reference,
+          element: { metadata: { name: 'notes' } } as never })).rejects.toBeInstanceOf(ValidationError);
+      }
+      // A separated name is a name-only lookup (ruling #581 item 1): absent, and never stripped to 'notes'.
+      for (const reference of ['team/notes.md', 'team/notes']) {
+        await expect(manager.delete(reference)).rejects.toMatchObject({ kind: 'absent' });
+        await expect(manager.deleteResolved({ kind: 'element', storageIdentity: 'db-id', requestedReference: reference,
+          element: { metadata: { name: 'notes' } } as never })).rejects.toMatchObject({ code: 'ENOENT' });
+      }
+      expect(resolveContentIdentity.mock.calls.map(([, identifier]) => identifier)).not.toContain('notes');
+      expect(deleteContentByIdentity).not.toHaveBeenCalled();
     });
 
     it('signals commit before asynchronous post-delete hooks and never on refusal', async () => {
@@ -557,6 +640,11 @@ describe('BaseElementManager - Requirements & Contract', () => {
       const exists = await manager.exists('nonexistent.md');
 
       expect(exists).toBe(false);
+    });
+
+    it('exists() refuses a caller reference on its own syntax, unwrapped, like every other entry point', async () => {
+      await expect(manager.exists('Q&A.md')).rejects.toThrow(ValidationError);
+      await expect(manager.exists(path.join('..', 'outside.md'))).rejects.toThrow(ValidationError);
     });
 
     it('validate() calls the element.validate() method', async () => {
@@ -630,7 +718,7 @@ describe('BaseElementManager - Requirements & Contract', () => {
 
   describe('Error Handling', () => {
     it('throws a meaningful error when loading a non-existent file', async () => {
-      await expect(manager.load('nonexistent.md')).rejects.toThrow(/ENOENT|no such file/i);
+      await expect(manager.load('nonexistent.md')).rejects.toMatchObject({ name: 'ElementMissingError', code: 'ENOENT' });
     });
 
     it('handles corrupted files gracefully during load', async () => {
@@ -919,6 +1007,9 @@ describe('BaseElementManager - Requirements & Contract', () => {
         storageLayerFactory: {
           createForElement: (type, options) => Object.assign(fallback.createForElement(type, options), {
             writeContent: jest.fn(),
+            // The database layer's own reference shape: a row id.
+            cachedInstanceCurrency: 'unverifiable',
+            isExactStorageReference: (reference: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(reference),
           }),
         },
       });
@@ -987,32 +1078,36 @@ describe('BaseElementManager - Requirements & Contract', () => {
       expect(result).toBeUndefined();
     });
 
-    it('findByName() does not call list() repeatedly for missing elements', async () => {
+    it('findByName() certifies missing names once without hydrating unrelated elements', async () => {
       // Setup: create one file
       await fs.writeFile(
         path.join(elementsDir, 'only-one.md'),
         `---\nname: only-one\n---\n\nContent`
       );
 
-      // Spy on list() to count calls
-      const listSpy = jest.spyOn(manager, 'list');
+      const listSpy = jest.spyOn(manager['storageLayer'], 'readCollection');
+      // A certified name is read through the loader route, never back through load().
+      const loadSpy = jest.spyOn(manager as any, 'loadStoredReference');
 
-      // A cold missing-name lookup hydrates the list once, preserving flexible matching.
+      // A cold missing-name lookup certifies summaries once, preserving flexible matching.
       const result1 = await manager.findByName('ghost-element');
       expect(result1).toBeUndefined();
       expect(listSpy).toHaveBeenCalledTimes(1);
 
-      // Second findByName() for another non-existent: should NOT trigger list() again
+      // A second missing name reuses the complete index.
       const result2 = await manager.findByName('another-ghost');
       expect(result2).toBeUndefined();
       expect(listSpy).toHaveBeenCalledTimes(1);
 
-      // An existing element now resolves from the populated cache.
+      // Only the matching existing definition is hydrated.
+      loadSpy.mockClear();
       const result3 = await manager.findByName('only-one');
       expect(result3).toBeDefined();
       expect(listSpy).toHaveBeenCalledTimes(1);
+      expect(loadSpy).toHaveBeenCalledTimes(1);
 
       listSpy.mockRestore();
+      loadSpy.mockRestore();
     });
 
     it('findByName() works with identifiers in various formats', async () => {
@@ -1049,7 +1144,7 @@ describe('BaseElementManager - Requirements & Contract', () => {
       manager.clearCache();
 
       // findByName() should still work after cache clear
-      // (falls through to tryDirectLoad or triggers a new list scan)
+      // (certifies through the index again, then the constructed filenames)
       const found = await manager.findByName('test');
       expect(found).toBeDefined();
       expect(found?.metadata.name).toBe('test');
@@ -1185,7 +1280,7 @@ describe('BaseElementManager - Requirements & Contract', () => {
         '---\nname: FAIL_PARSE\n---\n\nContent'
       );
 
-      await expect(failingManager.load('bad-element.md')).rejects.toThrow('Simulated parse failure');
+      await expect(failingManager.load('bad-element.md')).rejects.toMatchObject({ cause: expect.objectContaining({ message: 'Simulated parse failure' }) });
       expect(errorSpy).toHaveBeenCalled();
     });
 
@@ -1265,7 +1360,7 @@ describe('BaseElementManager - Requirements & Contract', () => {
       );
 
       // Second load — different error — should log at error level again
-      await expect(failingManager.load('bad-element.md')).rejects.toThrow('Different failure reason');
+      await expect(failingManager.load('bad-element.md')).rejects.toMatchObject({ cause: expect.objectContaining({ message: 'Different failure reason' }) });
       expect(errorSpy).toHaveBeenCalled();
     });
 

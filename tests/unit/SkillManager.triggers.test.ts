@@ -169,7 +169,7 @@ triggers:
 # Instructions`;
 
       await fs.writeFile(path.join(skillsDir, testSkillPath), skillContent);
-      await expect(skillManager.load(testSkillPath)).rejects.toThrow(/triggers/i);
+      await expect(skillManager.load(testSkillPath)).rejects.toMatchObject({ cause: expect.objectContaining({ message: expect.stringMatching(/triggers/i) }) });
     });
 
     it('rejects non-array trigger values', async () => {
@@ -183,7 +183,7 @@ triggers: "not an array"
 # Instructions`;
 
       await fs.writeFile(path.join(skillsDir, testSkillPath), skillContent);
-      await expect(skillManager.load(testSkillPath)).rejects.toThrow(/triggers/i);
+      await expect(skillManager.load(testSkillPath)).rejects.toMatchObject({ cause: expect.objectContaining({ message: expect.stringMatching(/triggers/i) }) });
     });
 
     it('rejects mixed trigger types instead of coercing them', async () => {
@@ -202,7 +202,7 @@ triggers:
 # Instructions`;
 
       await fs.writeFile(path.join(skillsDir, testSkillPath), skillContent);
-      await expect(skillManager.load(testSkillPath)).rejects.toThrow(/triggers/i);
+      await expect(skillManager.load(testSkillPath)).rejects.toMatchObject({ cause: expect.objectContaining({ message: expect.stringMatching(/triggers/i) }) });
     });
   });
 

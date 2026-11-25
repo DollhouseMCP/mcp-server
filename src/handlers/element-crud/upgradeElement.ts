@@ -124,96 +124,46 @@ export async function upgradeElement(
     return error(`Element type '${label}' is not yet supported for upgrade`);
   }
 
-  const element = await resolveElementByName(manager, normalizedType, name);
+  const element = await resolveElementByName(manager, name);
   if (!element) {
     const label = getElementTypeLabel(normalizedType);
     throw new ElementNotFoundError(label, name);
   }
 
-  const currentInstructions = ((element as any).instructions || '').trim();
-  const currentContent = getElementContent(element);
+  const displayName = (element as any).metadata?.name || name;
+  const label = getElementTypeLabel(normalizedType);
+  const current = { instructions: ((element as any).instructions || '').trim(), content: getElementContent(element) };
 
   // Check if already v2 format (and no overrides provided)
   if (isV2Format(element, normalizedType) && !instructions_override && !content_override) {
     return {
       content: [{
         type: 'text',
-        text: `ℹ️ ${getElementTypeLabel(normalizedType)} '${(element as any).metadata?.name || name}' is already in v2 dual-field format.\n\n` +
-          `**Instructions** (${currentInstructions.length} chars): ${truncate(currentInstructions, 100)}\n` +
-          `**Content** (${currentContent.length} chars): ${truncate(currentContent, 100)}`
+        text: `ℹ️ ${label} '${displayName}' is already in v2 dual-field format.\n\n` +
+          `**Instructions** (${current.instructions.length} chars): ${truncate(current.instructions, 100)}\n` +
+          `**Content** (${current.content.length} chars): ${truncate(current.content, 100)}`
       }]
     };
   }
 
-  // Determine new field values
-  let newInstructions: string;
-  let newContent: string;
+  // Manual override mode, or auto-detection: field values stay the same — the managers already
+  // assigned the body text to the correct field during load (per getV1BodyMapping). The upgrade
+  // is the re-save itself: serializeElement() writes instructions to YAML frontmatter and content
+  // as the markdown body, converting the on-disk format from v1 to v2.
+  const next = { instructions: instructions_override ?? current.instructions, content: content_override ?? current.content };
 
-  if (instructions_override !== undefined || content_override !== undefined) {
-    // Manual override mode
-    newInstructions = instructions_override ?? currentInstructions;
-    newContent = content_override ?? currentContent;
-  } else {
-    // Auto-detection: field values stay the same — the managers already assigned the
-    // body text to the correct field during load (per getV1BodyMapping). The upgrade
-    // is the re-save itself: serializeElement() writes instructions to YAML frontmatter
-    // and content as the markdown body, converting the on-disk format from v1 to v2.
-    newInstructions = currentInstructions;
-    newContent = currentContent;
-  }
-
-  if (dry_run) {
-    // Preview mode — show what would change
-    const changes: string[] = [];
-    if (newInstructions !== currentInstructions) {
-      changes.push(`**instructions**: "${truncate(currentInstructions, 80)}" → "${truncate(newInstructions, 80)}"`);
-    }
-    if (newContent !== currentContent) {
-      changes.push(`**content**: "${truncate(currentContent, 80)}" → "${truncate(newContent, 80)}"`);
-    }
-
-    const displayName = (element as any).metadata?.name || name;
-    const label = getElementTypeLabel(normalizedType);
-
-    if (changes.length === 0) {
-      return {
-        content: [{
-          type: 'text',
-          text: `ℹ️ ${label} '${displayName}' — no field changes needed for upgrade.\n\n` +
-            `The file will be re-saved in v2 format (instructions in YAML frontmatter, content as body).\n\n` +
-            `**instructions** (${newInstructions.length} chars): ${truncate(newInstructions, 150)}\n` +
-            `**content** (${newContent.length} chars): ${truncate(newContent, 150)}`
-        }]
-      };
-    }
-
-    return {
-      content: [{
-        type: 'text',
-        text: `🔍 Dry run — ${label} '${displayName}' upgrade preview:\n\n` +
-          changes.join('\n') + '\n\n' +
-          `Run without dry_run to apply these changes.`
-      }]
-    };
-  }
+  if (dry_run) return previewUpgrade(label, displayName, current, next);
 
   // Apply upgrade
-  (element as any).instructions = newInstructions;
+  (element as any).instructions = next.instructions;
   // For Memory, content is a getter — skip direct assignment
   if (normalizedType !== ElementType.MEMORY) {
-    (element as any).content = newContent;
+    (element as any).content = next.content;
   }
 
-  // Determine file path for saving
-  const filePathCandidate = typeof (element as any).getFilePath === 'function'
-    ? (element as any).getFilePath()
-    : ((element as any).filePath || (element as any).filename);
-  const filename = typeof filePathCandidate === 'string' && filePathCandidate.length > 0
-    ? filePathCandidate
-    : '';
-
+  const filename = upgradeTarget(element);
   if (!filename) {
-    return error(`Cannot determine file path for ${getElementTypeLabel(normalizedType)} '${name}'`);
+    return error(`Cannot determine file path for ${label} '${name}'`);
   }
 
   try {
@@ -222,24 +172,61 @@ export async function upgradeElement(
     return error(`Failed to save upgraded element: ${err instanceof Error ? err.message : 'Unknown error'}`);
   }
 
-  const displayName = (element as any).metadata?.name || name;
-  const label = getElementTypeLabel(normalizedType);
-
   logger.info(`[upgradeElement] Upgraded ${label} '${displayName}' to v2 dual-field format`, {
     elementType: normalizedType,
     elementName: displayName,
-    instructionsLength: newInstructions.length,
-    contentLength: newContent.length,
+    instructionsLength: next.instructions.length,
+    contentLength: next.content.length,
   });
 
   return {
     content: [{
       type: 'text',
       text: `✅ Upgraded ${label} '${displayName}' to v2 dual-field format.\n\n` +
-        `**instructions** (${newInstructions.length} chars): ${truncate(newInstructions, 150)}\n` +
-        `**content** (${newContent.length} chars): ${truncate(newContent, 150)}`
+        `**instructions** (${next.instructions.length} chars): ${truncate(next.instructions, 150)}\n` +
+        `**content** (${next.content.length} chars): ${truncate(next.content, 150)}`
     }]
   };
+}
+
+type UpgradeFields = { instructions: string; content: string };
+
+/** Preview mode — show what would change. */
+function previewUpgrade(label: string, displayName: string, current: UpgradeFields, next: UpgradeFields) {
+  const changes: string[] = [];
+  if (next.instructions !== current.instructions) {
+    changes.push(`**instructions**: "${truncate(current.instructions, 80)}" → "${truncate(next.instructions, 80)}"`);
+  }
+  if (next.content !== current.content) {
+    changes.push(`**content**: "${truncate(current.content, 80)}" → "${truncate(next.content, 80)}"`);
+  }
+
+  if (changes.length === 0) {
+    return {
+      content: [{
+        type: 'text',
+        text: `ℹ️ ${label} '${displayName}' — no field changes needed for upgrade.\n\n` +
+          `The file will be re-saved in v2 format (instructions in YAML frontmatter, content as body).\n\n` +
+          `**instructions** (${next.instructions.length} chars): ${truncate(next.instructions, 150)}\n` +
+          `**content** (${next.content.length} chars): ${truncate(next.content, 150)}`
+      }]
+    };
+  }
+
+  return {
+    content: [{
+      type: 'text',
+      text: `🔍 Dry run — ${label} '${displayName}' upgrade preview:\n\n` +
+        changes.join('\n') + '\n\n' +
+        `Run without dry_run to apply these changes.`
+    }]
+  };
+}
+
+/** The storage reference the element was loaded under, or '' when it has none. */
+function upgradeTarget(element: any): string {
+  const candidate = typeof element.getFilePath === 'function' ? element.getFilePath() : (element.filePath || element.filename);
+  return typeof candidate === 'string' && candidate.length > 0 ? candidate : '';
 }
 
 function error(message: string) {
@@ -258,20 +245,5 @@ function truncate(text: string, maxLength: number): string {
 }
 
 function getManagerForType(context: ElementCrudContext, type: ElementType): ElementManagerWithPersistence<any> | null {
-  switch (type) {
-    case ElementType.PERSONA:
-      return context.personaManager as ElementManagerWithPersistence<any>;
-    case ElementType.SKILL:
-      return context.skillManager as ElementManagerWithPersistence<any>;
-    case ElementType.TEMPLATE:
-      return context.templateManager as ElementManagerWithPersistence<any>;
-    case ElementType.AGENT:
-      return context.agentManager as ElementManagerWithPersistence<any>;
-    case ElementType.MEMORY:
-      return context.memoryManager as ElementManagerWithPersistence<any>;
-    case ElementType.ENSEMBLE:
-      return context.ensembleManager as ElementManagerWithPersistence<any>;
-    default:
-      return null;
-  }
+  return (context.getManagerForType(type) as ElementManagerWithPersistence<any> | undefined) ?? null;
 }

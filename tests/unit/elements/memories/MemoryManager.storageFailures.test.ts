@@ -14,7 +14,7 @@ import { ValidationService } from '../../../../src/services/validation/Validatio
 import { TriggerValidationService } from '../../../../src/services/validation/TriggerValidationService.js';
 import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
 import { MemoryStorageLayer } from '../../../../src/storage/MemoryStorageLayer.js';
-import { MemoryMetadataExtractionError } from '../../../../src/storage/MemoryMetadataExtractor.js';
+import { ElementReadError } from '../../../../src/elements/base/ElementReadError.js';
 import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 import { createTestMetadataService } from '../../../helpers/di-mocks.js';
 import { createTestStorageFactory } from '../../../helpers/createTestStorageFactory.js';
@@ -43,20 +43,75 @@ async function fixture() {
 afterEach(() => jest.restoreAllMocks());
 
 describe('memory storage failure consumers', () => {
+  it.each([['system', 'system'], ['adapters', 'adapter']])('infers the memory type from the selected %s path', async (folder, memoryType) => {
+    const f = await fixture();
+    try {
+      await mkdir(path.join(f.dir, folder));
+      await writeFile(path.join(f.dir, folder, 'legacy.yaml'), 'name: Legacy memory\n');
+      expect((await f.manager.load(`${folder}/legacy.yaml`)).metadata).toMatchObject({ memoryType });
+    } finally { await f.cleanup(); }
+  });
+
+  it.each(['root', 'date'])('reports a denied %s directory in load diagnostics', async directory => {
+    const f = await fixture();
+    try {
+      jest.spyOn(f.manager as any, 'getDateFolders').mockResolvedValue(directory === 'date' ? ['2026-10-28'] : []);
+      jest.spyOn(f.files, 'listDirectory').mockImplementation(async target => {
+        if (target === path.join(f.dir, directory === 'date' ? '2026-10-28' : '')) {
+          throw Object.assign(new Error('Private directory failure'), { code: 'EACCES' });
+        }
+        return [];
+      });
+      const result = await f.manager.getLoadStatus();
+      expect(result.failed).toBe(1);
+      expect(result.failures).toEqual([{ file: directory === 'date' ? '2026-10-28' : '.', error: expect.stringContaining('EACCES') }]);
+      expect(result.loaded).toBe(0);
+      expect(JSON.stringify(result)).not.toContain('Private directory failure');
+    } finally { await f.cleanup(); }
+  });
+
+  it('reports a date folder that is a file instead of counting it as empty', async () => {
+    const f = await fixture();
+    try {
+      // A genuine ENOTDIR: the date-shaped entry exists but is a file, so its listing cannot be empty.
+      await writeFile(path.join(f.dir, '2026-10-28'), 'not a directory');
+      const result = await f.manager.getLoadStatus();
+      expect(result.failed).toBe(1);
+      expect(result.failures).toEqual([{ file: '2026-10-28', error: expect.stringContaining('ENOTDIR') }]);
+      expect(JSON.stringify(result)).not.toContain(f.dir);
+    } finally { await f.cleanup(); }
+  });
+
   it.each(['list', 'getAutoLoadMemories'] as const)('%s uses one pinned snapshot and audits a rejected definition once', async method => {
     const f = await fixture();
     try {
       await writeFile(path.join(f.dir, 'broken.yaml'), 'metadata: [broken');
-      const snapshot = jest.spyOn(f.layer, 'scanMemorySnapshot');
+      SecurityMonitor.clearAllEventsForTesting();
+      const snapshot = jest.spyOn(f.layer, 'readCollection');
       const paths = jest.spyOn(f.layer, 'getIndexedPaths');
       const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
-      const record = jest.spyOn(f.manager as unknown as { recordUnreadableElement(file: string, error: Error): void }, 'recordUnreadableElement');
-      await expect(f.manager[method]()).resolves.toEqual([]);
-      await expect(f.manager[method]()).resolves.toEqual([]);
+      if (method === 'list') {
+        await expect(f.manager.list()).rejects.toBeInstanceOf(ElementReadError);
+        await expect(f.manager.list()).rejects.toBeInstanceOf(ElementReadError);
+      } else {
+        await expect(f.manager.getAutoLoadMemories()).rejects.toBeInstanceOf(ElementReadError);
+        await expect(f.manager.getAutoLoadMemories()).rejects.toBeInstanceOf(ElementReadError);
+      }
       expect(snapshot).toHaveBeenCalledTimes(2);
       expect(paths).not.toHaveBeenCalled();
-      expect(record.mock.calls[0]).toEqual(['broken.yaml', expect.objectContaining({ name: 'MemoryMetadataExtractionError' })]);
       expect(audit.mock.calls.filter(([event]) => event.type === 'MEMORY_LIST_ITEM_FAILED')).toHaveLength(1);
+    } finally { await f.cleanup(); }
+  });
+
+  it.each([false, true])('returns discovery errors with auto-load survivors (healthy memory: %s)', async healthy => {
+    const f = await fixture();
+    try {
+      await writeFile(path.join(f.dir, 'broken.yaml'), 'metadata: [broken');
+      if (healthy) await writeFile(path.join(f.dir, 'healthy.yaml'), 'name: Healthy\ndescription: Useful memory information\nautoLoad: true\nentries: []\n');
+      jest.spyOn(f.manager, 'installSeedMemories').mockResolvedValue(undefined);
+      const result = await f.manager.loadAndActivateAutoLoadMemories();
+      expect(result.loaded).toBe(healthy ? 1 : 0);
+      expect(result.errors).toEqual([expect.stringContaining('broken.yaml')]);
     } finally { await f.cleanup(); }
   });
 
@@ -70,22 +125,53 @@ describe('memory storage failure consumers', () => {
         if (target === file) return Promise.reject(Object.assign(new Error('denied'), { code: 'EACCES' }));
         return read(target, options);
       });
-      const record = jest.spyOn(f.manager as unknown as { recordUnreadableElement(file: string, error: Error): void }, 'recordUnreadableElement');
-      await f.manager.list();
-      expect(record.mock.calls[0]).toEqual(['denied.yaml', expect.objectContaining({ name: 'Error', code: 'EACCES' })]);
+      const report = await f.manager.listReport();
+      expect(report.complete).toBe(false);
+      expect(report.failures).toEqual([expect.objectContaining({ reference: 'denied.yaml', error: expect.any(ElementReadError) })]);
+      expect(report.failures[0].error.message).toContain('EACCES');
     } finally { await f.cleanup(); }
   });
 
-  it('refuses a fresh mutation when a sibling cannot be parsed', async () => {
+  it('runs a fresh mutation beside a sibling that cannot be parsed, and refuses one a broken copy could hold', async () => {
     const f = await fixture();
     try {
       await writeFile(path.join(f.dir, 'healthy.yaml'), 'name: Healthy');
       await writeFile(path.join(f.dir, 'broken.yaml'), 'metadata: [broken');
-      const mutate = jest.fn<() => Promise<void>>();
-      const failure = await f.manager.runFreshMemoryMutation('Healthy', mutate).catch((error: unknown) => error);
-      expect(failure).toBeInstanceOf(MemoryMetadataExtractionError);
-      expect(failure).toMatchObject({ message: expect.stringMatching(/broken\.yaml:.*(?:unexpected end|flow collection)/s) });
-      expect(failure).toMatchObject({ message: expect.not.stringContaining(f.dir) });
+      const mutate = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);
+      // The broken file can hold only its filename key ('broken'), so it does not block 'Healthy'.
+      await expect(f.manager.runFreshMemoryMutation('Healthy', mutate)).resolves.toBeUndefined();
+      expect(mutate).toHaveBeenCalledTimes(1);
+      // A never-parsed copy whose filename could hold the requested name still refuses it.
+      await mkdir(path.join(f.dir, '2026-10-27'), { recursive: true });
+      await writeFile(path.join(f.dir, '2026-10-27', 'healthy.yaml'), 'metadata: [broken');
+      mutate.mockClear();
+      await expect(f.manager.runFreshMemoryMutation('Healthy', mutate)).rejects.toMatchObject({ name: 'ElementIndeterminateError',
+        failures: [expect.objectContaining({ reference: '2026-10-27/healthy.yaml' })] });
+      expect(mutate).not.toHaveBeenCalled();
+    } finally { await f.cleanup(); }
+  });
+
+  it('certifies a literal reference for fresh mutation beside a failed same-name copy', async () => {
+    const f = await fixture();
+    try {
+      await writeFile(path.join(f.dir, 'healthy.yaml'), 'name: Healthy');
+      await mkdir(path.join(f.dir, '2026-10-27'));
+      await writeFile(path.join(f.dir, '2026-10-27', 'healthy.yaml'), 'metadata: [broken');
+      const mutate = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);
+      await expect(f.manager.runFreshMemoryMutation('healthy.yaml', mutate)).resolves.toBeUndefined();
+      expect(mutate).toHaveBeenCalledTimes(1);
+      await expect(f.manager.runFreshMemoryMutation('Healthy', mutate)).rejects.toMatchObject({ kind: 'indeterminate' });
+      await expect(f.manager.runFreshMemoryMutation('2026-10-27/healthy.yaml', mutate)).rejects.toBeInstanceOf(ElementReadError);
+    } finally { await f.cleanup(); }
+  });
+
+  it('keeps the fresh-mutation ambiguous-target refusal', async () => {
+    const f = await fixture();
+    try {
+      await writeFile(path.join(f.dir, 'first.yaml'), 'name: Shared');
+      await writeFile(path.join(f.dir, 'second.yaml'), 'name: Shared');
+      const mutate = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);
+      await expect(f.manager.runFreshMemoryMutation('Shared', mutate)).rejects.toMatchObject({ name: 'MemoryDrainRefusedError' });
       expect(mutate).not.toHaveBeenCalled();
     } finally { await f.cleanup(); }
   });

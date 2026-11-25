@@ -238,12 +238,10 @@ describe('Persona Lifecycle Integration', () => {
       // Use Promise.allSettled to handle potential race conditions
       const results = await Promise.allSettled(edits);
       
-      // Add synchronization delay to let file system settle
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
       // Verify all edits completed successfully
       const fulfilled = results.filter((result): result is PromiseFulfilledResult<{ success: boolean }> => result.status === 'fulfilled');
-      expect(fulfilled.length).toBe(results.length);
+      expect(results.filter(result => result.status === 'rejected').map(result => String(result.reason))).toEqual([]);
+      expect(fulfilled).toHaveLength(results.length);
       const successCount = fulfilled.filter(result => result.value.success).length;
       expect(successCount).toBeGreaterThan(0);
       
@@ -296,7 +294,7 @@ Original default creative writer persona content.`;
 
       // Should now have 2 "Creative Writer" personas: original default + modified copy
       const creativeWriters = allPersonas.filter(p => p.metadata.name === 'Creative Writer');
-      expect(creativeWriters.length).toBe(2);
+      expect(creativeWriters).toHaveLength(2);
 
       const original = creativeWriters.find(p => p.filename === defaultFilename);
       const modifiedCopy = creativeWriters.find(p => p.filename !== defaultFilename);
@@ -387,15 +385,17 @@ This persona has corrupted frontmatter that should cause parsing errors.`;
       
       await fs.writeFile(corruptedPath, corruptedContent);
       
-      // Should handle gracefully during reload
-      await expect(testServer.personaManager.reload()).resolves.not.toThrow();
-      
-      // Verify corrupted file is handled (might be loaded with defaults or skipped)
-      const allPersonas = await testServer.personaManager.getAllPersonas();
+      await expect(testServer.personaManager.reload()).rejects.toThrow('could not be read completely');
+      const report = await testServer.personaManager.listReport();
+      expect(report.complete).toBe(false);
+      expect(report.failures.map(failure => failure.reference)).toContain('corrupted.md');
 
       // Verify file still exists (not deleted)
       const fileStillExists = await fileExists(corruptedPath);
       expect(fileStillExists).toBe(true);
+      // Repair the unreadable record before authoritative name/duplicate checks.
+      await fs.writeFile(corruptedPath, '---\nname: Repaired Persona\ndescription: Repaired definition\n---\nDetailed repaired persona instructions.');
+      testServer.personaManager.clearCache();
       
       // Other personas should still work
       // v2: create() returns persona directly
@@ -411,7 +411,7 @@ This persona has corrupted frontmatter that should cause parsing errors.`;
       expect(foundPersona).toBeDefined();
       
       // System should continue functioning with at least the working personas
-      expect(allPersonas.size).toBeGreaterThanOrEqual(0);
+      expect((await testServer.personaManager.listReport()).complete).toBe(true);
     });
   });
 });

@@ -200,8 +200,12 @@ for (const mode of ['filesystem', 'database'] as const) {
         const record = manager.getInvalidElement(identity);
         expect(record).toBeDefined();
         const response = await handler.getElementDetails(identity, 'skills');
+        // As on beta, the details name the invalid definition and its recorded reason, here in its
+        // client-safe form, never the raw definition bytes.
         expect(response.content[0].text).toContain('Skill Invalid');
-        expect(response.content[0].text).toContain(record!.reason);
+        expect(response.content[0].text).toContain(identity);
+        expect(response.content[0].text).toMatch(/Definition (content )?could not be read or validated/u);
+        expect(response.content[0].text).not.toContain('name: [unfinished');
         expect(await handler.listElements('skills')).toMatchObject({ warnings: { invalid_elements_count: 1 } });
       });
       await asUser(userB, async () => {
@@ -212,18 +216,36 @@ for (const mode of ['filesystem', 'database'] as const) {
       });
     });
 
-    it('keeps the other namespace record when both recorded the same relative identifier', async () => {
+    it.each(mode === 'filesystem' ? ['load', 'findByName'] : ['load'])('repairs through %s without clearing the other namespace record', async lookup => {
+      if (mode === 'filesystem') jest.spyOn(Date, 'now').mockReturnValue(Date.now());
+      const files = env.container.resolve<FileOperationsService>('FileOperationsService');
+      const enumeration = jest.spyOn(files, 'listDirectoryWithTypes');
+      const read = jest.spyOn(files, 'readFile');
       await writeDefinition(userB, invalidContent, true);
       await failLoad(userA);
       await failLoad(userB);
+      const scans = enumeration.mock.calls.length;
+      const definitionReads = () => read.mock.calls.filter(([file]) => file.endsWith(identity)).length;
+      const reads = definitionReads();
+      if (mode === 'filesystem') {
+        await asUser(userB, async () => {
+          for (let attempt = 0; attempt < 3; attempt++) {
+            await expect(lookup === 'load' ? manager.load(identity) : manager.findByName('shared-skill')).rejects.toThrow();
+          }
+        });
+        expect(enumeration).toHaveBeenCalledTimes(scans);
+        expect(definitionReads()).toBe(reads);
+      }
       const original = await asUser(userA, async () => manager.getInvalidElement(identity));
       // A public database row has the same storage identity for both readers.
       await writeDefinition(userB, validContent, true);
       await asUser(userB, async () => {
-        expect((await manager.load(identity)).metadata.name).toBe('shared-skill');
+        const repaired = lookup === 'load' ? await manager.load(identity) : await manager.findByName('shared-skill');
+        expect(repaired?.metadata.name).toBe('shared-skill');
         expect(manager.getInvalidElements()).toEqual([]);
       });
       await asUser(userA, async () => expect(manager.getInvalidElement(identity)).toEqual(original));
+      if (mode === 'filesystem') expect(enumeration).toHaveBeenCalledTimes(scans);
     });
 
     it('emits the first error per namespace and re-emits after successful recovery', async () => {

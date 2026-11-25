@@ -5,20 +5,22 @@ import { ElementType } from '../../portfolio/PortfolioManager.js';
 import type { PortfolioManager } from '../../portfolio/PortfolioManager.js';
 import { ElementCrudContext } from './types.js';
 import {
-  findElementFlexibly,
   normalizeElementTypeInput,
   formatValidElementTypesList,
-  getElementFilename,
   getElementTypeLabel,
-  resolveElementByName,
   ElementManagerOperations
 } from './helpers.js';
 import { logger } from '../../utils/logger.js';
 import type { IFileOperationsService } from '../../services/FileOperationsService.js';
 import { ElementNotFoundError } from '../../utils/ErrorHandler.js';
+import { ElementMissingError } from '../../elements/base/ElementReadError.js';
+import { ValidationError } from '../../security/errors.js';
+import type { DeletionReport, ElementDeletionTarget } from '../../elements/base/ElementDeletion.js';
+import type { IElement } from '../../types/elements/IElement.js';
 
-type ElementManagerWithDelete<T> = ElementManagerOperations<T> & {
-  delete(filePath: string, onCommitted?: () => void): Promise<void>;
+type ElementManagerWithDelete<T extends IElement> = ElementManagerOperations<T> & {
+  resolveDeletionTarget(identifier: string): Promise<ElementDeletionTarget<T>>;
+  deleteResolved(target: ElementDeletionTarget<T>, onCommitted?: () => void): Promise<DeletionReport>;
 };
 
 interface DeleteElementArgs {
@@ -29,25 +31,28 @@ interface DeleteElementArgs {
 
 export async function deleteElement(context: ElementCrudContext, args: DeleteElementArgs) {
   await context.ensureInitialized();
+  const { type: normalizedType } = normalizeElementTypeInput(args.type);
 
   try {
     const { name, type, deleteData } = args;
-
-    const { type: normalizedType } = normalizeElementTypeInput(type);
 
     if (!normalizedType) {
       return invalidType(type);
     }
 
-    // FIX: Issue #281 - PERSONA now uses standard flow (PersonaManager.delete() handles auto-deactivation)
+    // PersonaManager.deleteResolved owns persona deactivation in the standard flow.
     if (normalizedType === ElementType.MEMORY) {
       return await deleteMemory(context, name, deleteData);
     }
 
     return await deleteStandardElement(context, normalizedType, name, deleteData);
   } catch (error) {
-    // FIX: Issue #275 - Re-throw ElementNotFoundError so callers can handle it
-    if (error instanceof ElementNotFoundError) {
+    if (error instanceof ElementMissingError) {
+      throw new ElementNotFoundError(normalizedType ? getElementTypeLabel(normalizedType) : args.type, args.name);
+    }
+    // FIX: Issue #275 - Re-throw ElementNotFoundError so callers can handle it; a refused caller
+    // reference fails the operation the same way.
+    if (error instanceof ElementNotFoundError || error instanceof ValidationError) {
       throw error;
     }
     logger.error('ElementCRUDHandler.deleteElement', error);
@@ -72,13 +77,12 @@ async function deleteStandardElement(
     return unsupportedType(type);
   }
 
-  const element = await resolveDeletionElement(context, manager, type, name);
-
-  if (!element) {
-    // FIX: Issue #275 - Throw error instead of returning content for missing elements
-    const label = getElementTypeLabel(type);
-    throw new ElementNotFoundError(label, name);
+  const target = await manager.resolveDeletionTarget(name);
+  if (target.kind === 'repair') {
+    const cleanup = await context.prepareElementDeletion?.(type, target.storageIdentity, target.storageIdentity, target);
+    return withWarning(success(type, target.storageIdentity), await deleteAndFinish(manager, target, cleanup, type, target.storageIdentity));
   }
+  const element = target.element;
 
   const fileOps = context.fileOperations;
   const elementName = element.metadata?.name || name;
@@ -93,20 +97,13 @@ async function deleteStandardElement(
   // re-validate that the element still exists. State may have changed between
   // the initial prompt and the user's confirmation response.
   if (deleteData !== undefined) {
-    const recheck = await resolveDeletionElement(context, manager, type, name);
-    if (!recheck) {
-      const label = getElementTypeLabel(type);
-      throw new ElementNotFoundError(label, name);
-    }
+    await manager.resolveDeletionTarget(name);
   }
 
-  const filePathCandidate = (element as any).filePath || (element as any).filename;
-  const filename = typeof filePathCandidate === 'string' && filePathCandidate.length > 0
-    ? filePathCandidate
-    : getElementFilename(type, elementName);
+  const filename = target.storageIdentity;
 
   const cleanup = await context.prepareElementDeletion?.(type, elementName, filename, element);
-  const warning = await deleteAndFinish(manager, filename, cleanup, type, elementName);
+  const warning = await deleteAndFinish(manager, target, cleanup, type, elementName);
 
   if (deleteData && dataFiles.length > 0) {
     const results = await removeDataFiles(context.portfolioManager, dataFiles, fileOps);
@@ -120,16 +117,6 @@ async function deleteStandardElement(
   return withWarning(success(type, elementName), warning);
 }
 
-async function resolveDeletionElement(
-  context: ElementCrudContext, manager: ElementManagerWithDelete<any>, type: ElementType, name: string,
-) {
-  // Persona filenames disambiguate identical display names and must remain exact.
-  if (type === ElementType.PERSONA && context.personaManager.findPersonaAsync) {
-    return context.personaManager.findPersonaAsync(name);
-  }
-  return resolveElementByName(manager, type, name);
-}
-
 // FIX: Issue #281 - deletePersona removed, PERSONA now uses standard deleteStandardElement flow
 
 async function deleteMemory(
@@ -137,13 +124,13 @@ async function deleteMemory(
   name: string,
   deleteData?: boolean
 ) {
-  const memories = await context.memoryManager.list();
-  const memory = findElementFlexibly(name, memories);
-
-  if (!memory) {
-    // FIX: Issue #275 - Throw error instead of returning content for missing elements
-    throw new ElementNotFoundError('Memory', name);
+  const target = await context.memoryManager.resolveDeletionTarget(name);
+  if (target.kind === 'repair') {
+    const cleanup = await context.prepareElementDeletion?.(ElementType.MEMORY, target.storageIdentity, target.storageIdentity, target);
+    return withWarning(success(ElementType.MEMORY, target.storageIdentity),
+      await deleteAndFinish(context.memoryManager, target, cleanup, ElementType.MEMORY, target.storageIdentity));
   }
+  const memory = target.element;
 
   // Deactivate if currently active
   if (memory.getStatus?.() === 'active' && memory.deactivate) {
@@ -153,31 +140,33 @@ async function deleteMemory(
   const memoryName = memory.metadata.name;
 
   // Delegate to manager — handles file mode, DB mode, path resolution, file lock, events
-  const filePath = memory.getFilePath() || memoryName;
+  const filePath = target.storageIdentity;
   const cleanup = await context.prepareElementDeletion?.(ElementType.MEMORY, memoryName, filePath, memory);
-  const warning = await deleteAndFinish(context.memoryManager, filePath, cleanup, ElementType.MEMORY, memoryName);
+  const warning = await deleteAndFinish(context.memoryManager, target, cleanup, ElementType.MEMORY, memoryName);
   context.memoryManager.clearCache();
 
   // Clean up storage data if requested (handler-level concern, not manager's)
-  if (deleteData) {
-    const memoryDir = context.portfolioManager.getElementDir(ElementType.MEMORY);
-    await cleanupMemoryStorage(memoryDir, memoryName, context.fileOperations);
-  }
+  const storageFailure = deleteData
+    ? await cleanupMemoryStorage(context.portfolioManager.getElementDir(ElementType.MEMORY), memoryName, context.fileOperations)
+    : undefined;
+  const storageDeleted = deleteData && !storageFailure;
 
-  logger.info(`Memory deleted: ${memoryName}${deleteData ? ' (with storage)' : ''}`);
+  logger.info(`Memory deleted: ${memoryName}${storageDeleted ? ' (with storage)' : ''}`);
   return {
     content: [{
       type: "text",
-      text: `✅ Successfully deleted memory '${memoryName}'${deleteData ? ' and its storage data' : ''}${warning}`
+      text: `✅ Successfully deleted memory '${memoryName}'${storageDeleted ? ' and its storage data' : ''}${warning}`
+        + (storageFailure ? `\n\n⚠️ Its storage data could not be deleted: ${storageFailure}` : '')
     }]
   };
 }
 
 async function deleteAndFinish(
-  manager: { delete(path: string, onCommitted?: () => void): Promise<void> },
-  filename: string, cleanup: DeletionCleanup | undefined, type: string, name: string,
+  manager: Pick<ElementManagerWithDelete<any>, 'deleteResolved'>,
+  target: ElementDeletionTarget<any>, cleanup: DeletionCleanup | undefined, type: string, name: string,
 ): Promise<string> {
   try {
+    let report: DeletionReport;
     if (cleanup?.onCommitted) {
       let committed = false;
       const notifyCommitted = () => {
@@ -185,16 +174,17 @@ async function deleteAndFinish(
         cleanup.onCommitted?.();
       };
       try {
-        await manager.delete(filename, notifyCommitted);
+        report = await manager.deleteResolved(target, notifyCommitted);
       } catch (error) {
         if (committed) await finishDeletion(cleanup, type, name);
         throw error;
       }
       if (!committed) notifyCommitted();
     } else {
-      await manager.delete(filename);
+      report = await manager.deleteResolved(target);
     }
-    return await finishDeletion(cleanup, type, name);
+    const warning = await finishDeletion(cleanup, type, name);
+    return report.notices.map(notice => `\n⚠️ ${notice}`).join('') + warning;
   } finally {
     cleanup?.settle?.();
   }
@@ -215,25 +205,24 @@ function withWarning<T extends { content: Array<{ text: string }> }>(result: T, 
   return result;
 }
 
-// buildMemoryPathCandidates removed — path resolution now handled by MemoryManager.delete()
+// MemoryManager.resolveDeletionTarget owns memory path resolution.
 // via validateAndResolvePath() (file mode) or storage layer (DB mode).
 
-/**
- * Clean up memory storage data file (.storage directory).
- * Silently ignores missing files (ENOENT).
- */
+/** Deletes the memory's storage data (.storage directory); absent data is already deleted. Returns the failure reason otherwise. */
 async function cleanupMemoryStorage(
   memoryDir: string,
   memoryName: string,
   fileOps: IFileOperationsService
-): Promise<void> {
+): Promise<string | undefined> {
   const storagePath = path.join(memoryDir, '.storage', `${memoryName}.json`);
   try {
     await fileOps.deleteFile(storagePath);
-  } catch (error: any) {
-    if (error.code !== 'ENOENT') {
-      logger.debug(`Memory storage deletion warning: ${error.message}`);
-    }
+    return undefined;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return undefined;
+    logger.warn('Memory storage deletion failed', { memoryName, code });
+    return code ? `storage error ${code}` : 'storage error';
   }
 }
 
@@ -297,21 +286,7 @@ function successPreserveData(type: ElementType, name: string, dataFiles: string[
 }
 
 function getManagerForType(context: ElementCrudContext, type: ElementType): ElementManagerWithDelete<any> | null {
-  switch (type) {
-    // FIX: Issue #281 - PERSONA now uses standard flow
-    case ElementType.PERSONA:
-      return context.personaManager as ElementManagerWithDelete<any>;
-    case ElementType.SKILL:
-      return context.skillManager as ElementManagerWithDelete<any>;
-    case ElementType.TEMPLATE:
-      return context.templateManager as ElementManagerWithDelete<any>;
-    case ElementType.AGENT:
-      return context.agentManager as ElementManagerWithDelete<any>;
-    case ElementType.ENSEMBLE:
-      return context.ensembleManager as ElementManagerWithDelete<any>;
-    default:
-      return null;
-  }
+  return (context.getManagerForType(type) as ElementManagerWithDelete<any> | undefined) ?? null;
 }
 
 async function collectDataFiles(

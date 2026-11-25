@@ -353,7 +353,7 @@ describe('RegistrySessionActivationStateAdapter', () => {
     expect(manager.findMany).not.toHaveBeenCalled();
   });
 
-  it('preserves successful activation when pending-deletion lookup throws', async () => {
+  it('refuses activation before live or saved mutation when pending-deletion lookup throws', async () => {
     const registry = new SessionActivationRegistry('default');
     const store = new FixtureActivationStateStore(SESSION_ID);
     registry.getOrCreate(SESSION_ID).activationStore = store;
@@ -365,9 +365,9 @@ describe('RegistrySessionActivationStateAdapter', () => {
       recordPendingActivation: jest.fn(),
     };
     const adapter = new RegistrySessionActivationStateAdapter(registry, () => manager);
-    await expect(adapter.activate(SESSION_ID, SKILL_TYPE, SKILL_CANONICAL_NAME)).resolves.toMatchObject({ changed: true });
-    expect(registry.get(SESSION_ID)?.skills.has(SKILL_CANONICAL_NAME)).toBe(true);
-    expect(store.getActivations(SKILL_TYPE)).toHaveLength(1);
+    await expect(adapter.activate(SESSION_ID, SKILL_TYPE, SKILL_CANONICAL_NAME)).rejects.toThrow('unreadable definition');
+    expect(registry.get(SESSION_ID)?.skills.has(SKILL_CANONICAL_NAME)).toBe(false);
+    expect(store.getActivations(SKILL_TYPE)).toHaveLength(0);
     expect(manager.recordPendingActivation).not.toHaveBeenCalled();
   });
 

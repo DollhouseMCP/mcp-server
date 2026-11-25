@@ -32,6 +32,7 @@
  */
 
 import * as yaml from 'js-yaml';
+import { markContentRejection } from '../security/contentRejection.js';
 import matter from '../security/frontmatter.js';
 import { assertSupportedFrontmatterLanguage } from '../security/frontmatterLanguage.js';
 import { SecureYamlParser, hasFrontmatterFraming } from '../security/secureYamlParser.js';
@@ -238,18 +239,6 @@ export interface AutoParsedResult {
 // ============================================================================
 
 /**
- * Service for centralized serialization operations
- *
- * This service provides unified serialization functionality to eliminate code
- * duplication across element managers. Supports:
- * - YAML parsing and dumping
- * - JSON parsing and stringification
- * - Frontmatter creation and parsing
- * - Metadata cleaning
- * - Format detection
- * - Security validation
- */
-/**
  * Fix #910: Canonical metadata field order for deterministic YAML output.
  * Fields are ordered: identity → format → content → type-specific → infrastructure.
  * Fields not listed appear after all listed fields, sorted alphabetically.
@@ -305,6 +294,18 @@ export function orderMetadataFields(metadata: Record<string, unknown>): Record<s
   return ordered;
 }
 
+/**
+ * Service for centralized serialization operations
+ *
+ * This service provides unified serialization functionality to eliminate code
+ * duplication across element managers. Supports:
+ * - YAML parsing and dumping
+ * - JSON parsing and stringification
+ * - Frontmatter creation and parsing
+ * - Metadata cleaning
+ * - Format detection
+ * - Security validation
+ */
 export class SerializationService {
   // Default limits
   private static readonly DEFAULT_MAX_YAML_SIZE = 64 * 1024; // 64KB
@@ -350,7 +351,7 @@ export class SerializationService {
 
     // Size validation
     if (data.length > maxSize) {
-      throw new Error(`YAML content exceeds allowed size of ${maxSize} bytes`);
+      throw markContentRejection(new Error(`YAML content exceeds allowed size of ${maxSize} bytes`));
     }
 
     // Select YAML schema
@@ -374,20 +375,21 @@ export class SerializationService {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       logger.warn(`YAML parsing failed in ${source}: ${errorMessage}`);
-      throw new Error(`Failed to parse YAML: ${errorMessage}`);
+      const refusal = new Error(`Failed to parse YAML: ${errorMessage}`, { cause: error });
+      throw error instanceof yaml.YAMLException ? markContentRejection(refusal) : refusal;
     }
 
     // Structure validation
     if (validateStructure) {
       if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-        throw new Error('YAML must contain an object at root level');
+        throw markContentRejection(new Error('YAML must contain an object at root level'));
       }
 
       // Check for malicious keys
       const keys = Object.keys(parsed);
       for (const key of keys) {
         if (key.includes('[object Object]') || key.includes('function')) {
-          throw new Error('Invalid YAML structure detected');
+          throw markContentRejection(new Error('Invalid YAML structure detected'));
         }
       }
     }

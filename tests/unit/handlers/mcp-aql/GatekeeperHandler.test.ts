@@ -9,6 +9,7 @@ import type { HandlerRegistry } from '../../../../src/handlers/mcp-aql/MCPAQLHan
 
 function fixture() {
   const collect = jest.fn<GatekeeperHandlerDeps['getActiveElements']>().mockResolvedValue([]);
+  const report = jest.fn<GatekeeperHandlerDeps['getPolicyReportElements']>().mockResolvedValue({ items: [], failures: [], complete: true });
   const gatekeeper = new Gatekeeper(undefined, { enableAuditLogging: false });
   const enforce = jest.spyOn(gatekeeper, 'enforce');
   const recordConfirmation = jest.spyOn(gatekeeper, 'recordConfirmation');
@@ -18,7 +19,7 @@ function fixture() {
   const consume = jest.spyOn(limiter, 'consumeToken');
   const handler = new GatekeeperHandler({
     handlers: {} as HandlerRegistry, operations, gatekeeper, executingAgents: new Map(),
-    getActiveElements: collect, getPolicyReportElements: collect,
+    getActiveElements: collect, getPolicyReportElements: report,
     getEndpointForOperation: operation => operations.getRoute(operation)!.endpoint,
     resolvePermissionPromptLimiter: () => limiter,
     resolveCliApprovalLimiter: () => RateLimiterFactory.createCliApprovalLimiter(),
@@ -27,13 +28,25 @@ function fixture() {
     issueDeadlockReliefChallenge: () => undefined, completeDeadlockRelief: async () => undefined,
     buildRateLimitDeny: () => ({ behavior: 'deny' }),
   });
-  return { handler, collect, gatekeeper, enforce, recordConfirmation, createApproval, consume };
+  return { handler, collect, report, gatekeeper, enforce, recordConfirmation, createApproval, consume };
 }
 
 const PROMPT = { tool_name: 'Write', input: { file_path: '/tmp/result.txt', content: 'hello' }, agent_identity: 'worker' };
 const CONFIRM = { operation: 'create_element', element_type: 'skill' };
 
 describe('GatekeeperHandler policy acquisition failures', () => {
+  it('discloses incomplete dashboard policy reports alongside surviving policies', async () => {
+    const f = fixture();
+    const failures = [{ type: 'skill', reference: 'broken', reason: 'Definition is unreadable' }];
+    f.report.mockResolvedValue({
+      items: [{ type: 'skill', name: 'healthy', metadata: {} }], failures, complete: false,
+    });
+    await expect(f.handler.dispatch('getEffectiveCliPolicies', { reporting_scope: 'dashboard' })).resolves.toMatchObject({
+      activeElementCount: 1, complete: false, failures, enforcementReady: false,
+      elements: [expect.objectContaining({ name: 'healthy' })],
+    });
+    expect(f.collect).not.toHaveBeenCalled();
+  });
   it('returns a normal deny for permission_prompt when element collection fails', async () => {
     const f = fixture();
     expect(classifyTool(PROMPT.tool_name, PROMPT.input).behavior).toBe('evaluate');

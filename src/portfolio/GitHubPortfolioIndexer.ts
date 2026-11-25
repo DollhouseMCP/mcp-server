@@ -17,6 +17,9 @@ import { SecurityMonitor } from '../security/securityMonitor.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
 import { APICache } from '../cache/APICache.js';
+import { visitSequentially } from '../utils/visitSequentially.js';
+import { requireCompleteCollection, type CollectionReport, type CollectionFailure } from '../elements/base/CollectionReport.js';
+import { elementReadFailure, GuardedReadConflict } from '../elements/base/ElementReadError.js';
 
 export interface GitHubIndexEntry {
   path: string;
@@ -60,9 +63,9 @@ export class GitHubPortfolioIndexer {
   private readonly actionTimestampByUser = new Map<string, Date>();
   private readonly actionGracePeriod = 2 * 60 * 1000; // 2 minutes after action
   
-  private portfolioRepoManager: PortfolioRepoManager;
-  private apiCache: APICache;
-  private rateLimitTracker: Map<string, number[]>;
+  private readonly portfolioRepoManager: PortfolioRepoManager;
+  private readonly apiCache: APICache;
+  private readonly rateLimitTracker: Map<string, number[]>;
   private readonly graphQLFeatureEnabled: boolean;
   
   constructor(
@@ -85,25 +88,18 @@ export class GitHubPortfolioIndexer {
    * Main method to get GitHub portfolio index
    */
   public async getIndex(force = false): Promise<GitHubPortfolioIndex> {
-    try {
-      const userKey = this.currentUserKey();
-      if (force || this.shouldFetchFresh(userKey)) {
-        return await this.fetchFresh();
-      }
+    return requireCompleteCollection(await this.getIndexReport(force))[0];
+  }
 
-      const cachedIndex = this.cacheByUser.get(userKey);
-      const lastFetch = this.lastFetchByUser.get(userKey) ?? null;
-
-      if (cachedIndex && this.isCacheValid(userKey)) {
-        GitHubPortfolioIndexer.logCachedIndex(cachedIndex, lastFetch);
-        return cachedIndex;
-      }
-
-      return await this.fetchFreshWithFallback(cachedIndex, lastFetch);
-    } catch (error) {
-      ErrorHandler.logError('GitHubPortfolioIndexer.getIndex', error);
-      return this.cacheByUser.get(this.currentUserKey()) ?? this.createEmptyIndex();
+  public async getIndexReport(force = false): Promise<CollectionReport<GitHubPortfolioIndex>> {
+    const userKey = this.currentUserKey();
+    const cachedIndex = this.cacheByUser.get(userKey);
+    const lastFetch = this.lastFetchByUser.get(userKey) ?? null;
+    if (!force && !this.shouldFetchFresh(userKey) && cachedIndex && this.isCacheValid(userKey)) {
+      GitHubPortfolioIndexer.logCachedIndex(cachedIndex, lastFetch);
+      return { items: [cachedIndex], failures: [], complete: true };
     }
+    return this.fetchFreshWithFallback(cachedIndex, lastFetch);
   }
 
   private static logCachedIndex(cachedIndex: GitHubPortfolioIndex, lastFetch: Date | null): void {
@@ -117,7 +113,7 @@ export class GitHubPortfolioIndexer {
   private async fetchFreshWithFallback(
     cachedIndex: GitHubPortfolioIndex | undefined,
     lastFetch: Date | null
-  ): Promise<GitHubPortfolioIndex> {
+  ): Promise<CollectionReport<GitHubPortfolioIndex>> {
     try {
       return await this.fetchFresh();
     } catch (error) {
@@ -129,9 +125,11 @@ export class GitHubPortfolioIndexer {
           username: cachedIndex.username,
           age: lastFetch ? Date.now() - lastFetch.getTime() : 'unknown'
         });
-        return cachedIndex;
+        const failure = elementReadFailure(error, 'github');
+        if (failure instanceof GuardedReadConflict) throw failure;
+        return { items: [cachedIndex], failures: [{ reference: 'github', error: failure }], complete: false };
       }
-      return this.createEmptyIndex();
+      throw elementReadFailure(error, 'github');
     }
   }
 
@@ -188,17 +186,13 @@ export class GitHubPortfolioIndexer {
   }
 
   private currentUserKey(): string {
-    try {
-      return this.userKeyProvider();
-    } catch {
-      return 'system';
-    }
+    return this.userKeyProvider();
   }
 
   /**
    * Fetch fresh data from GitHub
    */
-  private async fetchFresh(): Promise<GitHubPortfolioIndex> {
+  private async fetchFresh(): Promise<CollectionReport<GitHubPortfolioIndex>> {
     const startTime = Date.now();
     logger.info('Fetching fresh GitHub portfolio index...');
 
@@ -211,11 +205,13 @@ export class GitHubPortfolioIndexer {
       const repoExists = await this.portfolioRepoManager.checkPortfolioExists(username);
       if (!repoExists) {
         logger.info('GitHub portfolio repository does not exist', { username });
-        return this.createEmptyIndex(username, repository);
+        return { items: [this.createEmptyIndex(username, repository)], failures: [], complete: true };
       }
       
       // Fetch repository content using GitHub API
-      const index = await this.fetchRepositoryContent(username, repository);
+      const report = await this.fetchRepositoryContent(username, repository);
+      const index = report.items[0];
+      if (!report.complete) return report;
       
       // Update cache
       const userKey = this.currentUserKey();
@@ -241,7 +237,7 @@ export class GitHubPortfolioIndexer {
         metadata: { username, duration, totalElements: index.totalElements }
       });
       
-      return index;
+      return report;
       
     } catch (error) {
       const duration = Date.now() - startTime;
@@ -253,10 +249,10 @@ export class GitHubPortfolioIndexer {
   /**
    * Fetch repository content from GitHub API
    */
-  private async fetchRepositoryContent(username: string, repository: string): Promise<GitHubPortfolioIndex> {
+  private async fetchRepositoryContent(username: string, repository: string): Promise<CollectionReport<GitHubPortfolioIndex>> {
     if (this.graphQLFeatureEnabled) {
       try {
-        return await this.fetchWithGraphQL(username, repository);
+        return { items: [await this.fetchWithGraphQL(username, repository)], failures: [], complete: true };
       } catch (graphqlError) {
         logger.debug('GraphQL fetch failed, falling back to REST API', {
           error: graphqlError instanceof Error ? graphqlError.message : String(graphqlError)
@@ -271,9 +267,9 @@ export class GitHubPortfolioIndexer {
 
   /**
    * Fetch using GraphQL for better performance
-   * TODO: Implement GraphQL endpoint for portfolio operations
+   * Portfolio GraphQL is unavailable; the caller falls back to REST.
    */
-  private async fetchWithGraphQL(username: string, repository: string): Promise<GitHubPortfolioIndex> {
+  private fetchWithGraphQL(username: string, repository: string): Promise<GitHubPortfolioIndex> {
     // GraphQL query stub - will be used when GraphQL endpoint is implemented
     const _query = `
       query GetPortfolioContent($owner: String!, $name: String!) {
@@ -327,13 +323,13 @@ export class GitHubPortfolioIndexer {
     // GraphQL endpoint not yet implemented with PortfolioRepoManager
     // For now, just throw to fall back to REST
     // Note: In a real implementation, you would send POST request with _query and _variables
-    throw new Error('GraphQL not yet implemented for portfolio operations');
+    return Promise.reject(new Error('GraphQL not yet implemented for portfolio operations'));
   }
 
   /**
    * Fetch using REST API with pagination
    */
-  private async fetchWithREST(username: string, repository: string): Promise<GitHubPortfolioIndex> {
+  private async fetchWithREST(username: string, repository: string): Promise<CollectionReport<GitHubPortfolioIndex>> {
     const normalizedUsername = UnicodeValidator.normalize(username).normalizedContent;
 
     // Construct repository path (repository parameter is always just the repo name)
@@ -365,11 +361,14 @@ export class GitHubPortfolioIndexer {
     
     // Fetch content for each element type
     logger.info(`Fetching content for all element types from GitHub portfolio...`);
+    const failures: CollectionFailure[] = [];
 
-    for (const elementType of Object.values(ElementType)) {
+    await visitSequentially(Object.values(ElementType).values(), async elementType => {
       try {
         logger.debug(`Fetching ${elementType} from GitHub...`);
-        const entries = await this.fetchElementTypeContent(repoPath, elementType);
+        const report = await this.fetchElementTypeContent(repoPath, elementType);
+        const entries = report.items;
+        failures.push(...report.failures);
         index.elements.set(elementType, entries);
         index.totalElements += entries.length;
         
@@ -383,11 +382,13 @@ export class GitHubPortfolioIndexer {
           error: error instanceof Error ? error.message : String(error),
           elementType
         });
-        // Continue with other element types
+        const failure = elementReadFailure(error, elementType);
+        if (failure instanceof GuardedReadConflict) throw failure;
+        failures.push({ reference: elementType, error: failure });
       }
-    }
+    });
     
-    return index;
+    return { items: [index], failures, complete: failures.length === 0 };
   }
 
   /**
@@ -396,20 +397,20 @@ export class GitHubPortfolioIndexer {
   private async fetchElementTypeContent(
     repoPath: string,
     elementType: ElementType
-  ): Promise<GitHubIndexEntry[]> {
+  ): Promise<CollectionReport<GitHubIndexEntry>> {
     try {
       const contents = await this.portfolioRepoManager.githubRequest(
         `/repos/${repoPath}/contents/${elementType}`
       );
       if (!Array.isArray(contents)) {
-        return [];
+        throw new TypeError('GitHub directory response is not an array');
       }
 
       return await this.createEntriesFromDirectoryContents(elementType, contents);
     } catch (error) {
       if (this.isGitHubNotFoundError(error)) {
         logger.debug(`Directory ${elementType} not found in GitHub repository (this is normal if not yet created)`);
-        return [];
+        return { items: [], failures: [], complete: true };
       }
       if (error instanceof Error) {
         logger.debug(`Error fetching ${elementType}: ${error.message}`);
@@ -422,34 +423,43 @@ export class GitHubPortfolioIndexer {
   private async createEntriesFromDirectoryContents(
     elementType: ElementType,
     contents: any[]
-  ): Promise<GitHubIndexEntry[]> {
+  ): Promise<CollectionReport<GitHubIndexEntry>> {
     const entries: GitHubIndexEntry[] = [];
+    const failures: CollectionFailure[] = [];
     const maxConcurrent = 5;
-    for (let i = 0; i < contents.length; i += maxConcurrent) {
+    const offsets = Array.from({ length: Math.ceil(contents.length / maxConcurrent) }, (_, index) => index * maxConcurrent);
+    await visitSequentially(offsets.values(), async i => {
       const batchResults = await this.createIndexEntriesBatch(
         elementType,
         contents.slice(i, i + maxConcurrent)
       );
-      entries.push(...batchResults);
+      entries.push(...batchResults.items);
+      failures.push(...batchResults.failures);
       if (i + maxConcurrent < contents.length) {
         await new Promise(resolve => setTimeout(resolve, 100));
       }
-    }
-    return entries;
+    });
+    return { items: entries, failures, complete: failures.length === 0 };
   }
 
   private async createIndexEntriesBatch(
     elementType: ElementType,
     batch: any[]
-  ): Promise<GitHubIndexEntry[]> {
-    const batchPromises = batch
-      .filter(item => item.type === 'file' && item.name.endsWith('.md'))
-      .map(item => this.createGitHubIndexEntry(elementType, item));
-    const batchResults = await Promise.allSettled(batchPromises);
-    return batchResults
-      .filter((result): result is PromiseFulfilledResult<GitHubIndexEntry | null> => result.status === 'fulfilled')
-      .map(result => result.value)
-      .filter((entry): entry is GitHubIndexEntry => entry !== null);
+  ): Promise<CollectionReport<GitHubIndexEntry>> {
+    const files = batch.filter(item => item.type === 'file' && item.name.endsWith('.md'));
+    const results = await Promise.allSettled(files.map(item => this.createGitHubIndexEntry(elementType, item)));
+    const items: GitHubIndexEntry[] = [];
+    const failures: CollectionFailure[] = [];
+    results.forEach((result, index) => {
+      if (result.status === 'fulfilled') items.push(result.value);
+      else {
+        const reference = files[index].path;
+        const error = elementReadFailure(result.reason, reference);
+        if (error instanceof GuardedReadConflict) throw error;
+        failures.push({ reference, error });
+      }
+    });
+    return { items, failures, complete: failures.length === 0 };
   }
 
   private isGitHubNotFoundError(error: unknown): boolean {
@@ -463,49 +473,35 @@ export class GitHubPortfolioIndexer {
   private async createGitHubIndexEntry(
     elementType: ElementType,
     fileInfo: any
-  ): Promise<GitHubIndexEntry | null> {
-    try {
-      // Parse metadata from filename or fetch content if needed
-      // FIX: Keep original filename format to match local file expectations
-      // Previously: .replaceAll(/-/g, ' ') converted hyphens to spaces causing sync mismatch
-      const name = fileInfo.name.replace('.md', '');
+  ): Promise<GitHubIndexEntry> {
+    // Parse metadata from filename or fetch content if needed
+    // FIX: Keep original filename format to match local file expectations
+    // Previously: .replaceAll(/-/g, ' ') converted hyphens to spaces causing sync mismatch
+    const name = fileInfo.name.replace('.md', '');
       
-      const entry: GitHubIndexEntry = {
-        path: fileInfo.path,
-        name,
-        elementType,
-        sha: fileInfo.sha,
-        htmlUrl: fileInfo.html_url,
-        downloadUrl: fileInfo.download_url,
-        lastModified: new Date(), // GitHub API doesn't provide file modification time directly
-        size: fileInfo.size || 0
-      };
-      await this.hydrateSmallFileMetadata(entry, fileInfo);
-      return entry;
-    } catch (error) {
-      logger.debug('Failed to create GitHub index entry', {
-        path: fileInfo.path,
-        error: error instanceof Error ? error.message : String(error)
-      });
-      return null;
-    }
+    const entry: GitHubIndexEntry = {
+      path: fileInfo.path,
+      name,
+      elementType,
+      sha: fileInfo.sha,
+      htmlUrl: fileInfo.html_url,
+      downloadUrl: fileInfo.download_url,
+      lastModified: new Date(), // GitHub API doesn't provide file modification time directly
+      size: fileInfo.size || 0
+    };
+    await this.hydrateSmallFileMetadata(entry, fileInfo);
+    return entry;
   }
 
   private async hydrateSmallFileMetadata(entry: GitHubIndexEntry, fileInfo: any): Promise<void> {
     if (!fileInfo.size || fileInfo.size >= 10000) {
       return;
     }
-    try {
-      const response = await fetch(fileInfo.download_url);
-      const content = await response.text();
-      const metadata = this.parseMetadataFromContent(content);
-      GitHubPortfolioIndexer.applyParsedMetadata(entry, metadata);
-    } catch (metadataError) {
-      logger.debug('Failed to fetch metadata for file', {
-        path: fileInfo.path,
-        error: metadataError instanceof Error ? metadataError.message : String(metadataError)
-      });
-    }
+    const response = await fetch(fileInfo.download_url);
+    if (!response.ok) throw new Error(`GitHub content request failed (${response.status})`);
+    const content = await response.text();
+    const metadata = this.parseMetadataFromContent(content);
+    GitHubPortfolioIndexer.applyParsedMetadata(entry, metadata);
   }
 
   private static applyParsedMetadata(
@@ -530,7 +526,7 @@ export class GitHubPortfolioIndexer {
     const metadata: any = {};
     
     // Simple frontmatter parsing (could use a proper YAML parser)
-    const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
+    const frontmatterMatch = /^---\n([\s\S]*?)\n---/.exec(content);
     if (frontmatterMatch) {
       const frontmatter = frontmatterMatch[1];
       

@@ -35,6 +35,7 @@ const PAGE_SIZE = 24;
 
 const state = {
   elements: [],
+  readReport: null,
   type: 'all',       // plural API type, or 'all'
   source: 'all',     // all | collection | portfolio
   search: '',
@@ -128,6 +129,7 @@ function template() {
     </fieldset>
   </div>
 
+  <div id="pf-read-failures" role="status" hidden></div>
   <ul class="elements-grid" id="pf-grid"></ul>
 
   <nav class="pagination" id="pf-pagination" hidden aria-label="Page navigation">
@@ -154,12 +156,13 @@ async function load() {
   }
   // Local portfolio elements are flagged so the LOCAL badge + Portfolio source filter work.
   state.elements = (list.body?.elements ?? []).filter(Boolean).map(el => ({ ...el, _local: true }));
+  state.readReport = list.body;
   state.summary = summary?.status === 200 ? summary.body : null;
   paint();
   // The list DTO is lean; hydrate the rich card fields (description/author/
   // category) from each element's full detail — the legacy did the same. No
   // backend change: GET /me/portfolio/elements/:type/:name returns metadata.
-  hydrateDetails();
+  void hydrateDetails();
 }
 
 const HYDRATE_CONCURRENCY = 8;
@@ -168,23 +171,23 @@ async function hydrateDetails() {
   const queue = state.elements.filter(el => el.name && el.type && el._hydrated === undefined);
   let next = 0;
   const worker = async () => {
-    while (next < queue.length) {
-      const el = queue[next++];
-      el._hydrated = false;
-      try {
-        const res = await get(`/me/portfolio/elements/${encodeURIComponent(el.type)}/${encodeURIComponent(el.name)}`);
-        if (res.status === 200 && res.body) {
-          const m = res.body.metadata ?? {};
-          el.metadata = m;                 // keep the full stored frontmatter
-          el.content = res.body.content;   // for the detail view (next increment)
-          el._etag = res.etag;
-          el.description = str(m.description);
-          el.author = str(m.author);
-          el.category = str(m.category);
-          el._hydrated = true;
-        }
-      } catch { /* leave the card with its summary fields */ }
-    }
+    if (next >= queue.length) return;
+    const el = queue[next++];
+    el._hydrated = false;
+    try {
+      const res = await get(`/me/portfolio/elements/${encodeURIComponent(el.type)}/${encodeURIComponent(el.name)}`);
+      if (res.status === 200 && res.body) {
+        const m = res.body.metadata ?? {};
+        el.metadata = m;                 // keep the full stored frontmatter
+        el.content = res.body.content;   // for the detail view (next increment)
+        el._etag = res.etag;
+        el.description = str(m.description);
+        el.author = str(m.author);
+        el.category = str(m.category);
+        el._hydrated = true;
+      }
+    } catch { /* leave the card with its summary fields */ }
+    await worker();
   };
   await Promise.all(Array.from({ length: Math.min(HYDRATE_CONCURRENCY, queue.length) }, worker));
   render(); // re-render once with the enriched fields filled in
@@ -361,7 +364,19 @@ function visibleElements() {
   return items.sort(cmp);
 }
 
+function renderReadFailures() {
+  const notice = host.querySelector('#pf-read-failures');
+  const incomplete = state.source !== 'collection' && state.readReport?.complete === false;
+  notice.hidden = !incomplete;
+  if (!incomplete) { notice.textContent = ''; return; }
+  const failures = state.readReport.failures ?? [];
+  notice.innerHTML = '<p>Some portfolio elements could not be read.</p><ul>'
+    + failures.map(failure => `<li>${escapeHtml(failure.reference ?? 'Portfolio')}: ${escapeHtml(failure.reason)}</li>`).join('')
+    + '</ul>';
+}
+
 function render() {
+  renderReadFailures();
   const grid = host.querySelector('#pf-grid');
   grid.dataset.view = state.view; // the ported CSS styles .elements-grid[data-view="list"|"grid"]
   const items = visibleElements();
@@ -504,7 +519,7 @@ function wireControls() {
     // otherwise a transient blip would brick the tab for the whole session.
     const cst = state.collection.status;
     if ((v === 'all' || v === 'collection') && (cst === 'idle' || cst === 'error' ||
-        (cst === 'degraded' && state.collection.elements.length === 0))) loadCollection();
+        (cst === 'degraded' && state.collection.elements.length === 0))) void loadCollection();
   }));
   host.querySelector('#pf-type-filters').addEventListener('click', (e) => {
     const btn = e.target.closest('.type-filter'); if (!btn) return;
@@ -523,12 +538,12 @@ function wireControls() {
       : list.findIndex(el => el.type === cardEl.dataset.key && el.name === cardEl.dataset.name);
     if (idx < 0) return;
     const installBtn = e.target.closest('[data-action="install"]');
-    if (installBtn) { e.stopPropagation(); installCard(list[idx], installBtn); return; }   // install without opening
+    if (installBtn) { e.stopPropagation(); void installCard(list[idx], installBtn); return; }   // install without opening
     const dlBtn = e.target.closest('[data-action="download"]');
-    if (dlBtn) { e.stopPropagation(); downloadCard(list[idx], dlBtn); return; }   // download without opening
+    if (dlBtn) { e.stopPropagation(); void downloadCard(list[idx], dlBtn); return; }   // download without opening
     const editBtn = e.target.closest('[data-action="edit"]');
-    if (editBtn) { e.stopPropagation(); editCard(list[idx], editBtn); return; }
-    openModal(list, idx);
+    if (editBtn) { e.stopPropagation(); void editCard(list[idx], editBtn); return; }
+    void openModal(list, idx);
   });
 }
 
@@ -735,7 +750,7 @@ async function performInstall(el) {
     notify(res.status === 409
       ? `“${title(el)}” is already in your portfolio.`
       : `Installed “${title(el)}” into your portfolio.`, 'success');
-    refreshPortfolio();
+    void refreshPortfolio();
     return true;
   }
   const detail = res.body && typeof res.body.detail === 'string' ? res.body.detail : `status ${res.status}`;
@@ -785,10 +800,11 @@ async function refreshPortfolio() {
     ]);
     if (list.status !== 200) return;
     state.elements = (list.body?.elements ?? []).filter(Boolean).map(el => ({ ...el, _local: true }));
+    state.readReport = list.body;
     state.summary = summary?.status === 200 ? summary.body : state.summary;
     renderSummary();
     if (state.source !== 'collection') paint();
-    hydrateDetails();
+    void hydrateDetails();
   } catch { /* leave the current portfolio view; the next full load will catch up */ }
 }
 
@@ -800,11 +816,11 @@ function onToolbar(e) {
     btn.innerHTML = modalShowRaw ? '&#8644; Rendered' : '&#8644; Raw';
     renderModalBody();
   } else if (act === 'copy') {
-    navigator.clipboard?.writeText(rawSource(modalEl)).then(() => notify('Copied to clipboard.', 'success'));
+    navigator.clipboard?.writeText(rawSource(modalEl)).then(() => notify('Copied to clipboard.', 'success'), () => notify('Could not copy to clipboard.', 'error'));
   } else if (act === 'download') {
     downloadElement(modalEl);
   } else if (act === 'install') {
-    installFromModal(btn);
+    void installFromModal(btn);
   } else if (act === 'edit') {
     const element = modalEl;
     closeDetailModal();
@@ -814,9 +830,9 @@ function onToolbar(e) {
     closeDetailModal();
     authoring.deleteElement(element);
   } else if (act === 'prev' && modalIdx > 0) {
-    openModal(modalList, modalIdx - 1);
+    void openModal(modalList, modalIdx - 1);
   } else if (act === 'next' && modalIdx < modalList.length - 1) {
-    openModal(modalList, modalIdx + 1);
+    void openModal(modalList, modalIdx + 1);
   }
 }
 

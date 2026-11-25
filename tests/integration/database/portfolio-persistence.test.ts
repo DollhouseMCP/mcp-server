@@ -60,6 +60,15 @@ describe.each(CONSOLE_PORTFOLIO_ELEMENT_TYPES)('PostgreSQL portfolio persistence
     expect((await store.findByName(USER_ID, type, input.name))?.tags).toEqual(['winner']);
   });
 
+  it('deletes the resolved definition through the console projection', async () => {
+    const { store } = fixture();
+    const created = await store.create(input);
+    await expect(store.delete({ userId: USER_ID, type, canonicalName: created.canonicalName,
+      expectedVersion: created.version, expectedContentHash: created.contentHash, now: NOW,
+    })).resolves.toMatchObject({ name: created.name });
+    await expect(store.findByName(USER_ID, type, created.canonicalName)).resolves.toBeNull();
+  });
+
 });
 
 it('preserves a skill reference body through console import and save', async () => {

@@ -68,7 +68,7 @@ export class Skill extends BaseElement implements IElement {
   // Store MetadataService for clone operation
   private readonly metadataService: MetadataService;
 
-  constructor(metadata: Partial<SkillMetadata>, instructions: string = '', metadataService: MetadataService, content: string = '') {
+  constructor(metadata: Partial<SkillMetadata>, instructions: string | undefined, metadataService: MetadataService, content: string = '') {
     // SECURITY FIX #2: Validate and sanitize ALL metadata fields
     // Previously: metadata was used directly without validation
     // Now: All string inputs are Unicode normalized and sanitized to prevent:
@@ -86,7 +86,7 @@ export class Skill extends BaseElement implements IElement {
     // Ensure instructions is always a string, even if empty
     // Use ContentValidator for multi-line content to preserve formatting (newlines, tabs)
     // while still detecting prompt injection attacks
-    if (instructions && instructions.trim()) {
+    if (instructions?.trim()) {
       const contentValidation = ContentValidator.validateAndSanitize(instructions, { maxLength: SECURITY_LIMITS.MAX_CONTENT_LENGTH, contentContext: 'skill' });
       this.instructions = contentValidation.sanitizedContent || '';
     } else {
@@ -262,7 +262,7 @@ export class Skill extends BaseElement implements IElement {
   /**
    * Execute the skill with current parameters
    */
-  async execute(input?: any): Promise<any> {
+  execute(input?: any): Promise<any> {
     logger.info(`Executing skill: ${this.metadata.name}`);
     
     // Validate required parameters
@@ -271,19 +271,19 @@ export class Skill extends BaseElement implements IElement {
       .map(p => p.name) || [];
     
     if (missingRequired.length > 0) {
-      throw new Error(`Missing required parameters: ${missingRequired.join(', ')}`);
+      return Promise.reject(new Error(`Missing required parameters: ${missingRequired.join(', ')}`));
     }
 
     // Skills don't have built-in execution logic - this would be implemented
     // by specific skill types or through a plugin system
     logger.debug(`Skill ${this.metadata.name} executed with parameters:`, this.getAllParameters());
     
-    return {
+    return Promise.resolve({
       skill: this.metadata.name,
       parameters: this.getAllParameters(),
       input,
       executed_at: new Date().toISOString()
-    };
+    });
   }
 
   /**
@@ -293,8 +293,8 @@ export class Skill extends BaseElement implements IElement {
     const result = super.validate();
     
     // Initialize arrays if not present
-    if (!result.errors) result.errors = [];
-    if (!result.warnings) result.warnings = [];
+    result.errors ??= [];
+    result.warnings ??= [];
     
     // Instructions should not be empty
     if (!this.instructions || this.instructions.trim().length === 0) {
@@ -443,6 +443,7 @@ export class Skill extends BaseElement implements IElement {
       
       // Update metadata
       this.metadata = { ...this.metadata, ...parsed.metadata };
+      this.assignName(this.metadata.name);
       
       // Update other properties
       this.instructions = parsed.instructions || '';

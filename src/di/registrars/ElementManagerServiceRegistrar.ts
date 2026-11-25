@@ -37,9 +37,10 @@ import { TemplateManager } from '../../elements/templates/TemplateManager.js';
 import { TemplateRenderer } from '../../utils/TemplateRenderer.js';
 import { AgentManager } from '../../elements/agents/AgentManager.js';
 import type { AdmittedDatabaseMemoryManagerFactory } from '../../storage/DatabaseStorageLayerFactory.js';
-import type { ElementManagerDeps } from '../../elements/base/BaseElementManager.js';
+import type { BaseElementManager, ElementManagerDeps } from '../../elements/base/BaseElementManager.js';
 import { MemoryManager } from '../../elements/memories/MemoryManager.js';
 import { EnsembleManager } from '../../elements/ensembles/EnsembleManager.js';
+import { createElementManagerLookup, type ElementManagerLookup } from '../../elements/ElementManagerLookup.js';
 import { ElementEventDispatcher } from '../../events/ElementEventDispatcher.js';
 import {
   AnthropicToDollhouseConverter,
@@ -191,15 +192,27 @@ export class ElementManagerServiceRegistrar {
 
     container.register('ActivePolicyCollectorFactory', () => createActivePolicyCollector);
 
+    // One type-to-manager lookup for every consumer that must ask the owning manager
+    // (the installer's existence preflight). Managers resolve lazily so
+    // the lookup never forces construction order. Memories under a tenant registry have
+    // no unattributed root manager; a bound caller substitutes its operation's manager.
+    container.register<ElementManagerLookup>('ElementManagerLookup', () => createElementManagerLookup({
+      [ElementType.PERSONA]: () => container.resolve<BaseElementManager<any>>('PersonaManager'),
+      [ElementType.SKILL]: () => container.resolve<BaseElementManager<any>>('SkillManager'),
+      [ElementType.TEMPLATE]: () => container.resolve<BaseElementManager<any>>('TemplateManager'),
+      [ElementType.AGENT]: () => container.resolve<BaseElementManager<any>>('AgentManager'),
+      [ElementType.MEMORY]: () => {
+        if (container.hasRegistration('DatabaseTenantMemoryRegistry')) throw new Error('Bound memory operation required');
+        return container.resolve<BaseElementManager<any>>('MemoryManager');
+      },
+      [ElementType.ENSEMBLE]: () => container.resolve<BaseElementManager<any>>('EnsembleManager'),
+    }));
+
     // POLICY EXPORT SERVICE (Issue #762: Export policies to bridge)
     container.register('PolicyExportService', () => new PolicyExportService({
       getActiveElementsForPolicy: async () => {
-        try {
-          const handler = container.resolve<ElementCRUDHandler>('ElementCRUDHandler');
-          return handler.getActiveElementsForPolicy();
-        } catch {
-          return [];
-        }
+        const handler = container.resolve<ElementCRUDHandler>('ElementCRUDHandler');
+        return handler.getActiveElementsForPolicyReport();
       },
       getServerVersion: () => PACKAGE_VERSION,
     }));

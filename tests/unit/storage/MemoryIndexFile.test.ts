@@ -8,6 +8,8 @@ import { MemoryIndexFile } from '../../../src/storage/MemoryIndexFile.js';
 import type { MemoryIndexData } from '../../../src/storage/MemoryIndexFile.js';
 import type { FileOperationsService } from '../../../src/services/FileOperationsService.js';
 import type { ElementIndexEntry } from '../../../src/storage/types.js';
+import { FileStateTable } from '../../../src/storage/FileStateTable.js';
+import { assertNamedReadEvidence } from '../../../src/elements/base/ElementNameEvidence.js';
 
 function makeEntry(filePath: string, name: string): ElementIndexEntry {
   return {
@@ -61,6 +63,24 @@ describe('MemoryIndexFile', () => {
     const serialized = jest.mocked(fileOps.writeFile).mock.calls[0][1];
     jest.mocked(fileOps.readFile).mockResolvedValue(serialized);
     expect(await indexFile.read()).toMatchObject({ entryCount: 1, blocked });
+  });
+
+  it('preserves camel-case attribution through persisted blocked records and a failed restart scan', async () => {
+    const table = new FileStateTable();
+    table.applySaved('legacy.yaml', 1, makeEntry('legacy.yaml', 'CodeReview'));
+    const outcomes = new Map([['legacy.yaml', { status: 'failed' as const, mtimeMs: 2,
+      failure: { name: 'Error', reason: 'Invalid definition', candidateNames: [], unattributed: true } }]]);
+    table.publishScan(table.beginScan(), outcomes);
+    table.publishScan(table.beginScan(), outcomes);
+    const snapshot = table.persistableSnapshot()!;
+    await indexFile.write(snapshot.entries, snapshot.blocked);
+    jest.mocked(fileOps.readFile).mockResolvedValue(jest.mocked(fileOps.writeFile).mock.calls[0][1]);
+    const disk = await indexFile.read();
+    const restarted = new FileStateTable();
+    restarted.hydrate(Object.values(disk!.entries), disk!.blocked);
+    restarted.publishScan(restarted.beginScan(), outcomes);
+    expect(() => assertNamedReadEvidence('code-review', true, restarted.unindexed())).toThrow('legacy.yaml');
+    expect(restarted.unindexed().get('legacy.yaml')?.candidateNames).toContain('CodeReview');
   });
 
   it('skips malformed blocked entries and accepts a missing blocked field', async () => {

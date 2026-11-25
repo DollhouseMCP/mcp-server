@@ -5,15 +5,41 @@ import { logger } from '../../../src/utils/logger.js';
 import { getActiveElementLimitConfig } from '../../../src/config/active-element-limits.js';
 import { PersonaActivationStrategy } from '../../../src/handlers/strategies/PersonaActivationStrategy.js';
 import type { PersonaIndicatorService } from '../../../src/services/PersonaIndicatorService.js';
+import { ElementReadError } from '../../../src/elements/base/ElementReadError.js';
 
+/**
+ * Activation reads the persona's definition; the eviction scenarios then model a definition that
+ * can no longer be read: clearing the cache also removes the backing files.
+ */
 function createPersonaFindingFixture() {
   const fixture = createFixture();
-  fixture.mockFileOperationsService.readElementFile.mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' }));
+  const clearCache = fixture.personaManager.clearCache.bind(fixture.personaManager);
+  fixture.personaManager.clearCache = () => {
+    fixture.files.clear();
+    clearCache();
+  };
   return fixture;
 }
 
 describe('Persona activation references', () => {
   afterEach(() => jest.restoreAllMocks());
+
+  it('reload retains failed references and removes only proven missing references', async () => {
+    const { personaManager } = createPersonaFindingFixture();
+    const active = personaManager['getActivationSet']();
+    active.add('broken.md');
+    active.add('missing.md');
+    active.add('healthy.md');
+    jest.spyOn(personaManager as any, 'scanAndEvict').mockResolvedValue(undefined);
+    const healthy = { metadata: { name: 'healthy' }, filename: 'healthy.md' };
+    const lookup = jest.spyOn(personaManager, 'findPersonaAsync').mockImplementation(async name => {
+      if (name === 'broken.md') throw new Error('Definition unavailable');
+      return name === 'healthy.md' ? healthy as any : undefined;
+    });
+    await expect(personaManager.reload()).rejects.toBeInstanceOf(ElementReadError);
+    expect([...active]).toEqual(['broken.md', 'healthy.md']);
+    expect(lookup.mock.calls.map(([name]) => name)).toEqual(['broken.md', 'missing.md', 'healthy.md']);
+  });
 
   it('emits one activation event when concurrent pressure checks finish', async () => {
     const { personaManager } = createPersonaFindingFixture();
@@ -76,15 +102,26 @@ describe('Persona activation references', () => {
     expect(warn).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps activation when a public delete by filename fails', async () => {
+    const { personaManager } = createPersonaFindingFixture();
+    await personaManager.activatePersona('Creative Writer');
+    const failure = new Error('storage failure');
+    jest.spyOn(BaseElementManager.prototype, 'deleteResolved').mockRejectedValueOnce(failure);
+    await expect(personaManager.delete('Creative-Writer.md')).rejects.toBe(failure);
+    expect(personaManager['getActivationSet']().has('Creative-Writer.md')).toBe(true);
+  });
+
   it.each(['veto', 'storage failure'])('keeps activation and warning suppression when delete fails with %s', async reason => {
     const { personaManager } = createPersonaFindingFixture();
     await personaManager.activatePersona('Creative Writer');
+    const target = { kind: 'element' as const, storageIdentity: 'Creative-Writer.md',
+      element: (await personaManager.findPersonaAsync('Creative Writer'))! };
     personaManager.clearCache();
     const warn = jest.spyOn(logger, 'warn');
     await personaManager['collectRetainedReferenceNotices']();
     const failure = new Error(reason);
-    jest.spyOn(BaseElementManager.prototype, 'delete').mockRejectedValueOnce(failure);
-    await expect(personaManager.delete('Creative-Writer.md')).rejects.toBe(failure);
+    jest.spyOn(BaseElementManager.prototype, 'deleteResolved').mockRejectedValueOnce(failure);
+    await expect(personaManager.deleteResolved(target)).rejects.toBe(failure);
     expect(personaManager['getActivationSet']().has('Creative-Writer.md')).toBe(true);
     await personaManager['collectRetainedReferenceNotices']();
     expect(warn).toHaveBeenCalledTimes(1);
@@ -94,12 +131,14 @@ describe('Persona activation references', () => {
     const { personaManager } = createPersonaFindingFixture();
     await personaManager.activatePersona('Creative Writer');
     const pending: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
-    jest.spyOn(BaseElementManager.prototype, 'delete').mockImplementation((_locator, onCommitted) => new Promise<void>((resolve, reject) => {
-      pending.push({ resolve: () => { onCommitted?.(); resolve(); }, reject });
+    const target = { kind: 'element' as const, storageIdentity: 'Creative-Writer.md',
+      element: (await personaManager.findPersonaAsync('Creative Writer'))! };
+    jest.spyOn(BaseElementManager.prototype, 'deleteResolved').mockImplementation((_target, onCommitted) => new Promise((resolve, reject) => {
+      pending.push({ resolve: () => { onCommitted?.(); resolve({ storageIdentity: target.storageIdentity, notices: [] }); }, reject });
     }));
     jest.spyOn(personaManager, 'reload').mockResolvedValue(undefined);
-    const first = personaManager.delete('Creative-Writer.md');
-    const second = personaManager.delete('Creative-Writer.md');
+    const first = personaManager.deleteResolved(target);
+    const second = personaManager.deleteResolved(target);
     const settled = Promise.allSettled([first, second]);
     if (outcome === 'deactivate') personaManager.deactivatePersona('Creative Writer');
     if (outcome === 'reactivate') await personaManager.activatePersona('Creative Writer');

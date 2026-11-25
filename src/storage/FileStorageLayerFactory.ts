@@ -49,12 +49,13 @@ export class FileStorageLayerFactory implements IStorageLayerFactory {
   ) {}
 
   createForElement(elementType: string, options: FileStorageOptions): IStorageLayer {
-    const resolver = this.elementDirResolverFactory?.(elementType);
+    const resolver = options.elementDirResolver ?? this.elementDirResolverFactory?.(elementType);
 
     if (elementType === 'memories') {
       return new MemoryStorageLayer(this.fileOps, {
         memoriesDir: options.elementDir,
         retainDirectoryState: options.retainDirectoryState,
+        onFailedRecordRecovered: options.onFailedRecordRecovered,
         memoriesDirResolver: resolver,
         scanCooldownMs: options.scanCooldownMs,
         indexDebounceMs: this.memoryConfig.indexDebounceMs,
@@ -63,6 +64,7 @@ export class FileStorageLayerFactory implements IStorageLayerFactory {
     }
     return new ElementStorageLayer(this.fileOps, {
       ...options,
+      elementType,
       elementDirResolver: resolver,
     });
   }

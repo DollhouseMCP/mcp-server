@@ -38,6 +38,12 @@ const DB_STATE_AGENT_NAME = 'db-state-agent';
 
 let dbAvailable = false;
 
+/** Another process's insert of an agent definition: its own storage layer, same user and schema. */
+async function insertExternalSibling(tracker: ContextTracker, name: string, content: string, description: string): Promise<void> {
+  const externalLayer = new DatabaseStorageLayer(getTestDb(), createUserIdResolver(tracker), 'agents');
+  await externalLayer.writeContent('agents', name, content, { author: '', version: '1.0.0', description, tags: [] });
+}
+
 function createDbAgentManager(tempDir: string, tracker: ContextTracker): AgentManager {
   const fileLockManager = new FileLockManager();
   const fileOperations = new FileOperationsService(fileLockManager);
@@ -321,24 +327,27 @@ describe('AgentManager DB-backed runtime state', () => {
     try {
       await tracker.runAsync({ type: 'test', timestamp: Date.now(), session }, async () => {
         const staleManager = createDbAgentManager(tempDir, tracker);
-        expect((await staleManager.create(
+        const created = await staleManager.create(
           firstName,
           'First externally-colliding agent',
           'Use the objective.',
           { goal: { template: '{objective}', parameters: [{ name: 'objective', type: 'string', required: true }] } },
-        )).success).toBe(true);
+        );
+        expect(created.success).toBe(true);
+        if (!created.element) throw new Error('Expected stale-delete fixture');
         await staleManager.executeAgent(firstName, { objective: 'preserve first state' });
 
+        // Another process inserts the colliding sibling: a second storage layer's write, not a manager create.
+        await insertExternalSibling(tracker, secondName, (await staleManager.exportElement(created.element))
+          .replace(/^name:.*$/mu, `name: ${secondName}`)
+          .replace('First externally-colliding agent', 'Second externally-colliding agent'), 'Second externally-colliding agent');
         const externalManager = createDbAgentManager(tempDir, tracker);
-        expect((await externalManager.create(
-          secondName,
-          'Second externally-colliding agent',
-          'Use the objective.',
-          { goal: { template: '{objective}', parameters: [{ name: 'objective', type: 'string', required: true }] } },
-        )).success).toBe(true);
         await externalManager.executeAgent(secondName, { objective: 'preserve second state' });
 
-        await expect(staleManager.delete('Stale Alias Agent.md')).rejects.toThrow(/not found|ambiguous/iu);
+        // The colliding rows make the name ambiguous: the delete refuses, typed, and removes neither.
+        await expect(staleManager.delete('Stale Alias Agent.md')).rejects.toMatchObject({
+          kind: 'indeterminate', message: expect.stringMatching(/ambiguous/iu),
+        });
 
         const remainingDefinitions = await withUserRead(getTestDb(), userId, tx =>
           tx.select({ id: elements.id, name: elements.name })
@@ -381,31 +390,38 @@ describe('AgentManager DB-backed runtime state', () => {
     try {
       await tracker.runAsync({ type: 'test', timestamp: Date.now(), session }, async () => {
         const staleManager = createDbAgentManager(tempDir, tracker);
-        expect((await staleManager.create(
+        const created = await staleManager.create(
           firstName,
           'First stale-read agent',
           'Use the objective.',
           { goal: { template: '{objective}', parameters: [{ name: 'objective', type: 'string', required: true }] } },
-        )).success).toBe(true);
+        );
+        expect(created.success).toBe(true);
+        if (!created.element) throw new Error('Expected stale-read fixture');
         await staleManager.executeAgent(firstName, { objective: 'first state only' });
-        await staleManager.refreshIndex();
+        await staleManager['scanAndEvict']();
 
+        // Another process inserts the colliding sibling: a second storage layer's write, not a manager create.
+        await insertExternalSibling(tracker, secondName, (await staleManager.exportElement(created.element))
+          .replace(/^name:.*$/mu, `name: ${secondName}`)
+          .replace('First stale-read agent', 'Second stale-read agent'), 'Second stale-read agent');
         const externalManager = createDbAgentManager(tempDir, tracker);
-        expect((await externalManager.create(
-          secondName,
-          'Second stale-read agent',
-          'Use the objective.',
-          { goal: { template: '{objective}', parameters: [{ name: 'objective', type: 'string', required: true }] } },
-        )).success).toBe(true);
         await externalManager.executeAgent(secondName, { objective: 'second state only' });
 
         const [ordinaryRead, strictRead] = await Promise.allSettled([
           staleManager.read(ambiguousName),
           staleManager.getAgentStateForRecovery({ agentName: ambiguousName }),
         ]);
+        // Ambiguity is never proven absence: both reads refuse, naming both competing definitions.
+        const competing = (await withUserRead(getTestDb(), userId, tx =>
+          tx.select({ id: elements.id, name: elements.name }).from(elements).where(eq(elements.userId, userId))))
+          .filter(row => row.name === firstName || row.name === secondName);
+        expect(competing).toHaveLength(2);
+        const ambiguity = expect.objectContaining({ name: 'ElementIndeterminateError', failures: expect.arrayContaining(
+          competing.map(row => expect.objectContaining({ reference: row.id, reason: 'Competing definition name' }))) });
         expect({ ordinaryRead, strictRead }).toEqual({
-          ordinaryRead: { status: 'fulfilled', value: null },
-          strictRead: { status: 'rejected', reason: expect.objectContaining({ message: expect.stringMatching(/not found/iu) }) },
+          ordinaryRead: { status: 'rejected', reason: ambiguity },
+          strictRead: { status: 'rejected', reason: ambiguity },
         });
       });
     } finally {
@@ -799,9 +815,13 @@ describe('AgentManager DB-backed runtime state', () => {
           expect(await manager.findByStorageIdentity(secondId as string)).toBe(secondAgent);
           expect(await manager.read(firstName)).toBe(firstAgent);
           expect(await manager.read(secondName)).toBe(secondAgent);
-          await expect(manager.read(ambiguousName)).resolves.toBeNull();
-          await expect(manager.getAgentStateForRecovery({ agentName: ambiguousName }))
-            .rejects.toThrow(/not found/iu);
+          // Ambiguity is never proven absence: both reads refuse, naming both competing definitions.
+          const ambiguity = expect.objectContaining({ name: 'ElementIndeterminateError', failures: expect.arrayContaining([
+            expect.objectContaining({ reference: firstId, reason: 'Competing definition name' }),
+            expect.objectContaining({ reference: secondId, reason: 'Competing definition name' }),
+          ]) });
+          await expect(manager.read(ambiguousName)).rejects.toEqual(ambiguity);
+          await expect(manager.getAgentStateForRecovery({ agentName: ambiguousName })).rejects.toEqual(ambiguity);
 
           await manager.executeAgent(firstName, { objective: 'first identity goal' });
           await manager.executeAgent(secondName, { objective: 'second identity goal' });

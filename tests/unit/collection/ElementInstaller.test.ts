@@ -19,6 +19,8 @@ import { UnifiedIndexManager, UnifiedSearchResult } from '../../../src/portfolio
 import { ElementType } from '../../../src/portfolio/PortfolioManager.js';
 import { ElementSource } from '../../../src/config/sourcePriority.js';
 import { createTestFileOperationsService } from '../../helpers/di-mocks.js';
+import type { BaseElementManager } from '../../../src/elements/base/BaseElementManager.js';
+import { ElementIndeterminateError } from '../../../src/elements/base/ElementReadError.js';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -30,6 +32,8 @@ describe('ElementInstaller - Source Priority Support (Issue #1447)', () => {
   let installer: ElementInstaller;
   let mockGitHubClient: jest.Mocked<GitHubClient>;
   let mockUnifiedIndexManager: jest.Mocked<UnifiedIndexManager>;
+  let localManager: { findByName: jest.Mock<(name: string) => Promise<unknown>> };
+  let managerLookup: { managerFor: jest.Mock<(type: ElementType) => BaseElementManager<any>> };
   let originalEnv: NodeJS.ProcessEnv;
   let testPortfolioDir: string;
 
@@ -79,9 +83,14 @@ describe('ElementInstaller - Source Priority Support (Issue #1447)', () => {
     // Create FileOperationsService using di-mocks helper
     const fileOperationsService = createTestFileOperationsService();
 
+    // The owning manager certifies local existence; the index is never consulted for it.
+    localManager = { findByName: jest.fn<(name: string) => Promise<unknown>>().mockResolvedValue(undefined) };
+    managerLookup = { managerFor: jest.fn(() => localManager as unknown as BaseElementManager<any>) };
+
     // Create installer with DI pattern (refactored constructor)
     installer = new ElementInstaller(mockGitHubClient, {
       portfolioManager: mockPortfolioManager,
+      managerLookup,
       unifiedIndexManager: mockUnifiedIndexManager,
       fileOperations: fileOperationsService
     });
@@ -117,21 +126,8 @@ describe('ElementInstaller - Source Priority Support (Issue #1447)', () => {
       const elementType = ElementType.PERSONA;
       const collectionPath = 'library/personas/writing/creative-writer.md';
 
-      // Mock local search returning existing element
-      mockUnifiedIndexManager.search.mockResolvedValueOnce([
-        {
-          source: 'local',
-          entry: {
-            name: 'creative-writer',
-            elementType: ElementType.PERSONA,
-            description: 'Existing local element',
-            lastModified: new Date(),
-            localFilePath: '/test/path.md'
-          },
-          matchType: 'exact',
-          score: 1
-        } as UnifiedSearchResult
-      ]);
+      // The persona manager certifies that the name already resolves locally.
+      localManager.findByName.mockResolvedValueOnce({ metadata: { name: 'creative-writer' } });
 
       const result = await installer.installElement(elementName, elementType, collectionPath);
 
@@ -139,22 +135,15 @@ describe('ElementInstaller - Source Priority Support (Issue #1447)', () => {
       expect(result.alreadyExists).toBe(true);
       expect(result.source).toBe(ElementSource.LOCAL);
       expect(result.message).toContain('already exists');
-      expect(mockUnifiedIndexManager.search).toHaveBeenCalledWith({
-        query: elementName,
-        includeLocal: true,
-        includeGitHub: false,
-        includeCollection: false,
-        elementType
-      });
+      expect(managerLookup.managerFor).toHaveBeenCalledWith(elementType);
+      expect(localManager.findByName).toHaveBeenCalledWith(elementName);
+      expect(mockUnifiedIndexManager.search).not.toHaveBeenCalled();
     });
 
     it('should try GitHub after local check fails', async () => {
       const elementName = 'test-skill';
       const elementType = ElementType.SKILL;
       const collectionPath = 'library/skills/dev/test-skill.md';
-
-      // Mock local search returning no results
-      mockUnifiedIndexManager.search.mockResolvedValueOnce([]);
 
       // Mock GitHub search returning element
       mockUnifiedIndexManager.search.mockResolvedValueOnce([
@@ -191,6 +180,19 @@ category: "test"
       expect(result.source).toBe(ElementSource.GITHUB);
       expect(result.message).toContain('GitHub');
       expect(result.filename).toBe('test-skill.md');
+    });
+
+    it('selects the GitHub portfolio entry by the shared name rule, not by exact lower-case equality', async () => {
+      mockUnifiedIndexManager.search.mockResolvedValueOnce([
+        { source: 'github', entry: { name: 'Code Reviewer', elementType: ElementType.SKILL, description: 'GitHub skill',
+          lastModified: new Date(), githubDownloadUrl: 'https://raw.githubusercontent.com/user/repo/main/skills/code-reviewer.md' },
+          matchType: 'partial', score: 0.9 } as UnifiedSearchResult,
+      ]);
+      const validContent = '---\nname: "Code Reviewer"\ndescription: "Reviews code"\ncategory: "test"\n---\n# Code Reviewer';
+      globalThis.fetch = jest.fn().mockResolvedValueOnce({ ok: true, text: jest.fn().mockResolvedValue(validContent) } as any);
+      const result = await installer.installElement('code-reviewer', ElementType.SKILL, 'library/skills/dev/code-reviewer.md');
+      expect(result.success).toBe(true);
+      expect(result.source).toBe(ElementSource.GITHUB);
     });
 
     it('should fallback to collection after GitHub fails', async () => {
@@ -268,9 +270,6 @@ category: "test"
         preferredSource: ElementSource.GITHUB
       };
 
-      // Mock local search returning no results
-      mockUnifiedIndexManager.search.mockResolvedValueOnce([]);
-
       // Mock GitHub search returning element
       mockUnifiedIndexManager.search.mockResolvedValueOnce([
         {
@@ -308,6 +307,40 @@ category: "test"
   });
 
   describe('force Option', () => {
+    it('certifies absence from the skill manager alone when the index is unavailable and the directory is gone', async () => {
+      mockUnifiedIndexManager.search.mockRejectedValue(new Error('Index unavailable'));
+      await fs.rmdir(path.join(testPortfolioDir, 'skills'));
+      const listDirectory = jest.spyOn(installer['fileOperations'], 'listDirectory');
+      await expect(installer['checkLocalElement']('new-skill', ElementType.SKILL)).resolves.toBe(false);
+      expect(managerLookup.managerFor).toHaveBeenCalledWith(ElementType.SKILL);
+      expect(localManager.findByName).toHaveBeenCalledWith('new-skill');
+      expect(listDirectory).not.toHaveBeenCalled();
+      expect(mockUnifiedIndexManager.search).not.toHaveBeenCalled();
+    });
+    it('refuses installation when the skill manager cannot determine whether the name exists', async () => {
+      const indeterminate = new ElementIndeterminateError('Element identity could not be determined', {
+        failures: [{ reference: 'broken.md', reason: 'Definition could not be read or validated' }],
+      });
+      localManager.findByName.mockRejectedValue(indeterminate);
+      const listDirectory = jest.spyOn(installer['fileOperations'], 'listDirectory');
+      await expect(installer.installElement('existing', ElementType.SKILL, 'library/skills/existing.md'))
+        .rejects.toBe(indeterminate);
+      expect(mockGitHubClient.fetchFromGitHub).not.toHaveBeenCalled();
+      expect(listDirectory).not.toHaveBeenCalled();
+    });
+    it('installs from the next source when the manager certifies the name absent', async () => {
+      localManager.findByName.mockResolvedValue(undefined);
+      // GitHub portfolio has nothing; the collection serves the definition.
+      mockUnifiedIndexManager.search.mockResolvedValue([]);
+      const validContent = '---\nname: "absent-skill"\ndescription: "Installed after certified absence"\n---\n# Absent';
+      mockGitHubClient.fetchFromGitHub.mockResolvedValueOnce({
+        type: 'file', content: Buffer.from(validContent).toString('base64'), size: validContent.length });
+      const result = await installer.installElement('absent-skill', ElementType.SKILL, 'library/skills/test/absent-skill.md');
+      expect(result.alreadyExists).toBeUndefined();
+      expect(result.success).toBe(true);
+      expect(result.source).toBe(ElementSource.COLLECTION);
+      expect(localManager.findByName).toHaveBeenCalledWith('absent-skill');
+    });
     it('should overwrite local element when force=true', async () => {
       const elementName = 'force-test';
       const elementType = ElementType.PERSONA;
@@ -463,9 +496,6 @@ category: "test"
       const elementName = 'github-skill';
       const elementType = ElementType.SKILL;
       const collectionPath = 'library/skills/test/github-skill.md';
-
-      // Mock local search returning no results
-      mockUnifiedIndexManager.search.mockResolvedValueOnce([]);
 
       // Mock GitHub search returning element
       mockUnifiedIndexManager.search.mockResolvedValueOnce([
@@ -790,9 +820,6 @@ category: "test"
       const elementType = ElementType.AGENT;
       const collectionPath = 'library/agents/test/atomic-test.md';
 
-      // Mock local search returning no results
-      mockUnifiedIndexManager.search.mockResolvedValueOnce([]);
-
       // Mock GitHub search returning element
       mockUnifiedIndexManager.search.mockResolvedValueOnce([
         {
@@ -893,26 +920,14 @@ category: "test"
       const elementType = ElementType.PERSONA;
       const collectionPath = 'library/personas/test/case-sensitive-test.md';
 
-      // Mock local search with different case
-      mockUnifiedIndexManager.search.mockResolvedValueOnce([
-        {
-          source: 'local',
-          entry: {
-            name: 'case-sensitive-test',
-            elementType: ElementType.PERSONA,
-            description: 'Case test',
-            lastModified: new Date(),
-            localFilePath: '/test/path.md'
-          },
-          matchType: 'exact',
-          score: 1
-        } as UnifiedSearchResult
-      ]);
+      // The manager folds the name, so a differently cased request still resolves locally.
+      localManager.findByName.mockResolvedValueOnce({ metadata: { name: 'case-sensitive-test' } });
 
       const result = await installer.installElement(elementName, elementType, collectionPath);
 
       expect(result.success).toBe(false);
       expect(result.alreadyExists).toBe(true);
+      expect(localManager.findByName).toHaveBeenCalledWith(elementName);
     });
 
     it('should handle empty search results gracefully', async () => {

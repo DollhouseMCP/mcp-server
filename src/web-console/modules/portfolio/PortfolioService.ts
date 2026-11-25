@@ -1,3 +1,4 @@
+import { collectionReportEvidence } from '../../../elements/base/CollectionReport.js';
 import type {
   ConsoleHandlerResult,
   ConsoleRequest,
@@ -81,7 +82,7 @@ export class PortfolioService {
     store.assertOperationBinding?.();
     return {
       status: 200,
-      body: serializePortfolioSummary(records),
+      body: { ...serializePortfolioSummary(records.items), ...collectionReportEvidence(records) },
     };
   }
 
@@ -102,7 +103,7 @@ export class PortfolioService {
     store.assertOperationBinding?.();
     return {
       status: 200,
-      body: serializePortfolioElementList(records, fields.value),
+      body: { ...serializePortfolioElementList(records.items, fields.value), ...collectionReportEvidence(records) },
     };
   }
 

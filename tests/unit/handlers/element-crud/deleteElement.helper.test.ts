@@ -7,6 +7,8 @@ const { ElementType } = await import('../../../../src/portfolio/PortfolioManager
 const { ElementNotFoundError } = await import('../../../../src/utils/ErrorHandler.js');
 import type { ElementCrudContext } from '../../../../src/handlers/element-crud/types.js';
 import type { IFileOperationsService } from '../../../../src/services/FileOperationsService.js';
+import { ElementMissingError } from '../../../../src/elements/base/ElementReadError.js';
+import { ValidationError } from '../../../../src/security/errors.js';
 
 const MOCK_ROOT = path.resolve('mock');
 const MOCK_ELEMENTS_DIR = path.join(MOCK_ROOT, 'elements');
@@ -72,6 +74,26 @@ describe('deleteElement helper', () => {
       ensureInitialized: jest.fn().mockResolvedValue(undefined),
       fileOperations: mockFileOperations,
     } as any;
+    mockContext.getManagerForType = (type: string) => ({
+      [ElementType.PERSONA]: mockContext.personaManager, [ElementType.SKILL]: mockContext.skillManager,
+      [ElementType.TEMPLATE]: mockContext.templateManager, [ElementType.AGENT]: mockContext.agentManager,
+      [ElementType.MEMORY]: mockContext.memoryManager, [ElementType.ENSEMBLE]: mockContext.ensembleManager,
+    } as Record<string, unknown>)[type];
+    for (const manager of [mockContext.skillManager, mockContext.templateManager, mockContext.agentManager, mockContext.memoryManager]) {
+      manager.resolveDeletionTarget = jest.fn(async identifier => {
+        const fold = (text: string) => text.toLowerCase().replaceAll(/[\s_]+/g, '-');
+        const element = (await manager.list()).find((candidate: any) =>
+          fold(candidate.metadata?.name ?? '') === fold(identifier) || candidate.filename === identifier || candidate.filename === `${identifier}.md`);
+        if (!element) throw new ElementMissingError(identifier, undefined);
+        return { kind: 'element' as const, element,
+          storageIdentity: element.getFilePath?.() || element.filePath || element.filename };
+      });
+      manager.deleteResolved = jest.fn(async (target, onCommitted) => {
+        if (onCommitted) await manager.delete(target.storageIdentity, onCommitted);
+        else await manager.delete(target.storageIdentity);
+        return { storageIdentity: target.storageIdentity, notices: [] };
+      });
+    }
   });
 
   it.each(['skills', 'memories'])('finishes %s cleanup when a successful manager omits the commit observer', async type => {
@@ -235,6 +257,22 @@ describe('deleteElement helper', () => {
         })
       ).rejects.toThrow(ElementNotFoundError);
     });
+
+    it('fails the operation for a refused caller reference instead of reporting it as a result', async () => {
+      const refusal = new ValidationError('Invalid skill path: Path access denied');
+      mockContext.skillManager.resolveDeletionTarget = jest.fn(async () => { throw refusal; });
+
+      await expect(deleteElement(mockContext, { name: '../../../etc/passwd', type: ElementType.SKILL })).rejects.toBe(refusal);
+    });
+
+    it('names a missing element by its singular type label whichever spelling the caller used', async () => {
+      mockContext.agentManager.list = jest.fn().mockResolvedValue([]);
+
+      await expect(deleteElement(mockContext, { name: 'missing', type: 'agents' }))
+        .rejects.toThrow("agent 'missing' not found");
+      await expect(deleteElement(mockContext, { name: 'missing', type: ElementType.AGENT }))
+        .rejects.toThrow("agent 'missing' not found");
+    });
   });
 
   describe('flexible name matching', () => {
@@ -320,6 +358,20 @@ describe('deleteElement helper', () => {
       );
       expect(result.content[0].text).toContain('✅');
     });
+  });
+
+  it('reports a memory storage cleanup failure instead of claiming the storage data deleted', async () => {
+    mockFileOperations.deleteFile.mockRejectedValueOnce(Object.assign(new Error('denied /private/path'), { code: 'EACCES' }));
+    const result = await deleteElement(mockContext, { name: 'test-memory', type: ElementType.MEMORY, deleteData: true });
+    const text = result.content[0].text;
+    expect(text).toContain("✅ Successfully deleted memory 'test-memory'");
+    expect(text).not.toContain('and its storage data');
+    expect(text).toContain('Its storage data could not be deleted: storage error EACCES');
+    expect(text).not.toContain('/private/path');
+    // Absent storage data is already deleted.
+    mockFileOperations.deleteFile.mockRejectedValueOnce(Object.assign(new Error('gone'), { code: 'ENOENT' }));
+    const absent = await deleteElement(mockContext, { name: 'test-memory', type: ElementType.MEMORY, deleteData: true });
+    expect(absent.content[0].text).toContain('and its storage data');
   });
 
   describe('deleteData option handling', () => {

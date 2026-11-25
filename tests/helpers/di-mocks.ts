@@ -167,6 +167,7 @@ export function createMockFileOperationsService(overrides: Partial<any> = {}) {
   return {
     readFile: jest.fn().mockResolvedValue(''),
     readElementFile: jest.fn().mockResolvedValue(''),
+    auditElementRead: jest.fn(),
     writeFile: jest.fn().mockResolvedValue(undefined),
     deleteFile: jest.fn().mockResolvedValue(undefined),
     createDirectory: jest.fn().mockResolvedValue(undefined),

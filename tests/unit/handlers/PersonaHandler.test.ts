@@ -7,6 +7,7 @@ import { PersonaHandler } from '../../../src/handlers/PersonaHandler.js';
 import { PathValidator } from '../../../src/security/pathValidator.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
 import * as yaml from 'js-yaml';
+import { ElementUnreadableError } from '../../../src/elements/base/ElementReadError.js';
 
 describe('PersonaHandler', () => {
   let handler: InstanceType<typeof PersonaHandler>;
@@ -71,6 +72,7 @@ This is a sample persona with enough instructional content to satisfy validation
     // Create mock services for pure DI
     mockPersonaManager = {
       list: jest.fn().mockResolvedValue(Array.from(personas.values())),
+      listReport: jest.fn().mockImplementation(async () => ({ items: await mockPersonaManager.list(), failures: [], complete: true })),
       find: jest.fn().mockImplementation(async (predicate: any) => {
         const values = Array.from(personas.values());
         return values.find(predicate) || null;
@@ -125,6 +127,15 @@ This is a sample persona with enough instructional content to satisfy validation
   });
 
   describe('listPersonas', () => {
+    it('lists readable personas and discloses unreadable definitions', async () => {
+      mockPersonaManager.listReport.mockResolvedValue({ items: await mockPersonaManager.list(),
+        failures: [{ reference: 'broken.md', error: new Error('Malformed definition') }], complete: false });
+      const result = await handler.listPersonas();
+      expect(result.content[0].text).toContain('Sample Persona 1');
+      expect(result.content[0].text).toContain('broken.md: Malformed definition');
+      expect(result.content[0].text).toContain('Listing incomplete');
+    });
+
     it('should list available personas and indicate none is active', async () => {
       const result = await handler.listPersonas();
       expect(result.content[0].text).toContain('Available Personas (2)');
@@ -292,6 +303,15 @@ This is a sample persona with enough instructional content to satisfy validation
   });
 
   describe('createPersona', () => {
+    it('reports post-create inventory failure without claiming a complete persona count', async () => {
+      mockPersonaManager.create.mockResolvedValue({ metadata: { name: 'Created', author: 'test' }, filename: 'created.md' } as any);
+      mockPersonaManager.list.mockRejectedValue(new Error('Inventory unavailable'));
+      const result = await handler.createPersona('Created', 'Detailed description', 'Detailed instructions');
+      expect(mockPersonaManager.create).toHaveBeenCalled();
+      expect(result.content[0].text).toContain('Persona Created Successfully');
+      expect(result.content[0].text).toContain('Listing incomplete');
+      expect(result.content[0].text).not.toContain('Total personas:');
+    });
     it('should create a new persona successfully', async () => {
       const newPersona = {
         filename: 'new-persona.md',
@@ -365,6 +385,29 @@ This is a sample persona with enough instructional content to satisfy validation
   });
 
   describe('importPersona', () => {
+    it('reports a successful import with an incomplete post-import listing notice', async () => {
+      mockPersonaManager.importPersona.mockResolvedValue({ success: true, persona: { metadata: { name: 'Imported' } } });
+      mockPersonaManager.listReport.mockResolvedValue({ items: [], complete: false,
+        failures: [{ reference: 'broken.md', error: new ElementUnreadableError('Definition storage unavailable') }] });
+      const result = await handler.importPersona('source.json');
+      expect(result.content[0].text).toContain('Definition storage unavailable');
+      expect(result.content[0].text).toContain('imported successfully');
+      expect(result.content[0].text).toContain('Listing incomplete');
+      expect(result.content[0].text).not.toContain('Import failed');
+    });
+
+    it('exports readable personas with failure evidence', async () => {
+      const survivors = await mockPersonaManager.list();
+      mockPersonaManager.listReport.mockResolvedValue({ items: survivors, complete: false,
+        failures: [{ reference: 'broken.md', error: new ElementUnreadableError('Definition storage unavailable') }] });
+      mockPersonaExporter.formatBundleResult.mockReturnValue('Readable persona bundle');
+      const result = await handler.exportAllPersonas();
+      expect(mockPersonaExporter.exportBundle).toHaveBeenCalledWith(survivors, true);
+      expect(result.content[0].text).toContain('Readable persona bundle');
+      expect(result.content[0].text).toContain('broken.md');
+      expect(result.content[0].text).toContain('Listing incomplete');
+    });
+
     it('should import a persona successfully', async () => {
       const importedPersona = {
         filename: 'imported.md',

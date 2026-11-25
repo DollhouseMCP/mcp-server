@@ -2,6 +2,7 @@
  * Unit tests for ElementStorageLayer
  */
 
+import path from 'node:path';
 import { MAX_CACHED_DIRECTORY_STATES } from '../../../src/storage/DirectoryStateCache.js';
 import { describe, it, expect, jest, beforeEach } from '@jest/globals';
 import { ElementStorageLayer } from '../../../src/storage/ElementStorageLayer.js';
@@ -58,10 +59,10 @@ describe('ElementStorageLayer', () => {
   });
 
   it('reads cold index status without scanning', async () => {
-    expect(await layer.readIndexedPath(['Alpha'])).toEqual({ path: undefined, indexComplete: false, authoritative: false, unindexed: [] });
+    expect(await layer.readIndexedPath(['Alpha'])).toMatchObject({ path: undefined, indexComplete: false, authoritative: false, unindexed: [] });
     expect(backend.statMany).not.toHaveBeenCalled();
-    expect(await layer.findIndexedPath(['Alpha'])).toBe('alpha.md');
-    expect(await layer.readIndexedPath(['Alpha'])).toEqual({ path: 'alpha.md', indexComplete: true, authoritative: true, unindexed: [] });
+    await layer.scan();
+    expect(await layer.readIndexedPath(['Alpha'])).toMatchObject({ path: 'alpha.md', indexComplete: true, authoritative: true, unindexed: [] });
   });
 
   it.each([false, true])('leaves warm modified diffs for refresh (invalidated: %s)', async invalidate => {
@@ -73,8 +74,7 @@ describe('ElementStorageLayer', () => {
         ['beta.md', makeMeta('beta.md', 2000)],
       ]), failures: new Map() });
       if (invalidate) layer.invalidate();
-      expect(await layer.findIndexedPath(['Alpha'])).toBe('alpha.md');
-      expect(await layer.readIndexedPath(['Alpha'])).toMatchObject({ indexComplete: true, authoritative: !invalidate });
+      expect(await layer.readIndexedPath(['Alpha'])).toMatchObject({ path: 'alpha.md', indexComplete: true, authoritative: !invalidate });
       const diff = await layer.scan();
       expect(diff.modified).toContain('alpha.md');
     } finally {
@@ -102,6 +102,63 @@ describe('ElementStorageLayer', () => {
   });
 
   describe('cooldown behavior', () => {
+    it('reports the directory members a collection read finds now, while unchanged members keep the cooldown', async () => {
+      await layer.readCollection();
+      expect(backend.statMany).toHaveBeenCalledTimes(1);
+
+      // Unchanged membership inside the cooldown: one enumeration, no re-stat of the members.
+      expect((await layer.readCollection()).entries.map(entry => entry.filePath).sort()).toEqual(['alpha.md', 'beta.md']);
+      expect(backend.statMany).toHaveBeenCalledTimes(1);
+
+      // A member removed outside this layer leaves the very next collection read.
+      (backend.listFiles as jest.Mock<any>).mockResolvedValue(['beta.md']);
+      (backend.statMany as jest.Mock<any>).mockResolvedValue({ stats: new Map([['beta.md', makeMeta('beta.md', 2000)]]), failures: new Map() });
+      const removed = await layer.readCollection();
+      expect(removed.entries.map(entry => entry.filePath)).toEqual(['beta.md']);
+      expect(removed.diff.removed).toEqual(['alpha.md']);
+
+      // A member added outside this layer joins it.
+      (backend.listFiles as jest.Mock<any>).mockResolvedValue(['alpha.md', 'beta.md']);
+      (backend.statMany as jest.Mock<any>).mockResolvedValue({ stats: new Map([
+        ['alpha.md', makeMeta('alpha.md', 1000)], ['beta.md', makeMeta('beta.md', 2000)],
+      ]), failures: new Map() });
+      expect((await layer.readCollection()).entries.map(entry => entry.filePath).sort()).toEqual(['alpha.md', 'beta.md']);
+    });
+
+    it('keeps concurrent collection reads authoritative when both observe the same membership change', async () => {
+      await layer.readCollection();
+      const later = <T>(ms: number, value: T) => new Promise<T>(resolve => setTimeout(() => resolve(value), ms));
+      // The second reader's enumeration settles while the first reader's scan is still statting.
+      let enumerations = 0;
+      (backend.listFiles as jest.Mock<any>).mockImplementation(() => later(++enumerations === 2 ? 20 : 0, ['beta.md']));
+      (backend.statMany as jest.Mock<any>).mockImplementation(() => later(40, {
+        stats: new Map([['beta.md', makeMeta('beta.md', 2000)]]), failures: new Map() }));
+
+      const snapshots = await Promise.all([layer.readCollection(), layer.readCollection()]);
+
+      for (const snapshot of snapshots) {
+        expect(snapshot).toMatchObject({ authoritative: true, complete: true });
+        expect(snapshot.entries.map(entry => entry.filePath)).toEqual(['beta.md']);
+      }
+      expect((await layer.readIndexedPath(['Beta'])).authoritative).toBe(true);
+    });
+
+    it('answers a collection read from the scan it began when a change is signalled during that scan', async () => {
+      await layer.readCollection();
+      layer.invalidate();
+      const stats = { stats: new Map([['alpha.md', makeMeta('alpha.md', 1000)], ['beta.md', makeMeta('beta.md', 2000)]]), failures: new Map() };
+      (backend.statMany as jest.Mock<any>).mockImplementationOnce(() => {
+        layer.invalidate();
+        return Promise.resolve(stats);
+      });
+
+      const snapshot = await layer.readCollection();
+
+      expect(snapshot).toMatchObject({ authoritative: true, complete: true });
+      expect(snapshot.entries.map(entry => entry.name).sort((a, b) => a.localeCompare(b))).toEqual(['Alpha', 'Beta']);
+      expect((await layer.readIndexedPath(['Beta'])).authoritative).toBe(false);
+    });
+
     it('should return empty diff within cooldown period', async () => {
       await layer.scan(); // first scan
       const secondDiff = await layer.scan(); // within cooldown
@@ -357,6 +414,64 @@ describe('ElementStorageLayer', () => {
       // Only good.md should be in the index
       const paths = await badLayer.getIndexedPaths();
       expect(paths).toEqual(['good.md']);
+    });
+  });
+
+  describe('reference policy at scan', () => {
+    const directory = path.resolve('policy-elements');
+    const named = (reference: string, name: string) => ({ reference, name });
+    function policyLayer(files: Record<string, string>) {
+      const names = Object.keys(files);
+      const policyBackend = createMockBackend({
+        listFiles: jest.fn<any>().mockResolvedValue(names),
+        statMany: jest.fn<any>().mockResolvedValue({ stats: new Map(names.map((file, index) => [file, makeMeta(file, 1000 + index)])), failures: new Map() }),
+        readFile: jest.fn<any>().mockImplementation((absPath: string) => Promise.resolve(makeContent(files[path.basename(absPath)]))),
+      });
+      return { backend: policyBackend, layer: new ElementStorageLayer(dummyFileOps, { elementDir: directory, fileExtension: '.md', storageBackend: policyBackend }) };
+    }
+
+    it('audits a definition read through the file service and refuses it under the scan policy', async () => {
+      const audit = jest.fn();
+      const { backend: readBackend } = policyLayer({ 'healthy.md': 'Healthy' });
+      const audited = new ElementStorageLayer({ auditElementRead: audit } as unknown as FileOperationsService,
+        { elementDir: directory, fileExtension: '.md', storageBackend: readBackend, elementType: 'skills' });
+      expect(await audited.readContent('healthy.md')).toContain('Healthy');
+      expect(audit).toHaveBeenCalledWith(path.join(directory, 'healthy.md'), 'skills', 'ElementStorageLayer.readContent');
+      await expect(audited.readContent(path.join('..', 'outside.md'))).rejects.toMatchObject({ name: 'ValidationError' });
+      expect(audit).toHaveBeenCalledTimes(1);
+    });
+
+    it('records a traversal filename as a failed record with the validator reason and keeps the sibling', async () => {
+      const { backend: policyBackend, layer: policed } = policyLayer({ 'healthy.md': 'Healthy', 'v1..2.md': 'Traversal' });
+      await policed.scan();
+      expect(await policed.getIndexedPaths()).toEqual(['healthy.md']);
+      // The policy runs before the read, exactly where the loader would refuse the file.
+      expect(jest.mocked(policyBackend.readFile).mock.calls.map(([target]) => target)).toEqual([path.join(directory, 'healthy.md')]);
+      const refused = await policed.readIndexedPath(['v1-2']);
+      expect(refused).toMatchObject({ path: undefined, authoritative: true, unindexed: ['v1..2.md'], candidates: [] });
+      expect(refused.failures.get('v1..2.md')).toMatchObject({ name: 'ValidationError', reason: 'Path traversal detected', candidateNames: ['v1-2'], unattributed: true });
+      expect(await policed.readIndexedPath(['Healthy'])).toMatchObject({ path: 'healthy.md', candidates: [named('healthy.md', 'Healthy')] });
+    });
+
+    it('refuses a stored reference the input sanitiser would rewrite, under its real name', async () => {
+      const { backend: policyBackend, layer: policed } = policyLayer({ 'healthy.md': 'Healthy', 'Q&A.md': 'Questions', 'notes(draft).md': 'Draft' });
+      await policed.scan();
+      expect(await policed.getIndexedPaths()).toEqual(['healthy.md']);
+      expect(jest.mocked(policyBackend.readFile).mock.calls.map(([target]) => target)).toEqual([path.join(directory, 'healthy.md')]);
+      const refused = await policed.readIndexedPath(['Questions']);
+      expect(refused.failures.get('Q&A.md')).toMatchObject({ name: 'ValidationError', reason: expect.stringContaining('not allowed'), candidateNames: ['q-a'] });
+      expect(refused.failures.get('notes(draft).md')).toMatchObject({ name: 'ValidationError', candidateNames: ['notes-draft'] });
+    });
+
+    it('offers every healthy entry a name could select beside the owner hint', async () => {
+      const { layer: duplicates } = policyLayer({ 'first.md': 'Other', 'second.md': 'Other', 'camel.md': 'FooBar' });
+      await duplicates.scan();
+      expect(await duplicates.readIndexedPath(['Other'])).toMatchObject({ path: 'second.md', candidates: [named('first.md', 'Other'), named('second.md', 'Other')] });
+      expect((await duplicates.readIndexedPath(['first.md'])).candidates).toEqual([named('first.md', 'Other')]);
+      expect((await duplicates.readIndexedPath(['foo-bar'])).candidates).toEqual([named('camel.md', 'FooBar')]);
+      expect((await duplicates.readIndexedPath(['foobar'])).candidates).toEqual([named('camel.md', 'FooBar')]);
+      expect((await duplicates.readIndexedPath(['missing', 'Other'])).candidates).toHaveLength(2);
+      expect((await duplicates.readIndexedPath(['missing'])).candidates).toEqual([]);
     });
   });
 

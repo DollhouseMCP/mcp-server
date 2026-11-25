@@ -1,8 +1,4 @@
 import { ElementType } from '../../portfolio/PortfolioManager.js';
-import type { Skill } from '../../elements/skills/Skill.js';
-import type { Template } from '../../elements/templates/Template.js';
-import type { Agent } from '../../elements/agents/Agent.js';
-import type { Memory } from '../../elements/memories/Memory.js';
 import { Ensemble } from '../../elements/ensembles/Ensemble.js';
 import type { EnsembleElementInput } from '../../elements/ensembles/types.js';
 import { resolveElementTypes } from '../../utils/elementTypeResolver.js';
@@ -10,7 +6,7 @@ import type { ElementCrudContext } from './types.js';
 import { generateMemoryId } from '../../elements/memories/utils.js';
 import { MEMORY_CONSTANTS } from '../../elements/memories/constants.js';
 import { logger } from '../../utils/logger.js';
-import { normalizeVersion } from '../../elements/BaseElement.js';
+import { BaseElement, normalizeVersion } from '../../elements/BaseElement.js';
 import { ValidationService, type ValidationFieldType } from '../../services/validation/ValidationService.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
 import { ContentValidator } from '../../security/contentValidator.js';
@@ -602,7 +598,10 @@ async function resolveForkedElement(
   if (!forkResult.forked) {
     return element;
   }
-  return await resolveElementByName(manager, normalizedType, name) ?? element;
+  // A fork that the post-fork lookup cannot certify is a failed edit, never an edit of the shared original.
+  const forked = await resolveElementByName(manager, name);
+  if (!forked) throw new ElementNotFoundError(getElementTypeLabel(normalizedType), name);
+  return forked;
 }
 
 function collectUnknownEditProperties(
@@ -913,6 +912,8 @@ function normalizeEditedMetadata(element: any): void {
   if (!element.metadata) {
     return;
   }
+  // An edited name takes the element's own name rule, as a constructed or loaded one does.
+  if (element instanceof BaseElement && typeof element.metadata.name === 'string') element.assignName(element.metadata.name);
   element.metadata.description ??= '';
   element.metadata.tags ??= [];
   element.metadata.modified = new Date().toISOString();
@@ -1033,7 +1034,7 @@ export async function editElement(
     return error(`Element type '${labelPlural}' is not yet supported for editing`);
   }
 
-  let element = await resolveElementByName(manager, normalizedType, name);
+  let element = await resolveElementByName(manager, name);
   if (!element) {
     const label = getElementTypeLabel(normalizedType);
     throw new ElementNotFoundError(label, name);
@@ -1105,22 +1106,7 @@ function error(message: string) {
 }
 
 function getManagerForType(context: ElementCrudContext, type: ElementType): ElementManagerWithPersistence<any> | null {
-  switch (type) {
-    case ElementType.PERSONA:
-      return context.personaManager as ElementManagerWithPersistence<any>;
-    case ElementType.SKILL:
-      return context.skillManager as ElementManagerWithPersistence<Skill>;
-    case ElementType.TEMPLATE:
-      return context.templateManager as ElementManagerWithPersistence<Template>;
-    case ElementType.AGENT:
-      return context.agentManager as ElementManagerWithPersistence<Agent>;
-    case ElementType.MEMORY:
-      return context.memoryManager as ElementManagerWithPersistence<Memory>;
-    case ElementType.ENSEMBLE:
-      return context.ensembleManager as ElementManagerWithPersistence<any>;
-    default:
-      return null;
-  }
+  return (context.getManagerForType(type) as ElementManagerWithPersistence<any> | undefined) ?? null;
 }
 
 function updateVersionExplicit(element: any, versionString: string) {

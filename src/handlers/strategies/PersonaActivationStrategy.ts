@@ -127,9 +127,8 @@ export class PersonaActivationStrategy extends BaseActivationStrategy implements
    * Get all active personas
    * Issue #281: Updated to show all active personas (supports multiple)
    */
-  getActiveElements(): Promise<MCPResponse> {
-    try {
-    const activePersonas = this.personaManager.getActivePersonas();
+  async getActiveElements(): Promise<MCPResponse> {
+    return this.renderCollectionReport(await this.personaManager.getActiveReferenceReport({ freshness: 'advisory' }), activePersonas => {
     const indicator = this.getPersonaIndicator();
 
     if (activePersonas.length === 0) {
@@ -142,7 +141,7 @@ export class PersonaActivationStrategy extends BaseActivationStrategy implements
     }
 
     const personaList = activePersonas.map(p =>
-      `🔹 **${p.metadata.name}** (${p.unique_id})\n   ${p.metadata.description}\n   📁 ${p.metadata.category || 'general'} | 🎭 ${p.metadata.author || 'Unknown'}`
+      `🔹 **${p.metadata.name}**\n   ${p.metadata.description}\n   📁 ${p.metadata.category || 'general'} | 🎭 ${p.metadata.author || 'Unknown'}`
     ).join('\n\n');
 
     const header = activePersonas.length === 1
@@ -167,9 +166,7 @@ export class PersonaActivationStrategy extends BaseActivationStrategy implements
         text
       }]
     });
-    } catch (error) {
-      return Promise.reject(error);
-    }
+    });
   }
 
   /**

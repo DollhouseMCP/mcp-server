@@ -10,6 +10,9 @@
 
 import { logger } from './logger.js';
 import { ELEMENT_TYPE_MAP } from './elementTypeNormalization.js';
+import { elementReadFailure } from '../elements/base/ElementReadError.js';
+import { ValidationError } from '../security/errors.js';
+import { visitSequentially } from './visitSequentially.js';
 
 /**
  * Interface for managers passed to resolveElementTypes().
@@ -60,12 +63,11 @@ export async function resolveElementTypes(
   elements: any[],
   managers: ElementManagersForResolution
 ): Promise<ResolveElementTypesResult> {
-  const resolved = [];
+  const resolved: ResolveElementTypesResult['resolved'] = [];
   const ambiguous: Array<{ element_name: string; found_in: string[] }> = [];
   const notFound: string[] = [];
 
-  for (let i = 0; i < elements.length; i++) {
-    const elem = elements[i];
+  await visitSequentially(elements.entries(), async ([i, elem]) => {
 
     // Issue #507: Guard against non-object elements (e.g., bare strings like "my-skill")
     if (typeof elem !== 'object' || elem === null) {
@@ -75,7 +77,7 @@ export async function resolveElementTypes(
         `but must be an object with { element_name, element_type }. Skipping.`
       );
       notFound.push(String(elem));
-      continue;
+      return;
     }
 
     const elementName = elem.element_name || elem.name;
@@ -84,13 +86,13 @@ export async function resolveElementTypes(
     if (elementType || !elementName) {
       // Type is already known, or no name to search for — pass through as-is
       resolved.push(elem);
-      continue;
+      return;
     }
 
     const matches = await findMatchingTypes(elementName, managers);
 
     recordResolution(elem, elementName, matches, { resolved, ambiguous, notFound });
-  }
+  });
 
   return { resolved, ambiguous, notFound };
 }
@@ -107,8 +109,8 @@ async function findMatchingTypes(elementName: string, managers: ElementManagersF
   ];
 
   const matches: string[] = [];
-  for (const [typeName, manager] of typeMap) {
-    if (!manager) continue;
+  await visitSequentially(typeMap.values(), async ([typeName, manager]) => {
+    if (!manager) return;
     try {
       if (typeName === 'persona' && manager.findPersonaAsync) {
         const found = await manager.findPersonaAsync(elementName);
@@ -117,10 +119,12 @@ async function findMatchingTypes(elementName: string, managers: ElementManagersF
         const found = await manager.findByName(elementName);
         if (found) matches.push(typeName);
       }
-    } catch {
-      // Manager lookup failed — skip this type silently
+    } catch (cause) {
+      // The name is caller input: its own syntax refusal is not a storage failure.
+      if (cause instanceof ValidationError) throw cause;
+      throw elementReadFailure(cause, elementName);
     }
-  }
+  });
   return matches;
 }
 

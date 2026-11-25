@@ -25,6 +25,9 @@ export function listCounts(mode: Backend, type: CountedType, scenario: Scenario,
     rawContentBytes: bytes, yamlParses: bodies };
 }
 
+/** Statements in the database refresh's full id scan. */
+const DATABASE_REFRESH_SCAN = 1;
+
 export function refreshCounts(mode: Backend, type: CountedType, count: number,
   scenario: Scenario, temperature: Temperature): OperationCounts {
   if (mode === 'file') {
@@ -34,12 +37,17 @@ export function refreshCounts(mode: Backend, type: CountedType, count: number,
       fileBytes: 2 * (bodies * BODY_BYTES[type] - Number(scenario === 'edit') * 2),
       yamlParses: bodies, indexParses: bodies };
   }
-  // Each refresh scans all three manager indexes, even an empty portfolio.
+  // An empty active set needs no scan; beta scanned all three manager indexes even then.
+  if (count === 0) return { ...EMPTY };
+  // One full id scan of the type holding the references (it sees rows deleted elsewhere and reports
+  // every known row modified, as beta's invalidate and scan did), replacing beta's three index scans.
   const bodies = count - Number(scenario === 'delete');
   // #3120: persona identity lookup also queries a deleted activation before name fallback.
   const attempts = type === 'personas' ? count : bodies;
-  // Every refresh rereads all remaining active bodies, even warm.
-  return { ...EMPTY, dataStatements: 3 + attempts, setupStatements: 12 + 4 * attempts,
+  // Every remaining active body is read by id again, even warm (the loader never vouches for a row).
+  // The deleted reference's miss is answered from the refresh's own scan, never observed again.
+  const statements = DATABASE_REFRESH_SCAN + attempts;
+  return { ...EMPTY, dataStatements: statements, setupStatements: 4 * statements,
     rawContentBytes: bodies * BODY_BYTES[type] - (scenario === 'edit' ? 2 : 0), yamlParses: bodies };
 }
 

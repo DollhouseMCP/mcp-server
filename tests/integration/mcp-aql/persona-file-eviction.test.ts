@@ -31,17 +31,17 @@ describe('File persona recovery by activation filename', () => {
       path.join(env.portfolioManager.getElementDir(ElementType.PERSONA), 'finance-v2-0.md'),
       `---\nname: ${name}\ndescription: Finance policy\n---\nFinance instructions.\n`,
     );
-    await manager.refreshIndex({ freshAfterInFlight: true });
+    await manager['scanAndEvict']({ freshAfterInFlight: true });
     expect((await manager.findByName(name))?.metadata.name).toBe(name);
     manager.clearCache();
-    await manager.refreshIndex({ freshAfterInFlight: true });
+    await manager['scanAndEvict']({ freshAfterInFlight: true });
     expect((await manager.findPersonaAsync(name))?.metadata.name).toBe(name);
     expect(manager.getCacheMissMetrics().diskFailures).toBe(0);
   });
 
   it('activates a user-supplied filename from a cold cache', async () => {
     const name = await put(0);
-    await manager.refreshIndex({ freshAfterInFlight: true });
+    await manager['scanAndEvict']({ freshAfterInFlight: true });
     expect(manager.findPersona(name)).toBeUndefined();
     const result = await manager.activatePersona(`${name}.md`);
     expect(result.success).toBe(true);
@@ -57,7 +57,7 @@ describe('File persona recovery by activation filename', () => {
       expect((await manager.activatePersona(name)).success).toBe(true);
     }, Promise.resolve());
     manager.clearCache();
-    await manager.refreshIndex({ freshAfterInFlight: true });
+    await manager['scanAndEvict']({ freshAfterInFlight: true });
     expect(await manager.resolveActivePersonas()).toHaveLength(count);
   });
 
@@ -66,7 +66,7 @@ describe('File persona recovery by activation filename', () => {
     await manager.list();
     expect((await manager.activatePersona(name)).success).toBe(true);
     await put(0, true);
-    await manager.refreshIndex({ freshAfterInFlight: true });
+    await manager['scanAndEvict']({ freshAfterInFlight: true });
     const active = await manager.resolveActivePersonas();
     expect(active).toHaveLength(1);
     expect(active[0].instructions).toContain('Edited');

@@ -436,6 +436,61 @@ describe('SubmitToPortfolioTool', () => {
       expect(result.success).toBe(false);
       expect(result.error).toBe('CONTENT_NOT_FOUND');
     });
+
+    it('reports a portfolio index it could not read as a failed submission, never as not found', async () => {
+      // ENOENT/ENOTDIR mean "not in this type"; any other failure propagates.
+      mockPortfolioIndexManager.findByName.mockRejectedValue(Object.assign(new Error('index unreadable'), { code: 'EACCES' }));
+      const result = await tool.execute({ name: 'test-element', type: ElementType.PERSONA });
+      expect(result.success).toBe(false);
+      expect(result.error).not.toBe('CONTENT_NOT_FOUND');
+      expect(result.message).toContain('index unreadable');
+    });
+
+    it('treats a missing type directory as absence', async () => {
+      mockPortfolioIndexManager.findByName.mockResolvedValue(null);
+      MockFileDiscoveryUtil.findFile.mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' }));
+      const result = await tool.execute({ name: 'test-element', type: ElementType.PERSONA });
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('CONTENT_NOT_FOUND');
+    });
+
+    it('reports a failed suggestion scan instead of offering suggestions from the surviving types', async () => {
+      mockPortfolioIndexManager.findByName.mockResolvedValue(null);
+      MockFileDiscoveryUtil.findFile.mockImplementation(async (_directory: string, pattern: string) => {
+        if (pattern === '*') throw Object.assign(new Error('suggestion scan unreadable'), { code: 'EACCES' });
+        return null;
+      });
+      const result = await tool.execute({ name: 'nonexistent' } as never);
+      expect(result.success).toBe(false);
+      expect(result.error).not.toBe('CONTENT_NOT_FOUND');
+      expect(result.message).toContain('suggestion scan unreadable');
+    });
+
+    it('reports a memory directory it cannot list instead of reading it as not found', async () => {
+      mockPortfolioIndexManager.findByName.mockResolvedValue(null);
+      MockFileDiscoveryUtil.findFile.mockResolvedValue(null);
+      MockFs.readdir = jest.fn().mockRejectedValue(Object.assign(new Error('memory listing denied'), { code: 'EACCES' })) as never;
+      const result = await tool.execute({ name: 'test-memory', type: ElementType.MEMORY });
+      expect(result.success).toBe(false);
+      expect(result.error).not.toBe('CONTENT_NOT_FOUND');
+      expect(result.message).toContain('memory listing denied');
+    });
+
+    it('reports a failed type search during detection instead of reading it as not found', async () => {
+      const failure = Object.assign(new Error('directory unreadable'), { code: 'EIO' });
+      mockPortfolioIndexManager.findByName.mockRejectedValue(failure);
+      // Run the real per-type searches, as the optimizer would, collecting their failures as strings.
+      MockEarlyTerminationSearch.executeWithEarlyTermination.mockImplementation(async (searches: Array<() => Promise<unknown>>) => {
+        const settled = await Promise.allSettled(searches.map(search => search()));
+        return { matches: [], exactMatch: null, totalSearches: searches.length, completedSearches: searches.length,
+          failures: settled.flatMap((result, index) => result.status === 'rejected' ? [{ index, error: String(result.reason) }] : []),
+          earlyTerminationTriggered: false, performanceGain: '0%' };
+      });
+      const result = await tool.execute({ name: 'test-element' } as never);
+      expect(result.success).toBe(false);
+      expect(result.error).not.toBe('CONTENT_NOT_FOUND');
+      expect(result.message).toContain('directory unreadable');
+    });
   });
   
   describe('File size validation', () => {

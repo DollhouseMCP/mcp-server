@@ -306,7 +306,8 @@ activates:
 # Empty Activates Agent
 `);
         }
-        return Promise.reject(new Error('File not found'));
+        // A missing file is ENOENT, as the real file service reports it.
+        return Promise.reject(Object.assign(new Error('File not found'), { code: 'ENOENT' }));
       });
     const mockFileOperations: any = {
       createDirectory: jest.fn().mockResolvedValue(undefined),
@@ -327,6 +328,10 @@ activates:
     // BaseElementManager.load uses readElementFile. Wire it dynamically so tests
     // that replace mockFileOperations.readFile later still take effect.
     mockFileOperations.readElementFile = jest.fn((...args: unknown[]) => mockFileOperations.readFile(...args));
+    // The storage layer shares this service: definition reads go through it under the scan policy.
+    mockFileOperations.auditElementRead = jest.fn();
+    mockFileOperations.stat = mockFileOperations.stat ?? jest.fn().mockResolvedValue({ isDirectory: () => true, isFile: () => false, mtimeMs: 0, size: 0 });
+    mockFileOperations.listDirectoryWithTypes = mockFileOperations.listDirectoryWithTypes ?? jest.fn().mockResolvedValue([]);
     container.replace<FileOperationsService>('FileOperationsService', () => mockFileOperations as any);
 
     // Register DI services
@@ -365,7 +370,7 @@ activates:
       serializationService: container.resolve('SerializationService'),
       metadataService: container.resolve('MetadataService'),
       eventDispatcher: new ElementEventDispatcher(),
-    storageLayerFactory: createTestStorageFactory(),
+    storageLayerFactory: createTestStorageFactory(container.resolve('FileOperationsService')),
       elementManagerResolver,
     });
 
@@ -642,6 +647,20 @@ goal:
       const mockedWarn = logger.warn as jest.MockedFunction<typeof logger.warn>;
       const warnCalls = mockedWarn.mock.calls.map(call => String(call[0]));
       expect(warnCalls.some(msg => msg.includes('could not be resolved during cycle detection'))).toBe(true);
+    });
+
+    it('propagates a failed read of an activated agent instead of treating it as having no children', async () => {
+      const agentData = createGhostActivatorAgent();
+      await agentManager.create(agentData.name, agentData.content);
+      const mockFileOps = (agentManager as any).fileOperations;
+      const read = mockFileOps.readFile;
+      mockFileOps.readFile = jest.fn().mockImplementation((filePath: string) => path.basename(filePath) === 'ghost-agent.md'
+        ? Promise.reject(Object.assign(new Error('I/O error'), { code: 'EIO' })) : read(filePath));
+      try {
+        await expect(agentManager.executeAgent('ghost-activator', {})).rejects.toMatchObject({ kind: 'unreadable' });
+      } finally {
+        mockFileOps.readFile = read;
+      }
     });
   });
 

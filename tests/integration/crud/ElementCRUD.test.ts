@@ -192,8 +192,6 @@ describe.each(ELEMENT_TYPE_REGISTRY)(
             assertOperationFailed(result, expectedError);
           }
         );
-      } else {
-        it.skip('should reject invalid element: no test cases defined', () => {});
       }
 
       it('should reject duplicate element name', async () => {
@@ -369,11 +367,8 @@ describe.each(ELEMENT_TYPE_REGISTRY)(
 
         // Delete all found elements
         for (const name of elementNames) {
-          try {
-            await deleteElementViaTool(context.server, name, config.type);
-          } catch (_error) {
-            // Ignore deletion errors - element might already be gone or be protected
-          }
+          const deletion = await deleteElementViaTool(context.server, name, config.type);
+          expect(deletion.content?.map((item: { text?: string }) => item.text).join(' ')).not.toContain('❌');
         }
 
         const result = await listElementsViaTool(context.server, config.type);
@@ -1040,7 +1035,7 @@ describe.each(ELEMENT_TYPE_REGISTRY)(
           }
 
           // Verify all created
-          expect(elements.length).toBe(maxDepth);
+          expect(elements).toHaveLength(maxDepth);
         });
 
         if (detectsCircularDependencies(config)) {

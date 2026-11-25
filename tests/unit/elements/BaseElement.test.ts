@@ -339,6 +339,20 @@ describe('BaseElement', () => {
       expect(element.ratings?.userRating).toBe(4);
     });
     
+    it('reads the whole digit run of an explicit rating, with any spacing before the unit, as beta does', () => {
+      const spaced = new TestElement({ name: 'Test' });
+      spaced.receiveFeedback(`4${' '.repeat(12)}stars`);
+      expect(spaced.ratings?.feedbackHistory?.[0].inferredRating).toBe(4);
+      // An out-of-range number is no explicit rating ('1000' is never read as its tail '000' or '005').
+      for (const text of ['1000 stars', '1005 stars']) {
+        const outOfRange = new TestElement({ name: 'Test' });
+        outOfRange.receiveFeedback(text);
+        const sentiment = new TestElement({ name: 'Test' });
+        sentiment.receiveFeedback('stars');
+        expect(outOfRange.ratings?.feedbackHistory?.[0].inferredRating).toBe(sentiment.ratings?.feedbackHistory?.[0].inferredRating);
+      }
+    });
+
     it('should update user rating average', () => {
       const element = new TestElement({ name: 'Test' });
       

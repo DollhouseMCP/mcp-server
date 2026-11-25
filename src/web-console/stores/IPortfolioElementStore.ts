@@ -1,4 +1,5 @@
 import { canonicalizePortfolioName as canonicalizePortfolioElementName } from '../../utils/portfolioName.js';
+import type { CollectionReport } from '../../elements/base/CollectionReport.js';
 import {
   ConsoleStoreValidationError,
   assertDisplayString,
@@ -48,11 +49,11 @@ export interface IPortfolioElementStore {
   /** Trusted internal caller composition; never an input/request supplied store. */
   bindForOperation?(userId: string): Promise<IPortfolioElementStore>;
   assertOperationBinding?(): void;
-  summarizeByUser(userId: string): Promise<readonly ConsolePortfolioElementSummaryRecord[]>;
+  summarizeByUser(userId: string): Promise<CollectionReport<ConsolePortfolioElementSummaryRecord>>;
   listByUser(
     userId: string,
     filters?: ConsolePortfolioListFilters,
-  ): Promise<readonly ConsolePortfolioElementSummaryRecord[]>;
+  ): Promise<CollectionReport<ConsolePortfolioElementSummaryRecord>>;
   findByName(
     userId: string,
     type: ConsolePortfolioElementType,

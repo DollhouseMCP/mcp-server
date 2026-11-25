@@ -15,6 +15,7 @@ import type { SharedPoolInstallRequest, ProvenanceRecord } from '../../../../src
 import type { GitHubClient } from '../../../../src/collection/GitHubClient.js';
 import type { PortfolioManager } from '../../../../src/portfolio/PortfolioManager.js';
 import type { UnifiedIndexManager } from '../../../../src/portfolio/UnifiedIndexManager.js';
+import type { ElementManagerLookup } from '../../../../src/elements/ElementManagerLookup.js';
 import type { IFileOperationsService } from '../../../../src/services/FileOperationsService.js';
 
 function makeProvenance(overrides?: Partial<ProvenanceRecord>): ProvenanceRecord {
@@ -56,6 +57,11 @@ function createMockUnifiedIndexManager(): UnifiedIndexManager {
   return {} as unknown as UnifiedIndexManager;
 }
 
+/** Shared-pool installs never consult a local manager; the lookup refuses if one is asked for. */
+function createMockManagerLookup(): ElementManagerLookup {
+  return { managerFor: () => { throw new Error('Local manager lookup is not part of a shared-pool install'); } };
+}
+
 function createMockFileOps(): IFileOperationsService {
   return {
     writeFile: jest.fn().mockResolvedValue(undefined),
@@ -81,6 +87,7 @@ describe('ElementInstaller shared-pool integration', () => {
 
       const installer = new ElementInstaller(createMockGitHubClient(), {
         portfolioManager: createMockPortfolioManager(),
+        managerLookup: createMockManagerLookup(),
         unifiedIndexManager: createMockUnifiedIndexManager(),
         fileOperations: createMockFileOps(),
         sharedPoolInstaller: mockInstaller,
@@ -112,6 +119,7 @@ describe('ElementInstaller shared-pool integration', () => {
 
       const installer = new ElementInstaller(createMockGitHubClient(), {
         portfolioManager: createMockPortfolioManager(),
+        managerLookup: createMockManagerLookup(),
         unifiedIndexManager: createMockUnifiedIndexManager(),
         fileOperations: createMockFileOps(),
         sharedPoolInstaller: mockInstaller,
@@ -135,6 +143,7 @@ describe('ElementInstaller shared-pool integration', () => {
 
       const installer = new ElementInstaller(createMockGitHubClient(), {
         portfolioManager: createMockPortfolioManager(),
+        managerLookup: createMockManagerLookup(),
         unifiedIndexManager: createMockUnifiedIndexManager(),
         fileOperations: createMockFileOps(),
         sharedPoolInstaller: mockInstaller,
@@ -161,6 +170,7 @@ describe('ElementInstaller shared-pool integration', () => {
 
       const installer = new ElementInstaller(createMockGitHubClient(), {
         portfolioManager: createMockPortfolioManager(),
+        managerLookup: createMockManagerLookup(),
         unifiedIndexManager: createMockUnifiedIndexManager(),
         fileOperations: createMockFileOps(),
         sharedPoolInstaller: mockInstaller,
@@ -188,6 +198,7 @@ describe('ElementInstaller shared-pool integration', () => {
 
       const installer = new ElementInstaller(createMockGitHubClient(), {
         portfolioManager: createMockPortfolioManager(),
+        managerLookup: createMockManagerLookup(),
         unifiedIndexManager: createMockUnifiedIndexManager(),
         fileOperations: createMockFileOps(),
         sharedPoolInstaller: mockInstaller,
@@ -205,6 +216,7 @@ describe('ElementInstaller shared-pool integration', () => {
 
       const installer = new ElementInstaller(createMockGitHubClient(), {
         portfolioManager: createMockPortfolioManager(),
+        managerLookup: createMockManagerLookup(),
         unifiedIndexManager: createMockUnifiedIndexManager(),
         fileOperations: mockFileOps,
       });

@@ -18,6 +18,7 @@ import { aggregateElements, validateAggregationOptions } from '../../services/qu
 import type { AggregationResult } from '../../services/query/AggregationService.js';
 import { IElement } from '../../types/elements/IElement.js';
 import { ELEMENT_TYPE_MAP, toSingularLabel } from '../../utils/elementTypeNormalization.js';
+import { collectionReportEvidence, type CollectionReport } from '../../elements/base/CollectionReport.js';
 
 /** Default page size for list_elements when no pagination specified (Issue #299) */
 const DEFAULT_LIST_PAGE_SIZE = 20;
@@ -34,6 +35,11 @@ const DEFAULT_LIST_PAGE_SIZE = 20;
  *
  * Issue #204: MCP-AQL Pagination, filtering, and sorting
  */
+/** Whether a supplied pagination number is not a whole number of at least `minimum`. */
+function invalidPaginationNumber(value: unknown, minimum: number): boolean {
+  return typeof value === 'number' && (!Number.isFinite(value) || !Number.isInteger(value) || value < minimum);
+}
+
 /**
  * Validate pagination input before normalization.
  * Returns an error string if invalid, or null if valid.
@@ -44,26 +50,26 @@ function validatePaginationInput(options: Record<string, unknown>): string | nul
   // Check nested pagination object
   if (options.pagination && typeof options.pagination === 'object') {
     const p = options.pagination as Record<string, unknown>;
-    if (typeof p.page === 'number' && (!Number.isFinite(p.page) || !Number.isInteger(p.page) || p.page <= 0)) {
+    if (invalidPaginationNumber(p.page, 1)) {
       return `Invalid pagination: page must be a positive integer (got: ${p.page}).\nExample: { pagination: { page: 1, pageSize: 25 } }`;
     }
-    if (typeof p.pageSize === 'number' && (!Number.isFinite(p.pageSize) || !Number.isInteger(p.pageSize) || p.pageSize <= 0)) {
+    if (invalidPaginationNumber(p.pageSize, 1)) {
       return `Invalid pagination: pageSize must be a positive integer (got: ${p.pageSize}).\nExample: { pagination: { page: 1, pageSize: 25 } }`;
     }
     return null;
   }
 
   // Check flat params
-  if (typeof options.page === 'number' && (!Number.isFinite(options.page) || !Number.isInteger(options.page) || options.page <= 0)) {
+  if (invalidPaginationNumber(options.page, 1)) {
     return `Invalid pagination: page must be a positive integer (got: ${options.page}).\nExample: { page: 1, pageSize: 25 }`;
   }
-  if (typeof options.pageSize === 'number' && (!Number.isFinite(options.pageSize) || !Number.isInteger(options.pageSize) || options.pageSize <= 0)) {
+  if (invalidPaginationNumber(options.pageSize, 1)) {
     return `Invalid pagination: pageSize must be a positive integer (got: ${options.pageSize}).\nExample: { page: 1, pageSize: 25 }`;
   }
-  if (typeof options.limit === 'number' && (!Number.isFinite(options.limit) || !Number.isInteger(options.limit) || options.limit <= 0)) {
+  if (invalidPaginationNumber(options.limit, 1)) {
     return `Invalid pagination: limit must be a positive integer (got: ${options.limit}).\nExample: { limit: 25, offset: 0 }`;
   }
-  if (typeof options.offset === 'number' && (!Number.isFinite(options.offset) || !Number.isInteger(options.offset) || options.offset < 0)) {
+  if (invalidPaginationNumber(options.offset, 0)) {
     return `Invalid pagination: offset must be a whole number, 0 or greater (got: ${options.offset}).\nExample: { limit: 25, offset: 0 }`;
   }
 
@@ -86,11 +92,25 @@ function normalizeQueryOptions(options: Record<string, unknown>): QueryOptions |
 
   const normalized: QueryOptions = {};
 
+  normalizePaginationOptions(options, normalized);
+  normalizeFilterOptions(options, normalized);
+  normalizeSortOptions(options, normalized);
+
+  // Normalize aggregation (Issue #309)
+  if (options.aggregate && typeof options.aggregate === 'object') {
+    normalized.aggregate = options.aggregate as AggregationOptions;
+  }
+
+  return normalized;
+}
+
+function normalizePaginationOptions(options: Record<string, unknown>, normalized: QueryOptions): void {
   // Normalize pagination
   // Priority: nested pagination > limit/offset > flat page/pageSize
   if (options.pagination && typeof options.pagination === 'object') {
     normalized.pagination = options.pagination as QueryOptions['pagination'];
-  } else {
+    return;
+  }
     const pagination: QueryOptions['pagination'] = {};
 
     // Support limit/offset style (convert to page/pageSize)
@@ -113,8 +133,9 @@ function normalizeQueryOptions(options: Record<string, unknown>): QueryOptions |
     if (Object.keys(pagination).length > 0) {
       normalized.pagination = pagination;
     }
-  }
+}
 
+function normalizeFilterOptions(options: Record<string, unknown>, normalized: QueryOptions): void {
   // Normalize filters
   // Priority: nested filters/filter > flat filter fields
   if (options.filters && typeof options.filters === 'object') {
@@ -123,42 +144,11 @@ function normalizeQueryOptions(options: Record<string, unknown>): QueryOptions |
     // Support singular 'filter' as alias for 'filters'
     normalized.filters = options.filter as QueryOptions['filters'];
   } else {
-    // Support flat filter fields
-    const filters: NonNullable<QueryOptions['filters']> = {};
-
-    if (typeof options.nameContains === 'string') {
-      filters.nameContains = options.nameContains;
-    }
-    if (Array.isArray(options.tags) && options.tags.length > 0) {
-      filters.tags = options.tags as string[];
-    }
-    if (Array.isArray(options.tagsAny) && options.tagsAny.length > 0) {
-      filters.tagsAny = options.tagsAny as string[];
-    }
-    if (typeof options.author === 'string') {
-      filters.author = options.author;
-    }
-    if (typeof options.createdAfter === 'string') {
-      filters.createdAfter = options.createdAfter;
-    }
-    if (typeof options.createdBefore === 'string') {
-      filters.createdBefore = options.createdBefore;
-    }
-    if (options.status === 'active' || options.status === 'inactive' || options.status === 'all') {
-      filters.status = options.status;
-    }
-    if (typeof options.descriptionContains === 'string') {
-      filters.descriptionContains = options.descriptionContains;
-    }
-    if (typeof options.category === 'string') {
-      filters.category = options.category;
-    }
-
-    if (Object.keys(filters).length > 0) {
-      normalized.filters = filters;
-    }
+    normalizeFlatFilters(options, normalized);
   }
+}
 
+function normalizeSortOptions(options: Record<string, unknown>, normalized: QueryOptions): void {
   // Normalize sort
   // Priority: nested sort > flat sortBy/sortOrder
   if (options.sort && typeof options.sort === 'object') {
@@ -177,13 +167,54 @@ function normalizeQueryOptions(options: Record<string, unknown>): QueryOptions |
       normalized.sort = sort;
     }
   }
+}
 
-  // Normalize aggregation (Issue #309)
-  if (options.aggregate && typeof options.aggregate === 'object') {
-    normalized.aggregate = options.aggregate as AggregationOptions;
+function normalizeFlatFilters(options: Record<string, unknown>, normalized: QueryOptions): void {
+  // Support flat filter fields
+  const filters: NonNullable<QueryOptions['filters']> = {};
+
+  if (typeof options.nameContains === 'string') {
+    filters.nameContains = options.nameContains;
+  }
+  if (Array.isArray(options.tags) && options.tags.length > 0) {
+    filters.tags = options.tags as string[];
+  }
+  if (Array.isArray(options.tagsAny) && options.tagsAny.length > 0) {
+    filters.tagsAny = options.tagsAny as string[];
+  }
+  if (typeof options.author === 'string') {
+    filters.author = options.author;
+  }
+  if (typeof options.createdAfter === 'string') {
+    filters.createdAfter = options.createdAfter;
+  }
+  if (typeof options.createdBefore === 'string') {
+    filters.createdBefore = options.createdBefore;
+  }
+  if (options.status === 'active' || options.status === 'inactive' || options.status === 'all') {
+    filters.status = options.status;
+  }
+  if (typeof options.descriptionContains === 'string') {
+    filters.descriptionContains = options.descriptionContains;
+  }
+  if (typeof options.category === 'string') {
+    filters.category = options.category;
   }
 
-  return normalized;
+  if (Object.keys(filters).length > 0) {
+    normalized.filters = filters;
+  }
+}
+
+/** The listed fields of an options group that carry a value (not undefined, not an empty array). */
+function selectedFields<T extends object>(source: T | undefined, keys: readonly (keyof T)[]): Partial<T> | undefined {
+  if (!source) return undefined;
+  const result: Partial<T> = {};
+  for (const key of keys) {
+    const value = source[key];
+    if (value !== undefined && (!Array.isArray(value) || value.length > 0)) result[key] = value;
+  }
+  return Object.keys(result).length ? result : undefined;
 }
 
 /**
@@ -191,39 +222,16 @@ function normalizeQueryOptions(options: Record<string, unknown>): QueryOptions |
  */
 function cleanQueryOptions(options: QueryOptions): QueryOptions {
   const clean: QueryOptions = {};
-
-  if (options.pagination) {
-    const pagination: Partial<QueryOptions['pagination']> = {};
-    if (options.pagination.page !== undefined) pagination.page = options.pagination.page;
-    if (options.pagination.pageSize !== undefined) pagination.pageSize = options.pagination.pageSize;
-    if (Object.keys(pagination).length > 0) clean.pagination = pagination;
-  }
-
-  if (options.sort) {
-    const sort: Partial<NonNullable<QueryOptions['sort']>> = {};
-    if (options.sort.sortBy !== undefined) sort.sortBy = options.sort.sortBy;
-    if (options.sort.sortOrder !== undefined) sort.sortOrder = options.sort.sortOrder;
-    if (Object.keys(sort).length > 0) clean.sort = sort;
-  }
-
-  if (options.filters) {
-    const filters: Partial<NonNullable<QueryOptions['filters']>> = {};
-    if (options.filters.nameContains !== undefined) filters.nameContains = options.filters.nameContains;
-    if (options.filters.tags !== undefined && options.filters.tags.length > 0) filters.tags = options.filters.tags;
-    if (options.filters.tagsAny !== undefined && options.filters.tagsAny.length > 0) filters.tagsAny = options.filters.tagsAny;
-    if (options.filters.author !== undefined) filters.author = options.filters.author;
-    if (options.filters.createdAfter !== undefined) filters.createdAfter = options.filters.createdAfter;
-    if (options.filters.createdBefore !== undefined) filters.createdBefore = options.filters.createdBefore;
-    if (options.filters.status !== undefined) filters.status = options.filters.status;
-    if (options.filters.descriptionContains !== undefined) filters.descriptionContains = options.filters.descriptionContains;
-    if (options.filters.category !== undefined) filters.category = options.filters.category;
-    if (Object.keys(filters).length > 0) clean.filters = filters;
-  }
-
-  if (options.aggregate) {
-    clean.aggregate = options.aggregate;
-  }
-
+  const pagination = selectedFields(options.pagination, ['page', 'pageSize']);
+  const sort = selectedFields(options.sort, ['sortBy', 'sortOrder']);
+  const filters = selectedFields(options.filters, [
+    'nameContains', 'tags', 'tagsAny', 'author', 'createdAfter', 'createdBefore',
+    'status', 'descriptionContains', 'category',
+  ]);
+  if (pagination) clean.pagination = pagination;
+  if (sort) clean.sort = sort;
+  if (filters) clean.filters = filters;
+  if (options.aggregate) clean.aggregate = options.aggregate;
   return clean;
 }
 
@@ -327,10 +335,12 @@ export async function listElements(
     const includePublic = rawFlag === true;
 
     // Get raw elements from the appropriate manager
-    const elements = await getElementsForType(context, normalizedType, { includePublic });
+    const report = await getElementsForType(context, normalizedType, { includePublic });
+    const elements = report.items;
+    const evidence = collectionReportEvidence(report);
 
     if (elements.length === 0) {
-      return emptyElementsResponse(normalizedType);
+      return { ...emptyElementsResponse(normalizedType, report.failures.length), ...evidence };
     }
 
     // Clean the options to remove undefined values
@@ -338,7 +348,7 @@ export async function listElements(
 
     // Handle aggregation requests (Issue #309)
     if (cleanOptions.aggregate && (cleanOptions.aggregate.count || cleanOptions.aggregate.group_by)) {
-      return handleAggregation(context, elements as IElement[], normalizedType, cleanOptions);
+      return { ...handleAggregation(context, elements as IElement[], normalizedType, cleanOptions), ...evidence };
     }
 
     // Apply query service (filter → sort → paginate) with default pagination
@@ -351,10 +361,10 @@ export async function listElements(
     const result = context.elementQueryService.query(elements as IElement[], cleanOptions);
 
     // Issue #708: Include count of invalid elements in list response
-    const invalidCount = getInvalidElementCount(context, normalizedType);
+    const invalidCount = report.failures.length;
 
     // Return structured data (not MCP text format) so FieldFilter can process it
-    return formatStructuredResult(result, normalizedType, invalidCount);
+    return { ...formatStructuredResult(result, normalizedType, invalidCount), ...evidence };
   } catch (error) {
     logger.error('ElementCRUDHandler.listElements', { error, type });
     return {
@@ -375,46 +385,25 @@ async function getElementsForType(
   context: ElementCrudContext,
   type: ElementType,
   options?: { includePublic?: boolean }
-): Promise<any[]> {
+): Promise<CollectionReport<any>> {
   switch (type) {
     case ElementType.PERSONA:
-      return context.personaManager.list(options);
+      return context.personaManager.listReport(options);
     case ElementType.SKILL:
-      return context.skillManager.list(options);
+      return context.skillManager.listReport(options);
     case ElementType.TEMPLATE:
-      return context.templateManager.list(options);
+      return context.templateManager.listReport(options);
     case ElementType.AGENT:
-      return context.agentManager.list(options);
+      return context.agentManager.listReport(options);
     case ElementType.MEMORY:
-      return context.memoryManager.list(options);
+      return context.memoryManager.listReport(options);
     case ElementType.ENSEMBLE:
-      return context.ensembleManager.list(options);
+      return context.ensembleManager.listReport(options);
     default:
-      return [];
+      throw new Error(`Unknown element type: ${type}`);
   }
 }
 
-/**
- * Issue #708: Get the count of invalid elements for a given type.
- */
-function getInvalidElementCount(
-  context: ElementCrudContext,
-  type: ElementType
-): number {
-  let manager: { getInvalidElements?: () => unknown[] } | undefined;
-  switch (type) {
-    case ElementType.PERSONA: manager = context.personaManager; break;
-    case ElementType.SKILL: manager = context.skillManager; break;
-    case ElementType.TEMPLATE: manager = context.templateManager; break;
-    case ElementType.AGENT: manager = context.agentManager; break;
-    case ElementType.MEMORY: manager = context.memoryManager; break;
-    case ElementType.ENSEMBLE: manager = context.ensembleManager; break;
-  }
-  if (manager && typeof manager.getInvalidElements === 'function') {
-    return manager.getInvalidElements().length;
-  }
-  return 0;
-}
 
 /**
  * Convert QueryResult into a structured response with concise per-item data.
@@ -491,7 +480,7 @@ function handleAggregation(
 /**
  * Empty response for each element type — returns structured data with zero items
  */
-function emptyElementsResponse(type: ElementType): ListElementsResult {
+function emptyElementsResponse(type: ElementType, invalidCount: number): ListElementsResult {
   return {
     items: [],
     pagination: {
@@ -507,6 +496,7 @@ function emptyElementsResponse(type: ElementType): ListElementsResult {
       sortOrder: 'asc',
     },
     element_type: toSingularLabel(type),
+    ...(invalidCount > 0 ? { warnings: { invalid_elements_count: invalidCount } } : {}),
   };
 }
 

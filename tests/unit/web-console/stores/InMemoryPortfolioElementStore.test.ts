@@ -53,8 +53,8 @@ describe('InMemoryPortfolioElementStore', () => {
       }),
     ]);
 
-    await expect(store.summarizeByUser(USER_ID)).resolves.toHaveLength(2);
-    await expect(store.listByUser(USER_ID, { type: 'skills', tag: 'review' })).resolves.toMatchObject([
+    expect((await store.summarizeByUser(USER_ID)).items).toHaveLength(2);
+    expect((await store.listByUser(USER_ID, { type: 'skills', tag: 'review' })).items).toMatchObject([
       {
         userId: USER_ID,
         type: 'skills',

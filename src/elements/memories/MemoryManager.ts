@@ -1,3 +1,4 @@
+import { storageReferenceFromPath } from '../../storage/StorageReference.js';
 /**
  * MemoryManager - Implementation of IElementManager for Memory elements
  * Handles CRUD operations and lifecycle management for memories implementing IElement
@@ -11,6 +12,7 @@
  */
 
 import { visitSequentially } from '../../utils/visitSequentially.js';
+import type { DeletionReport, ElementDeletionTarget } from '../base/ElementDeletion.js';
 import type { CachePublicationLease } from '../base/ElementCache.js';
 import { assertHydratedMemoryReadFidelity } from '../../storage/MemoryHydrationReadFidelity.js';
 import { matchesPortfolioName } from '../../utils/portfolioName.js';
@@ -26,7 +28,9 @@ import {
   STORAGE_LAYER_CONFIG
 } from '../../config/performance-constants.js';
 import { isWritableStorageLayer, type ElementSaveOptions, type UnindexedEntry } from '../../storage/IStorageLayer.js';
-import { MemoryStorageLayer } from '../../storage/MemoryStorageLayer.js';
+import { ELEMENT_FILE_EXTENSIONS, acceptedExtensions, canonicalElementName } from '../../storage/ElementNameKeys.js';
+import { markContentRejection } from '../../security/contentRejection.js';
+import { callerNamesOf, certifyNamedCandidate } from '../base/ElementNameEvidence.js';
 import { PackageResourceLocator } from '../../paths/PackageResourceLocator.js';
 
 const _packageLocator = new PackageResourceLocator();
@@ -34,7 +38,12 @@ const _packageLocator = new PackageResourceLocator();
 // createDatabaseStorageLayer factory. Type reference retained for the
 // override's return-type annotation if needed in future.
 import { isAbsentPathError } from '../../services/FileOperationsService.js';
-import { MemoryMetadataExtractor } from '../../storage/MemoryMetadataExtractor.js';
+import { sanitizeStorageError } from '../../storage/StorageScanError.js';
+import { collectionReportNotice, requireCompleteCollection, type CollectionReport } from '../base/CollectionReport.js';
+import { ElementIndeterminateError, ElementMissingError, ElementReadError, callerReadFailure, elementReadFailure, isRejectedDefinition } from '../base/ElementReadError.js';
+import { ValidationError } from '../../security/errors.js';
+import { BoundedDiagnosticMap } from '../../utils/BoundedDiagnosticMap.js';
+import type { ElementIndexEntry } from '../../storage/types.js';
 import { LRUCache } from '../../cache/LRUCache.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
@@ -58,6 +67,11 @@ import { sanitizeGatekeeperPolicy, getGatekeeperAuthoringErrors } from '../../ha
 // Issue #83: Centralized active element limits (configurable via env vars)
 import { getActiveElementLimitConfig } from '../../config/active-element-limits.js';
 
+
+/** A read failure that proves the definition is absent (nothing to back up or repair). */
+function isProvenAbsence(error: unknown): boolean {
+  return error instanceof ElementMissingError;
+}
 
 /**
  * Issue #39: Check if a memory name contains backup patterns (corrupted name)
@@ -276,36 +290,69 @@ export class MemoryManager extends BaseElementManager<Memory> {
   }
 
   /**
-   * Load a memory element.
+   * Load a memory element by name or storage reference.
    *
-   * Resolves the file path (memories live in subdirectories: system/, adapters/,
-   * date folders) and checks the cache before delegating to super.load() for
-   * the core flow. Entries and instructions are loaded via the afterLoad hook
+   * A reference the storage layer has a record of is read exactly, so its failure surfaces as
+   * that failure. Only a bare filename the layer has no record of is searched in system/,
+   * adapters/ and the date folders. Entries and instructions are loaded via the afterLoad hook
    * from the parsed YAML stashed on the element during load.
    */
   override async load(filePath: string): Promise<Memory> {
+    try {
+      return await this.loadResolvedMemory(filePath);
+    } catch (cause) {
+      throw callerReadFailure(cause, filePath);
+    }
+  }
+
+  /**
+   * A stored reference the index or certification selected: read through the guarded snapshot in
+   * guarded mode (as load() reads it), otherwise through the shared loader. Never re-classified.
+   */
+  protected override loadStoredReference(reference: string): Promise<Memory> {
+    // A stored reference is read exactly as given, in both modes; it is never re-resolved to
+    // another folder (a root 'dup.yaml' is never read as 'system/dup.yaml').
+    return this.guardedUpdateAdapter ? this.loadGuardedMemory(reference, 'stored') : super.loadStoredReference(reference);
+  }
+
+  /**
+   * The memory type's places for a bare filename the index does not hold, in the memory search
+   * order: system/, adapters/, the date folders (most recent first), then the root. The shared resolver
+   * reads them only in its filename fallback, and accepts one only by its own name.
+   */
+  protected override async fallbackCandidates(filename: string): Promise<string[]> {
+    if (isWritableStorageLayer(this.storageLayer) || filename.includes('/')) return [filename];
+    const dated = (await this.getDateFolders()).map(folder => `${folder}/${filename}`);
+    return [`system/${filename}`, `adapters/${filename}`, ...dated, filename];
+  }
+
+  private async loadResolvedMemory(filePath: string): Promise<Memory> {
     if (this.guardedUpdateAdapter) return this.loadGuardedMemory(filePath);
-    // Resolve the path: bare filenames need to search system/, adapters/, date folders.
-    // In DB mode, filePath is a UUID — pass through as-is.
-    // MEMORY_LOAD_FAILED is emitted via the onLoadError hook (base class calls it
+    // The shared caller-text classifier decides: a name loads by name; path syntax is refused there.
+    if (await this.classifyCallerText(filePath) !== 'reference') return super.load(filePath);
+    // In DB mode the reference is a row id — pass through as-is.
+    if (isWritableStorageLayer(this.storageLayer)) return this.loadStoredReference(filePath);
+    // A reference the layer has any record of (indexed, failed or awaiting a recheck) is read
+    // exactly: 'notes.yaml' is the root file for load, as for findByStorageIdentity, exists and
+    // delete, and a failed root surfaces as its failure. Only a cold index is filled first.
+    let held = this.storageLayer.holdsReference(filePath);
+    if (held === undefined) {
+      await this.readCollectionEvicting();
+      held = this.storageLayer.holdsReference(filePath);
+    }
+    if (held === undefined) {
+      throw new ElementIndeterminateError('Element identity could not be determined', {
+        failures: [{ reference: filePath, reason: 'The memory index could not be read' }],
+      });
+    }
+    if (held) return this.loadStoredReference(filePath);
+    // Only a bare filename the layer has no record of is searched in system/, adapters/ and the
+    // date folders. MEMORY_LOAD_FAILED is emitted via the onLoadError hook (base class calls it
     // from its catch block). We do NOT wrap this in try/catch here — doing so
     // would double-emit alongside base's element:load:error event.
-    if (isWritableStorageLayer(this.storageLayer)) {
-      return super.load(filePath);
-    }
-
-    const fullPath = await this.resolveMemoryPath(filePath);
-    if (!fullPath) {
-      throw new Error(`Could not resolve memory path: ${filePath}`);
-    }
-    const resolvedRelative = path.relative(this.memoriesDir, fullPath).split(path.sep).join('/');
-
-    // Check cache before reading from disk (preserves same-instance-on-repeated-load)
-    const cached = this.getCachedByAbsolutePath(fullPath);
-    if (cached) return cached;
-
     // Entries/instructions are loaded in afterLoad() from the already-parsed YAML.
-    return super.load(resolvedRelative);
+    const fullPath = await this.resolveMemoryPath(filePath);
+    return this.loadStoredReference(storageReferenceFromPath(path.relative(this.memoriesDir, fullPath)));
   }
 
   /**
@@ -335,7 +382,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
    */
   protected override parseContent(content: string): { data: Record<string, unknown>; content: string } {
     if (content.length > MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE) {
-      throw new Error('Memory exceeds the bounded legacy recovery read limit');
+      throw markContentRejection(new Error('Memory exceeds the bounded legacy recovery read limit'));
     }
     if (!content.trim()) return { data: {}, content: '' };
 
@@ -408,11 +455,17 @@ export class MemoryManager extends BaseElementManager<Memory> {
    */
   protected override afterLoad(
     memory: Memory,
-    _filePath: string,
+    filePath: string,
     parsedData?: { data: Record<string, unknown>; content: string },
     options?: { suppressLoadPolicy?: boolean },
   ): Promise<void> {
     this.populateLoadedMemory(memory, parsedData, options);
+    const metadata = memory.metadata as MemoryMetadata;
+    if (!metadata.memoryType) {
+      const folder = filePath.split(/[\\/]/)[0];
+      if (folder === 'system') metadata.memoryType = MemoryType.SYSTEM;
+      if (folder === 'adapters') metadata.memoryType = MemoryType.ADAPTER;
+    }
     return Promise.resolve();
   }
 
@@ -465,7 +518,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * Move existing memory file to user backup directory
    * Issue #49: Prevents duplicate files by backing up instead of versioning
    */
-  private async moveToUserBackup(existingPath: string): Promise<void> {
+  private async moveToUserBackup(existingPath: string): Promise<string> {
     const date = new Date();
     const dateFolder = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
     const backupDir = path.join(this.memoriesDir, 'backups', 'user', dateFolder);
@@ -480,6 +533,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
     // Issue #654: Prune excess backups for this memory in this date folder
     await this.pruneBackupsForMemory(backupDir, filename);
+    return storageReferenceFromPath(path.relative(this.memoriesDir, path.join(backupDir, backupName)));
   }
 
   /**
@@ -636,7 +690,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
       if (isAbsentPathError(error)) {
         return [];
       }
-      throw error;
+      throw sanitizeStorageError(error, this.memoriesDir, this.memoriesDir, 'memories directory');
     }
   }
 
@@ -712,7 +766,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
   private sameAppendStorageLocator(saved: string | undefined, source: string | undefined): boolean {
     if (saved === undefined || source === undefined) return false;
     if (isWritableStorageLayer(this.storageLayer)) return saved === source;
-    // Discovery uses forward slashes; file persistence records native separators.
+    // New file references are portable, but a retained source may still carry a path alias (such as ./).
+    // Compare file locations without rewriting that source; database identities above remain exact.
     return path.normalize(saved) === path.normalize(source);
   }
 
@@ -784,9 +839,14 @@ export class MemoryManager extends BaseElementManager<Memory> {
   }
 
   private async readUpgradeContent(filePath: string): Promise<string> {
-    if (isWritableStorageLayer(this.storageLayer)) return this.storageLayer.readContent(filePath);
-    const fullPath = await this.validateAndResolvePath(filePath);
-    return this.fileOperations.readElementFile(fullPath, ElementType.MEMORY, { source: 'MemoryManager.upgradeSnapshot' });
+    const reference = isWritableStorageLayer(this.storageLayer) ? filePath
+      : storageReferenceFromPath(path.relative(this.memoriesDir, await this.validateAndResolvePath(filePath)));
+    try {
+      return await this.storageLayer.readContent(reference);
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException | null)?.code === 'ENOENT') throw new ElementMissingError(reference, cause);
+      throw elementReadFailure(cause, reference);
+    }
   }
 
   private captureUpgradeOwner(): string {
@@ -819,24 +879,40 @@ export class MemoryManager extends BaseElementManager<Memory> {
     if (this.guardedUpdateAdapter) throw new Error('Guarded mutations require their existing head contract');
     const target = this.upgradeTargetKey();
     return this.memoryUpgrade.runTarget(target, async () => {
-      // The root-created file layer's resolver may have a different context
-      // tracker from this session manager. Pin discovery to the same directory
-      // used by its save/read path, retaining the injected backend and filter.
-      const summaries = this.storageLayer instanceof MemoryStorageLayer
-        ? await this.storageLayer.readFreshSummariesAtDirectory(this.memoriesDir, true)
-        : await this.storageLayer.listSummaries({ includePublic: false, preserveDuplicates: true, freshMetadata: true });
+      // The layer follows this manager's directory; every locator is offered and the shared
+      // selector chooses, so a duplicate name is ambiguity here exactly as on every other read.
+      const { summaries, failures } = await this.readFreshInventory();
       if (this.upgradeTargetKey() !== target) throw new MemoryDrainRefusedError('Memory owner changed during lookup');
-      const matches = summaries.filter(summary => summary.name === name);
-      if (matches.length === 0) throw new Error(`Memory '${name}' not found. Use list_elements to see available memories.`);
-      if (matches.length !== 1 || !matches[0].filePath) throw new MemoryDrainRefusedError('Memory target is ambiguous or has no persisted path');
-      const path = matches[0].filePath;
+      const selected = this.certifyFreshMutationTarget(name, summaries, failures);
+      if (selected && !selected.reference) throw new MemoryDrainRefusedError('Memory target is ambiguous or has no persisted path');
+      if (!selected) throw new Error(`Memory '${name}' not found. Use list_elements to see available memories.`);
+      const path = selected.reference;
       const content = await this.readUpgradeContent(path);
       const memory = await this.hydrateDefinitionFromContent(content, path, { suppressLoadPolicy: true });
       memory.setFilePath(path);
       if (this.upgradeTargetKey() !== target) throw new MemoryDrainRefusedError('Memory owner changed during hydration');
-      if (memory.metadata.name !== name) throw new MemoryDrainRefusedError('Memory name changed during hydration');
+      // The index keeps a memory's stored (raw) name; hydration carries its canonical form.
+      if (memory.metadata.name !== canonicalElementName(selected.name)) throw new MemoryDrainRefusedError('Memory name changed during hydration');
       return mutate(memory);
     });
+  }
+
+  /** Shared certification, with the mutation API's existing ambiguity error. */
+  private certifyFreshMutationTarget(name: string, summaries: readonly ElementIndexEntry[], failures: ReadonlyMap<string, UnindexedEntry>) {
+    try {
+      return certifyNamedCandidate(name, summaries.map(summary => ({ reference: summary.filePath, name: summary.name })), true, failures, callerNamesOf(this.storageLayer, name)).selected;
+    } catch (error) {
+      if (error instanceof ElementIndeterminateError && error.ambiguous) {
+        throw new MemoryDrainRefusedError('Memory target is ambiguous or has no persisted path');
+      }
+      throw error;
+    }
+  }
+
+  /** The fresh inventory with every unreadable file as evidence (the storage contract's typed snapshot). */
+  private async readFreshInventory(): Promise<{ summaries: readonly ElementIndexEntry[]; failures: ReadonlyMap<string, UnindexedEntry> }> {
+    const { entries, unindexed } = await this.storageLayer.readFreshCollection({ preserveDuplicates: true });
+    return { summaries: entries, failures: unindexed };
   }
 
   hasRetainedMemoryWork(): boolean {
@@ -873,7 +949,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
         `[MemoryManager] Issue #39: Detected corrupted backup name '${memoryName}', ` +
         `auto-repairing to '${originalName}'`
       );
-      element.metadata.name = originalName;
+      element.assignName(originalName);
 
       if (emitAudit) this.recordLegacyNameRepair(memoryName, originalName);
     }
@@ -938,18 +1014,19 @@ export class MemoryManager extends BaseElementManager<Memory> {
     if (attempt) attempt.phase = 'known-committed';
   }
 
-  private async loadGuardedMemory(filePath: string, mode: 'public' | 'mutation' = 'public'): Promise<Memory> {
+  /** 'public' resolves caller text through the memory folders; 'stored' and 'mutation' read the reference exactly. */
+  private async loadGuardedMemory(filePath: string, mode: 'public' | 'mutation' | 'stored' = 'public'): Promise<Memory> {
     return (await this.readGuardedMemory(filePath, mode)).memory;
   }
 
-  private readGuardedMemory(filePath: string, mode: 'public' | 'mutation'): Promise<GuardedMemoryRead>;
+  private readGuardedMemory(filePath: string, mode: 'public' | 'mutation' | 'stored'): Promise<GuardedMemoryRead>;
   private readGuardedMemory(filePath: string, mode: 'lookup', context: Readonly<{tenant: string; root: string}>): Promise<GuardedMemoryRead | undefined>;
-  private async readGuardedMemory(filePath: string, mode: 'public' | 'mutation' | 'lookup',
+  private async readGuardedMemory(filePath: string, mode: 'public' | 'mutation' | 'stored' | 'lookup',
     context?: Readonly<{tenant: string; root: string}>): Promise<GuardedMemoryRead | undefined> {
     const adapter = this.guardedUpdateAdapter!;
     const tenant = context?.tenant ?? adapter.captureTenant();
     const contextRoot = context?.root ?? this.memoriesDir;
-    const tenantRoot = isWritableStorageLayer(this.storageLayer) ? contextRoot : await fs.realpath(contextRoot);
+    const tenantRoot = isWritableStorageLayer(this.storageLayer) ? contextRoot : await this.resolveGuardedRoot(contextRoot);
     this.requireGuardedContext(tenant, contextRoot);
     let locator = filePath;
     if (!isWritableStorageLayer(this.storageLayer)) {
@@ -957,17 +1034,10 @@ export class MemoryManager extends BaseElementManager<Memory> {
         ? await this.validateAndResolvePath(filePath)
         : await this.resolveMemoryPath(filePath);
       if (!fullPath) throw new Error(`Could not resolve memory path: ${filePath}`);
-      locator = path.relative(contextRoot, fullPath).split(path.sep).join('/');
+      locator = storageReferenceFromPath(path.relative(contextRoot, fullPath));
     }
-    let snapshot: Awaited<ReturnType<MemoryHeadUpdateAdapter['readBoundSnapshot']>>;
-    try { snapshot = await adapter.readBoundSnapshot(locator, tenant, tenantRoot); }
-    catch (cause) {
-      if (mode === 'lookup' && (cause as NodeJS.ErrnoException | null)?.code === 'ENOENT') {
-        this.requireGuardedContext(tenant, contextRoot);
-        return undefined;
-      }
-      throw cause;
-    }
+    const snapshot = await this.readGuardedSnapshot(locator, tenant, contextRoot, tenantRoot, mode === 'lookup');
+    if (!snapshot) return undefined;
     const memory = await this.hydrateDefinitionFromContent(snapshot.content, locator, { suppressLoadPolicy: true });
     memory.setFilePath(locator);
     const definition = mode === 'lookup' ? this.parseContent(snapshot.content) : undefined;
@@ -981,6 +1051,27 @@ export class MemoryManager extends BaseElementManager<Memory> {
     adapter.bindLoaded(memory, snapshot, memory.metadata.name, contextRoot);
     // The caller receives a mutable working copy, not a durable cache entry.
     return Object.freeze({ memory, content: snapshot.content, locator, definition });
+  }
+
+  /** Root availability is infrastructure evidence, never proof that a definition is absent. */
+  private async resolveGuardedRoot(contextRoot: string): Promise<string> {
+    try { return await fs.realpath(contextRoot); }
+    catch (cause) { throw elementReadFailure(cause, '.'); }
+  }
+
+  /** Only the requested head's read boundary may establish absence. */
+  private async readGuardedSnapshot(locator: string, tenant: string, contextRoot: string,
+    tenantRoot: string, allowMissing: boolean): Promise<Awaited<ReturnType<MemoryHeadUpdateAdapter['readBoundSnapshot']>> | undefined> {
+    try { return await this.guardedUpdateAdapter!.readBoundSnapshot(locator, tenant, tenantRoot); }
+    catch (cause) {
+      if ((cause as NodeJS.ErrnoException | null)?.code !== 'ENOENT') throw cause;
+      this.requireGuardedContext(tenant, contextRoot);
+      // A vanished tenant root is infrastructure failure, even if it vanished during the snapshot read.
+      if (!isWritableStorageLayer(this.storageLayer)) await this.resolveGuardedRoot(contextRoot);
+      this.requireGuardedContext(tenant, contextRoot);
+      if (allowMissing) return undefined;
+      throw new ElementMissingError(locator, cause);
+    }
   }
 
   /** Internal captured-byte comparison; never loads storage, binds a token or publishes a cache. */
@@ -1192,6 +1283,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
           await this.storageLayer.notifySaved(locator!, path.join(contextRoot, locator!));
           this.requireGuardedContext(tenant, contextRoot);
         }
+        // The guarded write cannot report its own version, so the publication is cached unversioned:
+        // the layer never vouches for it, and the next load reads the file again.
         this.cacheElement(publication, locator!, lease);
         await this.afterSave(publication, locator!);
       };
@@ -1261,21 +1354,21 @@ export class MemoryManager extends BaseElementManager<Memory> {
     if (filePath) {
       // Explicit path provided — validate and convert to relative
       const fullPath = await this.validateAndResolvePath(filePath);
-      return path.relative(this.memoriesDir, fullPath).split(path.sep).join('/');
+      return storageReferenceFromPath(path.relative(this.memoriesDir, fullPath));
     }
 
     const existingFilePath = element.getFilePath();
     if (existingFilePath) {
       // Existing persisted path — validate and convert to relative
       const fullPath = await this.validateAndResolvePath(existingFilePath);
-      return path.relative(this.memoriesDir, fullPath).split(path.sep).join('/');
+      return storageReferenceFromPath(path.relative(this.memoriesDir, fullPath));
     }
 
     // First-time save — generate a new date/type-based path
     const memoryMeta = element.metadata as MemoryMetadata;
     const memoryType = memoryMeta.memoryType || MemoryType.USER;
     const fullPath = await this.generateMemoryPath(element, memoryType);
-    return path.relative(this.memoriesDir, fullPath).split(path.sep).join('/');
+    return storageReferenceFromPath(path.relative(this.memoriesDir, fullPath));
   }
 
   /**
@@ -1459,7 +1552,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * delete and `element:delete:success` via event dispatcher on commit, but
    * external SIEM consumers filter on the memory-specific event type.
    */
-  protected override afterDelete(filePath: string): Promise<void> {
+  protected override afterDelete(filePath: string, _displayName?: string): Promise<void> {
     try {
     SecurityMonitor.logSecurityEvent({
       type: MEMORY_SECURITY_EVENTS.MEMORY_DELETED,
@@ -1477,112 +1570,51 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * FIX (SonarCloud): Extract duplicated error handling to reduce code duplication
    * @private
    */
-  private handleLoadFailure(
-    file: string,
-    error: unknown,
-    failedLoads: Array<{ file: string; error: string }>
-  ): void {
-    const errorMsg = error instanceof Error ? error.message : String(error);
-    failedLoads.push({ file, error: errorMsg });
-    // Only log security event if load() didn't suppress this as a repeat
-    if (!this.isLoadErrorSuppressed(file)) {
+  private readonly reportedListFailures = new BoundedDiagnosticMap<Map<string, string>>(128);
+
+  override async listReport(options?: { includePublic?: boolean }): Promise<CollectionReport<Memory>> {
+    return this.readMemoryReport(options);
+  }
+
+  /**
+   * The underlying reason of a classified failure (a YAML parse message) for the internal audit only;
+   * a filesystem error is reduced to its client-safe form, so no absolute path is recorded.
+   */
+  private static internalFailureDetail(error: Error, reason: string): string | undefined {
+    const cause = (error as { cause?: unknown }).cause;
+    if (!(cause instanceof Error) || cause instanceof ElementReadError) return undefined;
+    const safe = sanitizeStorageError(cause);
+    const detail = safe instanceof Error ? safe.message : undefined;
+    return detail && detail !== reason ? detail : undefined;
+  }
+
+  private async readMemoryReport(options?: { includePublic?: boolean }, select?: (entry: ElementIndexEntry) => boolean): Promise<CollectionReport<Memory>> {
+    if (this.guardedUpdateAdapter && options?.includePublic) {
+      throw new Error('Guarded database memory public inclusion is unavailable; use owned qualified memory reads');
+    }
+    const report = await this.readCollectionReport(options, select);
+    const namespace = this.getCacheNamespace();
+    const previous = this.reportedListFailures.get(namespace) ?? new Map<string, string>();
+    const current = new Map<string, string>();
+    for (const failure of report.failures) {
+      const reference = failure.reference ?? 'collection';
+      const reason = failure.error.message;
+      current.set(reference, reason);
+      if (previous.get(reference) === reason) continue;
+      const diagnostic = MemoryManager.internalFailureDetail(failure.error, reason);
+      const detail = diagnostic ? `${reason} (${diagnostic})` : reason;
       SecurityMonitor.logSecurityEvent({
         type: MEMORY_SECURITY_EVENTS.MEMORY_LIST_ITEM_FAILED,
         severity: 'LOW',
         source: 'MemoryManager.list',
-        details: `Failed to load ${file}: ${error}`
+        details: `Failed to load ${reference} for caller ${JSON.stringify(namespace)}: ${detail}`,
       });
     }
+    this.reportedListFailures.set(namespace, current);
+    return report;
   }
 
-  /**
-   * List all available memories from all locations.
-   * Phase 2: Delegates multi-directory scanning to MemoryStorageLayer.
-   * Storage layer handles: system/, adapters/, date folders, root, backup filtering, cooldown.
-   *
-   * Issue #18 Phase 4: Apply active status to memories that are in the active set.
-   */
-  override async list(options?: { includePublic?: boolean; strictDatabase?: boolean }): Promise<Memory[]> {
-    if (this.guardedUpdateAdapter && options?.includePublic) {
-      throw new Error('Guarded database memory public inclusion is unavailable; use owned qualified memory reads');
-    }
-    // Database mode: delegate to base class which uses listFromDatabase().
-    // Base class list → scan → listSummaries → load (with our parseContent override).
-    if (isWritableStorageLayer(this.storageLayer)) {
-      const memories = await super.list(options);
-      await this.applyActivationStatus(memories);
-      return memories;
-    }
-
-    if (options?.strictDatabase) throw new Error('Strict database listing requires database storage');
-
-    // File mode: custom multi-directory listing with deduplication.
-    // MemoryStorageLayer scans system/, adapters/, date folders — portfolioManager.listElements()
-    // only does flat directory listing which misses the subdirectory structure.
-    try {
-      await this.fileOperations.createDirectory(this.memoriesDir);
-      const snapshot = await (this.storageLayer as MemoryStorageLayer).scanMemorySnapshot();
-      const memories = await this.loadMemoriesFromPaths(snapshot.entries.map(entry => entry.filePath), snapshot.unindexed);
-      const resultMemories = this.deduplicateMemoriesByPath(memories);
-      await this.applyActivationStatus(resultMemories);
-      return resultMemories;
-    } catch (error) {
-      if (isAbsentPathError(error)) {
-        return [];
-      }
-      throw error;
-    }
-  }
-
-  private recordUnindexedMemories(unindexed: ReadonlyMap<string, UnindexedEntry>, failedLoads: Array<{ file: string; error: string }>): void {
-    for (const [relativePath, entry] of unindexed) {
-      const error = Object.assign(new Error(entry.reason), { name: entry.name },
-        entry.code === undefined ? {} : { code: entry.code });
-      this.recordUnreadableElement(relativePath, error);
-      this.handleLoadFailure(relativePath, error, failedLoads);
-    }
-  }
-
-  private async loadMemoriesFromPaths(indexedPaths: string[], unindexed: ReadonlyMap<string, UnindexedEntry>): Promise<Memory[]> {
-    const failedLoads: Array<{ file: string; error: string }> = [];
-    const memories: Memory[] = [];
-    this.recordUnindexedMemories(unindexed, failedLoads);
-
-    await visitSequentially(indexedPaths.values(), async (relativePath) => {
-      try {
-        const memory = await this.load(relativePath);
-        const memoryMeta = memory.metadata as MemoryMetadata;
-        if (!memoryMeta.memoryType) {
-          memoryMeta.memoryType = MemoryMetadataExtractor.inferMemoryType(relativePath) as MemoryType;
-        }
-        memories.push(memory);
-      } catch (error) {
-        this.handleLoadFailure(relativePath, error, failedLoads);
-      }
-    });
-
-    if (failedLoads.length > 0) {
-      logger.warn(`[MemoryManager] Failed to load ${failedLoads.length} memories:`,
-        failedLoads.map(f => `  - ${f.file}: ${f.error}`).join('\n'));
-    }
-
-    return memories;
-  }
-
-  private deduplicateMemoriesByPath(memories: Memory[]): Memory[] {
-    const uniqueMemories = new Map<string, Memory>();
-    for (const memory of memories) {
-      const filePath = memory.getFilePath();
-      if (filePath && !uniqueMemories.has(filePath)) {
-        uniqueMemories.set(filePath, memory);
-      } else if (!filePath) {
-        uniqueMemories.set(`no-path-${memory.metadata.name}-${Date.now()}`, memory);
-      }
-    }
-    return Array.from(uniqueMemories.values());
-  }
-
-  private async applyActivationStatus(memories: Memory[]): Promise<void> {
+  protected override async decorateListed(memories: Memory[]): Promise<void> {
     await visitSequentially(memories.values(), async (memory) => {
       if (this.getActivationSet().has(memory.metadata.name)) {
         await memory.activate();
@@ -1679,11 +1711,11 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * Issue #18 Phase 4: Return memories that are in the active set
    */
   async getActiveMemories(assertCurrent?: () => void): Promise<Memory[]> {
-    assertCurrent?.();
-    const memories = assertCurrent && isWritableStorageLayer(this.storageLayer)
-      ? await this.list({ strictDatabase: true }) : await this.list();
-    assertCurrent?.();
-    return memories.filter(m => this.getActivationSet().has(m.metadata.name));
+    return this.resolveActiveReferences({ assertCurrent });
+  }
+
+  protected override afterActiveReferenceLookup(memory: Memory): Promise<void> {
+    return memory.activate();
   }
 
   /**
@@ -1736,7 +1768,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
           try {
             // Update the name
-            memory.metadata.name = repairedName;
+            memory.assignName(repairedName);
 
             // Save the repaired memory
             await this.save(memory);
@@ -1935,53 +1967,32 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
   }
   
-  /**
-   * Check root files for load failures
-   * FIX (SonarCloud S3776): Extract to reduce cognitive complexity
-   * @private
-   */
-  private async checkRootFiles(
+  /** Count readable files while preserving directory and definition failures separately. */
+  private async checkDirectoryFiles(
+    directory: string,
     failures: Array<{ file: string; error: string }>
-  ): Promise<number> {
-    const rootFiles = await this.fileOperations.listDirectory(this.memoriesDir)
-      .then(files => files.filter(f => f.endsWith('.yaml')))
-      .catch(() => []);
+  ): Promise<{ total: number; loaded: number }> {
+    let files: string[];
+    try {
+      files = (await this.fileOperations.listDirectory(path.join(this.memoriesDir, directory)))
+        .filter(file => file.endsWith('.yaml'));
+    } catch (cause) {
+      if (!isAbsentPathError(cause)) failures.push({ file: directory, error: elementReadFailure(cause, directory).message });
+      return { total: 0, loaded: 0 };
+    }
 
-    await visitSequentially(rootFiles.values(), async (file) => {
-      try {
-        await this.load(file);
-      } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : String(error);
-        failures.push({ file, error: errorMsg });
-      }
-    });
-
-    return rootFiles.length;
-  }
-
-  /**
-   * Check date folder files for load failures
-   * FIX (SonarCloud S3776): Extract to reduce cognitive complexity
-   * @private
-   */
-  private async checkDateFolderFiles(
-    dateFolder: string,
-    failures: Array<{ file: string; error: string }>
-  ): Promise<number> {
-    const files = await this.fileOperations.listDirectory(path.join(this.memoriesDir, dateFolder))
-      .then(files => files.filter(f => f.endsWith('.yaml')))
-      .catch(() => []);
-
+    let loaded = 0;
     await visitSequentially(files.values(), async (file) => {
+      const reference = storageReferenceFromPath(path.join(directory, file));
       try {
-        await this.load(path.join(dateFolder, file));
-      } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : String(error);
-        failures.push({ file: `${dateFolder}/${file}`, error: errorMsg });
+        await this.loadStoredReference(reference);
+        loaded++;
+      } catch (cause) {
+        failures.push({ file: reference, error: elementReadFailure(cause, reference).message });
       }
     });
 
-    return files.length;
+    return { total: files.length, loaded };
   }
 
   /**
@@ -1996,26 +2007,25 @@ export class MemoryManager extends BaseElementManager<Memory> {
   }> {
     const failures: Array<{ file: string; error: string }> = [];
     let totalFiles = 0;
+    let loadedFiles = 0;
 
     try {
       const dateFolders = await this.getDateFolders();
 
-      // Check root files
-      totalFiles += await this.checkRootFiles(failures);
-
-      // Check date folders
-      await visitSequentially(dateFolders.values(), async (dateFolder) => {
-        totalFiles += await this.checkDateFolderFiles(dateFolder, failures);
+      await visitSequentially(['.', ...dateFolders].values(), async directory => {
+        const counts = await this.checkDirectoryFiles(directory, failures);
+        totalFiles += counts.total;
+        loadedFiles += counts.loaded;
       });
 
       return {
         total: totalFiles,
-        loaded: totalFiles - failures.length,
+        loaded: loadedFiles,
         failed: failures.length,
         failures
       };
-    } catch (error) {
-      throw new Error(`Failed to get load status: ${error}`);
+    } catch (cause) {
+      throw elementReadFailure(cause, '.');
     }
   }
 
@@ -2028,46 +2038,20 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * @returns Promise resolving to array of auto-load memories sorted by priority
    */
   async getAutoLoadMemories(assertCurrent?: () => void): Promise<Memory[]> {
+    return requireCompleteCollection(await this.getAutoLoadMemoryReport(assertCurrent));
+  }
+
+  /** Keep healthy auto-load candidates and discovery failures in the same operation result. */
+  async getAutoLoadMemoryReport(assertCurrent?: () => void): Promise<CollectionReport<Memory>> {
     assertCurrent?.();
+    let report: CollectionReport<Memory>;
     try {
-      if (isWritableStorageLayer(this.storageLayer)) {
-        const memories = await this.list({ strictDatabase: true });
-        assertCurrent?.();
-        return memories.filter(memory => (memory.metadata as MemoryMetadata).autoLoad === true)
-          .sort((a, b) => ((a.metadata as MemoryMetadata).priority ?? 999) - ((b.metadata as MemoryMetadata).priority ?? 999));
-      }
-      // Phase 2: scan, then query the index for autoLoad entries — does NOT load all files
-      const memStorageLayer = this.storageLayer as MemoryStorageLayer;
-      const { entries: autoLoadEntries, unindexed } = await memStorageLayer.scanMemorySnapshot(true);
-      this.recordUnindexedMemories(unindexed, []);
-
-      logger.info(`[MemoryManager] getAutoLoadMemories: Found ${autoLoadEntries.length} auto-load entries in index`);
-
-      // Load only matching memories (typically 3-5)
-      const autoLoadMemories: Memory[] = [];
-      await visitSequentially(autoLoadEntries.values(), async (entry) => {
-        try {
-          const memory = await this.load(entry.filePath);
-          autoLoadMemories.push(memory);
-          logger.debug(`[MemoryManager]   - ${entry.name}: priority=${entry.priority ?? 999} (LOADED)`);
-        } catch (error) {
-          logger.warn(`[MemoryManager] Failed to load auto-load memory ${entry.filePath}: ${error}`);
-        }
-      });
-
-      // Sort by priority.
-      autoLoadMemories.sort((a, b) => {
-        const pa = (a.metadata as MemoryMetadata).priority ?? 999;
-        const pb = (b.metadata as MemoryMetadata).priority ?? 999;
-        return pa - pb;
-      });
-
-      return autoLoadMemories;
-    } catch (error) {
-      if (assertCurrent || this.guardedUpdateAdapter) throw error;
-      logger.error('[MemoryManager] Failed to get auto-load memories:', error);
-      return [];
+      report = await this.readMemoryReport(undefined, entry => entry.autoLoad === true);
+    } finally {
+      assertCurrent?.();
     }
+    report.items.sort((a, b) => ((a.metadata as MemoryMetadata).priority ?? 999) - ((b.metadata as MemoryMetadata).priority ?? 999));
+    return report;
   }
 
   /**
@@ -2104,6 +2088,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
       logger.info(`[MemoryManager] Step 6: Checking for existing seed memory in portfolio...`);
       const existingMemory = await this.findExistingSeedMemory(seedFileName);
+      if (existingMemory === 'skip') return;
 
       // If existing memory found, check if we need to reinstall
       if (existingMemory && await this.prepareExistingSeedForInstall(existingMemory, seedFileName)) {
@@ -2142,16 +2127,58 @@ export class MemoryManager extends BaseElementManager<Memory> {
     }
   }
 
-  private async findExistingSeedMemory(seedFileName: string): Promise<Memory | undefined> {
+  /**
+   * The seed copy to examine. The installer's system/ copy comes first. Only a copy whose own content
+   * was read and rejected is backed up (its bytes kept) and reinstalled, with a typed warning. Any
+   * other failure (a scan failure elsewhere in the tree, a permission error, an indeterminate index)
+   * establishes nothing about the seed: it is left untouched and the install is skipped for this
+   * startup ('skip'). Only when there is no system/ copy is a legacy copy (the memory search order)
+   * examined; an unreadable legacy copy is reported and left in place, and never blocks the system/
+   * install.
+   */
+  private async findExistingSeedMemory(seedFileName: string): Promise<Memory | undefined | 'skip'> {
+    const systemReference = `system/${seedFileName}`;
     try {
-      const memory = await this.load(seedFileName);
-      logger.info(`[MemoryManager] ✅ Step 7: Found existing seed memory '${seedFileName}'`);
-      logger.info(`[MemoryManager] Existing file location: ${memory.getFilePath()}`);
-      return memory;
-    } catch {
-      logger.info(`[MemoryManager] ℹ️  Step 7: Seed memory '${seedFileName}' not found in portfolio, will install fresh`);
-      return undefined;
+      return this.foundSeed(seedFileName, await this.loadStoredReference(systemReference));
+    } catch (error) {
+      if (isRejectedDefinition(error)) {
+        await this.backUpUnreadableSeed(systemReference, error);
+        return undefined;
+      }
+      if (!isProvenAbsence(error)) {
+        logger.warn(`[MemoryManager] Seed memory '${systemReference}' could not be examined; left untouched, install skipped`,
+          { reason: elementReadFailure(error, systemReference).message });
+        return 'skip';
+      }
     }
+    const legacy = storageReferenceFromPath(path.relative(this.memoriesDir, await this.resolveMemoryPath(seedFileName)));
+    try {
+      return legacy === systemReference ? this.absentSeed(seedFileName) : this.foundSeed(seedFileName, await this.loadStoredReference(legacy));
+    } catch (error) {
+      if (!isProvenAbsence(error)) {
+        logger.warn(`[MemoryManager] Legacy seed copy '${legacy}' could not be read; left in place, installing '${systemReference}'`,
+          { reason: elementReadFailure(error, legacy).message });
+      }
+      return this.absentSeed(seedFileName);
+    }
+  }
+
+  private foundSeed(seedFileName: string, memory: Memory): Memory {
+    logger.info(`[MemoryManager] ✅ Step 7: Found existing seed memory '${seedFileName}'`);
+    logger.info(`[MemoryManager] Existing file location: ${memory.getFilePath()}`);
+    return memory;
+  }
+
+  private absentSeed(seedFileName: string): undefined {
+    logger.info(`[MemoryManager] ℹ️  Step 7: Seed memory '${seedFileName}' not found in portfolio, will install fresh`);
+    return undefined;
+  }
+
+  /** Move a rejected installed seed to the user backups (its bytes kept) so the fresh seed replaces it. */
+  private async backUpUnreadableSeed(reference: string, cause: unknown): Promise<void> {
+    const backup = await this.moveToUserBackup(path.join(this.memoriesDir, reference));
+    logger.warn(`[MemoryManager] Seed memory '${reference}' could not be read; backed up to '${backup}' and reinstalled`,
+      { reason: elementReadFailure(cause, reference).message });
   }
 
   private async prepareExistingSeedForInstall(
@@ -2170,7 +2197,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
     }
 
     logger.info(`[MemoryManager] Step 9: Existing seed memory is empty (${entries.length} entries), will reinstall`);
-    await this.deleteExistingSeedMemory(seedFileName);
+    // Delete the file the check loaded, never another file the seed filename could also address.
+    await this.deleteExistingSeedMemory(existingMemory.getFilePath() ?? seedFileName);
     return false;
   }
 
@@ -2252,63 +2280,71 @@ export class MemoryManager extends BaseElementManager<Memory> {
   override async delete(filePath: string, onCommitted?: () => void): Promise<void> {
     if (this.guardedUpdateAdapter) throw new Error('Dormant memory adapter supports UPDATE only');
     try {
-      // Resolve to a relative path that super.delete() can handle.
-      // In DB mode, filePath may be a name or UUID — passed through as-is.
-      // In file mode, resolve via validateAndResolvePath to find the actual file.
-      let resolvedRelative: string;
-      if (isWritableStorageLayer(this.storageLayer)) {
-        resolvedRelative = filePath;
-      } else {
-        try {
-          const fullPath = await this.validateAndResolvePath(filePath);
-          resolvedRelative = path.relative(this.memoriesDir, fullPath).split(path.sep).join('/');
-        } catch (err) {
-          if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
-          throw err;
-        }
-      }
-
-      // Delegate to base class — gains: file lock, transaction, events, DB/file branching.
-      // afterDelete() runs inside that transaction and emits MEMORY_DELETED.
-      await super.delete(resolvedRelative, onCommitted);
-
-      // Memory-specific cleanup: content hash index.
-      // Use the same key shape that afterSave used (UUID in DB mode, absolute path in file mode).
-      // This runs AFTER the transaction commits so the hash map only clears on
-      // a successful delete (matches pre-refactor behavior).
-      const indexKey = isWritableStorageLayer(this.storageLayer)
-        ? resolvedRelative
-        : path.join(this.memoriesDir, resolvedRelative);
-      const namespacedIndexKey = this.memoryHashKey(indexKey);
-      const hash = this.contentHashByPath.get(namespacedIndexKey);
-      if (hash) {
-        this.contentHashIndex.delete(hash);
-        this.contentHashByPath.delete(namespacedIndexKey);
-      }
+      await super.delete(filePath, onCommitted);
     } catch (error) {
       // Preserve idempotent delete semantics: ENOENT is not an error
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
       throw error;
     }
   }
+
+  override async resolveDeletionTarget(identifier: string): Promise<ElementDeletionTarget<Memory>> {
+    if (isWritableStorageLayer(this.storageLayer)) return super.resolveDeletionTarget(identifier);
+    if (!this.storageLayer.isExactStorageReference(identifier, this.getFileExtension())) return super.resolveDeletionTarget(identifier);
+    const reference = storageReferenceFromPath(path.relative(this.memoriesDir, await this.validateAndResolvePath(identifier)));
+    return super.resolveDeletionTarget(reference);
+  }
+
+  /**
+   * The memory path policy, then the shared reference syntax every stored read applies, is the
+   * caller-syntax check for a memory reference used as a path: a reference it passes is one the
+   * stored read accepts.
+   */
+  protected override async validateCallerReference(reference: string): Promise<void> {
+    if (isWritableStorageLayer(this.storageLayer)) return;
+    try {
+      await this.validateAndResolvePath(reference);
+    } catch (error) {
+      // A wrong extension is coded as absence; every other refusal is caller syntax, as for every type.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw error;
+      throw this.pathRejection(error);
+    }
+    await super.validateCallerReference(reference);
+  }
+
+  override async deleteResolved(target: ElementDeletionTarget<Memory>, onCommitted?: () => void): Promise<DeletionReport> {
+    if (this.guardedUpdateAdapter) throw new Error('Dormant memory adapter supports UPDATE only');
+    const report = await super.deleteResolved(target, onCommitted);
+    const indexKey = isWritableStorageLayer(this.storageLayer)
+      ? target.storageIdentity : path.join(this.memoriesDir, target.storageIdentity);
+    const namespacedIndexKey = this.memoryHashKey(indexKey);
+    const hash = this.contentHashByPath.get(namespacedIndexKey);
+    if (hash) {
+      this.contentHashIndex.delete(hash);
+      this.contentHashByPath.delete(namespacedIndexKey);
+    }
+    return report;
+  }
   
   /**
    * Check if a memory exists.
    *
    * DB mode: delegate to base, which consults the storage-layer name index.
-   * File mode: use memory-specific multi-directory path resolver (system/, adapters/,
-   * date folders) before the disk existence check.
+   * File mode: qualify the memory extension, then apply the shared exact-reference storage policy.
    */
   override async exists(filePath: string): Promise<boolean> {
     if (isWritableStorageLayer(this.storageLayer)) {
       return super.exists(filePath);
     }
+    // The memory path policy refuses a caller reference directly; a non-memory extension is absence by construction.
+    let fullPath: string;
     try {
-      const fullPath = await this.validateAndResolvePath(filePath);
-      return await this.fileOperations.exists(fullPath);
-    } catch {
-      return false;
+      fullPath = await this.validateAndResolvePath(filePath);
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw cause;
     }
+    return super.exists(storageReferenceFromPath(path.relative(this.memoriesDir, fullPath)));
   }
   
   /**
@@ -2332,13 +2368,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     }
 
     // Check for duplicate (moved from createElement handler)
-    const existingMemories = await this.list();
-    const duplicateExists = existingMemories.some(m =>
-      m.metadata.name.toLowerCase() === metadata.name?.toLowerCase()
-    );
-    if (duplicateExists) {
-      throw new Error(`A memory named "${metadata.name}" already exists`);
-    }
+    if (metadata.name !== undefined) await this.assertNameAvailable(metadata.name);
 
     // Separate content and instructions from metadata fields
     // Note: BaseElement.constructor generates the element id from the name,
@@ -2631,7 +2661,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * Get the file extension for memory files
    */
   override getFileExtension(): string {
-    return '.yaml';
+    return ELEMENT_FILE_EXTENSIONS.memories;
   }
   
   // Private helper methods
@@ -2665,22 +2695,14 @@ export class MemoryManager extends BaseElementManager<Memory> {
         source: 'MemoryManager.validateAndResolvePath',
         details: `Blocked path traversal attempt: ${filePath}`
       });
-      throw new Error('Invalid file path: Path traversal detected');
+      throw new ValidationError('Invalid file path: Path traversal detected');
     }
     
     // Ensure proper extension - memories should only be .yaml or .yml.
-    // Coded as ENOENT because a path without a memory extension cannot refer
-    // to any file in the memories directory — equivalent to "no such file."
-    // This allows BaseElementManager.tryDirectLoad's candidate iteration to
-    // treat a no-extension identifier as "try the next candidate" rather than
-    // surfacing the extension error through the read() error-propagation
-    // contract (preserve-load-errors fix in fbbf564a). Explicit callers that
-    // pass an invalid extension still get "not found" via the standard
-    // read()/findByName flow — consistent with how a missing file is reported.
-    if (!normalized.endsWith('.yaml') && !normalized.endsWith('.yml')) {
-      const err = new Error('Memory files must have .yaml or .yml extension') as NodeJS.ErrnoException;
-      err.code = 'ENOENT';
-      throw err;
+    // A reference outside the memory extension domain cannot identify a memory definition.
+    // Keep that domain miss typed so resolver fallback can try its next candidate.
+    if (!acceptedExtensions(ELEMENT_FILE_EXTENSIONS.memories).some(extension => normalized.toLowerCase().endsWith(extension))) {
+      throw new ElementMissingError(filePath, undefined);
     }
     
     // Construct full path
@@ -2702,16 +2724,22 @@ export class MemoryManager extends BaseElementManager<Memory> {
   private normalizeMemoryName(input: string): string;
   private normalizeMemoryName(input: string, mode: 'skip-invalid'): string | undefined;
   private normalizeMemoryName(input: string, mode?: 'skip-invalid'): string | undefined {
+    const checked = this.validateMemoryName(input);
+    if ('name' in checked) return checked.name;
+    // Unrelated discovery hints may be unreadable; raw matches still undergo
+    // strict hydration and all genuine matching candidates count for ambiguity.
+    if (mode === 'skip-invalid') return undefined;
+    throw checked.refusal;
+  }
+
+  /** The loader's name rule: the sanitized name, or the refusal saying why the name was refused. */
+  private validateMemoryName(input: string): { name: string } | { refusal: Error } {
     const result = this.validationService.validateAndSanitizeInput(input, {
       maxLength: SECURITY_LIMITS.MAX_NAME_LENGTH, allowSpaces: true,
     });
-    if (!result.isValid || result.sanitizedValue === undefined) {
-      // Unrelated discovery hints may be unreadable; raw matches still undergo
-      // strict hydration and all genuine matching candidates count for ambiguity.
-      if (mode === 'skip-invalid') return undefined;
-      throw new Error(`Invalid memory name: ${result.errors?.join(', ')}`);
-    }
-    return result.sanitizedValue;
+    return result.isValid && result.sanitizedValue !== undefined
+      ? { name: result.sanitizedValue }
+      : { refusal: new Error(`Invalid memory name: ${result.errors?.join(', ')}`) };
   }
 
   private parseMemoryFile(parsed: ParsedMemoryData): { metadata: MemoryMetadata; content: string } {
@@ -2728,8 +2756,11 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
     // Extract metadata with validation
     // SECURITY FIX: Validate BEFORE sanitization to prevent bypass attacks
+    // A refusal of the definition's own name or description is a content rejection.
     const nameInput = metadataSource.name || DEFAULT_MEMORY_NAME;
-    const sanitizedName = this.normalizeMemoryName(nameInput);
+    const checkedName = this.validateMemoryName(nameInput);
+    if ('refusal' in checkedName) throw markContentRejection(checkedName.refusal);
+    const sanitizedName = checkedName.name;
 
     // FIX: Must specify fieldType: 'description' to allow punctuation like colons, semicolons, etc.
     let sanitizedDescription = '';
@@ -2741,7 +2772,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
       });
       const sanitizedDescriptionValue = descResult.sanitizedValue;
       if (!descResult.isValid || sanitizedDescriptionValue === undefined) {
-        throw new Error(`Invalid memory description: ${descResult.errors?.join(', ')}`);
+        throw markContentRejection(new Error(`Invalid memory description: ${descResult.errors?.join(', ')}`));
       }
       sanitizedDescription = sanitizedDescriptionValue;
     }
@@ -2804,6 +2835,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
    */
   private parseRetentionDays(retention: string | number): number {
     if (typeof retention === 'number') return retention;
+    if (typeof retention !== 'string') throw markContentRejection(new Error('Invalid memory retention policy'));
     if (retention === 'permanent' || retention === 'perpetual') return 999999;
     const normalized = retention.toLowerCase();
     let cursor = 0;
@@ -2934,12 +2966,13 @@ export class MemoryManager extends BaseElementManager<Memory> {
       }
 
       // Get auto-load memories
-      const autoLoadMemories = assertCurrent
-        ? await this.getAutoLoadMemories(assertCurrent)
-        : await this.getAutoLoadMemories();
+      const report = await this.getAutoLoadMemoryReport(assertCurrent);
+      const autoLoadMemories = report.items;
+      errors.push(...report.failures.map(failure => `${failure.reference ?? 'collection'}: ${failure.error.message}`));
+      if (!report.complete) logger.warn(collectionReportNotice(report));
       assertCurrent?.();
 
-      if (autoLoadMemories.length === 0) {
+      if (autoLoadMemories.length === 0 && report.complete) {
         logger.debug('[MemoryManager] No auto-load memories configured');
         return { loaded: 0, skipped: 0, totalTokens: 0, errors: [] };
       }

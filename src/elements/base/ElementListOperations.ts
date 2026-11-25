@@ -1,27 +1,25 @@
 /**
- * ElementListOperations - list(), listFromDatabase(), listSummaries(), scanAndEvict().
+ * Shared complete listings, partial collection reports, and cache eviction.
  *
- * Owns the full list() and listFromDatabase() method bodies plus the
- * listSummaries() pass-through and the scanAndEvict() cache-maintenance helper.
+ * Combines storage completeness with individual load failures for each operation.
  * Services that need to call subclass-overridable methods (parseContent,
  * parseMetadata, createElement) receive them via the ElementListHost interface
  * so late binding is preserved.
- * Extracted from BaseElementManager; no behaviour changed.
  */
 
+import { evictingNameEvidence, type NameEvidenceSource } from './ElementNameEvidence.js';
 import * as path from 'node:path';
 import { IElement } from '../../types/elements/IElement.js';
 import { ElementType } from '../../portfolio/types.js';
-import { logger } from '../../utils/logger.js';
-import { PortfolioManager } from '../../portfolio/PortfolioManager.js';
-import { FileOperationsService } from '../../services/FileOperationsService.js';
+import { ElementIndeterminateError, type ElementReadError, elementReadFailure, GuardedReadConflict, indexedReadFailure } from './ElementReadError.js';
+import { collectionSurvivors, requireCompleteCollection, type CollectionReport, type CollectionFailure } from './CollectionReport.js';
 import {
   type IStorageLayer,
   type StorageScanOptions,
-  isWritableStorageLayer,
+  type StorageCollectionSnapshot,
 } from '../../storage/IStorageLayer.js';
 import type { ElementIndexEntry } from '../../storage/types.js';
-import type { ElementCache } from './ElementCache.js';
+import { type ElementCache, evictChangedReferences } from './ElementCache.js';
 import type { PublicElementDiscovery } from '../../collection/shared-pool/PublicElementDiscovery.js';
 import type { UserIdResolver } from '../../database/UserContext.js';
 
@@ -37,7 +35,8 @@ export interface ElementListHost<T extends IElement> {
   migrateMetadataDefaults(data: Record<string, unknown>, filePath: string): void;
   parseMetadata(data: any): Promise<T['metadata']>;
   createElement(metadata: T['metadata'], content: string): T;
-  load(filePath: string): Promise<T>;
+  /** Read an indexed storage reference through the loader (never classified as caller text). */
+  load(reference: string): Promise<T>;
   resolveAbsolutePath(filePath: string): string;
   getElementLabelCapitalized(): string;
   readonly constructor: { name: string };
@@ -47,178 +46,162 @@ export class ElementListOperations<T extends IElement> {
   constructor(
     private readonly host: ElementListHost<T>,
     private readonly cache: ElementCache<T>,
-    private readonly portfolioManager: PortfolioManager,
-    private readonly fileOperations: FileOperationsService,
     private readonly storageLayer: IStorageLayer,
     private readonly publicElementDiscovery: PublicElementDiscovery | undefined,
     private readonly getCurrentUserId: UserIdResolver | undefined,
-  ) {}
-
-  /**
-   * List all available elements.
-   * Identical to the former BaseElementManager.list() body.
-   */
-  async list(options?: { includePublic?: boolean; strictDatabase?: boolean }): Promise<T[]> {
-    try {
-      if (isWritableStorageLayer(this.storageLayer)) {
-        return this.listFromDatabase(options);
-      }
-
-      if (options?.strictDatabase) throw new Error('Strict database listing requires database storage');
-      await this.fileOperations.createDirectory(this.host.elementDir);
-
-      try {
-        const diff = await this.storageLayer.scan();
-        for (const relPath of [...diff.modified, ...diff.removed]) {
-          const absPath = path.join(this.host.elementDir, relPath);
-          this.cache.uncacheByPath(absPath);
-        }
-      } catch { /* index unavailable — list() continues without cache optimisation */ }
-
-      const files = await this.portfolioManager.listElements(this.host.elementType);
-
-      const elements = await Promise.all(
-        files.map(async (file) => {
-          try {
-            const absolutePath = this.host.resolveAbsolutePath(file);
-            const cached = this.cache.getCachedByAbsolutePath(absolutePath);
-            if (cached) return cached;
-            return await this.host.load(file);
-          } catch {
-            return null;
-          }
-        }),
-      );
-
-      const userElements = elements.filter((e): e is Awaited<T> => e !== null) as T[];
-
-      if (options?.includePublic) await this.addPublicElements(files, userElements);
-
-      return userElements;
-    } catch (error) {
-      if (options?.strictDatabase) throw error;
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        const label = this.host.getElementLabelCapitalized();
-        logger.debug(`${label}s directory does not exist yet, returning empty array`);
-        return [];
-      }
-      logger.error(`Failed to list ${this.host.elementType}s:`, error);
-      return [];
-    }
+  ) {
+    this.evictingSource = evictingNameEvidence(storageLayer, cache);
   }
 
-  private async addPublicElements(files: string[], userElements: T[]): Promise<void> {
-    if (!this.publicElementDiscovery) return;
-    try {
-      const userFileNames = new Set(files.map(f => path.basename(f)));
-      const sharedFiles = await this.publicElementDiscovery.discoverPublicElements(
-        this.host.elementType, userFileNames,
-      );
-      const sharedElements = await Promise.all(
-        sharedFiles.map(async (absPath) => {
-          try {
-            const content = await this.fileOperations.readElementFile(absPath, this.host.elementType, {
-              source: `${this.host.constructor.name}.list:shared`,
-            });
-            const parsed = this.host.parseContent(content);
-            this.host.migrateMetadataDefaults(parsed.data, absPath);
-            const metadata = await this.host.parseMetadata(parsed.data);
-            return this.host.createElement(metadata, parsed.content);
-          } catch {
-            return null;
-          }
-        }),
-      );
-      for (const el of sharedElements) {
-        if (el) userElements.push(el);
-      }
-    } catch {
-      logger.debug(`[${this.host.constructor.name}] Shared-pool discovery failed; returning user elements only`);
-    }
+  /** The storage layer's reads with the one evicting rule applied to every collection snapshot. */
+  private readonly evictingSource: NameEvidenceSource;
+
+  async list(options?: { includePublic?: boolean }): Promise<T[]> {
+    return requireCompleteCollection(await this.listReport(options));
+  }
+
+  listReport(options?: { includePublic?: boolean }, select?: (entry: ElementIndexEntry) => boolean): Promise<CollectionReport<T>> {
+    return this.collectReport(() => this.readCollectionEvicting(options),
+      async reference => this.cache.getCachedByPath(reference) ?? this.host.load(reference), options, select);
   }
 
   /**
-   * Database-mode list: query summaries from storage layer, then load each element.
+   * The one collection read for a manager: the snapshot's changed and removed references are
+   * evicted before anyone uses it, so a later cache-first read cannot serve what it saw change.
    */
-  private async listFromDatabase(options?: { includePublic?: boolean; strictDatabase?: boolean }): Promise<T[]> {
+  async readCollectionEvicting(options?: { includePublic?: boolean }): Promise<StorageCollectionSnapshot> {
+    return this.evictingSource.readCollection(options);
+  }
+
+
+  /** The index scan, with what it saw change evicted. */
+  async scanEvicting(options?: StorageScanOptions): Promise<void> {
     try {
-      const diff = await this.storageLayer.scan();
-      for (const id of [...diff.modified, ...diff.removed]) {
-        this.cache.uncacheByPath(id);
-      }
+      this.evictChanged(await this.storageLayer.scan(options));
+    } catch (cause) {
+      throw this.readFailure(cause);
+    }
+  }
 
-      const summaries = await this.storageLayer.listSummaries(options);
+  /** Fresh definition discovery never publishes hydrated instances; what its snapshot saw change is evicted. */
+  discoverReport(loadDefinition: (reference: string) => Promise<T>): Promise<CollectionReport<T>> {
+    return this.collectReport(() => this.readCollectionEvicting(), loadDefinition);
+  }
 
-      let currentUserId = '';
-      if (this.getCurrentUserId) {
+  private async collectReport(snapshotForRead: () => Promise<StorageCollectionSnapshot>,
+    load: (reference: string) => Promise<T>, options?: { includePublic?: boolean },
+    select?: (entry: ElementIndexEntry) => boolean): Promise<CollectionReport<T>> {
+    const items: T[] = [];
+    const failures: CollectionFailure[] = [];
+    try {
+      const snapshot = await snapshotForRead();
+      failures.push(...this.snapshotFailures(snapshot));
+      const entries = select ? snapshot.entries.filter(select) : snapshot.entries;
+      const loaded = await Promise.all(entries.map(async entry => {
         try {
-          currentUserId = this.getCurrentUserId() ?? '';
-        } catch (err) {
-          if (options?.strictDatabase) throw err;
-          logger.warn(
-            `[${this.host.constructor.name}] getCurrentUserId threw during listFromDatabase; foreign-row cache eviction skipped`,
-            { error: err instanceof Error ? err.message : String(err) },
-          );
+          return await load(entry.filePath);
+        } catch (cause) {
+          failures.push({ reference: entry.filePath, elementName: entry.name, error: this.readFailure(cause, entry.filePath) });
+          return undefined;
         }
+      }));
+      for (const element of loaded) if (element) items.push(element);
+      if (options?.includePublic && !snapshot.includesPublic) {
+        await this.addPublicElements(snapshot.entries.map(entry => entry.filePath), items, failures);
       }
-
-      const elements = await Promise.all(
-        summaries.map(async (summary) => {
-          try {
-            const cached = this.cache.getCachedByPath(summary.filePath);
-            if (cached) return cached;
-            return await this.host.load(summary.filePath);
-          } catch (cause) {
-            if (options?.strictDatabase) throw cause;
-            return null;
-          }
-        }),
-      );
-
-      if (options?.includePublic && currentUserId) {
-        this.evictForeignRowsFromCache(summaries, currentUserId);
-      }
-
-      return elements.filter((e): e is Awaited<T> => e !== null) as T[];
-    } catch (error) {
-      if (options?.strictDatabase) throw error;
-      logger.error(`Failed to list ${this.host.elementType}s from database:`, error);
-      return [];
+      const currentUserId = options?.includePublic && snapshot.includesPublic ? this.getCurrentUserId?.() : undefined;
+      if (currentUserId) this.evictForeignRowsFromCache(snapshot.entries, currentUserId);
+    } catch (cause) {
+      failures.push({ error: this.readFailure(cause) });
     }
+    const report = { items, failures, complete: failures.length === 0 };
+    return { ...report, items: collectionSurvivors(report, item => item.metadata.name) };
+  }
+
+  private readFailure(cause: unknown, reference?: string): ElementReadError {
+    const error = elementReadFailure(cause, reference);
+    if (error instanceof GuardedReadConflict) throw error;
+    return error;
+  }
+
+  private snapshotFailures(snapshot: StorageCollectionSnapshot): CollectionFailure[] {
+    const failures: CollectionFailure[] = [];
+    for (const [reference, failure] of snapshot.unindexed) {
+      failures.push({ reference, elementName: failure.elementName, candidateNames: failure.candidateNames,
+        shadowsSurvivors: failure.shadowsSurvivors, error: this.readFailure(indexedReadFailure(reference, failure)) });
+    }
+    if (!snapshot.complete && failures.length === 0) {
+      failures.push({ error: new ElementIndeterminateError('Element index is not authoritative') });
+    }
+    return failures;
+  }
+
+  private async addPublicElements(files: string[], items: T[], failures: CollectionFailure[]): Promise<void> {
+    const discovery = this.publicElementDiscovery;
+    if (!discovery) return;
+    const userFileNames = new Set(files.map(file => path.basename(file)));
+    const sharedFiles = await discovery.discoverPublicElements(this.host.elementType, userFileNames);
+    await Promise.all(sharedFiles.map(async reference => {
+      try {
+        const content = await discovery.readPublicElement(this.host.elementType, reference);
+        const parsed = this.host.parseContent(content);
+        this.host.migrateMetadataDefaults(parsed.data, reference);
+        const metadata = await this.host.parseMetadata(parsed.data);
+        items.push(this.host.createElement(metadata, parsed.content));
+      } catch (cause) {
+        const publicReference = discovery.publicReference(this.host.elementType, reference);
+        failures.push({ reference: publicReference, error: this.readFailure(cause, publicReference) });
+      }
+    }));
   }
 
   private evictForeignRowsFromCache(summaries: ElementIndexEntry[], currentUserId: string): void {
     for (const summary of summaries) {
-      if (summary.userId && summary.userId !== currentUserId) {
-        this.cache.uncacheByPath(summary.filePath);
-      }
+      if (summary.userId && summary.userId !== currentUserId) this.cache.uncacheByPath(summary.filePath);
     }
   }
 
-  /**
-   * List lightweight metadata summaries without loading full elements.
-   */
   async listSummaries(options?: { includePublic?: boolean }): Promise<ElementIndexEntry[]> {
-    if (!isWritableStorageLayer(this.storageLayer)) {
-      await this.fileOperations.createDirectory(this.host.elementDir);
+    return requireCompleteCollection(await this.summaryReport(options));
+  }
+
+  /** Index entries and failed records without hydrating a definition: the count and status surface. */
+  async summaryReport(options?: { includePublic?: boolean }): Promise<CollectionReport<ElementIndexEntry>> {
+    try {
+      const snapshot = await this.storageLayer.readCollection(options);
+      this.evictChanged(snapshot.diff);
+      const failures = this.snapshotFailures(snapshot);
+      const report = { items: snapshot.entries, failures, complete: failures.length === 0 };
+      return { ...report, items: collectionSurvivors(report, entry => entry.name) };
+    } catch (cause) {
+      return { items: [], failures: [{ error: this.readFailure(cause) }], complete: false };
     }
-    return this.storageLayer.listSummaries(options);
+  }
+
+  private evictChanged(diff: { modified: string[]; removed: string[] }): void {
+    evictChangedReferences(this.cache, diff);
   }
 
   /**
-   * Force a fresh disk scan and evict modified/removed cache entries.
-   * Unlike list(), this does not load all elements — it only evicts stale ones.
+   * The layer's collection-read freshness without loading definitions: a scan begun after this call
+   * (or, inside the cooldown, one membership enumeration), and every reference it reports changed
+   * evicted. Used where invalidate-then-scan would re-read every unchanged member. Enforcement passes
+   * `freshAfterInFlight`, so a scan already running when it began is followed by one of its own.
    */
+  async refreshCollection(options?: StorageScanOptions): Promise<void> {
+    try {
+      this.evictChanged(await this.storageLayer.refreshCollection(options));
+    } catch (cause) {
+      throw this.readFailure(cause);
+    }
+  }
+
   async scanAndEvict(options?: StorageScanOptions): Promise<void> {
     this.storageLayer.invalidate();
     try {
-      const diff = await this.storageLayer.scan(options);
-      for (const relPath of [...diff.modified, ...diff.removed]) {
-        const cachePath = isWritableStorageLayer(this.storageLayer)
-          ? relPath
-          : path.join(this.host.elementDir, relPath);
-        this.cache.uncacheByPath(cachePath);
-      }
-    } catch { /* non-fatal — cache may be slightly stale, but activation proceeds */ }
+      this.evictChanged(await this.storageLayer.scan(options));
+    } catch (cause) {
+      throw this.readFailure(cause);
+    }
   }
 }

@@ -104,7 +104,7 @@ export class MemoryActivationStrategy extends BaseActivationStrategy implements 
    */
   async getActiveElements(): Promise<MCPResponse> {
     // Use the manager's method to get active memories directly
-    const activeMemories = await this.memoryManager.getActiveMemories();
+    return this.renderCollectionReport(await this.memoryManager.getActiveReferenceReport({ freshness: 'advisory' }), activeMemories => {
 
     if (activeMemories.length === 0) {
       return {
@@ -127,6 +127,7 @@ export class MemoryActivationStrategy extends BaseActivationStrategy implements 
         text: `Active memories:\n${memoryList}`
       }]
     };
+    });
   }
 
   /**
@@ -137,12 +138,11 @@ export class MemoryActivationStrategy extends BaseActivationStrategy implements 
    * @see Issue #275 - Handlers return success=true for missing elements
    */
   async getElementDetails(name: string): Promise<MCPResponse> {
-    // Use flexible finding to support both display name and filename
-    const allMemories = await this.memoryManager.list();
-    const memory = await this.findElementFlexibly(name, allMemories);
+    const memory = await this.memoryManager.findByName(name);
     if (!memory) {
       this.throwNotFoundError(name, 'Memory');
     }
+    await this.memoryManager.projectForDisplay(memory);
 
     const details = [
       `🧠 **${memory.metadata.name}**`,

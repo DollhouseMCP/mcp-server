@@ -2,7 +2,7 @@
  * Smart cache for collection index with conditional fetching and performance optimization
  */
 
-import * as path from 'path';
+import * as path from 'node:path';
 import { CollectionIndex, CachedIndex } from '../types/collection.js';
 import { logger } from '../utils/logger.js';
 import { GitHubClient } from '../collection/GitHubClient.js';
@@ -12,6 +12,8 @@ import { PerformanceMonitor } from '../utils/PerformanceMonitor.js';
 import { IFileOperationsService } from '../services/FileOperationsService.js';
 import type { ISharedCacheStore } from '../storage/sharedCache/ISharedCacheStore.js';
 import { resolveDataDirectory } from '../paths/resolveDataDirectory.js';
+import { requireCompleteCollection, type CollectionReport } from '../elements/base/CollectionReport.js';
+import { elementReadFailure, ElementUnreadableError, GuardedReadConflict } from '../elements/base/ElementReadError.js';
 
 export interface CollectionIndexCacheConfig {
   githubClient: GitHubClient;
@@ -40,12 +42,12 @@ export class CollectionIndexCache {
   private cache: CachedIndex | null = null;
   private readonly TTL = 15 * 60 * 1000; // 15 minutes in milliseconds
   private readonly INDEX_URL = 'https://dollhousemcp.github.io/collection/collection-index.json';
-  private cacheDir: string;
-  private cacheFile: string;
-  private githubClient: GitHubClient;
-  private performanceMonitor: PerformanceMonitor;
-  private memoryCache: LRUCache<any>;
-  private fetchPromise: Promise<CollectionIndex> | null = null; // Prevent concurrent fetches
+  private readonly cacheDir: string;
+  private readonly cacheFile: string;
+  private readonly githubClient: GitHubClient;
+  private readonly performanceMonitor: PerformanceMonitor;
+  private readonly memoryCache: LRUCache<any>;
+  private fetchPromise: Promise<CollectionReport<CollectionIndex>> | null = null; // Prevent concurrent fetches
 
   // File operations service for secure file I/O
   private readonly fileOperations: IFileOperationsService;
@@ -118,6 +120,10 @@ export class CollectionIndexCache {
    * Get the collection index with performance optimization and lazy loading
    */
   async getIndex(lazyLoad: boolean = false): Promise<CollectionIndex> {
+    return requireCompleteCollection(await this.getIndexReport(lazyLoad))[0];
+  }
+
+  async getIndexReport(lazyLoad = false): Promise<CollectionReport<CollectionIndex>> {
     const startTime = Date.now();
     const memoryBefore = process.memoryUsage().heapUsed;
     
@@ -127,7 +133,7 @@ export class CollectionIndexCache {
       if (memoryCached && this.isValid()) {
         logger.debug('Using memory cached collection index');
         this.recordPerformanceMetrics(startTime, memoryBefore, 'memory-hit');
-        return memoryCached;
+        return { items: [memoryCached], failures: [], complete: true };
       }
       
       // Check if we have valid disk cached data
@@ -136,7 +142,7 @@ export class CollectionIndexCache {
         const result = this.cache!.data;
         this.memoryCache.set('collection-index', result);
         this.recordPerformanceMetrics(startTime, memoryBefore, 'disk-hit');
-        return result;
+        return { items: [result], failures: [], complete: true };
       }
       
       // Prevent concurrent fetches
@@ -149,7 +155,7 @@ export class CollectionIndexCache {
       if (lazyLoad && this.cache?.data) {
         logger.debug('Using stale cache in lazy load mode');
         this.recordPerformanceMetrics(startTime, memoryBefore, 'lazy-stale');
-        return this.cache.data;
+        return this.staleReport(this.cache.data, new ElementUnreadableError('Cached collection index has not been refreshed'));
       }
       
       // Create fetch promise to prevent concurrent requests
@@ -157,8 +163,8 @@ export class CollectionIndexCache {
       
       try {
         const result = await this.fetchPromise;
-        this.memoryCache.set('collection-index', result);
-        this.recordPerformanceMetrics(startTime, memoryBefore, 'fresh-fetch');
+        if (result.complete) this.memoryCache.set('collection-index', result.items[0]);
+        this.recordPerformanceMetrics(startTime, memoryBefore, result.complete ? 'fresh-fetch' : 'stale-fallback');
         return result;
       } finally {
         this.fetchPromise = null;
@@ -173,12 +179,11 @@ export class CollectionIndexCache {
         logger.debug('Using persistent cache as last resort');
         this.cache = persistentCache;
         const result = persistentCache.data;
-        this.memoryCache.set('collection-index', result);
         this.recordPerformanceMetrics(startTime, memoryBefore, 'disk-fallback');
-        return result;
+        return this.staleReport(result, error);
       }
       
-      throw error;
+      throw elementReadFailure(error, 'collection');
     }
   }
   
@@ -197,7 +202,7 @@ export class CollectionIndexCache {
   /**
    * Fetch fresh index from GitHub with conditional requests
    */
-  private async fetchFresh(): Promise<CollectionIndex | null> {
+  private async fetchFresh(): Promise<CollectionIndex> {
     try {
       // Build headers for conditional request
       const headers: Record<string, string> = {
@@ -258,7 +263,7 @@ export class CollectionIndexCache {
       
     } catch (error) {
       logger.debug('Failed to fetch fresh collection index:', error);
-      return null;
+      throw elementReadFailure(error, 'collection');
     }
   }
   
@@ -494,27 +499,24 @@ export class CollectionIndexCache {
   /**
    * Fetch fresh index with comprehensive fallback strategy
    */
-  private async fetchFreshWithFallback(): Promise<CollectionIndex> {
+  private async fetchFreshWithFallback(): Promise<CollectionReport<CollectionIndex>> {
     try {
       // Try to fetch fresh index
       const freshIndex = await this.fetchFresh();
-      if (freshIndex) {
-        logger.debug('Collection index fetched successfully');
-        return freshIndex;
-      }
+      return { items: [freshIndex], failures: [], complete: true };
     } catch (error) {
       logger.warn('Fresh fetch failed, trying fallback', {
         error: error instanceof Error ? error.message : String(error)
       });
+      if (this.cache?.data) return this.staleReport(this.cache.data, error);
+      throw elementReadFailure(error, 'collection');
     }
-    
-    // Fall back to stale cache if available
-    if (this.cache?.data) {
-      logger.debug('Using stale cached collection index as fallback');
-      return this.cache.data;
-    }
-    
-    throw new Error('No collection index available - fresh fetch failed and no cache exists');
+  }
+
+  private staleReport(index: CollectionIndex, cause: unknown): CollectionReport<CollectionIndex> {
+    const error = elementReadFailure(cause, 'collection');
+    if (error instanceof GuardedReadConflict) throw error;
+    return { items: [index], failures: [{ reference: 'collection', error }], complete: false };
   }
   
   /**

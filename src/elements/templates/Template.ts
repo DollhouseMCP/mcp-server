@@ -22,7 +22,7 @@ import { SECURITY_LIMITS } from '../../security/constants.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { ContentValidator } from '../../security/contentValidator.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
-import * as path from 'path';
+import * as path from 'node:path';
 import { MetadataService } from '../../services/MetadataService.js';
 
 // Extend IElementMetadata with template-specific fields
@@ -99,7 +99,8 @@ export class Template extends BaseElement implements IElement {
   private readonly MAX_INCLUDE_DEPTH = 5;          // Prevent infinite include loops
   private readonly MAX_STRING_LENGTH = 10000;      // Max length for string variables
 
-  constructor(metadata: Partial<TemplateMetadata>, content: string = '', metadataService: MetadataService) {
+  constructor(metadata: Partial<TemplateMetadata>, givenContent: string | undefined, metadataService: MetadataService) {
+    const content = givenContent ?? '';
     // SECURITY FIX #3 & #6: Validate and sanitize ALL metadata fields
     // Unicode normalization prevents homograph attacks
     // Input sanitization prevents XSS and injection attacks
@@ -281,9 +282,7 @@ export class Template extends BaseElement implements IElement {
    * Used by TemplateRenderer to serve section-specific render results.
    */
   getSections(): TemplateSections {
-    if (!this.parsedSections) {
-      this.parsedSections = Template.parseSections(this.content);
-    }
+    this.parsedSections ??= Template.parseSections(this.content);
     return this.parsedSections;
   }
 
@@ -399,10 +398,19 @@ export class Template extends BaseElement implements IElement {
    * SECURITY FIX #3: All variables are validated and sanitized
    * TYPE SAFETY: Strong typing for variables with runtime validation
    */
-  async render<T extends Record<string, unknown>>(
+  render<T extends Record<string, unknown>>(
     variables: T = {} as T, 
     includeDepth: number = 0
   ): Promise<string> {
+    // Rendering itself is synchronous; a refusal is returned as a rejected promise, as before.
+    try {
+      return Promise.resolve(this.renderNow(variables, includeDepth));
+    } catch (error) {
+      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  private renderNow(variables: Record<string, unknown>, includeDepth: number): string {
     // SECURITY FIX #4: Prevent infinite include loops
     if (includeDepth > this.MAX_INCLUDE_DEPTH) {
       SecurityMonitor.logSecurityEvent({
@@ -418,7 +426,7 @@ export class Template extends BaseElement implements IElement {
     const compiled = this.compile();
     
     // Validate and sanitize all provided variables
-    const sanitizedVariables = await this.validateAndSanitizeVariables(variables);
+    const sanitizedVariables = this.validateAndSanitizeVariables(variables);
     
     // Start with the template content
     let rendered = compiled.content;
@@ -438,7 +446,7 @@ export class Template extends BaseElement implements IElement {
     
     // Process includes if any
     if (this.metadata.includes && this.metadata.includes.length > 0) {
-      rendered = await this.processIncludes(rendered, sanitizedVariables, includeDepth);
+      rendered = this.processIncludes(rendered, includeDepth);
     }
     
     // Update usage statistics
@@ -464,9 +472,9 @@ export class Template extends BaseElement implements IElement {
    * SECURITY FIX #3: Comprehensive validation of all input variables
    * TYPE SAFETY: Improved type safety for variable validation
    */
-  private async validateAndSanitizeVariables(
+  private validateAndSanitizeVariables(
     variables: Record<string, unknown>
-  ): Promise<Record<string, unknown>> {
+  ): Record<string, unknown> {
     const sanitized: Record<string, unknown> = {};
     
     // Check required variables
@@ -491,8 +499,7 @@ export class Template extends BaseElement implements IElement {
       }
       
       // Type validation and sanitization
-      const sanitizedValue = await this.sanitizeVariableValue(value, varDef);
-      sanitized[name] = sanitizedValue;
+      sanitized[name] = this.sanitizeVariableValue(value, varDef);
     }
     
     // Apply defaults for missing optional variables
@@ -509,59 +516,10 @@ export class Template extends BaseElement implements IElement {
    * Sanitize a single variable value according to its definition
    * SECURITY FIX #3 & #6: Type-specific validation and Unicode normalization
    */
-  private async sanitizeVariableValue(value: any, varDef: TemplateVariable): Promise<any> {
+  private sanitizeVariableValue(value: any, varDef: TemplateVariable): any {
     switch (varDef.type) {
-      case 'string': {
-        // SECURITY FIX #6: Unicode normalization
-        const normalized = UnicodeValidator.normalize(String(value));
-        let stringValue = sanitizeInput(normalized.normalizedContent, this.MAX_STRING_LENGTH);
-        
-        // Apply regex validation if specified
-        if (varDef.validation) {
-          // SECURITY FIX: Validate regex complexity to prevent ReDoS attacks
-          // Previously: User-provided regex executed without limits
-          // Now: Check for dangerous patterns and limit execution time
-          try {
-            // Check for dangerous regex patterns
-            if (this.isDangerousRegex(varDef.validation)) {
-              throw ErrorHandler.createError(`Variable '${varDef.name}' has potentially dangerous validation pattern`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.DANGEROUS_PATTERN);
-            }
-            
-            const regex = new RegExp(varDef.validation);
-            // Use a simple timeout mechanism - in production, consider using a worker thread
-            const startTime = Date.now();
-            const result = regex.test(stringValue);
-            const duration = Date.now() - startTime;
-            
-            // If regex takes too long, it might be malicious
-            if (duration > 100) { // 100ms threshold
-              SecurityMonitor.logSecurityEvent({
-                type: 'CONTENT_INJECTION_ATTEMPT',
-                severity: 'HIGH',
-                source: 'Template.sanitizeVariableValue',
-                details: `Regex validation took ${duration}ms for variable '${varDef.name}', possible ReDoS`
-              });
-              throw ErrorHandler.createError(`Variable '${varDef.name}' validation pattern is too complex`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.PATTERN_TOO_COMPLEX);
-            }
-            
-            if (!result) {
-              throw ErrorHandler.createError(`Variable '${varDef.name}' does not match validation pattern`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.PATTERN_MISMATCH);
-            }
-          } catch (e) {
-            if (e instanceof SyntaxError) {
-              throw ErrorHandler.createError(`Variable '${varDef.name}' has invalid validation pattern`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_PATTERN);
-            }
-            throw e;
-          }
-        }
-        
-        // Check enum options if specified
-        if (varDef.options && !varDef.options.includes(stringValue)) {
-          throw ErrorHandler.createError(`Variable '${varDef.name}' must be one of: ${varDef.options.join(', ')}`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_OPTIONS);
-        }
-        
-        return stringValue;
-      }
+      case 'string':
+        return this.sanitizeStringVariable(value, varDef);
 
       case 'number': {
         const num = Number(value);
@@ -582,28 +540,8 @@ export class Template extends BaseElement implements IElement {
         return date;
       }
 
-      case 'array': {
-        if (!Array.isArray(value)) {
-          throw ErrorHandler.createError(`Variable '${varDef.name}' must be an array`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_ARRAY);
-        }
-        // SECURITY FIX: Limit array size to prevent memory exhaustion attacks
-        // Previously: No limit on array size could lead to DoS
-        // Now: Enforces reasonable size limit with logging
-        const MAX_ARRAY_SIZE = 1000;
-        if (value.length > MAX_ARRAY_SIZE) {
-          SecurityMonitor.logSecurityEvent({
-            type: 'CONTENT_SIZE_EXCEEDED',
-            severity: 'MEDIUM',
-            source: 'Template.sanitizeVariableValue',
-            details: `Array variable '${varDef.name}' has ${value.length} items, limiting to ${MAX_ARRAY_SIZE}`
-          });
-          value = value.slice(0, MAX_ARRAY_SIZE);
-        }
-        // Sanitize string elements in arrays
-        return value.map((item: any) =>
-          typeof item === 'string' ? sanitizeInput(item, 1000) : item
-        );
-      }
+      case 'array':
+        return this.sanitizeArrayVariable(value, varDef);
 
       case 'object':
         if (typeof value !== 'object' || value === null) {
@@ -615,6 +553,82 @@ export class Template extends BaseElement implements IElement {
       default:
         return value;
     }
+  }
+
+  /** A string variable: Unicode-normalised and sanitised, then checked against its pattern and options. */
+  private sanitizeStringVariable(value: unknown, varDef: TemplateVariable): string {
+    // SECURITY FIX #6: Unicode normalization
+    const normalized = UnicodeValidator.normalize(String(value));
+    const stringValue = sanitizeInput(normalized.normalizedContent, this.MAX_STRING_LENGTH);
+    if (varDef.validation) this.assertMatchesValidation(stringValue, varDef, varDef.validation);
+    // Check enum options if specified
+    if (varDef.options && !varDef.options.includes(stringValue)) {
+      throw ErrorHandler.createError(`Variable '${varDef.name}' must be one of: ${varDef.options.join(', ')}`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_OPTIONS);
+    }
+    return stringValue;
+  }
+
+  /**
+   * SECURITY FIX: Validate regex complexity to prevent ReDoS attacks
+   * Previously: User-provided regex executed without limits
+   * Now: Check for dangerous patterns and limit execution time
+   */
+  private assertMatchesValidation(stringValue: string, varDef: TemplateVariable, pattern: string): void {
+    try {
+      // Check for dangerous regex patterns
+      if (this.isDangerousRegex(pattern)) {
+        throw ErrorHandler.createError(`Variable '${varDef.name}' has potentially dangerous validation pattern`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.DANGEROUS_PATTERN);
+      }
+
+      const regex = new RegExp(pattern);
+      // Use a simple timeout mechanism - in production, consider using a worker thread
+      const startTime = Date.now();
+      const result = regex.test(stringValue);
+      const duration = Date.now() - startTime;
+
+      // If regex takes too long, it might be malicious
+      if (duration > 100) { // 100ms threshold
+        SecurityMonitor.logSecurityEvent({
+          type: 'CONTENT_INJECTION_ATTEMPT',
+          severity: 'HIGH',
+          source: 'Template.sanitizeVariableValue',
+          details: `Regex validation took ${duration}ms for variable '${varDef.name}', possible ReDoS`
+        });
+        throw ErrorHandler.createError(`Variable '${varDef.name}' validation pattern is too complex`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.PATTERN_TOO_COMPLEX);
+      }
+
+      if (!result) {
+        throw ErrorHandler.createError(`Variable '${varDef.name}' does not match validation pattern`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.PATTERN_MISMATCH);
+      }
+    } catch (e) {
+      if (e instanceof SyntaxError) {
+        throw ErrorHandler.createError(`Variable '${varDef.name}' has invalid validation pattern`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_PATTERN);
+      }
+      throw e;
+    }
+  }
+
+  /** An array variable, bounded in size, with its string items sanitised. */
+  private sanitizeArrayVariable(value: unknown, varDef: TemplateVariable): unknown[] {
+    if (!Array.isArray(value)) {
+      throw ErrorHandler.createError(`Variable '${varDef.name}' must be an array`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_ARRAY);
+    }
+    // SECURITY FIX: Limit array size to prevent memory exhaustion attacks
+    // Previously: No limit on array size could lead to DoS
+    // Now: Enforces reasonable size limit with logging
+    const MAX_ARRAY_SIZE = 1000;
+    let items: unknown[] = value;
+    if (items.length > MAX_ARRAY_SIZE) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'CONTENT_SIZE_EXCEEDED',
+        severity: 'MEDIUM',
+        source: 'Template.sanitizeVariableValue',
+        details: `Array variable '${varDef.name}' has ${items.length} items, limiting to ${MAX_ARRAY_SIZE}`
+      });
+      items = items.slice(0, MAX_ARRAY_SIZE);
+    }
+    // Sanitize string elements in arrays
+    return items.map(item => typeof item === 'string' ? sanitizeInput(item, 1000) : item);
   }
 
   /**
@@ -785,25 +799,12 @@ export class Template extends BaseElement implements IElement {
   /**
    * Process template includes
    * SECURITY FIX #2: Safe include processing with path validation
-   * 
-   * TODO: Implement actual include processing functionality
-   * This is currently a placeholder that validates the security model
-   * but does not actually load and render included templates.
-   * 
-   * Future implementation should:
-   * 1. Load templates from validated paths
-   * 2. Render them with current variables
-   * 3. Replace include markers in content
-   * 4. Respect includeDepth limit
+   *
+   * Includes are validated and audited, but not rendered: the content is returned unchanged.
+   * Loading, rendering and substituting included templates (within the include depth limit) is
+   * not implemented.
    */
-  private async processIncludes(
-    content: string, 
-    variables: Record<string, unknown>, 
-    includeDepth: number
-  ): Promise<string> {
-    // TODO: Implement actual template include processing
-    // Current implementation only validates the security model
-    
+  private processIncludes(content: string, includeDepth: number): string {
     if (!this.metadata.includes || this.metadata.includes.length === 0) {
       return content;
     }
@@ -815,13 +816,6 @@ export class Template extends BaseElement implements IElement {
       source: 'Template.processIncludes',
       details: `Processing ${this.metadata.includes.length} includes at depth ${includeDepth}`
     });
-    
-    // TODO: Future implementation would:
-    // for (const includePath of this.metadata.includes) {
-    //   const template = await this.loadIncludedTemplate(includePath);
-    //   const rendered = await template.render(variables, includeDepth + 1);
-    //   content = content.replace(`{{include:${includePath}}}`, rendered);
-    // }
     
     return content;
   }
@@ -984,6 +978,7 @@ export class Template extends BaseElement implements IElement {
       
       // Update metadata
       this.metadata = { ...this.metadata, ...parsed.metadata };
+      this.assignName(this.metadata.name);
       
       // Update content
       this.content = parsed.content || '';

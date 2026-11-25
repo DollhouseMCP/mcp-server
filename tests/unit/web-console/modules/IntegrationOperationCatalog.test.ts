@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import { ElementUnreadableError } from '../../../../src/elements/base/ElementReadError.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -117,7 +118,7 @@ describe('IntegrationOperationCatalog', () => {
       await expect(pending).rejects.toMatchObject({ code: 'integration_skill_missing', status: 404 });
       expect(update).toHaveBeenCalledTimes(1);
       expect(await portfolioStore.findByName(USER_ID, 'skills', GENERATED_SKILL_NAME)).toBeNull();
-      expect(await portfolioStore.listByUser(USER_ID)).toHaveLength(0);
+      expect((await portfolioStore.listByUser(USER_ID)).items).toHaveLength(0);
       // Spec ingestion commits before optional regeneration; a skill failure is not a spec rollback.
       if (action === 'ingestion') {
         const persisted = await f.specStore.findByDescriptorId(DESCRIPTOR_ID);
@@ -167,6 +168,17 @@ describe('IntegrationOperationCatalog', () => {
       expect(third.content).toBe(first.content);
       expect(third.portfolioName).not.toBe(first.portfolioName);
     });
+  });
+
+  it('discloses failed skill discovery in the operation catalog', async () => {
+    const portfolioStore = new InMemoryPortfolioElementStore();
+    const f = createCatalog({ scopes: [GMAIL_READONLY], portfolioStore });
+    jest.spyOn(portfolioStore, 'listByUser').mockResolvedValue({ items: [], complete: false,
+      failures: [{ reference: 'broken.md', error: new ElementUnreadableError('Definition storage unavailable') }] });
+    const result = await runAsUser(f.contextTracker, () => f.catalog.listOperations({ provider: 'gmail' }));
+    expect(result.skillStatus).toContainEqual({ skill_name: 'broken.md', status: 'unreadable',
+      guidance: 'Definition storage unavailable' });
+    expect(result.operations.length).toBeGreaterThan(0);
   });
 
   it('ignores unrelated unreadable skills when listing operations', async () => {
@@ -881,7 +893,7 @@ describe('strict integration management', () => {
         expect(await renamed.catalog.updateSkill({ provider: 'gmail' })).toMatchObject({ outcome: 'updated' });
       });
       expect(await runAsUser(f.contextTracker, () => f.catalog.regenerateSkill({ provider: 'gmail' }))).toMatchObject({ portfolioAction: 'updated' });
-      expect(await portfolioStore.listByUser(USER_ID)).toHaveLength(1);
+      expect((await portfolioStore.listByUser(USER_ID)).items).toHaveLength(1);
     });
   });
 
@@ -968,7 +980,7 @@ describe('strict integration management', () => {
       expect(created).toMatchObject({ outcome: 'created', operationCount: 3 });
       await expect(f.catalog.updateSpec({ ...input, expectedSpecHash: SPEC_HASH })).rejects.toThrow('list_integration_operations');
       expect(await f.catalog.updateSpec({ ...input, expectedSpecHash: created.specHash })).toMatchObject({ outcome: 'updated' });
-      expect(await f.portfolioStore.listByUser(USER_ID)).toEqual([]);
+      expect((await f.portfolioStore.listByUser(USER_ID)).items).toEqual([]);
     });
   });
 
@@ -988,7 +1000,7 @@ describe('strict integration management', () => {
       await f.specStore.upsert({ descriptorId: DESCRIPTOR_ID, spec: openApiSpec(), specHash: 'b'.repeat(64), createdAt: new Date(TIMESTAMP), updatedAt: new Date(TIMESTAMP) });
       expect(await f.catalog.updateSkill(input)).toMatchObject({ outcome: 'updated', skill_name: input.skillName });
       expect(await f.catalog.createSkill({ provider: 'gmail' })).toMatchObject({ outcome: 'created', skill_name: GENERATED_SKILL_NAME });
-      expect((await f.portfolioStore.listByUser(USER_ID)).map(row => row.name).sort()).toEqual([input.skillName, GENERATED_SKILL_NAME].sort());
+      expect((await f.portfolioStore.listByUser(USER_ID)).items.map(row => row.name).sort()).toEqual([input.skillName, GENERATED_SKILL_NAME].sort());
     });
   });
 
@@ -1039,7 +1051,7 @@ describe('strict integration management', () => {
       });
       await expect(f.catalog.updateSkill({ provider: 'gmail' })).rejects.toThrow(race === 'deleted' ? 'create_integration_skill' : 'expected_content_hash');
       const skills = await f.portfolioStore.listByUser(USER_ID);
-      expect(skills).toHaveLength(race === 'deleted' ? 0 : 1);
+      expect(skills.items).toHaveLength(race === 'deleted' ? 0 : 1);
       if (race === 'edited') {
         expect((await f.portfolioStore.findByName(USER_ID, 'skills', GENERATED_SKILL_NAME))?.content).toBe('concurrent edit');
       }

@@ -9,7 +9,7 @@ import { mapStorageItems } from './mapStorageItems.js';
 import * as path from 'node:path';
 import type { IStorageBackend, StorageStatResult } from './IStorageBackend.js';
 import type { StorageItemMetadata } from './types.js';
-import { type FileOperationsService, isAbsentPathError } from '../services/FileOperationsService.js';
+import { type FileOperationsService, directoryExists, isAbsentPathError } from '../services/FileOperationsService.js';
 
 export class FileStorageBackend implements IStorageBackend {
   constructor(private readonly fileOps: FileOperationsService) {}
@@ -77,7 +77,8 @@ export class FileStorageBackend implements IStorageBackend {
     return this.fileOps.readFile(absolutePath);
   }
 
-  async directoryExists(directory: string): Promise<boolean> {
-    return this.fileOps.directoryExists(directory);
+  /** The one strict directory probe: true for a directory, false only for ENOENT, a file is ENOTDIR typed. */
+  directoryExists(directory: string): Promise<boolean> {
+    return directoryExists(directory, filePath => this.fileOps.stat(filePath));
   }
 }

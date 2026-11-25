@@ -1,7 +1,7 @@
 import { sanitizeStorageError } from '../storage/StorageScanError.js';
 import { promises as fs, Stats } from 'node:fs';
 import * as path from 'node:path';
-import { FileLockManager } from '../security/fileLockManager.js';
+import { FileLockManager, type WrittenFileVersion } from '../security/fileLockManager.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { logger } from '../utils/logger.js';
 import { ElementType } from '../portfolio/types.js';
@@ -13,20 +13,37 @@ interface ActiveSessionContainerRegistry {
   } | undefined;
 }
 
-/** Missing paths and non-directory ancestors both mean the requested path is absent. */
+/** Only a missing path proves absence; a reader treats every other code, ENOTDIR included, as a failure. */
 export function isAbsentPathError(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException)?.code === 'ENOENT';
+}
+
+/**
+ * An existence probe ("does this path exist", "is this candidate this kind") may answer no when
+ * the path is missing or an ancestor is not a directory. Readers and the strict directoryExists
+ * never use this: they would answer empty.
+ */
+export function isAbsentKindError(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException)?.code;
   return code === 'ENOENT' || code === 'ENOTDIR';
 }
 
-/** Shared directory-kind probe, including callers without an injected service. */
+/**
+ * The one directory-kind probe, for the storage backend and every service caller: true for a
+ * directory, false only when the path is missing (ENOENT); a file at the path is ENOTDIR, typed,
+ * and any other failure propagates, so no caller certifies an empty collection from a path that
+ * is not a directory.
+ */
 export async function directoryExists(directoryPath: string, stat: (filePath: string) => Promise<Stats> = filePath => fs.stat(filePath)): Promise<boolean> {
+  let stats: Stats;
   try {
-    return (await stat(directoryPath)).isDirectory();
+    stats = await stat(directoryPath);
   } catch (error) {
     if (isAbsentPathError(error)) return false;
-    throw sanitizeStorageError(error);
+    throw error;
   }
+  if (stats.isDirectory()) return true;
+  throw Object.assign(new Error(`Not a directory: ${path.basename(directoryPath)}`), { code: 'ENOTDIR', path: directoryPath });
 }
 
 export interface FileReadOptions {
@@ -42,6 +59,8 @@ export interface FileWriteOptions {
   atomic?: boolean;
   /** Override maximum file size for this operation (in bytes) */
   maxSize?: number;
+  /** Receives the created file's (mtime, size), observed on the exclusive handle before it closes. */
+  onWritten?: (version: WrittenFileVersion) => void;
 }
 
 export interface FileOperationOptions {
@@ -76,13 +95,17 @@ export interface IFileOperationsService {
    */
   readElementFile(filePath: string, elementType: ElementType, options?: FileReadOptions): Promise<string>;
 
+  /** Record an element read performed elsewhere (a storage layer) in the verbose security audit. */
+  auditElementRead(filePath: string, elementType: ElementType | string, source: string): void;
+
   /**
    * Write a file securely with atomic locking
    * @param filePath - Absolute path to file
    * @param content - Content to write
    * @param options - Write options
+   * @returns the written file's (mtime, size) as the write observed it, when the write reports one
    */
-  writeFile(filePath: string, content: string, options?: FileWriteOptions): Promise<void>;
+  writeFile(filePath: string, content: string, options?: FileWriteOptions): Promise<WrittenFileVersion | void>;
 
   /**
    * Delete a file securely
@@ -220,23 +243,27 @@ export class FileOperationsService implements IFileOperationsService {
 
   async readElementFile(filePath: string, elementType: ElementType, options: FileReadOptions = {}): Promise<string> {
     const content = await this.readFile(filePath, options);
-
-    // Log security event for element access when verbose audit is enabled
-    // This is configurable to avoid log spam in production while allowing
-    // detailed audit trails when needed (e.g., for compliance or debugging)
-    if (this.config.verboseAudit) {
-      SecurityMonitor.logSecurityEvent({
-        type: 'FILE_READ',
-        severity: 'LOW',
-        source: options.source ?? 'FileOperationsService.readElementFile',
-        details: `Read ${elementType} file: ${path.basename(filePath)}`
-      });
-    }
+    this.auditElementRead(filePath, elementType, options.source ?? 'FileOperationsService.readElementFile');
 
     return content;
   }
 
-  async writeFile(filePath: string, content: string, options: FileWriteOptions = {}): Promise<void> {
+  /**
+   * Record an element read in the security audit when verbose audit is enabled. Configurable to
+   * avoid log spam in production while allowing detailed audit trails (compliance, debugging).
+   * The storage layers call it for reads they perform themselves.
+   */
+  auditElementRead(filePath: string, elementType: ElementType | string, source: string): void {
+    if (!this.config.verboseAudit) return;
+    SecurityMonitor.logSecurityEvent({
+      type: 'FILE_READ',
+      severity: 'LOW',
+      source,
+      details: `Read ${elementType} file: ${path.basename(filePath)}`,
+    });
+  }
+
+  async writeFile(filePath: string, content: string, options: FileWriteOptions = {}): Promise<WrittenFileVersion | void> {
     try {
       const validatedPath = await this.enforceWriteAllowlist(filePath, 'writeFile');
       const maxSize = options.maxSize ?? this.defaultMaxFileSize;
@@ -244,7 +271,7 @@ export class FileOperationsService implements IFileOperationsService {
         throw new Error(`Content exceeds maximum size of ${maxSize} bytes`);
       }
 
-      await this.fileLockManager.atomicWriteFile(validatedPath, content, {
+      const written = await this.fileLockManager.atomicWriteFile(validatedPath, content, {
         encoding: options.encoding ?? 'utf-8'
       });
 
@@ -254,6 +281,7 @@ export class FileOperationsService implements IFileOperationsService {
         source: options.source ?? 'FileOperationsService.writeFile',
         details: `File written successfully: ${path.basename(validatedPath)}`
       });
+      return written;
     } catch (error) {
       logger.error(`Failed to write file: ${filePath}`, error);
       throw error;
@@ -298,14 +326,18 @@ export class FileOperationsService implements IFileOperationsService {
       await fs.access(filePath);
       return true;
     } catch (error) {
-      if (isAbsentPathError(error)) return false;
+      if (isAbsentKindError(error)) return false;
       throw sanitizeStorageError(error);
     }
   }
 
-  /** Test directory kind while preserving operational failures. */
+  /** The strict directory probe (see the module helper); failures are client-safe like every service read. */
   async directoryExists(directoryPath: string): Promise<boolean> {
-    return directoryExists(directoryPath, filePath => this.stat(filePath));
+    try {
+      return await directoryExists(directoryPath, filePath => this.stat(filePath));
+    } catch (error) {
+      throw sanitizeStorageError(error);
+    }
   }
 
   /**
@@ -385,6 +417,10 @@ export class FileOperationsService implements IFileOperationsService {
       const fileHandle = await fs.open(validatedPath, 'wx');
       try {
         await fileHandle.writeFile(content, { encoding: options.encoding ?? 'utf-8' });
+        if (options.onWritten) {
+          const written = await fileHandle.stat();
+          options.onWritten({ mtimeMs: written.mtimeMs, sizeBytes: written.size });
+        }
       } finally {
         await fileHandle.close();
       }

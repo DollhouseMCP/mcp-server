@@ -14,6 +14,7 @@
  * @since Step 4.5 Commit 2.5
  */
 
+import { ELEMENT_FILE_EXTENSIONS } from './ElementNameKeys.js';
 import type { DatabaseInstance } from '../database/connection.js';
 import type { UserIdResolver } from '../database/UserContext.js';
 import type { IStorageLayer } from './IStorageLayer.js';
@@ -66,7 +67,7 @@ export class DatabaseStorageLayerFactory implements IStorageLayerFactory {
     }
     const layer = this.createForElement(ElementType.MEMORY, {
       elementDir: deps.portfolioManager.getElementDir(ElementType.MEMORY),
-      fileExtension: '.yaml', scanCooldownMs: getValidatedScanCooldown(),
+      fileExtension: ELEMENT_FILE_EXTENSIONS.memories, scanCooldownMs: getValidatedScanCooldown(),
     });
     if (!(layer instanceof DatabaseMemoryStorageLayer)) {
       throw new TypeError('Admitted memory composition requires a database memory layer');

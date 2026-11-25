@@ -42,7 +42,7 @@ describe('Persona lookup absolute benchmarks', () => {
       }
 
       const start = performance.now();
-      const found = personaManager.findPersona('persona-5');
+      const found = personaManager.findPersona('persona-5.md');
       const duration = performance.now() - start;
 
       expect(found).toBeDefined();
@@ -74,7 +74,7 @@ describe('Persona lookup absolute benchmarks', () => {
       }
 
       const start = performance.now();
-      const found = personaManager.findPersona('persona-50');
+      const found = personaManager.findPersona('persona-50.md');
       const duration = performance.now() - start;
 
       expect(found).toBeDefined();
@@ -106,7 +106,7 @@ describe('Persona lookup absolute benchmarks', () => {
       }
 
       const start = performance.now();
-      const found = personaManager.findPersona('persona-500');
+      const found = personaManager.findPersona('persona-500.md');
       const duration = performance.now() - start;
 
       expect(found).toBeDefined();

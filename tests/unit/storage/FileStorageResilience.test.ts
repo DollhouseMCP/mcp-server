@@ -8,6 +8,7 @@ import { MemoryIndexFile } from '../../../src/storage/MemoryIndexFile.js';
 import { MemoryIndexPersistence } from '../../../src/storage/MemoryIndexPersistence.js';
 import { logger } from '../../../src/utils/logger.js';
 import { createTestFileOperationsService } from '../../helpers/di-mocks.js';
+import { certifyNamedReference } from '../../../src/elements/base/ElementNameEvidence.js';
 
 import { supportsFileSymlinks } from '../../helpers/file-symlink-support.js';
 
@@ -30,7 +31,9 @@ it('rethrows the retained scan error within cooldown and retries after invalidat
   const retained = await layer.scan().catch((error: unknown) => error);
   expect(retained).toMatchObject({ cause: failure });
   await expect(layer.listSummaries()).rejects.toBe(retained);
-  await expect(layer.findIndexedPath(['missing'])).rejects.toBe(retained);
+  await expect(layer.readCollection()).rejects.toBe(retained);
+  // A name read inside the cooldown answers from the same retained failure, never absence.
+  await expect(certifyNamedReference(layer, 'missing')).rejects.toBe(retained);
   expect(enumerate).toHaveBeenCalledTimes(1);
   layer.invalidate(); await expect(layer.scan()).rejects.toMatchObject({ cause: failure });
   expect(enumerate).toHaveBeenCalledTimes(2);

@@ -3,18 +3,17 @@ import type { PortfolioIndexManager } from '../portfolio/PortfolioIndexManager.j
 import { bindTenantMemoryIndexView, type TenantMemoryIndexDependencies } from '../portfolio/TenantMemoryIndexView.js';
 
 import { CollectionBrowser, CollectionSearch, PersonaDetails, ElementInstaller } from '../collection/index.js';
-import { CollectionCache } from '../cache/index.js';
+import { CollectionCache, APICache } from '../cache/index.js';
 import { MCPInputValidator, sanitizeInput } from '../security/InputValidator.js';
 import { SecureErrorHandler } from '../security/errorHandler.js';
 import { ElementType, PortfolioManager } from '../portfolio/PortfolioManager.js';
 import { logger } from '../utils/logger.js';
 import { normalizeElementType } from '../utils/elementTypeNormalization.js';
-import * as path from 'path';
+import * as path from 'node:path';
 import { FileDiscoveryUtil } from '../utils/FileDiscoveryUtil.js';
 import { FileOperationsService } from '../services/FileOperationsService.js';
 import { SubmitToPortfolioTool } from '../tools/portfolio/submitToPortfolioTool.js';
 import { UnifiedIndexManager } from '../portfolio/UnifiedIndexManager.js';
-import { APICache } from '../cache/index.js';
 import { getSourceIcon } from '../utils/index.js';
 import { InitializationService } from '../services/InitializationService.js';
 import { PersonaIndicatorService } from '../services/PersonaIndicatorService.js';
@@ -411,32 +410,14 @@ export class CollectionHandler {
             return null;
           }
           const dir = this.portfolioManager.getElementDir(type);
-          try {
-            const file = await FileDiscoveryUtil.findFile(dir, contentIdentifier, {
-              extensions: ['.md', '.json', '.yaml', '.yml'],
-              partialMatch: true,
-              cacheResults: true
-            });
-            this.assertMemoryOperation();
-            
-            return file ? { type: type as ElementType, file } : null;
-          } catch (error: any) {
-          if (this.boundOperation) throw error;
-            // IMPROVED ERROR HANDLING: Log warnings for unexpected errors
-            if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') {
-              // Not just a missing directory - this could be a permission issue or other problem
-              logger.warn(`Unexpected error searching ${type} directory`, {
-                contentIdentifier,
-                type,
-                error: error?.message || String(error),
-                code: error?.code
-              });
-            } else {
-              // Directory doesn't exist - this is expected for unused element types
-              logger.debug(`${type} directory does not exist, skipping`, { type });
-            }
-            return null;
-          }
+          // A missing type directory is "not in this type" (discovery answers []); any other failure propagates.
+          const file = await FileDiscoveryUtil.findFile(dir, contentIdentifier, {
+            extensions: ['.md', '.json', '.yaml', '.yml'],
+            partialMatch: true,
+            cacheResults: true
+          });
+          this.assertMemoryOperation();
+          return file ? { type: type as ElementType, file } : null;
     }
 
     private async findContentForSubmission(contentIdentifier: string) {
@@ -453,9 +434,10 @@ export class CollectionHandler {
         // Wait for all searches to complete and find the first match
         const searchResults = await Promise.allSettled(searchPromises);
         this.assertMemoryOperation();
+        // A type whose directory could not be read is never skipped as "not in this type".
+        const failed = searchResults.find(result => result.status === 'rejected');
+        if (failed?.status === 'rejected') throw failed.reason;
         if (this.boundOperation) {
-          const failed = searchResults.find(result => result.status === 'rejected');
-          if (failed?.status === 'rejected') throw failed.reason;
           const matches = searchResults.filter(result => result.status === 'fulfilled' && result.value);
           if (matches.length > 1) throw new Error('Ambiguous portfolio submission type; no remote write performed');
         }
@@ -483,36 +465,24 @@ export class CollectionHandler {
     }
 
     private async submissionNameSuggestions(contentIdentifier: string): Promise<string[]> {
-            const suggestions: string[] = [];
-            
-            // Search for similar names across all element types
-            for (const elementType of Object.values(ElementType)) {
-              if (elementType === ElementType.MEMORY && this.boundOperation?.operation.manager.isGuardedHeadUpdateEnabled()) continue;
-              const dir = this.portfolioManager.getElementDir(elementType);
-              try {
-                const partialMatches = await FileDiscoveryUtil.findFile(dir, contentIdentifier, {
-                  extensions: ['.md', '.json', '.yaml', '.yml'],
-                  partialMatch: true,
-                  cacheResults: false
-                });
-                this.assertMemoryOperation();
-                
-                if (Array.isArray(partialMatches) && partialMatches.length > 0) {
-                  for (const match of partialMatches.slice(0, 2)) {
-                    const basename = path.basename(match, path.extname(match));
-                    suggestions.push(`"${basename}" (${elementType})`);
-                  }
-                } else if (partialMatches) {
-                  const basename = path.basename(partialMatches, path.extname(partialMatches));
-                  suggestions.push(`"${basename}" (${elementType})`);
-                }
-              } catch {
-                // Skip this type if there's an error
-                continue;
-              }
-            }
-            
-            return suggestions;
+        // Search for similar names across all element types; a missing type directory has none,
+        // any other failure propagates instead of shrinking the suggestions.
+        const types = Object.values(ElementType).filter(elementType =>
+          !(elementType === ElementType.MEMORY && this.boundOperation?.operation.manager.isGuardedHeadUpdateEnabled()));
+        const perType = await Promise.all(types.map(elementType => this.typeNameSuggestions(contentIdentifier, elementType)));
+        return perType.flat();
+    }
+
+    private async typeNameSuggestions(contentIdentifier: string, elementType: ElementType): Promise<string[]> {
+        const dir = this.portfolioManager.getElementDir(elementType);
+        // A missing type directory has no suggestions (discovery answers []); any other failure propagates.
+        const partialMatch = await FileDiscoveryUtil.findFile(dir, contentIdentifier, {
+          extensions: ['.md', '.json', '.yaml', '.yml'],
+          partialMatch: true,
+          cacheResults: false
+        });
+        this.assertMemoryOperation();
+        return partialMatch ? [`"${path.basename(partialMatch, path.extname(partialMatch))}" (${elementType})`] : [];
     }
 
     private async submissionNotFound(contentIdentifier: string) {
@@ -527,29 +497,22 @@ export class CollectionHandler {
           let errorMessage = `❌ Content "${contentIdentifier}" not found in portfolio.\n\n`;
           errorMessage += `🔍 **Searched across all element types**: ${availableTypes}\n\n`;
 
-          // Try to provide smart suggestions based on partial matches
-          try {
-            const suggestions = await this.submissionNameSuggestions(contentIdentifier);
-            this.assertMemoryOperation();
-
-            if (suggestions.length > 0) {
-              errorMessage += `💡 **Did you mean one of these?**\n`;
-              for (const suggestion of suggestions.slice(0, 5)) {
-                errorMessage += `  • ${suggestion}\n`;
-              }
-              errorMessage += `\n`;
+          // Smart suggestions based on partial matches; a failed scan propagates.
+          const suggestions = await this.submissionNameSuggestions(contentIdentifier);
+          this.assertMemoryOperation();
+          if (suggestions.length > 0) {
+            errorMessage += `💡 **Did you mean one of these?**\n`;
+            for (const suggestion of suggestions.slice(0, 5)) {
+              errorMessage += `  • ${suggestion}\n`;
             }
-          } catch (suggestionError) {
-          if (this.boundOperation) throw suggestionError;
-            // If suggestions fail, continue without them
-            logger.debug('Failed to generate suggestions', { suggestionError });
+            errorMessage += `\n`;
           }
           
           errorMessage += `🛠️ **Step-by-step troubleshooting**:\n`;
           errorMessage += `1. 📝 **List all content**: Use \`list_portfolio\` to see what's available\n`;
           errorMessage += `2. 🔍 **Check spelling**: Verify the exact name and try variations
 `;
-          errorMessage += `3. 🎯 **Specify type**: Try \`submit_collection_content \"${contentIdentifier}\" --type=personas\`\n\n`;
+          errorMessage += `3. 🎯 **Specify type**: Try \`submit_collection_content "${contentIdentifier}" --type=personas\`\n\n`;
           errorMessage += `4. 📁 **Browse files**: Check your portfolio directory manually
 
 `;
@@ -599,7 +562,8 @@ export class CollectionHandler {
 
     private formatSubmissionFailure(error: any) {
           let errorMessage = `${this.indicatorService.getPersonaIndicator()}❌ **Submission Failed**\n\n`;
-          errorMessage += `🚨 **Error**: ${error.message || 'Unknown error occurred'}\n\n`;
+          // A propagated storage failure can carry a local path; the client sees the sanitised text.
+          errorMessage += `🚨 **Error**: ${error?.message ? SecureErrorHandler.sanitizeError(error).message : 'Unknown error occurred'}\n\n`;
 
           // Provide contextual troubleshooting based on error type
           if (error.message?.includes('auth') || error.message?.includes('token')) {

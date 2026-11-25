@@ -9,6 +9,7 @@
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import * as path from 'path';
 import * as os from 'os';
+import { load as parseYaml } from 'js-yaml';
 
 jest.mock('../../../../src/security/fileLockManager.js');
 jest.mock('../../../../src/security/securityMonitor.js');
@@ -16,7 +17,9 @@ jest.mock('../../../../src/utils/logger.js');
 jest.mock('../../../../src/services/FileOperationsService.js');
 
 import { AgentManager } from '../../../../src/elements/agents/AgentManager.js';
-import type { Agent } from '../../../../src/elements/agents/Agent.js';
+import { Agent } from '../../../../src/elements/agents/Agent.js';
+import { canonicalElementName } from '../../../../src/storage/ElementNameKeys.js';
+import { ValidationError } from '../../../../src/security/errors.js';
 import { ElementType } from '../../../../src/portfolio/types.js';
 import { FileLockManager } from '../../../../src/security/fileLockManager.js';
 import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
@@ -31,7 +34,7 @@ import { ValidationService } from '../../../../src/services/validation/Validatio
 import { SerializationService } from '../../../../src/services/SerializationService.js';
 import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
 import { createTestStorageFactory } from '../../../helpers/createTestStorageFactory.js';
-import { logger } from '../../../../src/utils/logger.js';
+import { ElementIndeterminateError } from '../../../../src/elements/base/ElementReadError.js';
 
 const metadataService: MetadataService = createTestMetadataService();
 
@@ -171,6 +174,7 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
     // BaseElementManager.load uses readElementFile. Wire dynamically so tests
     // that reassign readFile propagate to the element-read path.
     mockFileOperations.readElementFile = jest.fn((...args: unknown[]) => mockFileOperations.readFile(...args));
+    mockFileOperations.auditElementRead = jest.fn();
     container.replace<FileOperationsService>('FileOperationsService', () => mockFileOperations as any);
 
     container.replace('SerializationService', () => new SerializationService());
@@ -190,13 +194,44 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
       serializationService: container.resolve('SerializationService'),
       metadataService: container.resolve('MetadataService'),
       eventDispatcher: new ElementEventDispatcher(),
-    storageLayerFactory: createTestStorageFactory(),
+    storageLayerFactory: createTestStorageFactory(container.resolve('FileOperationsService')),
     }));
 
     agentManager = container.resolve<AgentManager>('AgentManager');
     fileOperationsService = container.resolve<FileOperationsService>('FileOperationsService') as jest.Mocked<FileOperationsService>;
 
     await agentManager.initialize();
+    const storage = (agentManager as any).storageLayer;
+    // Build metadata fixtures independently of the loader's counted content reads; the warm index
+    // offers the same candidates the collection snapshot lists.
+    const buildSnapshot = async (enumerate = true) => {
+      const entries: Array<{ filePath: string; name: string }> = [];
+      const unindexed = new Map();
+      // A warm index read is not an enumeration: it uses the fixture listing without counting a call.
+      const files = enumerate ? await mockPortfolioManager.listElements(ElementType.AGENT)
+        : await (mockPortfolioManager.listElements.getMockImplementation()?.(ElementType.AGENT) ?? Promise.resolve([]));
+      for (const filePath of files) {
+        try {
+          const content = await fileOperationsService.readFile.getMockImplementation()!(filePath);
+          const metadata = parseYaml(content.split('---')[1]) as { name: string };
+          entries.push({ filePath, name: metadata.name });
+        } catch {
+          unindexed.set(filePath, { name: 'Error', reason: 'Unreadable fixture', candidateNames: [path.basename(filePath, '.md')], unattributed: true });
+        }
+      }
+      return { entries, unindexed, authoritative: true, complete: unindexed.size === 0, includesPublic: false,
+        diff: { added: [], modified: [], removed: [], unchanged: [] } };
+    };
+    jest.spyOn(storage, 'readIndexedPath').mockImplementation(async () => {
+      // The real layer is warm only after a successful scan; while enumeration fails it stays cold
+      // (non-authoritative) and the read goes to the collection snapshot, which then fails.
+      let snapshot;
+      try { snapshot = await buildSnapshot(false); }
+      catch { return { path: undefined, authoritative: false, indexComplete: false, unindexed: [], failures: new Map(), candidates: [] }; }
+      return { path: undefined, authoritative: true, indexComplete: true, unindexed: [...snapshot.unindexed.keys()],
+        failures: snapshot.unindexed, candidates: snapshot.entries.map(entry => ({ reference: entry.filePath, name: entry.name })) };
+    });
+    jest.spyOn(storage, 'readCollection').mockImplementation(buildSnapshot);
   });
 
   afterEach(async () => {
@@ -204,15 +239,90 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
   });
 
   describe('direct lookup succeeds', () => {
-    it('translates ambiguous database identity resolution into a typed user error', async () => {
-      const ambiguous = Object.assign(new Error('ambiguous'), { code: 'EAMBIGUOUS' });
-      (agentManager as unknown as { storageLayer: unknown }).storageLayer = {
-        writeContent: jest.fn(),
-        resolveContentIdentity: jest.fn().mockRejectedValue(ambiguous),
-      };
+    it.each(['name', 'file', 'database'] as const)('retains an indeterminate %s activation and prunes only proven absence', async kind => {
+      const key = kind === 'name' ? 'policy' : kind === 'file' ? path.join('agents', 'policy.md') : 'c471af79-2d4f-41bd-a97e-57a3f5244289';
+      const active = agentManager['getActivationSet']();
+      const aliases = agentManager['getActivationNameMap']();
+      active.add(key);
+      if (kind !== 'name') aliases.set(key, 'policy');
+      const read = jest.spyOn(agentManager, kind === 'name' ? 'findByName' : 'findByStorageIdentity');
+      read.mockRejectedValue(new ElementIndeterminateError('Discovery incomplete'));
+      await agentManager['cleanupStaleActiveAgents']();
+      expect(active.has(key)).toBe(true);
+      read.mockResolvedValue(undefined);
+      await agentManager['cleanupStaleActiveAgents']();
+      expect(active.has(key)).toBe(false);
+      expect(aliases.has(key)).toBe(false);
+      read.mockRestore();
+    });
 
-      await expect(agentManager.resolveExecutionIdentity('ambiguous-agent'))
-        .rejects.toMatchObject({ code: 'ELEMENT_IDENTITY_AMBIGUOUS' });
+    it('refuses path syntax before the database agent read runs its transaction', async () => {
+      const resolveContentIdentity = jest.fn<any>().mockResolvedValue(undefined);
+      (agentManager as unknown as { storageLayer: unknown }).storageLayer = { writeContent: jest.fn(), cachedInstanceCurrency: 'unverifiable', isExactStorageReference: () => false,
+        readCollection: jest.fn(), readIndexedPath: jest.fn<any>().mockResolvedValue({ path: undefined, authoritative: true, indexComplete: true,
+          unindexed: [], failures: new Map(), candidates: [] }), resolveContentIdentity };
+      await expect(agentManager.read('team/../secret')).rejects.toBeInstanceOf(ValidationError);
+      expect(resolveContentIdentity).not.toHaveBeenCalled();
+    });
+
+    it('resolves a database agent in a transaction on every read: ambiguity names the competing rows, absence is null', async () => {
+      const competitors = ['c471af79-2d4f-41bd-a97e-57a3f5244289', 'd582bf80-3e5f-42ce-b08a-68b4f6355390'];
+      const readCollection = jest.fn();
+      const readIndexedPath = jest.fn();
+      const resolveContentIdentity = jest.fn<any>().mockRejectedValue(
+        Object.assign(new Error('Ambiguous element identity: ambiguous-agent'), { code: 'EAMBIGUOUS', competitors }));
+      (agentManager as unknown as { storageLayer: unknown }).storageLayer = { writeContent: jest.fn(), cachedInstanceCurrency: 'unverifiable', isExactStorageReference: () => false, readCollection, readIndexedPath, resolveContentIdentity };
+      const ambiguity = { name: 'ElementIndeterminateError', failures: competitors.map(reference => ({ reference, reason: 'Competing definition name' })) };
+
+      await expect(agentManager.resolveExecutionIdentity('ambiguous-agent')).rejects.toMatchObject(ambiguity);
+      await expect(agentManager.read('ambiguous-agent')).rejects.toMatchObject(ambiguity);
+      await expect(agentManager.getAgentStateForRecovery({ agentName: 'ambiguous-agent' })).rejects.toMatchObject(ambiguity);
+      expect(resolveContentIdentity).toHaveBeenCalledWith(ElementType.AGENT, 'ambiguous-agent');
+      // Freshness comes from the transaction, not the warm index or a collection read.
+      expect(readIndexedPath).not.toHaveBeenCalled();
+      expect(readCollection).not.toHaveBeenCalled();
+      resolveContentIdentity.mockResolvedValue(undefined);
+      await expect(agentManager.read('ambiguous-agent')).resolves.toBeNull();
+    });
+
+    it('refuses a path-shaped agent name on its syntax for reads and execution, as findByName does', async () => {
+      mockPortfolioManager.listElements.mockResolvedValue(['outside.md']);
+      fileOperationsService.readFile.mockResolvedValue(AGENT_CONTENT_STANDARD.replace('name: my-agent', 'name: outside'));
+      const reference = path.join('..', 'outside');
+      await expect(agentManager.resolveExecutionIdentity(reference)).rejects.toThrow(ValidationError);
+      await expect(agentManager.read(reference)).rejects.toThrow(ValidationError);
+      await expect(agentManager.findByName(reference)).rejects.toThrow(ValidationError);
+    });
+
+    it('tries the raw filename after the slug when the index has no candidate', async () => {
+      mockPortfolioManager.listElements.mockResolvedValue([]);
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        if (path.basename(filePath) === 'My.Agent.md') return AGENT_CONTENT_STANDARD.replace('name: my-agent', 'name: My.Agent');
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+      const identity = await agentManager.resolveExecutionIdentity('My.Agent');
+      expect(identity.value).toBe('My.Agent.md');
+      const reads = fileOperationsService.readFile.mock.calls.map(([filePath]) => path.basename(filePath as string));
+      expect(reads.indexOf('my-agent.md')).toBeLessThan(reads.indexOf('My.Agent.md'));
+    });
+
+    it('guards a database lifecycle save with the name the row is stored under, for names the sanitiser would change', () => {
+      const agent = new Agent({ name: "Q&A Bob's (Strict)" }, createTestMetadataService());
+      const options = AgentManager.prototype['getLifecycleSaveOptions'].call({}, agent,
+        { kind: 'database', value: 'f2a1c0de-0000-4000-8000-000000000001' }) as { expectedIdentity: { name: string } };
+      // DatabaseStorageLayer.writeContent stores canonicalElementName(name); the guard must compare that same name.
+      expect(options.expectedIdentity.name).toBe(canonicalElementName("Q&A Bob's (Strict)"));
+    });
+
+    it('answers absent when a database agent row vanishes between its identity read and its load', async () => {
+      const resolveContentIdentity = jest.fn<any>().mockResolvedValue({ id: 'e693c091-4f5a-4b6b-8c7d-79c5f6a7b8c9', name: 'vanishing-agent' });
+      (agentManager as unknown as { storageLayer: unknown }).storageLayer = { writeContent: jest.fn(), cachedInstanceCurrency: 'unverifiable', isExactStorageReference: () => false, resolveContentIdentity };
+      const missing = Object.assign(new Error('Element definition does not exist'), { code: 'ENOENT' });
+      // The resolved row is read through the loader route (never back through load()).
+      jest.spyOn(agentManager as any, 'loadStoredReference').mockRejectedValue(missing);
+      jest.spyOn(agentManager as any, 'loadElementDefinition').mockRejectedValue(missing);
+      await expect(agentManager.read('vanishing-agent')).resolves.toBeNull();
+      await expect(agentManager.resolveExecutionIdentity('vanishing-agent')).rejects.toMatchObject({ name: 'ElementNotFoundError' });
     });
 
     it('resolves canonical-colliding file agents to their real distinct storage paths', async () => {
@@ -272,8 +382,58 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
 
       const agent = await agentManager.read('requested-agent');
 
+      // The warm index certifies the selection; the mismatched direct file is never served.
       expect(agent?.metadata.name).toBe('requested-agent');
-      expect(mockPortfolioManager.listElements).toHaveBeenCalledWith(ElementType.AGENT);
+      expect(mockPortfolioManager.listElements).not.toHaveBeenCalled();
+    });
+
+    it('serves one definition on ordinary and strict reads and locks it for execution', async () => {
+      const content = (name: string) => AGENT_CONTENT_STANDARD.replace('name: my-agent', `name: ${name}`);
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        const filename = path.basename(filePath);
+        if (filename === 'a.md') return content('my agent');
+        if (filename === 'my-agent.md') return content('My_Agent');
+        if (filename === 'a.state.yaml') return ACTIVE_REQUESTED_STATE;
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+      mockPortfolioManager.listElements.mockResolvedValue(['a.md', 'my-agent.md']);
+
+      const ordinary = await agentManager.read('my agent');
+      const strict = await agentManager['readWithStatePolicy']('my agent', true);
+      expect(ordinary?.metadata.name).toBe('my agent');
+      expect(strict?.metadata.name).toBe('my agent');
+      await expect(agentManager.resolveExecutionIdentity('my agent')).resolves.toEqual({ kind: 'file', value: 'a.md' });
+    });
+
+    it('refuses Q&A beside QA as one canonical name, and refuses the reference Q&A.md on its syntax', async () => {
+      const content = (name: string) => AGENT_CONTENT_STANDARD.replace('name: my-agent', `name: ${JSON.stringify(name)}`);
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        const filename = path.basename(filePath);
+        if (filename === 'qa-agent.md') return content('Q&A');
+        if (filename === 'qa.md') return content('QA');
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+      mockPortfolioManager.listElements.mockResolvedValue(['qa-agent.md', 'qa.md']);
+
+      // Q&A and QA canonicalise to one name: two definitions holding it are ambiguous, never one of them.
+      await expect(agentManager.read('Q&A')).rejects.toMatchObject({ name: 'ElementIndeterminateError',
+        failures: expect.arrayContaining([expect.objectContaining({ reference: 'qa-agent.md' }), expect.objectContaining({ reference: 'qa.md' })]) });
+      await expect(agentManager.load('Q&A.md')).rejects.toThrow(ValidationError);
+    });
+
+    it('recovers through the certified definition without reading the direct filename first', async () => {
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        const filename = path.basename(filePath);
+        if (filename === 'requested-agent.md') return AGENT_CONTENT_WRONG_DIRECT_IDENTITY;
+        if (filename === 'legacy-requested-agent.md') return AGENT_CONTENT_REQUESTED_IDENTITY;
+        if (filename === 'legacy-requested-agent.state.yaml') return ACTIVE_REQUESTED_STATE;
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+      mockPortfolioManager.listElements.mockResolvedValue(['requested-agent.md', 'legacy-requested-agent.md']);
+      const recovered = await agentManager.getAgentStateForRecovery({ agentName: 'requested-agent' });
+      expect(recovered.state).toBeDefined();
+      // The selector names legacy-requested-agent.md; the mismatched direct file is never hydrated.
+      expect(fileOperationsService.readFile.mock.calls.map(([filePath]) => path.basename(filePath as string))).not.toContain('requested-agent.md');
     });
 
     it('should not attach requested recovery state to a mismatched direct definition', async () => {
@@ -474,7 +634,7 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
 
   describe('non-ENOENT errors', () => {
     it('should propagate non-ENOENT errors without fallback', async () => {
-      fileOperationsService.readFile.mockRejectedValue(new Error('EACCES: permission denied'));
+      fileOperationsService.readFile.mockRejectedValue(Object.assign(new Error('permission denied'), { code: 'EACCES' }));
 
       await expect(agentManager.read('some-agent')).rejects.toThrow('EACCES');
     });
@@ -608,6 +768,24 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
       expect(stateWrites).not.toContain('shared-agent.state.yaml');
     });
 
+    it.each([false, true])('certifies absence from metadata selection despite a filename match (unreadable sibling: %s)', async broken => {
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        if (path.basename(filePath) === 'wanted.md') return AGENT_CONTENT_STANDARD.replace('name: my-agent', 'name: Other');
+        throw Object.assign(new Error('Unavailable'), { code: path.basename(filePath) === 'broken.md' ? 'EIO' : 'ENOENT' });
+      });
+      mockPortfolioManager.listElements.mockResolvedValue(broken ? ['wanted.md', 'broken.md'] : ['wanted.md']);
+      if (broken) {
+        const expected = { kind: 'indeterminate', failures: [expect.objectContaining({ reference: 'broken.md' })] };
+        await expect(agentManager.read('wanted')).rejects.toMatchObject(expected);
+        await expect(agentManager.getAgentStateForRecovery({ agentName: 'wanted' })).rejects.toMatchObject(expected);
+      } else {
+        await expect(agentManager.read('wanted')).resolves.toBeNull();
+        await expect(agentManager.getAgentStateForRecovery({ agentName: 'wanted' })).rejects.toThrow("Agent 'wanted' not found");
+      }
+      await expect(agentManager.read('Other')).resolves.toMatchObject({ metadata: { name: 'Other' } });
+      await expect(agentManager.read('wanted.md')).resolves.toMatchObject({ metadata: { name: 'Other' } });
+    });
+
     it('should fail closed for strict flexible reads with colliding file identities', async () => {
       const stateReads: string[] = [];
       fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
@@ -624,18 +802,16 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
       ]);
 
       await expect(agentManager.getAgentStateForRecovery({ agentName: 'shared-agent' }))
-        .rejects.toThrow("Agent 'shared-agent' not found");
+        .rejects.toMatchObject({ kind: 'indeterminate', failures: [
+          expect.objectContaining({ reference: 'legacy-shared-one.md' }),
+          expect.objectContaining({ reference: 'legacy-shared-two.md' }),
+        ] });
       expect(stateReads).toEqual([]);
     });
 
-    it('prefers an exact storage-path stem during ordinary flexible reads', async () => {
-      let directRead = true;
+    it('breaks a same-name tie by the name\'s own filename, as the shared selection rule does', async () => {
       fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
         const filename = path.basename(filePath);
-        if (filename === 'shared-agent.md' && directRead) {
-          directRead = false;
-          throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
-        }
         if (filename === 'legacy-shared.md') {
           return AGENT_CONTENT_SHARED_NAME.replace('Standard agent', 'Legacy duplicate');
         }
@@ -656,7 +832,6 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
     });
 
     it('fails closed on genuine ordinary-read ambiguity and names both paths', async () => {
-      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
       fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
         const filename = path.basename(filePath);
         if (filename === 'legacy-shared-one.md' || filename === 'legacy-shared-two.md') {
@@ -669,13 +844,10 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
         'legacy-shared-two.md',
       ]);
 
-      await expect(agentManager.read('shared-agent')).resolves.toBeNull();
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('legacy-shared-one.md'),
-      );
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('legacy-shared-two.md'),
-      );
+      await expect(agentManager.read('shared-agent')).rejects.toMatchObject({ kind: 'indeterminate', failures: [
+        expect.objectContaining({ reference: 'legacy-shared-one.md' }),
+        expect.objectContaining({ reference: 'legacy-shared-two.md' }),
+      ] });
     });
   });
 
@@ -797,7 +969,6 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
       mockPortfolioManager.listElements.mockResolvedValue([]);
 
       await expect(agentManager.read('missing-agent')).resolves.toBeNull();
-      expect(mockPortfolioManager.listElements).toHaveBeenCalledWith(ElementType.AGENT);
     });
 
     it('should propagate list failures through strict recovery reads', async () => {
@@ -808,11 +979,11 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
       // list() itself throws
       mockPortfolioManager.listElements.mockRejectedValue(new Error('Storage unavailable'));
 
+      // The shared resolution classifies the discovery failure; the storage error reaches the caller as its cause.
       await expect(agentManager.getAgentStateForRecovery({ agentName: 'failing-agent' }))
-        .rejects.toThrow('Storage unavailable');
+        .rejects.toMatchObject({ kind: 'unreadable', cause: expect.objectContaining({ message: 'Storage unavailable' }) });
       expect(mockPortfolioManager.listElements).toHaveBeenCalledWith(
-        ElementType.AGENT,
-        { throwOnFilesystemError: true }
+        ElementType.AGENT
       );
     });
 
@@ -826,7 +997,7 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
       );
 
       await expect(agentManager.getAgentStateForRecovery({ agentName: 'offline-agent' }))
-        .rejects.toThrow('Agents directory unavailable');
+        .rejects.toMatchObject({ cause: expect.objectContaining({ message: 'Agents directory unavailable' }) });
       expect(fileOperationsService.createDirectory).not.toHaveBeenCalled();
     });
 
@@ -840,10 +1011,10 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
       mockPortfolioManager.listElements.mockResolvedValue(['legacy-failing-agent.md']);
 
       await expect(agentManager.getAgentState({ agentName: 'failing-agent' }))
-        .rejects.toThrow('Candidate storage unavailable');
+        .rejects.toMatchObject({ kind: 'indeterminate' });
     });
 
-    it('should return a matching candidate despite an unrelated load failure', async () => {
+    it('should read one matching candidate despite an unrelated unreadable sibling', async () => {
       const cacheSpy = jest.spyOn(
         agentManager as unknown as {
           cacheElement: (agent: unknown, filename: string) => void;
@@ -865,9 +1036,9 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
         'legacy-poster-agent.md'
       ]);
 
-      await expect(agentManager.read('legacy-poster')).resolves.toMatchObject({
-        metadata: { name: 'legacy-poster' }
-      });
+      await expect(agentManager.read('legacy-poster')).resolves.toMatchObject({ metadata: { name: 'legacy-poster' } });
+      expect(fileOperationsService.readFile.mock.calls.filter(([file]) => path.basename(file) === 'legacy-poster-agent.md')).toHaveLength(1);
+      expect(fileOperationsService.readFile.mock.calls.some(([file]) => path.basename(file) === 'broken-agent.md')).toBe(false);
       expect(cacheSpy).not.toHaveBeenCalled();
     });
   });

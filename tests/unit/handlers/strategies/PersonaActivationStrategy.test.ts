@@ -17,6 +17,7 @@ describe('PersonaActivationStrategy', () => {
       getActivePersona: jest.fn(),
       // Issue #281: Add getActivePersonas for multiple active personas support
       getActivePersonas: jest.fn().mockReturnValue([]),
+      getActiveReferenceReport: jest.fn(async () => ({ items: await mockPersonaManager.getActivePersonas(), failures: [], complete: true })),
       findPersonaAsync: jest.fn(),
     } as unknown as jest.Mocked<PersonaManager>;
 
@@ -31,6 +32,15 @@ describe('PersonaActivationStrategy', () => {
   });
 
   describe('activate', () => {
+    it('reports unreadable active references without claiming there are no activations', async () => {
+      mockPersonaManager.getActiveReferenceReport.mockResolvedValue({ items: [], complete: false,
+        failures: [{ reference: 'broken', error: new Error('Definition unreadable') }] } as any);
+      const response = await strategy.getActiveElements();
+      const text = response.content.map(item => item.text).join('\n');
+      expect(text).toContain('broken');
+      expect(text).toContain('Definition unreadable');
+      expect(text).not.toMatch(/No active|No personas/);
+    });
     it('should activate persona successfully', async () => {
       const mockPersona = {
         filename: 'test-persona.md',
@@ -279,7 +289,7 @@ describe('PersonaActivationStrategy', () => {
 
       expect(result.content[0].text).toContain('>>');
       expect(result.content[0].text).toContain('active-persona');
-      expect(result.content[0].text).toContain('active-persona-123');
+      expect(result.content[0].text).not.toContain('active-persona-123');
       expect(result.content[0].text).toContain('The active one');
       expect(result.content[0].text).toContain('creative');
       expect(result.content[0].text).toContain('John Doe');

@@ -17,12 +17,16 @@ import { AsyncResource } from 'node:async_hooks';
 import { getStaticPolicyData } from '../handlers/mcp-aql/policies/ToolClassification.js';
 import { logger } from '../utils/logger.js';
 import { env } from '../config/env.js';
+import type { PolicyReport } from './policy/PolicyReport.js';
+import type { PolicyElement } from './policy/ActivePolicyCollector.js';
+import { visitSequentially } from '../utils/visitSequentially.js';
+import { clientReadFailureReason } from '../elements/base/ElementReadError.js';
 
 const POLICY_DIR = join(homedir(), '.dollhouse', 'bridge', 'imports', 'policies');
 const POLICY_FILENAME = 'dollhousemcp-crude-policies.json';
 
 export interface PolicyExportDeps {
-  getActiveElementsForPolicy: () => Promise<Array<{ type: string; name: string; metadata: Record<string, unknown> }>>;
+  getActiveElementsForPolicy: () => Promise<PolicyReport<PolicyElement>>;
   getServerVersion: () => string;
 }
 
@@ -77,19 +81,17 @@ export class PolicyExportService {
 
   private async runExportLoop(): Promise<void> {
     try {
-      while (this.pendingExport) {
-        const exportJob = this.pendingExport;
-        this.pendingExport = undefined;
+      await visitSequentially(this.pendingExports(), async exportJob => {
         const policy = await exportJob.capture();
 
         // If a newer request arrived while this snapshot was being gathered,
         // skip the older write. The loop will publish the newest snapshot.
         const newerRequest = this.pendingExport as PendingPolicyExport | undefined;
         if (newerRequest && newerRequest.sequence > exportJob.sequence) {
-          continue;
+          return;
         }
         if (policy) await this.writePolicy(policy);
-      }
+      });
     } finally {
       this.exportInFlight = undefined;
 
@@ -103,28 +105,32 @@ export class PolicyExportService {
     }
   }
 
+  private *pendingExports(): Generator<PendingPolicyExport> {
+    while (this.pendingExport) {
+      const job = this.pendingExport;
+      this.pendingExport = undefined;
+      yield job;
+    }
+  }
+
   private async capturePolicySnapshot(): Promise<PolicyDocument | undefined> {
     try {
       try {
         await access(this.policyDir);
-      } catch {
-        // Bridge not installed or imports dir not created — skip silently.
-        return undefined;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return undefined;
+        throw error;
       }
 
       const staticRules = getStaticPolicyData();
       const activeElements = await this.deps.getActiveElementsForPolicy();
-      const version = this.deps.getServerVersion();
+      if (!activeElements.complete) return this.unavailablePolicy(activeElements.failures);
 
-      const elementPolicies = this.buildElementPolicies(activeElements);
+      const elementPolicies = this.buildElementPolicies(activeElements.items);
 
       return {
-        schema_version: '1.0',
-        server: {
-          name: 'DollhouseMCP-V2-Refactor CRUDE',
-          version,
-        },
-        exported_at: new Date().toISOString(),
+        ...this.policyHeader(),
+        status: 'complete',
         static_rules: {
           safe_tools: staticRules.safe_tools,
           safe_bash_patterns: staticRules.safe_bash_patterns,
@@ -136,12 +142,25 @@ export class PolicyExportService {
           safe_mcp_operations: staticRules.safe_mcp_operations,
         },
         element_policies: elementPolicies,
+        complete: activeElements.complete,
+        failures: activeElements.failures,
         risk_scores: staticRules.risk_scores,
       };
     } catch (err) {
-      logger.warn('[PolicyExportService] Failed to capture policies', { error: (err as Error).message });
-      return undefined;
+      logger.warn('[PolicyExportService] Failed to capture policies', { error: clientReadFailureReason(err) });
+      return this.unavailablePolicy([{ type: 'collection', reason: clientReadFailureReason(err) }]);
     }
+  }
+
+  private policyHeader(): PolicyDocument {
+    return { schema_version: '1.0', server: {
+      name: 'DollhouseMCP-V2-Refactor CRUDE', version: this.deps.getServerVersion(),
+    }, exported_at: new Date().toISOString() };
+  }
+
+  private unavailablePolicy(failures: PolicyReport<PolicyElement>['failures']): PolicyDocument {
+    return { ...this.policyHeader(), schema_version: '2.0', status: 'unavailable', complete: false,
+      failures: failures.map(({ type, reference, reason }) => ({ type, reference, reason })) };
   }
 
   private async writePolicy(policy: PolicyDocument): Promise<void> {
@@ -155,7 +174,11 @@ export class PolicyExportService {
       });
     } catch (err) {
       // Non-fatal: policy export must never break element activation.
-      logger.warn('[PolicyExportService] Failed to export policies', { error: (err as Error).message });
+      if (policy['status'] === 'unavailable') {
+        logger.error('[PolicyExportService] Failed to publish unavailable policies', { error: clientReadFailureReason(err) });
+      } else {
+        logger.warn('[PolicyExportService] Failed to export policies', { error: clientReadFailureReason(err) });
+      }
     }
   }
 

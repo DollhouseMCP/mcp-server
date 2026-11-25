@@ -126,3 +126,15 @@ describe('PathValidator instance isolation (Issue #1948)', () => {
       .resolves.toBe(path.join(canonicalDir, 'personas', 'test.md'));
   });
 });
+
+describe('PathValidator.isPathShaped', () => {
+  it('flags separators, absolute paths and percent-encoded text, never plain display names', async () => {
+    const { PathValidator } = await import('../../../src/security/pathValidator.js');
+    for (const text of ['team/notes', 'team\\notes', '../outside', 'personas/../x', 'C:\\x', '/etc/passwd', '%2e%2e%2fetc']) {
+      expect(PathValidator.isPathShaped(text)).toBe(true);
+    }
+    for (const text of ['..', '.', 'Q&A', "Sam's Helper", 'My Skill', 'v1.2', 'Code Reviewer (Strict)', '100% done']) {
+      expect(PathValidator.isPathShaped(text)).toBe(false);
+    }
+  });
+});

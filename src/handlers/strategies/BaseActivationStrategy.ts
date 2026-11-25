@@ -2,42 +2,35 @@
  * BaseActivationStrategy - Shared functionality for all activation strategies
  *
  * Provides common helper methods used by multiple strategy implementations:
- * - Flexible element finding (by name or filename)
- * - Error response formatting
+ * - Text response building (success and error responses share one builder)
+ * - Collection-report rendering with its incomplete-collection notice
+ * - Not-found refusals and gatekeeper/restriction warnings
  */
 
-import { findElementFlexibly as findHelper } from '../element-crud/helpers.js';
 import { ElementNotFoundError } from '../../utils/ErrorHandler.js';
 import { MCPResponse } from './ElementActivationStrategy.js';
 import { getPermissionHookStatus } from '../../utils/permissionHooks.js';
 import { getGatekeeperDiagnostics } from '../mcp-aql/policies/ElementPolicies.js';
+import { collectionReportNotice, type CollectionReport } from '../../elements/base/CollectionReport.js';
 
 /**
  * Base class with shared utilities for activation strategies
  */
 export abstract class BaseActivationStrategy {
-  /**
-   * Find an element by name, supporting both exact display name and filename (slug) matching
-   * @param name - The name or filename to search for
-   * @param elementList - List of elements to search through
-   * @returns The found element or undefined
-   */
-  protected async findElementFlexibly(name: string, elementList: any[]): Promise<any> {
-    return findHelper(name, elementList);
+  protected async renderCollectionReport<T>(report: CollectionReport<T>, render: (items: T[]) => MCPResponse | Promise<MCPResponse>): Promise<MCPResponse> {
+    const response = !report.complete && report.items.length === 0 ? { content: [] } : await render(report.items);
+    if (report.complete) return response;
+    return { ...response, content: [...response.content, {
+      type: 'text', text: collectionReportNotice(report),
+    }] };
   }
-
   /**
    * Create a standard error response
    * @param message - The error message
    * @returns MCP-formatted error response
    */
   protected createErrorResponse(message: string): MCPResponse {
-    return {
-      content: [{
-        type: "text",
-        text: message
-      }]
-    };
+    return this.textResponse(message);
   }
 
   /**
@@ -46,6 +39,11 @@ export abstract class BaseActivationStrategy {
    * @returns MCP-formatted success response
    */
   protected createSuccessResponse(message: string): MCPResponse {
+    return this.textResponse(message);
+  }
+
+  /** The one text response both builders return; MCP-AQL success comes from not throwing. */
+  private textResponse(message: string): MCPResponse {
     return {
       content: [{
         type: "text",
@@ -55,10 +53,7 @@ export abstract class BaseActivationStrategy {
   }
 
   /**
-   * Throw an ElementNotFoundError for missing elements.
-   *
-   * This replaces the previous createNotFoundResponse which returned a success
-   * response with error text. Now we throw to ensure MCP-AQL returns success=false.
+   * Throw an ElementNotFoundError for missing elements, so MCP-AQL returns success=false.
    *
    * @param name - The name of the element that wasn't found
    * @param type - The type of element (for error message)
@@ -67,16 +62,6 @@ export abstract class BaseActivationStrategy {
    */
   protected throwNotFoundError(name: string, type: string): never {
     throw new ElementNotFoundError(type, name);
-  }
-
-  /**
-   * @deprecated Use throwNotFoundError instead to ensure proper error handling.
-   * This method returns a success response which causes MCP-AQL to return success=true.
-   * @see Issue #275 - Handlers return success=true for missing elements
-   */
-  protected createNotFoundResponse(name: string, type: string): MCPResponse {
-    // Keep for backward compatibility but strategies should migrate to throwNotFoundError
-    return this.createErrorResponse(`❌ ${type} '${name}' not found`);
   }
 
   /**
@@ -97,7 +82,7 @@ export abstract class BaseActivationStrategy {
     const parts: string[] = [hookStatus.installed
       ? '\n---\n**CLI Policies Loaded:**'
       : '\n---\n**CLI Policies Loaded (Hook Not Detected):**'];
-    if (restrictions.description) {
+    if (typeof restrictions.description === 'string' && restrictions.description) {
       parts.push(`> ${restrictions.description}`);
     }
     const denyPatterns = restrictions.denyPatterns as string[] | undefined;

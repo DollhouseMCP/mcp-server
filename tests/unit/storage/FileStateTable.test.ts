@@ -4,7 +4,7 @@ import type { ElementIndexEntry } from '../../../src/storage/types.js';
 const entry = (filePath = 'a.md', name = 'A', mtimeMs = 1): ElementIndexEntry => ({
   filePath, name, mtimeMs, sizeBytes: 1, description: '', author: '', tags: [], version: '1',
 });
-const failure = { name: 'Error', code: 'EACCES', reason: 'denied' };
+const failure = { name: 'Error', code: 'EACCES', reason: 'denied', candidateNames: [], unattributed: true };
 const read = (path = 'a.md', mtime = 1): ScanOutcome => ({ status: 'indexed', entry: entry(path, 'A', mtime), mtimeMs: mtime });
 function seed(table: FileStateTable, status: string) {
   if (status !== 'none') table.applySaved('a.md', 1, entry());
@@ -27,7 +27,8 @@ describe('FileStateTable publication', () => {
       } else expected[status === 'none' ? 'added' : 'modified'].push('a.md');
       expect(diff).toEqual(expected);
       expect(table.everSucceeded).toBe(true);
-      expect(table.isAuthoritative()).toBe(kind === 'indexed' || kind === 'absent');
+      expect(table.isAuthoritative()).toBe(true);
+      expect(table.unindexed().size).toBe(kind === 'failed' || kind === 'statFailed' ? 1 : 0);
     }
   });
 
@@ -77,7 +78,8 @@ describe('FileStateTable publication', () => {
     const table = new FileStateTable(); const token = table.beginScan(); table.invalidate();
     table.publishScan(token, new Map([['a.md', read()]])); expect(table.needsScan()).toBe(true);
     table.publishScan(table.beginScan(), new Map([['a.md', { status: 'failed', failure }]]));
-    expect(table.needsScan()).toBe(false); expect(table.isAuthoritative()).toBe(false);
+    expect(table.needsScan()).toBe(false); expect(table.isAuthoritative()).toBe(true);
+    expect(table.unindexed().has('a.md')).toBe(true);
     table.applyFailure('a.md', failure); expect(table.needsScan()).toBe(true);
     expect(table.everSucceeded).toBe(true);
   });
@@ -169,7 +171,8 @@ describe('persisted duplicate ownership', () => {
     }
     const snapshot = table.persistableSnapshot()!;
     expect(snapshot.entries.map(value => value.filePath)).toEqual(['old.md']);
-    expect(snapshot.blocked).toEqual({ 'new.md': { nameKey: 'shared', mtimeMs: 2 } });
+    expect(snapshot.blocked).toEqual({ 'new.md': { nameKey: 'shared', mtimeMs: 2,
+      elementName: status === 'pending' ? 'Shared' : ' shared ' } });
     const restarted = new FileStateTable();
     const token = restarted.beginScan();
     restarted.hydrate(snapshot.entries, snapshot.blocked);
@@ -272,4 +275,36 @@ it('distinguishes initial publication from unsaved content and releases missing 
   expect(table.needsInitialWrite()).toBe(false);
   table.clear(); table.applyFailure('a.md', failure);
   expect(table.hasUnsavedChanges()).toBe(true);
+});
+
+describe('candidate and recheck views', () => {
+  it('offers every selectable healthy entry, tracks ownership and drops recheck stamps on change', () => {
+    const table = new FileStateTable();
+    table.applySaved('a.md', 1, entry('a.md', 'Foo', 1));
+    table.applySaved('b.md', 2, entry('b.md', 'Foo', 2));
+    table.applySaved('c.md', 1, entry('c.md', 'FooBar', 1));
+    const paths = (identifier: string) => table.candidates(identifier).map(value => value.filePath);
+    expect(paths('foo')).toEqual(['a.md', 'b.md']);
+    expect(paths('foo-bar')).toEqual(['c.md']);
+    expect(paths('foobar')).toEqual(['c.md']);
+    expect(paths('c.md')).toEqual(['c.md']);
+    expect(paths('missing')).toEqual([]);
+    expect(table.isOwner('b.md')).toBe(true);
+    expect(table.isOwner('a.md')).toBe(false);
+    expect(table.isOwner('missing.md')).toBe(false);
+    table.applyFailure('b.md', failure);
+    expect(paths('foo')).toEqual(['a.md']);
+    expect(table.isOwner('a.md')).toBe(false);
+    expect(table.recheckDue('b.md', 100, 50)).toBe(true);
+    table.markRechecked('b.md', 100);
+    expect(table.recheckDue('b.md', 120, 50)).toBe(false);
+    expect(table.recheckDue('b.md', 150, 50)).toBe(true);
+    table.markRechecked('a.md', 100);
+    expect(table.recheckDue('a.md', 100, 50)).toBe(true);
+    table.applySaved('b.md', 3, entry('b.md', 'Foo', 3));
+    expect(table.recheckDue('b.md', 120, 50)).toBe(true);
+    expect(paths('foo')).toEqual(['a.md', 'b.md']);
+    table.clear();
+    expect(paths('foo')).toEqual([]);
+  });
 });

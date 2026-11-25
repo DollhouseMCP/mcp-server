@@ -217,7 +217,7 @@ version: 1.0.0
 specializations:
   - planning
   - organization
-decisionFramework: rule-based
+decisionFramework: rule_based
 riskTolerance: low
 ---
 

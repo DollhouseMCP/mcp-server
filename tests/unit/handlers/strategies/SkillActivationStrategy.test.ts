@@ -9,16 +9,27 @@ describe('SkillActivationStrategy', () => {
   beforeEach(() => {
     mockSkillManager = {
       list: jest.fn(),
+      findByName: jest.fn(async () => (await mockSkillManager.list())?.[0]),
       get: jest.fn(),
       activateSkill: jest.fn(),
       deactivateSkill: jest.fn(),
       getActiveSkills: jest.fn(),
+      getActiveReferenceReport: jest.fn(async () => ({ items: await mockSkillManager.getActiveSkills(), failures: [], complete: true })),
     } as unknown as jest.Mocked<SkillManager>;
 
     strategy = new SkillActivationStrategy(mockSkillManager);
   });
 
   describe('activate', () => {
+    it('reports unreadable active references without claiming there are no activations', async () => {
+      mockSkillManager.getActiveReferenceReport.mockResolvedValue({ items: [], complete: false,
+        failures: [{ reference: 'broken', error: new Error('Definition unreadable') }] } as any);
+      const response = await strategy.getActiveElements();
+      const text = response.content.map(item => item.text).join('\n');
+      expect(text).toContain('broken');
+      expect(text).toContain('Definition unreadable');
+      expect(text).not.toMatch(/No active|No personas/);
+    });
     it('should activate skill successfully', async () => {
       const mockSkill = {
         metadata: {

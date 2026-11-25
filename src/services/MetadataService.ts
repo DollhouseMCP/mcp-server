@@ -31,6 +31,7 @@
 import { userInfo } from 'node:os';
 import { ElementType } from '../portfolio/types.js';
 import { toSingularLabel } from '../utils/elementTypeNormalization.js';
+import { defaultElementName } from '../storage/ElementNameKeys.js';
 import { generateAnonymousId, generateUniqueId } from '../utils/filesystem.js';
 import { SYSTEM_CONTEXT } from '../context/ContextPolicy.js';
 import { normalizeVersion } from '../elements/BaseElement.js';
@@ -172,71 +173,44 @@ export class MetadataService {
 
     // Apply type-specific defaults FIRST (can be overridden by standard defaults)
     // Skip if skipTypeDefaults is true (for BaseElement constructor)
-    if (opts.typeDefaults && Object.keys(opts.typeDefaults).length > 0 && !opts.skipTypeDefaults) {
-      for (const [key, value] of Object.entries(opts.typeDefaults)) {
-        if (normalized[key] === undefined || (opts.preserveExisting === false && !normalized[key])) {
-          normalized[key] = value;
-        }
-      }
-    }
+    if (!opts.skipTypeDefaults) this.applyTypeDefaults(normalized, opts.typeDefaults, opts.preserveExisting);
 
     // Apply standard metadata defaults
-
-    // Name (required field, should already be set, but ensure it exists)
-    if (!normalized.name) {
-      normalized.name = `Untitled ${this.getElementTypeName(elementType)}`;
-    }
-
-    // Description
-    if (normalized.description === undefined || normalized.description === null) {
-      normalized.description = '';
-    }
-
-    // Version normalization
-    if (opts.normalizeVersion) {
-      if (!normalized.version) {
-        normalized.version = '1.0.0';
-      } else {
-        normalized.version = this.normalizeVersion(String(normalized.version));
-      }
-    }
-
+    // Name (required field, should already be set, but ensure it exists): the one default the
+    // indexes give the same definition, so the listing and a lookup agree.
+    if (!normalized.name) normalized.name = defaultElementName(elementType);
+    normalized.description ??= '';
+    if (opts.normalizeVersion) normalized.version = normalized.version ? this.normalizeVersion(String(normalized.version)) : '1.0.0';
     // Author attribution
-    if (opts.setAuthor && !normalized.author) {
-      normalized.author = this.getCurrentUser();
-    }
-
-    // Created date (YYYY-MM-DD format, matching PersonaManager line 178)
-    if (opts.setCreated && !normalized.created) {
-      if (normalized.created_date) {
-        normalized.created = String(normalized.created_date).split('T')[0];
-      } else {
-        normalized.created = this.generateDate('date-only');
-      }
-    }
-
-    // Modified date (ISO 8601 full format, matching AgentManager line 231)
-    if (opts.setModified && !normalized.modified) {
-      normalized.modified = this.generateDate('full');
-    }
-
+    if (opts.setAuthor && !normalized.author) normalized.author = this.getCurrentUser();
+    this.applyDateDefaults(normalized, opts.setCreated, opts.setModified);
     // Tags (initialize empty array if not provided)
-    if (!normalized.tags) {
-      normalized.tags = [];
-    }
-
+    if (!normalized.tags) normalized.tags = [];
     // Unique ID generation (if enabled and missing)
     if (opts.generateId && !normalized.unique_id) {
-      const author = normalized.author || this.getCurrentUser();
-      normalized.unique_id = this.assignUniqueId(normalized.name, author);
+      normalized.unique_id = this.assignUniqueId(normalized.name, normalized.author || this.getCurrentUser());
     }
-
     // Set element type if not present
-    if (!normalized.type) {
-      normalized.type = elementType;
-    }
+    if (!normalized.type) normalized.type = elementType;
 
     return normalized as T;
+  }
+
+  /** Type-specific defaults fill a missing field, or an empty one unless existing values are preserved. */
+  private applyTypeDefaults(normalized: Record<string, unknown>, typeDefaults: Record<string, unknown>, preserveExisting: boolean): void {
+    for (const [key, value] of Object.entries(typeDefaults)) {
+      if (normalized[key] === undefined || (!preserveExisting && !normalized[key])) normalized[key] = value;
+    }
+  }
+
+  /** Created (YYYY-MM-DD, from created_date when present) and modified (ISO 8601) dates. */
+  private applyDateDefaults(normalized: Record<string, any>, setCreated: boolean, setModified: boolean): void {
+    if (setCreated && !normalized.created) {
+      normalized.created = normalized.created_date
+        ? String(normalized.created_date).split('T')[0]
+        : this.generateDate('date-only');
+    }
+    if (setModified && !normalized.modified) normalized.modified = this.generateDate('full');
   }
 
   /**
@@ -259,7 +233,7 @@ export class MetadataService {
     overrides: Partial<BaseMetadata> = {}
   ): BaseMetadata {
     const defaults: BaseMetadata = {
-      name: `Untitled ${this.getElementTypeName(elementType)}`,
+      name: defaultElementName(elementType),
       description: '',
       version: '1.0.0',
       author: this.getCurrentUser(),
@@ -465,25 +439,7 @@ export class MetadataService {
     }
 
     // Type validation
-    if (metadata.author !== undefined && typeof metadata.author !== 'string') {
-      errors.push('author must be a string');
-    }
-
-    if (metadata.created !== undefined && typeof metadata.created !== 'string') {
-      errors.push('created must be a date string');
-    }
-
-    if (metadata.modified !== undefined && typeof metadata.modified !== 'string') {
-      errors.push('modified must be a date string');
-    }
-
-    if (metadata.tags !== undefined && !Array.isArray(metadata.tags)) {
-      errors.push('tags must be an array');
-    }
-
-    if (metadata.triggers !== undefined && !Array.isArray(metadata.triggers)) {
-      errors.push('triggers must be an array');
-    }
+    errors.push(...this.optionalFieldErrors(metadata));
 
     // Issue #755: Accept both plural ElementType ('agents') and singular label ('agent')
     if (metadata.type !== undefined && metadata.type !== elementType && metadata.type !== toSingularLabel(elementType)) {
@@ -498,20 +454,14 @@ export class MetadataService {
 
   // Private helper methods
 
-  /**
-   * Get human-readable element type name
-   * @private
-   */
-  private getElementTypeName(elementType: ElementType): string {
-    const typeNames: Record<ElementType, string> = {
-      [ElementType.SKILL]: 'Skill',
-      [ElementType.PERSONA]: 'Persona',
-      [ElementType.TEMPLATE]: 'Template',
-      [ElementType.AGENT]: 'Agent',
-      [ElementType.MEMORY]: 'Memory',
-      [ElementType.ENSEMBLE]: 'Ensemble'
-    };
-
-    return typeNames[elementType] || 'Element';
+  /** Optional fields that are present must have their type. */
+  private optionalFieldErrors(metadata: BaseMetadata): string[] {
+    const errors: string[] = [];
+    if (metadata.author !== undefined && typeof metadata.author !== 'string') errors.push('author must be a string');
+    if (metadata.created !== undefined && typeof metadata.created !== 'string') errors.push('created must be a date string');
+    if (metadata.modified !== undefined && typeof metadata.modified !== 'string') errors.push('modified must be a date string');
+    if (metadata.tags !== undefined && !Array.isArray(metadata.tags)) errors.push('tags must be an array');
+    if (metadata.triggers !== undefined && !Array.isArray(metadata.triggers)) errors.push('triggers must be an array');
+    return errors;
   }
 }

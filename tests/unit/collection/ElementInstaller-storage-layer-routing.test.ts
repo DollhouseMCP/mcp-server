@@ -30,6 +30,12 @@ import type {
 } from '../../../src/storage/IStorageLayer.js';
 import type { IStorageLayerFactory } from '../../../src/storage/IStorageLayerFactory.js';
 import { createTestFileOperationsService } from '../../helpers/di-mocks.js';
+import type { ElementManagerLookup } from '../../../src/elements/ElementManagerLookup.js';
+
+/** Every type's manager certifies the requested name absent. */
+function absentManagerLookup(): ElementManagerLookup {
+  return { managerFor: () => ({ findByName: async () => undefined }) } as unknown as ElementManagerLookup;
+}
 
 describe('ElementInstaller — storage-layer routing in DB mode', () => {
   let installer: ElementInstaller;
@@ -97,6 +103,7 @@ describe('ElementInstaller — storage-layer routing in DB mode', () => {
 
     installer = new ElementInstaller(mockGitHubClient, {
       portfolioManager: mockPortfolioManager,
+      managerLookup: absentManagerLookup(),
       unifiedIndexManager: mockUnifiedIndexManager,
       fileOperations: fileOperationsService,
       storageLayerFactory: mockStorageLayerFactory,
@@ -175,6 +182,7 @@ injected IWritableStorageLayer in DB mode instead of writing to disk.`;
 
     const fsInstaller = new ElementInstaller(mockGitHubClient, {
       portfolioManager: mockPortfolioManager,
+      managerLookup: absentManagerLookup(),
       unifiedIndexManager: mockUnifiedIndexManager,
       fileOperations: fileOperationsService,
       // intentionally no storageLayerFactory — filesystem mode
@@ -235,6 +243,7 @@ category: "test"
 
     const fsInstaller = new ElementInstaller(mockGitHubClient, {
       portfolioManager: mockPortfolioManager,
+      managerLookup: absentManagerLookup(),
       unifiedIndexManager: mockUnifiedIndexManager,
       fileOperations: fileOperationsService,
       storageLayerFactory: filesystemFactory,

@@ -12,6 +12,9 @@
  */
 
 import { PortfolioIndexManager, IndexEntry, SearchOptions } from './PortfolioIndexManager.js';
+import { requireCompleteCollection, type CollectionReport, type CollectionFailure } from '../elements/base/CollectionReport.js';
+import { elementReadFailure, GuardedReadConflict } from '../elements/base/ElementReadError.js';
+import { visitSequentially } from '../utils/visitSequentially.js';
 import { GitHubPortfolioIndexer, GitHubIndexEntry } from './GitHubPortfolioIndexer.js';
 import { CollectionIndexCache } from '../cache/CollectionIndexCache.js';
 import { GitHubClient } from '../collection/GitHubClient.js';
@@ -19,13 +22,15 @@ import { APICache } from '../cache/APICache.js';
 import { ElementType } from './types.js';
 import { FileOperationsService } from '../services/FileOperationsService.js';
 import { logger } from '../utils/logger.js';
-import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
+import { ErrorHandler } from '../utils/ErrorHandler.js';
 import { LRUCache, CacheFactory } from '../cache/LRUCache.js';
 import { PerformanceMonitor, SearchMetrics } from '../utils/PerformanceMonitor.js';
 import { IndexEntry as CollectionIndexEntry } from '../types/collection.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { getSourcePriorityConfig, SourcePriorityConfig, ElementSource, getSourceDisplayName } from '../config/sourcePriority.js';
+
+type PortfolioSource = 'local' | 'github' | 'collection';
 
 /**
  * Unified search options for searching across local, GitHub, and collection portfolios
@@ -127,7 +132,7 @@ export interface VersionConflict {
   local?: string;
   github?: string;
   collection?: string;
-  recommended: 'local' | 'github' | 'collection';
+  recommended: PortfolioSource;
   reason: string;
 }
 
@@ -135,7 +140,7 @@ export interface DuplicateInfo {
   name: string;
   elementType: ElementType;
   sources: Array<{
-    source: 'local' | 'github' | 'collection';
+    source: PortfolioSource;
     version?: string;
     lastModified: Date;
     path?: string;
@@ -153,11 +158,11 @@ export interface VersionInfo {
     collection?: { version: string; lastModified: Date; path: string };
   };
   recommended: {
-    source: 'local' | 'github' | 'collection';
+    source: PortfolioSource;
     reason: string;
   };
   updateAvailable: boolean;
-  updateFrom?: 'local' | 'github' | 'collection';
+  updateFrom?: PortfolioSource;
 }
 
 export interface UnifiedIndexEntry {
@@ -170,7 +175,7 @@ export interface UnifiedIndexEntry {
   lastModified: Date;
   
   // Source information
-  source: 'local' | 'github' | 'collection';
+  source: PortfolioSource;
   
   // Local properties (when source === 'local')
   localFilePath?: string;
@@ -196,7 +201,7 @@ export interface UnifiedIndexEntry {
 }
 
 export interface UnifiedSearchResult {
-  source: 'local' | 'github' | 'collection';
+  source: PortfolioSource;
   entry: UnifiedIndexEntry;
   matchType: string;
   score: number;
@@ -265,35 +270,35 @@ export interface UnifiedIndexManagerDependencies {
 
 export class UnifiedIndexManager {
   private readonly assertCurrent?: () => void;
-  private localIndexManager: PortfolioIndexManager;
-  private githubIndexer: GitHubPortfolioIndexer;
-  private collectionIndexCache: CollectionIndexCache;
-  private githubClient: GitHubClient;
+  private readonly localIndexManager: PortfolioIndexManager;
+  private readonly githubIndexer: GitHubPortfolioIndexer;
+  private readonly collectionIndexCache: CollectionIndexCache;
+  private readonly githubClient: GitHubClient;
   
   // Performance monitoring and caching
-  private performanceMonitor: PerformanceMonitor;
-  private resultCache: LRUCache<UnifiedSearchResult[]>;
-  private indexCache: LRUCache<any>;
+  private readonly performanceMonitor: PerformanceMonitor;
+  private readonly resultCache: LRUCache<UnifiedSearchResult[]>;
+  private readonly indexCache: LRUCache<any>;
   private readonly BATCH_SIZE = 50; // For streaming results
   private readonly MAX_CONCURRENT_SOURCES = 3;
-  private ownsLocalIndexManager: boolean;
-  private ownsGithubIndexer: boolean;
-  private ownsCollectionIndexCache: boolean;
-  private ownsPerformanceMonitor: boolean;
-  private ownsResultCache: boolean;
-  private ownsIndexCache: boolean;
+  private readonly ownsLocalIndexManager: boolean;
+  private readonly ownsGithubIndexer: boolean;
+  private readonly ownsCollectionIndexCache: boolean;
+  private readonly ownsPerformanceMonitor: boolean;
+  private readonly ownsResultCache: boolean;
+  private readonly ownsIndexCache: boolean;
 
   // Source priority configuration (Issue #1446)
   private readonly sourcePriorityConfig: SourcePriorityConfig;
 
   // Lookup tables for optimized enum conversions (Issue #1446 - Code Review)
-  private static readonly SOURCE_ENUM_TO_STRING_MAP: ReadonlyMap<ElementSource, 'local' | 'github' | 'collection'> = new Map([
+  private static readonly SOURCE_ENUM_TO_STRING_MAP: ReadonlyMap<ElementSource, PortfolioSource> = new Map([
     [ElementSource.LOCAL, 'local'],
     [ElementSource.GITHUB, 'github'],
     [ElementSource.COLLECTION, 'collection']
   ]);
 
-  private static readonly SOURCE_STRING_TO_ENUM_MAP: ReadonlyMap<'local' | 'github' | 'collection', ElementSource> = new Map([
+  private static readonly SOURCE_STRING_TO_ENUM_MAP: ReadonlyMap<PortfolioSource, ElementSource> = new Map([
     ['local', ElementSource.LOCAL],
     ['github', ElementSource.GITHUB],
     ['collection', ElementSource.COLLECTION]
@@ -370,6 +375,10 @@ export class UnifiedIndexManager {
    * - includeAll option forces search of all sources for comprehensive results
    */
   public async search(searchOptions: UnifiedSearchOptions): Promise<UnifiedSearchResult[]> {
+    return requireCompleteCollection(await this.searchReport(searchOptions));
+  }
+
+  public async searchReport(searchOptions: UnifiedSearchOptions): Promise<CollectionReport<UnifiedSearchResult>> {
     this.assertCurrent?.();
     const startTime = Date.now();
     const memoryBefore = process.memoryUsage().heapUsed;
@@ -386,7 +395,7 @@ export class UnifiedIndexManager {
     const cachedResult = await this.checkSearchCache(normalizedOptions, startTime, memoryBefore);
     this.assertCurrent?.();
     if (cachedResult) {
-      return cachedResult;
+      return { items: cachedResult, failures: [], complete: true };
     }
 
     try {
@@ -398,7 +407,7 @@ export class UnifiedIndexManager {
       }
 
       // Perform priority-based search
-      const { results, sourceCount, enabledSources } = await this.performPriorityBasedSearch(normalizedOptions);
+      const { results, sourceCount, enabledSources, failures } = await this.performPriorityBasedSearch(normalizedOptions);
 
       // Process, paginate, and cache results
       const finalResults = await this.processFinalResults(
@@ -407,17 +416,18 @@ export class UnifiedIndexManager {
         startTime,
         memoryBefore,
         sourceCount,
-        enabledSources
+        enabledSources,
+        failures
       );
 
       this.assertCurrent?.();
-      return finalResults;
+      return { items: finalResults, failures, complete: failures.length === 0 };
 
     } catch (error) {
       const duration = Date.now() - startTime;
       if (this.assertCurrent) throw error;
       ErrorHandler.logError('UnifiedIndexManager.search', error, { query: normalizedOptions, duration });
-      throw ErrorHandler.wrapError(error, 'Failed to perform unified portfolio search', ErrorCategory.SYSTEM_ERROR);
+      throw elementReadFailure(error);
     }
   }
 
@@ -481,10 +491,10 @@ export class UnifiedIndexManager {
         timestamp: new Date()
       });
       logger.debug('Using cached search results', { resultCount: cached.length });
-      return cached;
+      return await Promise.resolve(cached);
     }
 
-    return null;
+    return await Promise.resolve(null);
   }
 
   /**
@@ -499,9 +509,11 @@ export class UnifiedIndexManager {
   private async performPriorityBasedSearch(normalizedOptions: UnifiedSearchOptions): Promise<{
     results: UnifiedSearchResult[];
     sourceCount: { local: number; github: number; collection: number };
-    enabledSources: ('local' | 'github' | 'collection')[];
+    enabledSources: (PortfolioSource)[];
+    failures: CollectionFailure[];
   }> {
     const allResults: UnifiedSearchResult[] = [];
+    const failures: CollectionFailure[] = [];
     const sourceCount = { local: 0, github: 0, collection: 0 };
 
     // Get enabled sources in priority order
@@ -517,7 +529,8 @@ export class UnifiedIndexManager {
         normalizedOptions,
         allResults,
         sourceCount,
-        stopOnFirst
+        stopOnFirst,
+        failures
       );
 
       if (!shouldContinue) {
@@ -528,27 +541,31 @@ export class UnifiedIndexManager {
       this.checkMemoryUsage();
     }
 
-    return { results: allResults, sourceCount, enabledSources };
+    return { results: allResults, sourceCount, enabledSources, failures };
   }
 
   /**
    * Search a single source and update results (extracted from performPriorityBasedSearch())
    */
   private async searchSingleSource(
-    source: 'local' | 'github' | 'collection',
+    source: PortfolioSource,
     normalizedOptions: UnifiedSearchOptions,
     allResults: UnifiedSearchResult[],
     sourceCount: { local: number; github: number; collection: number },
-    stopOnFirst: boolean
+    stopOnFirst: boolean,
+    failures: CollectionFailure[]
   ): Promise<boolean> {
     const sourceStartTime = Date.now();
 
     try {
-      const sourceResults = await this.searchWithFallback(
+      const report = await this.searchWithFallback(
         source,
         normalizedOptions.query,
         normalizedOptions
       );
+      failures.push(...report.failures);
+      if (!report.complete && !this.sourcePriorityConfig.fallbackOnError) return false;
+      const sourceResults = report.items;
 
       const sourceDuration = Date.now() - sourceStartTime;
 
@@ -575,13 +592,14 @@ export class UnifiedIndexManager {
         }
       }
     } catch (error) {
+      failures.push(this.sourceFailure(source, error));
       this.handleSourceFailure(source, error);
     }
 
     return true; // Continue to next source
   }
 
-  private handleSourceFailure(source: 'local' | 'github' | 'collection', error: unknown): void {
+  private handleSourceFailure(source: PortfolioSource, error: unknown): void {
     this.assertCurrent?.();
     if (source === 'local' && this.localIndexManager.hasBoundMemorySource?.()) throw error;
     const shouldFallback = this.sourcePriorityConfig.fallbackOnError;
@@ -622,7 +640,8 @@ export class UnifiedIndexManager {
     startTime: number,
     memoryBefore: number,
     sourceCount: { local: number; github: number; collection: number },
-    enabledSources: ('local' | 'github' | 'collection')[]
+    enabledSources: (PortfolioSource)[],
+    failures: CollectionFailure[]
   ): Promise<UnifiedSearchResult[]> {
     // Apply advanced processing with memory-efficient batching
     const processedResults = await this.processSearchResultsOptimized(results, normalizedOptions);
@@ -631,7 +650,7 @@ export class UnifiedIndexManager {
     const paginatedResults = this.applyPagination(processedResults, normalizedOptions);
 
     // Cache results with memory limit check
-    if (paginatedResults.length < 1000) {
+    if (failures.length === 0 && paginatedResults.length < 1000) {
       const cacheKey = this.createCacheKey(normalizedOptions);
       this.resultCache.set(cacheKey, paginatedResults);
     }
@@ -690,38 +709,10 @@ export class UnifiedIndexManager {
     } catch (error) {
       if (this.assertCurrent) throw error;
       ErrorHandler.logError('UnifiedIndexManager.findByName', error, { name });
-      return null;
+      throw elementReadFailure(error);
     }
   }
 
-  /**
-   * Get elements by type from all portfolios
-   */
-  public async getElementsByType(elementType: ElementType, options: Partial<UnifiedSearchOptions> = {}): Promise<UnifiedIndexEntry[]> {
-    this.assertCurrent?.();
-    try {
-      const searchOptions: UnifiedSearchOptions = {
-        query: '', // Empty query to get all elements
-        elementType,
-        includeLocal: options.includeLocal ?? true,
-        includeGitHub: options.includeGitHub ?? true,
-        includeCollection: options.includeCollection ?? false,
-        pageSize: 1000, // Large page size to get all
-        ...options
-      };
-      
-      const results = await this.getAllElementsByType(elementType, searchOptions);
-      this.assertCurrent?.();
-      
-      return this.deduplicateEntries(results.map(r => r.entry));
-      
-    } catch (error) {
-      if (this.assertCurrent) throw error;
-      ErrorHandler.logError('UnifiedIndexManager.getElementsByType', error, { elementType });
-      return [];
-    }
-  }
-  
   /**
    * Check for duplicates across all sources
    */
@@ -778,7 +769,7 @@ export class UnifiedIndexManager {
     } catch (error) {
       if (this.assertCurrent) throw error;
       ErrorHandler.logError('UnifiedIndexManager.checkDuplicates', error, { name });
-      return [];
+      throw elementReadFailure(error);
     }
   }
   
@@ -836,66 +827,47 @@ export class UnifiedIndexManager {
     } catch (error) {
       if (this.assertCurrent) throw error;
       ErrorHandler.logError('UnifiedIndexManager.getVersionComparison', error, { name });
-      return null;
+      throw elementReadFailure(error);
     }
   }
 
   /**
    * Get comprehensive statistics across all sources
    */
-  public async getStats(): Promise<UnifiedIndexStats> {
+  public async getStats(): Promise<CollectionReport<Partial<UnifiedIndexStats>>> {
     this.assertCurrent?.();
     try {
+      const localWork = this.getLocalStats();
+      if (this.assertCurrent || this.localIndexManager.hasBoundMemorySource?.()) await localWork;
+      this.assertCurrent?.();
       const [localStats, githubStats, collectionStats] = await Promise.allSettled([
-        this.getLocalStats(),
+        localWork,
         this.getGitHubStats(),
         this.getCollectionStats()
       ]);
       
       this.assertCurrent?.();
-      if (this.assertCurrent && localStats.status === 'rejected') throw localStats.reason;
-      const local = localStats.status === 'fulfilled' ? localStats.value : {
-        totalElements: 0,
-        elementsByType: {} as Record<ElementType, number>,
-        lastBuilt: null,
-        isStale: true
-      };
+      const failures: CollectionFailure[] = [];
+      const local = this.statsResult('local', localStats, failures);
       
-      const github = githubStats.status === 'fulfilled' ? githubStats.value : {
-        totalElements: 0,
-        elementsByType: {} as Record<ElementType, number>,
-        lastFetched: null,
-        isStale: true
-      };
+      const github = this.statsResult('github', githubStats, failures);
       
-      const collection = collectionStats.status === 'fulfilled' ? collectionStats.value : {
-        totalElements: 0,
-        elementsByType: {} as Record<string, number>,
-        lastFetched: null,
-        isStale: true
-      };
+      const collection = this.statsResult('collection', collectionStats, failures);
       
       // Calculate combined statistics
-      const totalElements = local.totalElements + github.totalElements + collection.totalElements;
-      const duplicatesCount = await this.calculateDuplicatesCount();
-      this.assertCurrent?.();
-      const uniqueElements = totalElements - duplicatesCount;
+      const combined = await this.combinedStats(local, github, collection, failures);
       
-      return {
+      return { failures, complete: failures.length === 0, items: [{
         local,
         github,
         collection,
-        combined: {
-          totalElements,
-          uniqueElements,
-          duplicates: duplicatesCount
-        },
+        combined,
         performance: {
           averageSearchTime: this.getPerformanceStats().searchStats.averageTime || 0,
           cacheHitRate: this.getPerformanceStats().searchStats.cacheHitRate || 0,
           lastOptimized: null
         }
-      };
+      }] };
       
     } catch (error) {
       ErrorHandler.logError('UnifiedIndexManager.getStats', error);
@@ -906,6 +878,32 @@ export class UnifiedIndexManager {
   /**
    * Invalidate caches after user actions with performance monitoring
    */
+  private sourceFailure(reference: string, cause: unknown): CollectionFailure {
+    this.assertCurrent?.();
+    const error = elementReadFailure(cause, reference);
+    if (error instanceof GuardedReadConflict) throw error;
+    return { reference, error };
+  }
+
+  private statsResult<T>(source: string, result: PromiseSettledResult<T>, failures: CollectionFailure[]): T | undefined {
+    if (result.status === 'fulfilled') return result.value;
+    failures.push(this.sourceFailure(source, result.reason));
+    return undefined;
+  }
+
+  private async combinedStats(local: UnifiedIndexStats['local'] | undefined, github: UnifiedIndexStats['github'] | undefined,
+    collection: UnifiedIndexStats['collection'] | undefined, failures: CollectionFailure[]): Promise<UnifiedIndexStats['combined'] | undefined> {
+    if (!local || !github || !collection) return undefined;
+    try {
+      const totalElements = local.totalElements + github.totalElements + collection.totalElements;
+      const duplicates = await this.calculateDuplicatesCount();
+      return { totalElements, uniqueElements: totalElements - duplicates, duplicates };
+    } catch (cause) {
+      failures.push(this.sourceFailure('duplicates', cause));
+      return undefined;
+    } finally { this.assertCurrent?.(); }
+  }
+
   public invalidateAfterAction(action: string): void {
     this.assertCurrent?.();
     logger.info('Invalidating unified portfolio caches after user action', { action });
@@ -956,7 +954,7 @@ export class UnifiedIndexManager {
       // Rebuild in parallel with memory monitoring
       const rebuildPromises = [
         this.localIndexManager.rebuildIndex(),
-        this.githubIndexer.clearCache(),
+        Promise.resolve(this.githubIndexer.clearCache()),
         this.collectionIndexCache.clearCache()
       ];
       
@@ -984,42 +982,49 @@ export class UnifiedIndexManager {
   /**
    * Search with fallback strategies for resilient operation
    */
-  private async searchWithFallback(source: 'local' | 'github' | 'collection', query: string, options: UnifiedSearchOptions): Promise<UnifiedSearchResult[]> {
+  private async searchWithFallback(source: PortfolioSource, query: string, options: UnifiedSearchOptions): Promise<CollectionReport<UnifiedSearchResult>> {
     const startTime = Date.now();
     
     try {
-      let results: UnifiedSearchResult[] = [];
-      
       switch (source) {
         case 'local':
-          results = await this.searchLocal(query, options);
-          break;
+          return await this.searchLocal(query, options);
         case 'github':
-          results = await this.searchGitHub(query, options);
-          break;
+          return await this.searchGitHub(query, options);
         case 'collection':
-          results = await this.searchCollection(query, options);
-          break;
+          return await this.searchCollection(query, options);
       }
       
-      logger.debug(`${source} search completed in ${Date.now() - startTime}ms with ${results.length} results`);
-      return results;
+      logger.debug(`${source} search completed in ${Date.now() - startTime}ms`);
+      return { items: [], failures: [], complete: true };
       
     } catch (error) {
-      if (source === 'local' && this.localIndexManager.hasBoundMemorySource?.()) throw error;
+      this.assertCurrent?.();
+      const failure = elementReadFailure(error, source);
+      if (failure instanceof GuardedReadConflict) throw failure;
+      if (source === 'local' && this.assertCurrent) throw failure;
       logger.debug(`${source} search failed, attempting fallback`, {
         error: error instanceof Error ? error.message : String(error)
       });
       
       // Fallback strategies
-      return await this.handleSearchFallback(source, query, options, error);
+      let items: UnifiedSearchResult[] = [];
+      try { items = await this.handleSearchFallback(source, query, options, error); }
+      catch (cause) {
+        this.assertCurrent?.();
+        const fallbackFailure = elementReadFailure(cause, source);
+        if (fallbackFailure instanceof GuardedReadConflict) throw fallbackFailure;
+        return { items, failures: [{ reference: source, error: failure },
+          { reference: source, error: fallbackFailure }], complete: false };
+      }
+      return { items, failures: [{ reference: source, error: failure }], complete: false };
     }
   }
   
   /**
    * Handle search fallback strategies
    */
-  private async handleSearchFallback(source: 'local' | 'github' | 'collection', query: string, options: UnifiedSearchOptions, originalError: any): Promise<UnifiedSearchResult[]> {
+  private async handleSearchFallback(source: PortfolioSource, query: string, options: UnifiedSearchOptions, originalError: any): Promise<UnifiedSearchResult[]> {
     try {
       switch (source) {
         case 'local':
@@ -1045,24 +1050,26 @@ export class UnifiedIndexManager {
         originalError: originalError instanceof Error ? originalError.message : String(originalError),
         fallbackError: fallbackError instanceof Error ? fallbackError.message : String(fallbackError)
       });
-      return [];
+      throw elementReadFailure(fallbackError, source);
     }
   }
   
   /**
    * Search local portfolio
    */
-  private async searchLocal(query: string, options: UnifiedSearchOptions): Promise<UnifiedSearchResult[]> {
+  private async searchLocal(query: string, options: UnifiedSearchOptions): Promise<CollectionReport<UnifiedSearchResult>> {
     const localOptions = this.convertToLocalOptions(options);
-    const results = await this.localIndexManager.search(query, localOptions);
+    const report = await this.localIndexManager.searchReport(query, localOptions);
+    this.assertCurrent?.();
+    if (this.assertCurrent) requireCompleteCollection(report);
     
-    return results.map(result => ({
+    return { ...report, failures: report.failures.map(failure => ({ ...failure, reference: `local: ${failure.reference ?? 'collection'}` })), items: report.items.map(result => ({
       source: 'local' as const,
       entry: this.convertLocalEntry(result.entry),
       matchType: result.matchType,
       score: result.score,
       version: result.entry.metadata.version
-    }));
+    })) };
   }
   
   /**
@@ -1081,29 +1088,31 @@ export class UnifiedIndexManager {
         score: result.score * 0.8, // Reduce score for stale data
         version: result.entry.metadata.version
       }));
-    } catch {
-      return [];
+    } catch (cause) {
+      throw elementReadFailure(cause);
     }
   }
 
   /**
    * Search GitHub portfolio
    */
-  private async searchGitHub(query: string, options: UnifiedSearchOptions): Promise<UnifiedSearchResult[]> {
+  private async searchGitHub(query: string, options: UnifiedSearchOptions): Promise<CollectionReport<UnifiedSearchResult>> {
     try {
-      const githubIndex = await this.githubIndexer.getIndex();
+      const report = await this.githubIndexer.getIndexReport();
+      const githubIndex = report.items[0];
       const results: UnifiedSearchResult[] = [];
       const queryTokens = UnifiedIndexManager.tokenizeQuery(query);
 
       if (UnifiedIndexManager.shouldReturnNoQueryResults(query, queryTokens)) {
-        return results;
+        return { ...report, items: results };
       }
 
       for (const [elementType, entries] of githubIndex.elements) {
         this.addGitHubSearchResults(results, elementType, entries, query, queryTokens, options);
       }
 
-      return results.sort((a, b) => b.score - a.score);
+      results.sort((a, b) => b.score - a.score);
+      return { ...report, items: results };
     } catch (error) {
       logger.debug('GitHub search failed', {
         error: error instanceof Error ? error.message : String(error)
@@ -1153,39 +1162,41 @@ export class UnifiedIndexManager {
       // Try to use stale GitHub data
       const cacheStats = this.githubIndexer.getCacheStats();
       if (!cacheStats.isStale) {
-        return await this.searchGitHub(query, options);
+        return requireCompleteCollection(await this.searchGitHub(query, options));
       }
       
       // Use stale data with reduced scores
-      const results = await this.searchGitHub(query, options);
+      const results = requireCompleteCollection(await this.searchGitHub(query, options));
       return results.map(result => ({
         ...result,
         score: result.score * 0.7 // Reduce score for stale data
       }));
       
-    } catch {
-      return [];
+    } catch (cause) {
+      throw elementReadFailure(cause);
     }
   }
   
   /**
    * Search collection portfolio
    */
-  private async searchCollection(query: string, options: UnifiedSearchOptions): Promise<UnifiedSearchResult[]> {
+  private async searchCollection(query: string, options: UnifiedSearchOptions): Promise<CollectionReport<UnifiedSearchResult>> {
     try {
-      const collectionIndex = await this.collectionIndexCache.getIndex();
+      const report = await this.collectionIndexCache.getIndexReport();
+      const collectionIndex = report.items[0];
       const results: UnifiedSearchResult[] = [];
       const queryTokens = UnifiedIndexManager.tokenizeQuery(query);
 
       if (UnifiedIndexManager.shouldReturnNoQueryResults(query, queryTokens)) {
-        return results;
+        return { ...report, items: results };
       }
 
       for (const [elementType, entries] of Object.entries(collectionIndex.index)) {
         this.addCollectionSearchResults(results, elementType, entries, query, queryTokens, options);
       }
 
-      return results.sort((a, b) => b.score - a.score);
+      results.sort((a, b) => b.score - a.score);
+      return { ...report, items: results };
     } catch (error) {
       logger.debug('Collection search failed', {
         error: error instanceof Error ? error.message : String(error)
@@ -1227,18 +1238,18 @@ export class UnifiedIndexManager {
       // Try to use stale collection data
       const cacheStats = this.collectionIndexCache.getCacheStats();
       if (cacheStats.isValid) {
-        return await this.searchCollection(query, options);
+        return requireCompleteCollection(await this.searchCollection(query, options));
       }
       
       // Use stale data with reduced scores
-      const results = await this.searchCollection(query, options);
+      const results = requireCompleteCollection(await this.searchCollection(query, options));
       return results.map(result => ({
         ...result,
         score: result.score * 0.6 // Reduce score for stale collection data
       }));
       
-    } catch {
-      return [];
+    } catch (cause) {
+      throw elementReadFailure(cause);
     }
   }
 
@@ -1327,7 +1338,7 @@ export class UnifiedIndexManager {
       }
     }
     
-    return processedResults;
+    return await Promise.resolve(processedResults);
   }
   
   /**
@@ -1447,95 +1458,6 @@ export class UnifiedIndexManager {
   }
 
   /**
-   * Get all elements by type across sources
-   */
-  private async getAllElementsByType(elementType: ElementType, options: UnifiedSearchOptions): Promise<UnifiedSearchResult[]> {
-    const promises: Promise<UnifiedSearchResult[]>[] = [];
-    
-    if (options.includeLocal) {
-      promises.push(this.getLocalElementsByType(elementType));
-    }
-    if (options.includeGitHub) {
-      promises.push(this.getGitHubElementsByType(elementType));
-    }
-    if (options.includeCollection) {
-      promises.push(this.getCollectionElementsByType(elementType));
-    }
-    
-    const results = await Promise.allSettled(promises);
-    const allResults: UnifiedSearchResult[] = [];
-    
-    this.assertCurrent?.();
-    if (options.includeLocal && this.assertCurrent && results[0]?.status === 'rejected') throw results[0].reason;
-    results.forEach(result => {
-      if (result.status === 'fulfilled') {
-        allResults.push(...result.value);
-      }
-    });
-    
-    return allResults;
-  }
-  
-  /**
-   * Get local elements by type
-   */
-  private async getLocalElementsByType(elementType: ElementType): Promise<UnifiedSearchResult[]> {
-    try {
-      const elements = await this.localIndexManager.getElementsByType(elementType);
-      return elements.map(entry => ({
-        source: 'local' as const,
-        entry: this.convertLocalEntry(entry),
-        matchType: 'type',
-        score: 1,
-        version: entry.metadata.version
-      }));
-    } catch (cause) {
-      if (this.localIndexManager.hasBoundMemorySource?.()) throw cause;
-      return [];
-    }
-  }
-  
-  /**
-   * Get GitHub elements by type
-   */
-  private async getGitHubElementsByType(elementType: ElementType): Promise<UnifiedSearchResult[]> {
-    try {
-      const githubIndex = await this.githubIndexer.getIndex();
-      const entries = githubIndex.elements.get(elementType) || [];
-      
-      return entries.map(entry => ({
-        source: 'github' as const,
-        entry: this.convertGitHubEntry(entry),
-        matchType: 'type',
-        score: 1,
-        version: entry.version
-      }));
-    } catch {
-      return [];
-    }
-  }
-  
-  /**
-   * Get collection elements by type
-   */
-  private async getCollectionElementsByType(elementType: ElementType): Promise<UnifiedSearchResult[]> {
-    try {
-      const collectionIndex = await this.collectionIndexCache.getIndex();
-      const entries = collectionIndex.index[elementType.toString()] || [];
-      
-      return entries.map(entry => ({
-        source: 'collection' as const,
-        entry: this.convertCollectionEntry(entry, elementType.toString()),
-        matchType: 'type',
-        score: 1,
-        version: entry.version
-      }));
-    } catch {
-      return [];
-    }
-  }
-
-  /**
    * Get local portfolio statistics
    */
   private async getLocalStats(): Promise<UnifiedIndexStats['local']> {
@@ -1600,8 +1522,7 @@ export class UnifiedIndexManager {
       await this.addCollectionDuplicateSources(elementSources);
     } catch (error) {
       this.assertCurrent?.();
-      logger.debug('Error calculating duplicates count', error);
-      return 0;
+      throw elementReadFailure(error, 'duplicates');
     }
 
     return UnifiedIndexManager.countMultiSourceElements(elementSources);
@@ -1826,7 +1747,7 @@ export class UnifiedIndexManager {
    * Detect version conflict from sources
    */
   private detectVersionConflict(sources: DuplicateInfo['sources']): VersionConflict | undefined {
-    const versions = new Map<string, 'local' | 'github' | 'collection'>();
+    const versions = new Map<string, PortfolioSource>();
     
     for (const source of sources) {
       if (source.version && source.version !== 'unknown') {
@@ -1875,7 +1796,7 @@ export class UnifiedIndexManager {
   /**
    * Determine version recommendation from version info
    */
-  private determineVersionRecommendation(versions: VersionInfo['versions']): { source: 'local' | 'github' | 'collection'; reason: string } {
+  private determineVersionRecommendation(versions: VersionInfo['versions']): { source: PortfolioSource; reason: string } {
     // Prefer local if available and not too old
     if (versions.local) {
       const localAge = Date.now() - versions.local.lastModified.getTime();
@@ -1891,7 +1812,7 @@ export class UnifiedIndexManager {
     
     if (versionEntries.length > 1) {
       // Find highest version
-      let highest: { source: 'local' | 'github' | 'collection'; version: string } = {
+      let highest: { source: PortfolioSource; version: string } = {
         source: 'local',
         version: '0.0.0'
       };
@@ -1899,7 +1820,7 @@ export class UnifiedIndexManager {
       for (const [source, info] of versionEntries) {
         if (info && this.compareVersions(info.version, highest.version) > 0) {
           highest = {
-            source: source as 'local' | 'github' | 'collection',
+            source: source as PortfolioSource,
             version: info.version
           };
         }
@@ -1909,7 +1830,7 @@ export class UnifiedIndexManager {
     }
     
     // Fallback to most recent
-    let mostRecent: { source: 'local' | 'github' | 'collection'; date: Date } = {
+    let mostRecent: { source: PortfolioSource; date: Date } = {
       source: 'local',
       date: new Date(0)
     };
@@ -1917,7 +1838,7 @@ export class UnifiedIndexManager {
     for (const [source, info] of Object.entries(versions)) {
       if (info && info.lastModified > mostRecent.date) {
         mostRecent = {
-          source: source as 'local' | 'github' | 'collection',
+          source: source as PortfolioSource,
           date: info.lastModified
         };
       }
@@ -1929,7 +1850,7 @@ export class UnifiedIndexManager {
   /**
    * Determine version recommendation from sources
    */
-  private determineVersionRecommendationFromSources(sources: DuplicateInfo['sources']): { source: 'local' | 'github' | 'collection'; reason: string } {
+  private determineVersionRecommendationFromSources(sources: DuplicateInfo['sources']): { source: PortfolioSource; reason: string } {
     // Convert sources to versions format
     const versions: VersionInfo['versions'] = {};
     
@@ -2018,7 +1939,7 @@ export class UnifiedIndexManager {
   /**
    * Stream search results for better performance with large datasets
    */
-  private async streamSearch(options: UnifiedSearchOptions): Promise<UnifiedSearchResult[]> {
+  private async streamSearch(options: UnifiedSearchOptions): Promise<CollectionReport<UnifiedSearchResult>> {
     const { query, cursor, maxResults = 1000 } = options;
     const startTime = Date.now();
     
@@ -2026,18 +1947,21 @@ export class UnifiedIndexManager {
     
     const results: UnifiedSearchResult[] = [];
     const sources = this.getEnabledSources(options);
+    const failures: CollectionFailure[] = [];
     
     // Process sources in sequence for memory efficiency
-    for (const source of sources) {
+    await visitSequentially(sources.values(), async source => {
       if (results.length >= maxResults) {
-        break;
+        return;
       }
       
       try {
-        const sourceResults = await this.searchWithFallback(source, query, {
+        const report = await this.searchWithFallback(source, query, {
           ...options,
           pageSize: Math.min(this.BATCH_SIZE, maxResults - results.length)
         });
+        failures.push(...report.failures);
+        const sourceResults = report.items;
         
         results.push(...sourceResults);
         
@@ -2048,19 +1972,20 @@ export class UnifiedIndexManager {
         
       } catch (error) {
         this.assertCurrent?.();
-        if (source === 'local' && this.localIndexManager.hasBoundMemorySource?.()) throw error;
+        if (source === 'local' && this.assertCurrent) throw error;
+        failures.push(this.sourceFailure(source, error));
         logger.warn(`Streaming search failed for source ${source}`, {
           error: error instanceof Error ? error.message : String(error)
         });
       }
-    }
+    });
     
     logger.debug('Streaming search completed', {
       resultCount: results.length,
       duration: `${Date.now() - startTime}ms`
     });
     
-    return results;
+    return { items: results, failures, complete: failures.length === 0 };
   }
   
   /**
@@ -2075,8 +2000,7 @@ export class UnifiedIndexManager {
     const batchSize = Math.min(this.BATCH_SIZE, results.length);
     const processedResults: UnifiedSearchResult[] = [];
     
-    for (let i = 0; i < results.length; i += batchSize) {
-      const batch = results.slice(i, i + batchSize);
+    await visitSequentially(this.searchBatches(results, batchSize), async ({ i, batch }) => {
       
       // Apply smart ranking
       const rankedBatch = this.applySmartRanking(batch, options);
@@ -2090,7 +2014,7 @@ export class UnifiedIndexManager {
       if (i % (batchSize * 4) === 0) {
         await new Promise(resolve => setImmediate(resolve));
       }
-    }
+    });
     
     // Apply final sorting
     return this.applySorting(processedResults, options.sortBy || 'relevance', options.query);
@@ -2099,8 +2023,12 @@ export class UnifiedIndexManager {
   /**
    * Get enabled search sources
    */
-  private getEnabledSources(options: UnifiedSearchOptions): ('local' | 'github' | 'collection')[] {
-    const sources: ('local' | 'github' | 'collection')[] = [];
+  private *searchBatches(results: UnifiedSearchResult[], batchSize: number) {
+    for (let i = 0; i < results.length; i += batchSize) yield { i, batch: results.slice(i, i + batchSize) };
+  }
+
+  private getEnabledSources(options: UnifiedSearchOptions): PortfolioSource[] {
+    const sources: (PortfolioSource)[] = [];
     
     if (options.includeLocal !== false) sources.push('local');
     if (options.includeGitHub !== false) sources.push('github');
@@ -2112,8 +2040,8 @@ export class UnifiedIndexManager {
   /**
    * Batch sources for concurrent processing
    */
-  private batchSources(sources: ('local' | 'github' | 'collection')[], batchSize: number): ('local' | 'github' | 'collection')[][] {
-    const batches: ('local' | 'github' | 'collection')[][] = [];
+  private batchSources(sources: (PortfolioSource)[], batchSize: number): (PortfolioSource)[][] {
+    const batches: (PortfolioSource)[][] = [];
     
     for (let i = 0; i < sources.length; i += batchSize) {
       batches.push(sources.slice(i, i + batchSize));
@@ -2260,7 +2188,7 @@ export class UnifiedIndexManager {
    * @param options - Search options
    * @returns Array of enabled source names in priority order
    */
-  private getEnabledSourcesByPriority(options: UnifiedSearchOptions): ('local' | 'github' | 'collection')[] {
+  private getEnabledSourcesByPriority(options: UnifiedSearchOptions): (PortfolioSource)[] {
     // Determine priority order
     const priorityOrder = this.determinePriorityOrder(options);
 
@@ -2307,8 +2235,8 @@ export class UnifiedIndexManager {
    * @param options - Search options
    * @returns Filtered array of enabled source strings
    */
-  private filterEnabledSources(priorityOrder: ElementSource[], options: UnifiedSearchOptions): ('local' | 'github' | 'collection')[] {
-    const enabledSources: ('local' | 'github' | 'collection')[] = [];
+  private filterEnabledSources(priorityOrder: ElementSource[], options: UnifiedSearchOptions): (PortfolioSource)[] {
+    const enabledSources: (PortfolioSource)[] = [];
 
     for (const source of priorityOrder) {
       if (this.isSourceEnabled(source, options)) {
@@ -2371,7 +2299,7 @@ export class UnifiedIndexManager {
    * @returns Source string ('local', 'github', or 'collection')
    * @throws Error if source is invalid
    */
-  private mapSourceEnumToString(source: ElementSource): 'local' | 'github' | 'collection' {
+  private mapSourceEnumToString(source: ElementSource): PortfolioSource {
     const result = UnifiedIndexManager.SOURCE_ENUM_TO_STRING_MAP.get(source);
     if (!result) {
       throw new Error(`Invalid ElementSource: ${source}`);
@@ -2388,7 +2316,7 @@ export class UnifiedIndexManager {
    * @returns ElementSource enum value
    * @throws Error if source is invalid
    */
-  private mapSourceStringToEnum(source: 'local' | 'github' | 'collection'): ElementSource {
+  private mapSourceStringToEnum(source: PortfolioSource): ElementSource {
     const result = UnifiedIndexManager.SOURCE_STRING_TO_ENUM_MAP.get(source);
     if (!result) {
       throw new Error(`Invalid source string: ${source}`);
@@ -2405,7 +2333,7 @@ export class UnifiedIndexManager {
    * @param resultCount - Number of results returned
    * @param duration - Duration in milliseconds
    */
-  private recordSourceUsage(source: 'local' | 'github' | 'collection', resultCount: number, duration: number): void {
+  private recordSourceUsage(source: PortfolioSource, resultCount: number, duration: number): void {
     const telemetryKey = `${this.getCacheNamespace()}:${source}`;
     const existing = this.sourceUsageTelemetry.get(telemetryKey) ?? {
       searchCount: 0,

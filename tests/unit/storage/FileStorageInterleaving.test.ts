@@ -22,6 +22,7 @@ function signal() {
 }
 
 class InterleavingStorage extends FileStorageLayerBase {
+  protected readonly fileExtension = '.md';
   protected readonly scanLabel = 'InterleavingStorage';
   protected get directory(): string { return ROOT; }
   constructor(backend: IStorageBackend, private readonly persistence: IndexPersistence) {
@@ -110,7 +111,7 @@ function assertViews(table: FileStateTable): void {
   for (const entry of table.entries()) expect(table.get(entry.filePath)?.status).toBe('indexed');
   for (const relative of table.unindexed().keys()) expect(table.get(relative)?.status).toBe('failed');
   for (const entry of table.ownerEntries()) expect(table.getPathByName(entry.name)).toBe(entry.filePath);
-  if (table.pendingInvalidation || table.lastScan !== 'succeeded' || table.unindexed().size) expect(table.isAuthoritative()).toBe(false);
+  if (table.pendingInvalidation || table.lastScan !== 'succeeded') expect(table.isAuthoritative()).toBe(false);
   const snapshot = table.persistableSnapshot();
   if (!snapshot) return;
   const restarted = new FileStateTable(); restarted.beginScan(); restarted.hydrate(snapshot.entries, snapshot.blocked);

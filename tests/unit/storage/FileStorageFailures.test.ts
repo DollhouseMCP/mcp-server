@@ -49,11 +49,11 @@ describe('file scan failure recovery', () => {
     const warn = jest.spyOn(logger, 'warn').mockImplementation(() => {});
     const first = memory();
     await first.scan();
-    expect(await first.readIndexedPath(['Healthy'])).toEqual({ path: undefined, indexComplete: true, authoritative: false, unindexed: [relPath] });
+    expect(await first.readIndexedPath(['Healthy'])).toMatchObject({ path: undefined, indexComplete: true, authoritative: true, unindexed: [relPath] });
     expect((await persisted()).entries).toEqual({});
     const initialReads = reads.mock.calls.filter(([target]) => target === absolutePath).length;
     await first.scan();
-    const warmReads = initialReads + 1;
+    const warmReads = initialReads + Number(kind === 'read');
     expect(reads.mock.calls.filter(([target]) => target === absolutePath)).toHaveLength(warmReads);
     expect(warn).toHaveBeenCalledWith(`MemoryStorageLayer: failed to index ${relPath}`, expect.any(Object));
     await first.dispose();
@@ -64,7 +64,7 @@ describe('file scan failure recovery', () => {
     reads.mockImplementation(originalRead);
     await fs.writeFile(absolutePath, 'name: Repaired');
     await restarted.notifySaved(relPath, absolutePath);
-    expect(await restarted.readIndexedPath(['Repaired'])).toEqual({ path: relPath, indexComplete: true, authoritative: true, unindexed: [] });
+    expect(await restarted.readIndexedPath(['Repaired'])).toMatchObject({ path: relPath, indexComplete: true, authoritative: true, unindexed: [] });
     await restarted.dispose();
     expect((await persisted()).entries[relPath].name).toBe('Repaired');
   });
@@ -117,7 +117,7 @@ describe('file scan failure recovery', () => {
     else await expect(layer.scan()).resolves.toBeDefined();
   });
 
-  it('falls through to the resolver list when an unreadable file makes an indexed miss uncertain', async () => {
+  it('refuses an unproven miss when a never-parsed record remains', async () => {
     const unreadable = path.join(dir, 'unreadable.md');
     await fs.writeFile(unreadable, '---\nname: Unreadable\n---\nContent');
     const backend = new FileStorageBackend(fileOps);
@@ -127,21 +127,19 @@ describe('file scan failure recovery', () => {
     const cache = new ElementCache<IElement>(ElementType.SKILL, {
       elementDir: dir, resolveAbsolutePath, getCacheNamespace: () => 'test',
     }, { elementCacheTTL: 1000, pathCacheTTL: 1000 });
-    const list = jest.fn<() => Promise<IElement[]>>().mockResolvedValue([]);
     const load = jest.fn<(filePath: string) => Promise<IElement>>()
       .mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' }));
     const resolver = new ElementResolver({
-      load, list, resolveAbsolutePath,
-      normalizeFilename: (name: string) => name.toLowerCase(),
+      load, loadReference: load, list: async () => [], validateReference: async () => {}, classifyCallerText: async () => 'name' as const,
       getElementFilename: (name: string) => `${name}.md`,
       getFileExtension: () => '.md',
     }, cache, layer);
     try {
       await layer.scan();
-      expect(await layer.readIndexedPath(['Missing'])).toMatchObject({ path: undefined, authoritative: false, unindexed: ['unreadable.md'] });
-      await expect(resolver.findByName('Missing')).resolves.toBeUndefined();
-      expect(load).toHaveBeenCalled();
-      expect(list).toHaveBeenCalledTimes(1);
+      expect(await layer.readIndexedPath(['Missing'])).toMatchObject({ path: undefined, authoritative: true, unindexed: ['unreadable.md'] });
+      await expect(resolver.findByName('Missing')).rejects.toThrow('unreadable.md');
+      // The warm certification refuses the unproven absence before any direct read, like the cold path.
+      expect(load).not.toHaveBeenCalled();
     } finally {
       cache.dispose();
       layer.clear();
@@ -155,10 +153,10 @@ describe('file scan failure recovery', () => {
     await fs.writeFile(path.join(dir, '_index.json'), JSON.stringify({ version: 1, generatedAt: new Date().toISOString(), entryCount: 1,
       entries: { 'a.yaml': { filePath: 'a.yaml', name: 'unnamed', description: '', author: '', tags: [], version: '1.0.0', mtimeMs: stat.mtimeMs, sizeBytes: stat.size } } }));
     const layer = memory();
-    const snapshot = await layer.scanMemorySnapshot();
+    const snapshot = await layer.readCollection();
     expect(snapshot.entries).toEqual([]);
     expect(snapshot.unindexed.get('a.yaml')).toMatchObject({ name: 'MemoryMetadataExtractionError' });
-    expect((await layer.readIndexedPath(['unnamed'])).authoritative).toBe(false);
+    expect((await layer.readIndexedPath(['unnamed'])).authoritative).toBe(true);
     expect((await persisted()).version).toBe(2);
   });
 
@@ -198,6 +196,26 @@ describe('file scan failure recovery', () => {
     expect((await restarted.readIndexedPath(['Old'])).path).toBeUndefined();
   });
 
+  it('offers only the newest owner of a duplicated memory name on the warm path, as the collection lists it', async () => {
+    const older = path.join(dir, 'dup.yaml');
+    const subdir = path.join(dir, '2026-01-01');
+    await fs.mkdir(subdir);
+    const newer = path.join(subdir, 'dup.yaml');
+    await fs.writeFile(older, 'name: Dup');
+    await fs.writeFile(newer, 'name: Dup');
+    const past = new Date('2026-01-01T00:00:00.000Z');
+    const later = new Date(past.getTime() + 1000);
+    await fs.utimes(older, past, past);
+    await fs.utimes(newer, later, later);
+    const layer = memory();
+    const snapshot = await layer.readCollection();
+    expect(snapshot.entries.map(entry => entry.filePath)).toEqual(['2026-01-01/dup.yaml']);
+    expect(await layer.readIndexedPath(['Dup'])).toMatchObject({ path: '2026-01-01/dup.yaml', authoritative: true,
+      candidates: [{ reference: '2026-01-01/dup.yaml', name: 'Dup' }] });
+    // The older copy is never a name candidate, warm or cold; only an exact-reference load reaches it.
+    expect((await layer.readIndexedPath(['dup.yaml'])).candidates).toEqual([]);
+  });
+
   it('does not hydrate a same-mtime entry over a failed cold save notification', async () => {
     const file = path.join(dir, 'a.yaml');
     await fs.writeFile(file, 'name: Old');
@@ -211,7 +229,7 @@ describe('file scan failure recovery', () => {
     });
     const cold = memory();
     await cold.notifySaved('a.yaml', file);
-    const snapshot = await cold.scanMemorySnapshot();
+    const snapshot = await cold.readCollection();
     expect(snapshot.entries).toEqual([]);
     expect(snapshot.unindexed.get('a.yaml')).toMatchObject({ code: 'EACCES' });
     expect(read.mock.calls.filter(([target]) => target === file)).toHaveLength(2);
@@ -220,8 +238,8 @@ describe('file scan failure recovery', () => {
     expect((await persisted()).entries['a.yaml']).toBeUndefined();
     const restarted = memory();
     await restarted.scan();
-    expect(read.mock.calls.filter(([target]) => target === file)).toHaveLength(3);
-    expect(await restarted.readIndexedPath(['Old'])).toMatchObject({ path: undefined, authoritative: false, unindexed: ['a.yaml'] });
+    expect(read.mock.calls.filter(([target]) => target === file)).toHaveLength(4);
+    expect(await restarted.readIndexedPath(['Old'])).toMatchObject({ path: undefined, authoritative: true, unindexed: ['a.yaml'] });
   });
 
   it.each([false, true])('does not persist cold hydration without a successful override scan (scan failure: %s)', async failScan => {
@@ -309,7 +327,7 @@ describe('file scan failure recovery', () => {
     expect((await persisted()).entries['a.yaml']).toBeUndefined();
     const restarted = memory();
     await restarted.scan();
-    expect(await restarted.readIndexedPath(['Old'])).toMatchObject({ path: undefined, authoritative: false, unindexed: ['a.yaml'] });
+    expect(await restarted.readIndexedPath(['Old'])).toMatchObject({ path: undefined, authoritative: true, unindexed: ['a.yaml'] });
     const attempts = reads.mock.calls.filter(([target]) => target === file).length;
     await layer.scan();
     expect(reads.mock.calls.filter(([target]) => target === file)).toHaveLength(attempts + 1);
@@ -466,8 +484,8 @@ describe('file scan failure recovery', () => {
     expect(warn).not.toHaveBeenCalled();
     stat.mockRejectedValueOnce(failure());
     await layer.notifySaved(relativePath, file);
-    expect(await layer.readIndexedPath(['Old'])).toMatchObject({ path: undefined, authoritative: false, unindexed: [relativePath] });
     jest.spyOn(layer['backend'], 'readFile').mockRejectedValue(failure());
+    expect(await layer.readIndexedPath(['Old'])).toMatchObject({ path: undefined, authoritative: false, unindexed: [relativePath] });
     expect((await layer.scan()).modified).toContain(relativePath);
     expect((await layer.scan()).modified).toContain(relativePath);
   });

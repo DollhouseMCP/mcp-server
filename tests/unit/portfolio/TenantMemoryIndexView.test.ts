@@ -87,6 +87,9 @@ function indexCaller(f:Awaited<ReturnType<typeof fixture>>) {
 
 function indexAql(f:Awaited<ReturnType<typeof fixture>>,enhanced:EnhancedIndexHandler,gatekeeper:Gatekeeper) {
   const c=f.container;
+  for (const name of ['SkillManager', 'AgentManager', 'EnsembleManager', 'PersonaManager']) {
+    jest.spyOn(c.resolve<any>(name), 'getActiveReferenceReport').mockResolvedValue({items:[],failures:[],complete:true});
+  }
   const elementCRUD=new ElementCRUDHandler(c.resolve('SkillManager'),c.resolve('TemplateManager'),c.resolve('TemplateRenderer'),
     c.resolve('AgentManager'),undefined,c.resolve('EnsembleManager'),c.resolve('PersonaManager'),f.deps.portfolioManager,
     c.resolve('InitializationService'),c.resolve('PersonaIndicatorService'),c.resolve('FileOperationsService'),
@@ -108,7 +111,7 @@ describe('actual configured enhanced index callers (selected DB transport contro
     await f.tracker.runAsync(f.context,async()=>{
       const operation=await f.provider.resolve(f.provider.capture()); resolve.mockClear();
       const memory=new Memory({name:'Selected memory',description:'Owned selected notes',triggers:['remember']},f.container.resolve('MetadataService'));
-      memory.setFilePath(randomUUID());const list=jest.spyOn(operation.manager,'list').mockResolvedValue([memory]);
+      memory.setFilePath(randomUUID());const list=jest.spyOn(operation.manager,'listReport').mockResolvedValue({items:[memory],failures:[],complete:true});
       const write=jest.spyOn(f.deps.fileOperations,'writeFile');
       const results=await Promise.all([
         enhanced.findSimilarElements({elementName:'Selected memory',elementType:'memory',limit:5,threshold:0}),
@@ -124,10 +127,10 @@ describe('actual configured enhanced index callers (selected DB transport contro
     const f=await fixture();const enhanced=indexCaller(f);
     await f.tracker.runAsync(f.context,async()=>{
       const operation=await f.provider.resolve(f.provider.capture());const cause=new Error('Original selected index read failure');
-      const list=jest.spyOn(operation.manager,'list').mockRejectedValue(cause);
+      const list=jest.spyOn(operation.manager,'listReport').mockRejectedValue(cause);
       const {logger}=await import('../../../src/utils/logger.js');
       jest.spyOn(logger,'error').mockImplementation(()=>{throw new Error('Secondary logging failure');});
-      await expect(enhanced.findSimilarElements({elementName:'Selected memory',limit:5,threshold:0})).rejects.toBe(cause);
+      await expect(enhanced.findSimilarElements({elementName:'Selected memory',limit:5,threshold:0})).rejects.toThrow('Storage or validation operation failed');
       expect(list).toHaveBeenCalledTimes(1);
     });
   });
@@ -138,7 +141,7 @@ describe('actual configured enhanced index callers (selected DB transport contro
     await f.tracker.runAsync(f.context,async()=>{
       const operation=await f.provider.resolve(f.provider.capture());
       const memory=new Memory({name:'Selected memory'},f.container.resolve('MetadataService'));memory.setFilePath(randomUUID());
-      const list=jest.spyOn(operation.manager,'list').mockResolvedValue([memory]);const resolve=jest.spyOn(f.provider,'resolve');
+      const list=jest.spyOn(operation.manager,'listReport').mockResolvedValue({items:[memory],failures:[],complete:true});const resolve=jest.spyOn(f.provider,'resolve');
       const denied=await handler.handleRead({operation:'get_relationship_stats',params:{}});
       expect(denied.success).toBe(false);expect(enter).not.toHaveBeenCalled();expect(list).not.toHaveBeenCalled();
       enforce.mockReturnValue({allowed:true,permissionLevel:PermissionLevel.AUTO_APPROVE,reason:'Owned authorization'});resolve.mockClear();
@@ -160,7 +163,7 @@ describe('actual configured enhanced index callers (selected DB transport contro
     await f.tracker.runAsync(f.context,async()=>{
       const operation=await f.provider.resolve(f.provider.capture());
       const memory=new Memory({name:'Selected legacy memory'},f.container.resolve('MetadataService'));memory.setFilePath(randomUUID());
-      jest.spyOn(operation.manager,'list').mockResolvedValue([memory]);
+      jest.spyOn(operation.manager,'listReport').mockResolvedValue({items:[memory],failures:[],complete:true});
       const original=EnhancedIndexManager.prototype.dispose;
       const dispose=jest.spyOn(EnhancedIndexManager.prototype,'dispose').mockImplementation(async function(this:EnhancedIndexManager){
         await original.call(this);f.context.requestId=randomUUID();
@@ -178,7 +181,7 @@ describe('authentic per-operation DB memory index view', () => {
       const operation = await f.provider.resolve(f.provider.capture());
       const memory = new Memory({ name: 'Logical session name', description: 'Selected DB notes', tags: ['owned'], triggers: ['remember'] }, f.container.resolve('MetadataService'));
       const locator = randomUUID(); memory.setFilePath(locator);
-      const list = jest.spyOn(operation.manager, 'list').mockResolvedValue([memory]);
+      const list = jest.spyOn(operation.manager, 'listReport').mockResolvedValue({items:[memory],failures:[],complete:true});
       const exists = jest.spyOn(f.deps.fileOperations, 'exists').mockResolvedValue(false);
       const view = bindTenantMemoryIndexView(f.provider, operation, f.deps);
       try {
@@ -197,9 +200,11 @@ describe('authentic per-operation DB memory index view', () => {
     await f.tracker.runAsync(f.context, async () => {
       const operation = await f.provider.resolve(f.provider.capture());
       const cause = new Error('actual selected discovery refusal');
-      jest.spyOn(operation.manager, 'list').mockRejectedValue(cause);
+      jest.spyOn(operation.manager, 'listReport').mockRejectedValue(cause);
       const view = bindTenantMemoryIndexView(f.provider, operation, f.deps);
-      try { await expect(view.portfolioIndex.getIndex()).rejects.toBe(cause); }
+      try {
+        await expect(view.portfolioIndex.getIndex()).rejects.toThrow('Storage or validation operation failed');
+      }
       finally { await view.dispose(); }
     });
   });
@@ -208,7 +213,7 @@ describe('authentic per-operation DB memory index view', () => {
     const f = await fixture();
     await f.tracker.runAsync(f.context, async () => {
       const operation = await f.provider.resolve(f.provider.capture());
-      jest.spyOn(operation.manager, 'list').mockImplementation(async () => { f.context.requestId = randomUUID(); return []; });
+      jest.spyOn(operation.manager, 'listReport').mockImplementation(async () => { f.context.requestId = randomUUID(); return {items:[],failures:[],complete:true}; });
       const view = bindTenantMemoryIndexView(f.provider, operation, f.deps);
       try { await expect(view.portfolioIndex.getIndex()).rejects.toThrow('context changed'); }
       finally { await view.dispose(); }
@@ -223,24 +228,24 @@ describe('authentic per-operation DB memory index view', () => {
       expect(() => bindTenantMemoryIndexView(new TenantMemoryOperationProvider(f.registry, f.tracker), operation, f.deps)).toThrow('Authentic');
       const wrong = new PathService({ userResolver: new PerUserPathResolver(path.join(f.directory, 'wrong')), packageLocator: new PackageResourceLocator(), userIdResolver: () => f.tenant });
       expect(() => bindTenantMemoryIndexView(f.provider, operation, { ...f.deps, pathService: wrong })).toThrow('namespace binding');
-      jest.spyOn(operation.manager, 'list').mockResolvedValue([new Memory({ name: 'Unsaved' }, f.container.resolve('MetadataService'))]);
+      jest.spyOn(operation.manager, 'listReport').mockResolvedValue({items:[new Memory({ name: 'Unsaved' }, f.container.resolve('MetadataService'))],failures:[],complete:true});
       const view = bindTenantMemoryIndexView(f.provider, operation, f.deps);
-      try { await expect(view.portfolioIndex.getIndex()).rejects.toThrow('Persisted database memory locator'); }
+      try { await expect(view.portfolioIndex.getIndex()).rejects.toThrow('Storage or validation operation failed'); }
       finally { await view.dispose(); }
     });
   });
 
-  it.each([false, true])('never falls back from an authoritative local DB failure (stream=%s)', async streamResults => {
+  it.each([false, true])('never turns local DB failure into complete remote search success (stream=%s)', async streamResults => {
     const f = await fixture();
     await f.tracker.runAsync(f.context, async () => {
       const operation = await f.provider.resolve(f.provider.capture());
       const cause = new Error('local DB cannot be represented as remote or empty success');
-      jest.spyOn(operation.manager, 'list').mockRejectedValue(cause);
+      jest.spyOn(operation.manager, 'listReport').mockRejectedValue(cause);
       const remote = remoteDependencies(f);
-      const remoteRead = jest.spyOn(remote.githubIndexer, 'getIndex');
+      const remoteRead = jest.spyOn(remote.githubIndexer, 'getIndexReport');
       const view = bindTenantMemoryIndexView(f.provider, operation, { ...f.deps, remote });
       try {
-        await expect(view.unifiedIndex!.search({ query: 'notes', includeLocal: true, includeGitHub: true, streamResults })).rejects.toBe(cause);
+        await expect(view.unifiedIndex!.search({ query: 'notes', includeLocal: true, includeGitHub: true, streamResults })).rejects.toThrow('Storage or validation operation failed');
         expect(remoteRead).not.toHaveBeenCalled();
       } finally { await view.dispose(); }
     });
@@ -252,11 +257,11 @@ describe('authentic per-operation DB memory index view', () => {
       const operation = await f.provider.resolve(f.provider.capture());
       const shared = CacheFactory.createSearchResultCache<UnifiedSearchResult>();
       const remote = { ...remoteDependencies(f), resultCache: shared };
-      const list = jest.spyOn(operation.manager, 'list');
+      const list = jest.spyOn(operation.manager, 'listReport');
       const names: string[] = [];
       for (const name of ['First notes', 'Second notes']) {
         const memory = new Memory({ name }, f.container.resolve('MetadataService')); memory.setFilePath(randomUUID());
-        list.mockResolvedValue([memory]);
+        list.mockResolvedValue({items:[memory],failures:[],complete:true});
         const view = bindTenantMemoryIndexView(f.provider, operation, { ...f.deps, remote });
         try {
           const result = await view.unifiedIndex!.search({ query: 'notes', includeLocal: true, includeGitHub: false, includeCollection: false });
@@ -268,7 +273,7 @@ describe('authentic per-operation DB memory index view', () => {
     });
   });
 
-  it.each(['scan', 'listSummaries', 'load'] as const)('preserves actual %s failure in strict selected DB listing, while ordinary listing remains compatible', async failure => {
+  it.each(['scan', 'listSummaries', 'load'] as const)('refuses actual %s failure in both index discovery and plain listing', async failure => {
     const f = await fixture();
     await f.tracker.runAsync(f.context, async () => {
       const operation = await f.provider.resolve(f.provider.capture());
@@ -281,8 +286,8 @@ describe('authentic per-operation DB memory index view', () => {
       else jest.spyOn(operation.manager, 'load').mockRejectedValue(cause);
       const view = bindTenantMemoryIndexView(f.provider, operation, f.deps);
       try {
-        await expect(view.portfolioIndex.getIndex()).rejects.toBe(cause);
-        await expect(operation.manager.list()).resolves.toEqual([]);
+        await expect(view.portfolioIndex.getIndex()).rejects.toThrow('Storage or validation operation failed');
+        await expect(operation.manager.list()).rejects.toThrow('Storage or validation operation failed');
       } finally { await view.dispose(); }
     });
   });
@@ -291,7 +296,7 @@ describe('authentic per-operation DB memory index view', () => {
     const f = await fixture();
     await f.tracker.runAsync(f.context, async () => {
       const operation = await f.provider.resolve(f.provider.capture());
-      jest.spyOn(operation.manager, 'list').mockResolvedValue([]);
+      jest.spyOn(operation.manager, 'listReport').mockResolvedValue({items:[],failures:[],complete:true});
       const view = bindTenantMemoryIndexView(f.provider, operation, f.deps);
       try {
         await view.portfolioIndex.getIndex();
@@ -310,7 +315,7 @@ describe('authentic per-operation DB memory index view', () => {
     await f.tracker.runAsync(f.context, async () => {
       const operation = await f.provider.resolve(f.provider.capture());
       const memory = new Memory({ name: 'Legacy metrics', triggers: ['remember'] }, f.container.resolve('MetadataService')); memory.setFilePath(randomUUID());
-      jest.spyOn(operation.manager, 'list').mockResolvedValue([memory]);
+      jest.spyOn(operation.manager, 'listReport').mockResolvedValue({items:[memory],failures:[],complete:true});
       await mkdir(f.deps.pathService.getUserPortfolioDir(f.tenant), { recursive: true });
       const view = bindTenantMemoryIndexView(f.provider, operation, f.deps);
       try {
@@ -333,7 +338,7 @@ describe('authentic per-operation DB memory index view', () => {
     await f.tracker.runAsync(f.context, async () => {
       const operation = await f.provider.resolve(f.provider.capture());
       const memory = new Memory({ name: 'Legacy session' }, f.container.resolve('MetadataService')); memory.setFilePath(randomUUID());
-      jest.spyOn(operation.manager, 'list').mockResolvedValue([memory]);
+      jest.spyOn(operation.manager, 'listReport').mockResolvedValue({items:[memory],failures:[],complete:true});
       const view = bindTenantMemoryIndexView(f.provider, operation, f.deps);
       try {
         await mkdir(f.deps.pathService.getUserPortfolioDir(f.tenant), { recursive: true });

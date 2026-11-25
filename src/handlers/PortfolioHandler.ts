@@ -1,4 +1,6 @@
 import { TenantMemoryOperationProvider, type BoundMemoryOperation } from '../storage/TenantMemoryOperationProvider.js';
+import { elementReadFailure } from '../elements/base/ElementReadError.js';
+import { collectionReportNotice } from '../elements/base/CollectionReport.js';
 import { bindTenantMemoryIndexView, type TenantMemoryIndexDependencies } from '../portfolio/TenantMemoryIndexView.js';
 
 import { GitHubAuthManager } from '../auth/GitHubAuthManager.js';
@@ -14,7 +16,8 @@ import { PortfolioIndexManager } from '../portfolio/PortfolioIndexManager.js';
 import { UnifiedIndexManager } from '../portfolio/UnifiedIndexManager.js';
 import { logger } from '../utils/logger.js';
 import { ErrorHandler } from '../utils/ErrorHandler.js';
-import * as path from 'path';
+import * as path from 'node:path';
+import { visitSequentially } from '../utils/visitSequentially.js';
 import { getElementIcon, getSourceIcon } from '../utils/index.js';
 import { InitializationService } from '../services/InitializationService.js';
 import { PersonaIndicatorService } from '../services/PersonaIndicatorService.js';
@@ -159,7 +162,7 @@ export class PortfolioHandler {
     private async countElementsInDir(dirPath: string): Promise<number> {
         this.assertMemoryOperation();
         if (this.boundOperation && dirPath === this.portfolioManager.getElementDir(ElementType.MEMORY)) {
-            const memories = await this.boundOperation.operation.manager.list({ strictDatabase: true });
+            const memories = await this.boundOperation.operation.manager.list();
             this.assertMemoryOperation();
             return memories.length;
         }
@@ -176,8 +179,9 @@ export class PortfolioHandler {
                 file.endsWith('.json') ||
                 file.endsWith('.yaml')
             ).length;
-        } catch {
-            return 0;
+        } catch (cause) {
+            this.assertMemoryOperation();
+            throw elementReadFailure(cause, dirPath);
         }
     }
 
@@ -203,7 +207,7 @@ export class PortfolioHandler {
                 .filter(file => file.endsWith('.md') || file.endsWith('.json') || file.endsWith('.yaml'))
                 .map(file => file.replace(/\.(md|json|yaml)$/i, ''));
         } catch (error: any) {
-          if (this.boundOperation) throw error;
+            if (this.boundOperation) { throw error; }
             if (error.code === 'ENOENT') {
                 logger.debug(`[PortfolioHandler] Element directory doesn't exist yet: ${dirPath}`);
                 return [];
@@ -255,7 +259,7 @@ export class PortfolioHandler {
                 break;
             } catch (err: any) {
           this.assertMemoryOperation();
-          if (this.boundOperation) throw err;
+            if (this.boundOperation) { throw err; }
                 if (err.code !== 'ENOENT') {
                     throw err;
                 }
@@ -301,7 +305,7 @@ export class PortfolioHandler {
             try {
               validateUsername(username);
             } catch (error) {
-          if (this.boundOperation) throw error;
+              if (this.boundOperation) { throw error; }
               return {
                 content: [{
                   type: "text",
@@ -601,10 +605,10 @@ export class PortfolioHandler {
             this.assertMemoryOperation();
 
             // Finish each repository write/refusal before starting another type.
-            for (const elementType of elementTypes) {
+            await visitSequentially(elementTypes.values(), async elementType => {
               await this.syncPortfolioType(progress, elementType);
               this.assertMemoryOperation();
-            }
+            });
 
             this.appendSyncSummary(progress, username);
 
@@ -620,10 +624,10 @@ export class PortfolioHandler {
             // Pre-calculate totals for better progress indicators
             try {
               progress.syncText += `📊 **Calculating sync scope...**\n`;
-              for (const elementType of elementTypes) {
+              await visitSequentially(elementTypes.values(), async elementType => {
                 await this.countSyncType(progress, elementType);
                 this.assertMemoryOperation();
-              }
+              });
               
               progress.syncText += `\n🎯 **Ready to sync ${progress.totalElements} elements:**\n`;
               for (const [type, count] of Object.entries(progress.elementCounts)) {
@@ -633,24 +637,17 @@ export class PortfolioHandler {
               progress.syncText += `\n🚀 **Starting sync process...**\n\n`;
               
             } catch (error: any) {
-              if (this.boundOperation) throw error;
-              progress.syncText += `\n⚠️ **Warning**: Could not calculate sync scope: ${error.message}\n\n`;
+              this.assertMemoryOperation();
+              throw error;
             }
             
     }
 
     private async countSyncType(progress: PortfolioSyncProgress, elementType: string): Promise<void> {
-                try {
-                  const elements = await this.getElementsList(elementType);
-                  this.assertMemoryOperation();
-                  progress.elementCounts[elementType] = elements.length;
-                  progress.totalElements += elements.length;
-                } catch (error: any) {
-                  if (this.boundOperation) throw error;
-
-                  progress.elementCounts[elementType] = 0;
-                  logger.warn(`Failed to count ${elementType}`, { error: error.message });
-                }
+      const elements = await this.getElementsList(elementType);
+      this.assertMemoryOperation();
+      progress.elementCounts[elementType] = elements.length;
+      progress.totalElements += elements.length;
     }
 
     private async syncPortfolioType(progress: PortfolioSyncProgress, elementType: string) {
@@ -667,10 +664,10 @@ export class PortfolioHandler {
                 const elements = await this.getElementsList(elementType);
                 this.assertMemoryOperation();
                 
-                for (let i = 0; i < elements.length; i++) {
+                await visitSequentially(elements.keys(), async i => {
                   await this.syncPortfolioElement(progress, typeProgress, elementType, elements, i);
                   this.assertMemoryOperation();
-                }
+                });
 
                 // UX IMPROVEMENT: Show completion summary for each type
                 const successRate = elements.length > 0 ? Math.round((typeProgress.successCount / elements.length) * 100) : 0;
@@ -726,12 +723,15 @@ export class PortfolioHandler {
 
     private appendSyncElementError(progress: PortfolioSyncProgress, elementType: string, elementName: string, elementError: any): void {
                     // Extract error code if present
-                    const errorCode = elementError.code || (elementError.message?.match(/([A-Z_]+_\d+)/)?.[1]) || '';
                     const errorMessage = elementError.message || 'Unknown error during element sync';
+                    const embeddedCode = errorMessage.split(/[^A-Z_0-9]/)
+                      .map((word: string) => /^[A-Z_]+_\d+/.exec(word)?.[0]).find(Boolean);
+                    const errorCode = elementError.code || embeddedCode || '';
                     
                     // Clean up error message for display (remove code if already extracted)
-                    const displayMessage = errorCode 
-                      ? errorMessage.replace(/([A-Z_]+_\d+)\s*/, '')
+                    const codeOffset = embeddedCode ? errorMessage.indexOf(embeddedCode) : -1;
+                    const displayMessage = codeOffset >= 0
+                      ? errorMessage.slice(0, codeOffset) + errorMessage.slice(codeOffset + embeddedCode.length).trimStart()
                       : errorMessage;
                     
                     // Show error code in output for better diagnostics
@@ -871,17 +871,17 @@ export class PortfolioHandler {
             const elementTypeErrors: string[] = [];
 
             // Get element counts with better error handling
-            for (const elementType of ['personas', 'skills', 'templates', 'agents']) {
+            await visitSequentially(['personas', 'skills', 'templates', 'agents'].values(), async elementType => {
               try {
                 const elements = await this.getElementsList(elementType);
                 this.assertMemoryOperation();
                 elementTypeCounts[elementType] = elements.length;
               } catch (error: any) {
-          if (this.boundOperation) throw error;
+                if (this.boundOperation) { throw error; }
                 elementTypeCounts[elementType] = 'ERROR';
                 elementTypeErrors.push(`${elementType}: ${error.message || 'Unknown error'}`);
               }
-            }
+            });
 
             let dryRunText = `${this.indicatorService.getPersonaIndicator()}🔍 **Dry Run - Portfolio Sync Preview**\n\n`;
             dryRunText += `📤 **Elements to sync** (${direction}):\n`;
@@ -1140,10 +1140,12 @@ export class PortfolioHandler {
           };
     
           // Perform the search
-          const results = await this.portfolioIndexManager.search(options.query, searchOptions);
+          const report = await this.portfolioIndexManager.searchReport(options.query, searchOptions);
           this.assertMemoryOperation();
     
-          return this.formatPortfolioSearch(options.query, results, elementType, searchOptions.maxResults);
+          const response = this.formatPortfolioSearch(options.query, report.items, elementType, searchOptions.maxResults);
+          if (!report.complete) response.content.push({ type: 'text', text: collectionReportNotice(report) });
+          return response;
 
         } catch (error: any) {
           if (this.boundOperation) throw error;
@@ -1310,10 +1312,12 @@ export class PortfolioHandler {
           };
     
           // Perform the unified search
-          const results = await this.unifiedIndexManager.search(searchOptions);
+          const report = await this.unifiedIndexManager.searchReport(searchOptions);
           this.assertMemoryOperation();
     
-          return this.formatUnifiedSearch(options.query, results, elementType, sources, searchOptions.page, searchOptions.pageSize);
+          const response = this.formatUnifiedSearch(options.query, report.items, elementType, sources, searchOptions.page, searchOptions.pageSize);
+          if (!report.complete) response.content.push({ type: 'text', text: collectionReportNotice(report) });
+          return response;
     
         } catch (error: any) {
           if (this.boundOperation) throw error;

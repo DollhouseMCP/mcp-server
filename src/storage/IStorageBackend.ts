@@ -50,10 +50,10 @@ export interface IStorageBackend {
   readFile(absolutePath: string): Promise<string>;
 
   /**
-   * Check whether a directory exists. ENOENT, ENOTDIR, and non-directories
-   * return false; all other stat errors reject.
    * @param directory - Absolute path to check
-   * @returns true if the directory exists
+   * @returns true for a directory; false only when the path is missing (ENOENT). A file at the
+   *   path, ENOTDIR or any other failure rejects, so a scan never certifies an empty collection
+   *   from a path that is not a directory.
    */
   directoryExists(directory: string): Promise<boolean>;
 

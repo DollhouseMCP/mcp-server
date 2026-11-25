@@ -6,8 +6,11 @@
  * FrontmatterData object without null checks.
  */
 
+import path from 'node:path';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
+import { elementContentContext } from '../security/elementContentContext.js';
+import { storedElementName } from './ElementNameKeys.js';
 
 export interface FrontmatterData {
   name: string;
@@ -26,17 +29,18 @@ export class FrontmatterParser {
    * @param rawContent - Full file content including frontmatter delimiters
    * @returns Extracted metadata with defaults for missing fields
    */
-  static extractMetadata(rawContent: string): FrontmatterData {
+  static extractMetadata(rawContent: string, elementType?: string, filePath?: string): FrontmatterData {
     const parsed = SecureYamlParser.parse(rawContent, {
       validateContent: true,
       validateFields: false,
+      contentContext: elementContentContext(elementType),
     });
 
     const data = parsed.data;
 
-    const normalizedName = typeof data.name === 'string'
-      ? FrontmatterParser.normalizeText(data.name)
-      : '';
+    // The index holds the stored name (canonical, or the type's one default), the same one the hydrated element carries.
+    // A nameless definition is named by its filename stem, as the loader names it.
+    const normalizedName = storedElementName(data.name, elementType, filePath ? path.basename(filePath, path.extname(filePath)) : undefined);
     const normalizedDescription = typeof data.description === 'string'
       ? FrontmatterParser.normalizeText(data.description)
       : '';
@@ -54,9 +58,7 @@ export class FrontmatterParser {
 
     return {
       ...data,
-      name: normalizedName.length > 0
-        ? normalizedName
-        : 'unnamed',
+      name: normalizedName,
       description: normalizedDescription.length > 0
         ? normalizedDescription
         : '',

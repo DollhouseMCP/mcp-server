@@ -9,10 +9,13 @@ describe('AgentActivationStrategy', () => {
   beforeEach(() => {
     mockAgentManager = {
       list: jest.fn(),
+      projectForDisplay: jest.fn(() => Promise.resolve()),
+      findByName: jest.fn(async () => (await mockAgentManager.list())?.[0]),
       get: jest.fn(),
       activateAgent: jest.fn(),
       deactivateAgent: jest.fn(),
       getActiveAgents: jest.fn(),
+      getActiveReferenceReport: jest.fn(async () => ({ items: await mockAgentManager.getActiveAgents(), failures: [], complete: true })),
       persistState: jest.fn(),
     } as unknown as jest.Mocked<AgentManager>;
 
@@ -20,6 +23,23 @@ describe('AgentActivationStrategy', () => {
   });
 
   describe('activate', () => {
+    it.each([false, true])('reports unreadable active references with survivor: %s', async survivor => {
+      mockAgentManager.getActiveReferenceReport.mockResolvedValue({ items: survivor
+        ? [{ metadata: { name: 'healthy-agent' }, getState: () => ({ goals: [] }) }] : [], complete: false,
+        failures: [{ reference: 'broken', error: new Error('Definition unreadable') }] } as any);
+      const response = await strategy.getActiveElements();
+      const text = response.content.map(item => item.text).join('\n');
+      expect(text).toContain('broken');
+      expect(text).toContain('Definition unreadable');
+      expect(text).not.toMatch(/No active|No personas/);
+      expect(text.includes('healthy-agent')).toBe(survivor);
+    });
+    it('reads the active agents for the display at enforcement freshness, as beta\'s getActiveAgents did', async () => {
+      mockAgentManager.getActiveReferenceReport.mockResolvedValue({ items: [], failures: [], complete: true } as any);
+      await strategy.getActiveElements();
+      // No advisory option: the report runs beta's invalidate and scan before resolving the agents.
+      expect(mockAgentManager.getActiveReferenceReport).toHaveBeenCalledWith();
+    });
     it('should activate agent successfully with specializations', async () => {
       const mockAgent = {
         metadata: {

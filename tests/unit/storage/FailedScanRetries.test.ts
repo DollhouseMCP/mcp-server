@@ -33,7 +33,7 @@ describe('FailedScanRetries', () => {
     return { root, ops, backend, relative, file, layer, wrap };
   }
 
-  it.each(['element', 'memory'] as const)('re-reads unchanged %s parse failures and observes touches, repairs, deletion and rechecks', async kind => {
+  it.each(['element', 'memory'] as const)('reuses unchanged %s content failures and observes touches, repairs, deletion and rechecks', async kind => {
     const f = await fixture(kind);
     const reads = jest.spyOn(f.backend, 'readFile');
     const warn = jest.spyOn(logger, 'warn').mockImplementation(() => {});
@@ -42,19 +42,19 @@ describe('FailedScanRetries', () => {
     const initial = f.layer['getState']().table.unindexed().get(f.relative);
     warn.mockClear(); debug.mockClear();
     for (let i = 0; i < 3; i++) expect((await f.layer.scan()).modified).toEqual([f.relative]);
-    expect(reads).toHaveBeenCalledTimes(4);
+    expect(reads).toHaveBeenCalledTimes(1);
     expect(f.layer['getState']().table.unindexed().get(f.relative)).toEqual(initial);
-    expect((await f.layer.readIndexedPath(['missing'])).authoritative).toBe(false);
+    expect((await f.layer.readIndexedPath(['missing'])).authoritative).toBe(true);
     expect(warn.mock.calls.filter(([message]) => String(message).includes('failed to index'))).toHaveLength(0);
     expect(debug.mock.calls.filter(([message]) => String(message).includes('failed to index'))).toHaveLength(3);
     const timestamp = new Date(Date.now() + 10000);
-    await fs.utimes(f.file, timestamp, timestamp); await f.layer.scan(); expect(reads).toHaveBeenCalledTimes(5);
-    f.layer['getState']().table.applyAbsent(f.relative); await f.layer.scan(); expect(reads).toHaveBeenCalledTimes(6);
-    await f.layer.notifySaved(f.relative, f.file); expect(reads).toHaveBeenCalledTimes(7);
-    f.layer.clear(); await f.layer.scan(); expect(reads).toHaveBeenCalledTimes(8);
+    await fs.utimes(f.file, timestamp, timestamp); await f.layer.scan(); expect(reads).toHaveBeenCalledTimes(2);
+    f.layer['getState']().table.applyAbsent(f.relative); await f.layer.scan(); expect(reads).toHaveBeenCalledTimes(3);
+    await f.layer.notifySaved(f.relative, f.file); expect(reads).toHaveBeenCalledTimes(4);
+    f.layer.clear(); await f.layer.scan(); expect(reads).toHaveBeenCalledTimes(5);
     await fs.writeFile(f.file, f.wrap('name: Repaired'));
     await fs.utimes(f.file, new Date(timestamp.getTime() + 1000), new Date(timestamp.getTime() + 1000));
-    await f.layer.scan(); expect(reads).toHaveBeenCalledTimes(9);
+    await f.layer.scan(); expect(reads).toHaveBeenCalledTimes(6);
     expect((await f.layer.readIndexedPath(['Repaired'])).path).toBe(f.relative);
     await fs.unlink(f.file); expect((await f.layer.scan()).removed).toEqual([f.relative]);
     expect(f.layer['getState']().table.get(f.relative)).toBeUndefined();
@@ -117,20 +117,95 @@ describe('FailedScanRetries', () => {
     expect(() => table.getPathByName('name')).toThrow('File name ownership requires an observed modification time');
   });
 
-  it.each(['list', 'date folders'])('treats ENOTDIR as absence in memory %s', async operation => {
+  it.each(['list', 'date folders'])('preserves the ENOTDIR contract in memory %s', async operation => {
     const root = await fs.mkdtemp(path.join(tmpdir(), 'memory-absence-')); roots.push(root);
     const ops = createTestFileOperationsService();
     const manager = createRealMemoryManager(root, { fileOperationsService: ops });
     const cause = Object.assign(new Error('not a directory'), { code: 'ENOTDIR' });
     try {
       if (operation === 'list') {
-        jest.spyOn(manager['storageLayer'] as MemoryStorageLayer, 'scanMemorySnapshot').mockRejectedValue(cause);
-        await expect(manager.list()).resolves.toEqual([]);
+        jest.spyOn(manager['storageLayer'] as MemoryStorageLayer, 'readCollection').mockRejectedValue(cause);
+        await expect(manager.list()).rejects.toMatchObject({ kind: 'indeterminate',
+          failures: [expect.objectContaining({ reason: expect.stringContaining('ENOTDIR') })] });
       } else {
+        // A memories path that is not a directory is a typed failure, never an empty date list.
         jest.spyOn(ops, 'listDirectory').mockRejectedValue(cause);
-        await expect(manager['getDateFolders']()).resolves.toEqual([]);
+        await expect(manager['getDateFolders']()).rejects.toMatchObject({ name: 'StorageScanError', code: 'ENOTDIR', cause });
+        await expect(manager['getDateFolders']()).rejects.not.toThrow(root);
       }
     } finally { await manager.dispose(); }
+  });
+
+  it('refuses the scan when the element directory path is a file and keeps the previous index', async () => {
+    const parent = await fs.mkdtemp(path.join(tmpdir(), 'directory-kind-')); roots.push(parent);
+    const root = path.join(parent, 'skills');
+    await fs.mkdir(root);
+    await fs.writeFile(path.join(root, 'entry.md'), '---\nname: Entry\n---\nContent');
+    const ops = createTestFileOperationsService();
+    const layer = new ElementStorageLayer(ops, { elementDir: root, fileExtension: '.md', storageBackend: new FileStorageBackend(ops), scanCooldownMs: 0 });
+    layers.push(layer);
+    await layer.scan();
+    expect((await layer.readIndexedPath(['Entry'])).path).toBe('entry.md');
+    await fs.rm(root, { recursive: true });
+    await fs.writeFile(root, 'not a directory');
+    await expect(layer.scan()).rejects.toMatchObject({ name: 'StorageScanError', code: 'ENOTDIR' });
+    await expect(layer.readCollection()).rejects.toMatchObject({ name: 'StorageScanError' });
+    // Nothing is published as removed: the collection is unknown, not empty.
+    expect((await layer.readIndexedPath(['Entry'])).path).toBe('entry.md');
+    await fs.unlink(root);
+    await expect(layer.scan()).resolves.toMatchObject({ removed: ['entry.md'] });
+  });
+
+  it('indexes a saved file under the scan policy, so a notified outside symlink becomes a failed record', async () => {
+    const root = await fs.mkdtemp(path.join(tmpdir(), 'notify-policy-')); roots.push(root);
+    const outside = await fs.mkdtemp(path.join(tmpdir(), 'notify-policy-outside-')); roots.push(outside);
+    const ops = createTestFileOperationsService();
+    const target = path.join(outside, 'target.md');
+    await fs.writeFile(target, '---\nname: Outside Target\n---\nContent');
+    const link = path.join(root, 'link.md');
+    await fs.symlink(target, link);
+    const layer = new ElementStorageLayer(ops, { elementDir: root, fileExtension: '.md', storageBackend: new FileStorageBackend(ops), scanCooldownMs: 0 });
+    layers.push(layer);
+    await layer.notifySaved('link.md', link);
+    expect(layer['getState']().table.unindexed().get('link.md')).toMatchObject({ name: 'ValidationError', reason: 'Path access denied' });
+    expect(layer.getPathByName('Outside Target')).toBeUndefined();
+  });
+
+  it('refuses an outside symlink to a file at scan and recovers once a real file replaces it', async () => {
+    const root = await fs.mkdtemp(path.join(tmpdir(), 'reference-policy-')); roots.push(root);
+    const outside = await fs.mkdtemp(path.join(tmpdir(), 'reference-policy-outside-')); roots.push(outside);
+    const ops = createTestFileOperationsService(); const backend = new FileStorageBackend(ops);
+    const target = path.join(outside, 'target.md');
+    const link = path.join(root, 'outside.md');
+    await fs.writeFile(target, '---\nname: Outside Target\n---\nContent');
+    await fs.writeFile(path.join(root, 'healthy.md'), '---\nname: Healthy\n---\nContent');
+    await fs.symlink(target, link);
+    const layer = new ElementStorageLayer(ops, { elementDir: root, fileExtension: '.md', storageBackend: backend, scanCooldownMs: 0 });
+    layers.push(layer);
+    const reads = jest.spyOn(backend, 'readFile');
+    const errors = jest.spyOn(logger, 'error').mockImplementation(() => {});
+    await layer.scan();
+    expect(await layer.getIndexedPaths()).toEqual(['healthy.md']);
+    const refused = await layer.readIndexedPath(['outside']);
+    // The index owns the log line: one error with the validator's own detail per distinct refusal, the
+    // targeted recheck of the unchanged failure demotes, and the validator stays quiet on storage-side checks.
+    expect(errors.mock.calls.map(([message]) => String(message))).not.toContain('Symlink target outside allowed directory');
+    expect(errors.mock.calls).toEqual([[`ElementStorageLayer: refused outside.md: Path access denied`,
+      { path: link, realPath: await fs.realpath(target), allowedDir: path.normalize(root) }]]);
+    // A direct read of the refused reference reports once more, and only once.
+    await expect(layer.readContent('outside.md')).rejects.toMatchObject({ name: 'ValidationError' });
+    await expect(layer.readContent('outside.md')).rejects.toMatchObject({ name: 'ValidationError' });
+    expect(errors).toHaveBeenCalledTimes(2);
+    expect(refused).toMatchObject({ path: undefined, authoritative: true, unindexed: ['outside.md'], candidates: [] });
+    expect(refused.failures.get('outside.md')).toMatchObject({ name: 'ValidationError', reason: 'Path access denied', candidateNames: ['outside'], unattributed: true });
+    // The policy refuses the link before any read, at the scan and at the targeted recheck.
+    expect(reads.mock.calls.map(([file]) => file)).toEqual([path.join(root, 'healthy.md')]);
+    await fs.unlink(link);
+    await fs.writeFile(link, '---\nname: Outside\n---\nContent');
+    const later = new Date(Date.now() + 10_000);
+    await fs.utimes(link, later, later);
+    expect(await layer.readIndexedPath(['Outside'])).toMatchObject({ path: 'outside.md', authoritative: true, unindexed: [],
+      candidates: [{ reference: 'outside.md', name: 'Outside' }] });
   });
 
   it('evicts stale manager content when another reader already observed a parse failure', async () => {

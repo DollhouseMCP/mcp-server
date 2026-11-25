@@ -44,11 +44,13 @@ export class PersonaElement extends BaseElement implements IElement {
     this.id = value;
   }
 
-  constructor(metadata: Partial<PersonaElementMetadata>, instructions: string = '', filename: string = '', metadataService: MetadataService, content: string = '') {
-    super(ElementType.PERSONA, metadata, metadataService);
-    this.instructions = instructions;
+  constructor(metadata: Partial<PersonaElementMetadata>, instructions: string | undefined, filename: string | undefined, metadataService: MetadataService, content: string = '') {
+    // A persona keeps its name as written; a name nothing of which survives canonicalisation takes
+    // the persona default, as for every type.
+    super(ElementType.PERSONA, metadata, metadataService, 'stored');
+    this.instructions = instructions ?? '';
     this.content = content;
-    this.filename = filename;
+    this.filename = filename ?? '';
     
     // Ensure persona-specific metadata
     this.metadata = {
@@ -133,8 +135,8 @@ export class PersonaElement extends BaseElement implements IElement {
     const result = super.validate();
     
     // Initialize arrays if not present
-    if (!result.errors) result.errors = [];
-    if (!result.warnings) result.warnings = [];
+    result.errors ??= [];
+    result.warnings ??= [];
     
     // Add persona-specific validation rules
 

@@ -1,3 +1,4 @@
+import { ElementMissingError } from '../../../src/elements/base/ElementReadError.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { PortfolioService } from '../../../src/web-console/modules/portfolio/PortfolioService.js';
 import type { ConsoleRequest } from '../../../src/web-console/platform/ConsolePlatformTypes.js';
@@ -50,7 +51,7 @@ class ObservedManager extends MemoryManager {
   rejectValidation = false;
   backendValidationCandidate?: string;
   publicationFailure?: { cause: unknown };
-  cached(locator: string): Memory | undefined { return this.getCachedByAbsolutePath(path.join(this.elementDir, locator)); }
+  cached(locator: string): Memory | undefined { return this['_cache'].getCachedByAbsolutePath(path.join(this.elementDir, locator)); }
   protected override async serializeElement(memory: Memory): Promise<string> {
     if (this.serializeGate) await this.serializeGate;
     return this.backendValidationCandidate ?? super.serializeElement(memory);
@@ -448,6 +449,20 @@ posix('dormant central owned memory UPDATE', () => {
       } finally { index.mockRestore(); audit.mockRestore(); }
     } finally { await f.cleanup(); }
   });
+  it('publishes the guarded save unversioned, so an external rewrite right after it is never vouched for', async () => {
+    // The guarded write cannot report its own version (ruling #588 item 5): the publication is cached
+    // without one, and the layer never vouches for it, even after another writer rewrites the file.
+    const f = await fixture();
+    try {
+      const { manager } = f.makeManager(); const memory = await manager.load('head.yaml');
+      await manager.save(memory);
+      const published = manager.cached('head.yaml')!;
+      expect((manager as any)._cache.versionOf(published)).toBeUndefined();
+      const layer = (manager as any).storageLayer;
+      await expect(layer.isCachedReferenceCurrent('head.yaml', (manager as any)._cache.versionOf(published))).resolves.toBe(false);
+    } finally { await f.cleanup(); }
+  }, 15_000);
+
   it('rejects a separate process UPDATE using the working instance original token', async () => {
     const f = await fixture();
     let child: ReturnType<typeof spawn> | undefined; let closed: Promise<void> | undefined;
@@ -1624,8 +1639,8 @@ posix('guarded console unrelated malformed summary', () => {
     const f = await withMalformed();
     try {
       const snapshot = await f.owners.readHeadSnapshot('malformed.yaml'); const save = jest.spyOn(f.manager, 'save'); const write = jest.spyOn(f.owners, 'updateOwnedHead');
-      await expect(f.service.getElement(request(), 'memories', '!!!')).rejects.toThrow('Invalid memory name');
-      await expect(f.service.updateElement(request({metadata: {description: 'Must not admit'}}, '"v1-old"'), 'memories', '!!!')).rejects.toThrow('Invalid memory name');
+      await expect(f.service.getElement(request(), 'memories', '!!!')).rejects.toMatchObject({ kind: 'unreadable', cause: expect.objectContaining({ message: expect.stringContaining('Invalid memory name') }) });
+      await expect(f.service.updateElement(request({metadata: {description: 'Must not admit'}}, '"v1-old"'), 'memories', '!!!')).rejects.toMatchObject({ kind: 'unreadable', cause: expect.objectContaining({ message: expect.stringContaining('Invalid memory name') }) });
       expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled(); expect(await f.owners.readHeadSnapshot('malformed.yaml')).toEqual(snapshot);
     } finally {await f.cleanup();}
   });
@@ -1824,19 +1839,74 @@ posix('guarded console existing-owner UPDATE', () => {
     } finally {await f.cleanup();}
   });
 
-  it.each(['public load', 'hydration'])('preserves ENOENT outside the lookup snapshot stage: %s', async stage => {
+  it.each(['public', 'stored', 'resolver'] as const)('recognizes requested-head absence in %s mode', async mode => {
     const f = await fixture();
     try {
-      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const { manager } = f.makeManager();
+      const cause = Object.assign(new Error('Requested head is missing'), { code: 'ENOENT' });
+      jest.spyOn(f.owners, 'readHeadSnapshot').mockRejectedValue(cause);
+      if (mode === 'resolver') {
+        await expect(manager.findByName('owned-memory')).resolves.toBeUndefined();
+      } else {
+        const read = mode === 'public' ? manager.load('head.yaml') : manager.loadStoredReference('head.yaml');
+        await expect(read).rejects.toMatchObject({ kind: 'absent', code: 'ENOENT', cause });
+      }
+    } finally { await f.cleanup(); }
+  });
+
+  it.each(['public', 'stored'] as const)('does not classify a missing tenant root as a missing head in %s mode', async mode => {
+    const f = await fixture();
+    try {
+      const { manager } = f.makeManager();
+      Object.defineProperty(manager, 'memoriesDir', { configurable: true, get: () => path.join(f.root, 'missing-root') });
+      const read = jest.spyOn(f.owners, 'readHeadSnapshot');
+      const readResult = mode === 'public' ? manager.load('head.yaml') : manager.loadStoredReference('head.yaml');
+      await expect(readResult).rejects.toMatchObject({ kind: 'unreadable', cause: expect.objectContaining({ code: 'ENOENT' }) });
+      await expect(readResult).rejects.not.toHaveProperty('code', 'ENOENT');
+      expect(read).not.toHaveBeenCalled();
+    } finally { await f.cleanup(); }
+  });
+
+  it.each(['public', 'stored', 'seed'] as const)('does not mistake a tenant root disappearing during the snapshot read for a missing head in %s mode', async mode => {
+    const f = await fixture();
+    try {
+      const { manager } = f.makeManager();
+      jest.spyOn(f.owners, 'readHeadSnapshot').mockImplementationOnce(async () => {
+        await fs.rename(f.tenantRoot, path.join(f.root, 'moved-memories'));
+        throw Object.assign(new Error('Tenant root disappeared'), { code: 'ENOENT' });
+      });
+      if (mode === 'seed') {
+        const save = jest.spyOn(manager, 'save');
+        await expect(manager['findExistingSeedMemory']('head.yaml')).resolves.toBe('skip');
+        expect(save).not.toHaveBeenCalled();
+      } else {
+        const readResult = mode === 'public' ? manager.load('head.yaml') : manager.loadStoredReference('head.yaml');
+        await expect(readResult).rejects.toMatchObject({ kind: 'unreadable', cause: expect.objectContaining({ code: 'ENOENT' }) });
+        await expect(readResult).rejects.not.toHaveProperty('code', 'ENOENT');
+      }
+    } finally { await f.cleanup(); }
+  });
+
+  it('preserves auxiliary hydration ENOENT outside the lookup snapshot stage', async () => {
+    const f = await fixture();
+    try {
+      const { manager } = f.makeManager(); const store = consoleStore(manager);
       const snapshot = await f.owners.readHeadSnapshot('head.yaml');
-      const cause = Object.assign(new Error('Missing outside lookup read'), {code: 'ENOENT'});
-      if (stage === 'public load') jest.spyOn(f.owners, 'readHeadSnapshot').mockRejectedValueOnce(cause);
-      else jest.spyOn(manager as unknown as {hydrateDefinitionFromContent: () => Promise<Memory>}, 'hydrateDefinitionFromContent').mockRejectedValueOnce(cause);
+      const cause = Object.assign(new Error('Missing hydration dependency'), { code: 'ENOENT' });
+      jest.spyOn(manager as unknown as { hydrateDefinitionFromContent: () => Promise<Memory> }, 'hydrateDefinitionFromContent').mockRejectedValueOnce(cause);
       const save = jest.spyOn(manager, 'save'); const write = jest.spyOn(f.owners, 'updateOwnedHead');
-      await expect(stage === 'public load' ? manager.load('head.yaml') : store.findByName(USER, 'memories', 'owned-memory')).rejects.toBe(cause);
+      await expect(store.findByName(USER, 'memories', 'owned-memory')).rejects.toBe(cause);
       expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
       expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(snapshot);
-    } finally {await f.cleanup();}
+    } finally { await f.cleanup(); }
+  });
+
+  it('keeps wrong-extension references absent in guarded loads', async () => {
+    const f = await fixture();
+    try {
+      const { manager } = f.makeManager();
+      await expect(manager.loadStoredReference('head.md')).rejects.toBeInstanceOf(ElementMissingError);
+    } finally { await f.cleanup(); }
   });
 
   it('retains a postcommit publication ENOENT instead of converting it to notfound', async () => {

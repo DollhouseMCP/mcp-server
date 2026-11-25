@@ -49,9 +49,9 @@ export function bindTenantMemoryIndexView(provider: TenantMemoryOperationProvide
     namespace, assertCurrent,
     listEntries: async () => {
       assertCurrent();
-      const memories = await operation.manager.list({ strictDatabase: true });
+      const report = await operation.manager.listReport();
       assertCurrent();
-      return memories.map(memory => memoryIndexEntry(memory, operation, assertCurrent));
+      return { ...report, items: report.items.map(memory => memoryIndexEntry(memory, operation, assertCurrent)) };
     },
   });
   // Derived algorithm state belongs to this view, not another tenant's shared corpus/graph.

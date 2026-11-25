@@ -23,6 +23,8 @@ import { TriggerValidationService } from '../../src/services/validation/TriggerV
 import { ValidationRegistry } from '../../src/services/validation/ValidationRegistry.js';
 import { OperationalTelemetry } from '../../src/telemetry/OperationalTelemetry.js';
 import { ElementEventDispatcher } from '../../src/events/ElementEventDispatcher.js';
+import { ElementUnreadableError } from '../../src/elements/base/ElementReadError.js';
+import { logger } from '../../src/utils/logger.js';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
@@ -102,7 +104,7 @@ describe('ServerStartup - Auto-Load Integration (Issue #1430)', () => {
     });
 
     // Create MigrationManager and OperationalTelemetry for ServerStartup
-    const migrationManager = new MigrationManager(portfolioManager, fileLockManager);
+    const migrationManager = new MigrationManager(portfolioManager, fileLockManager, fileOperationsService, createTestStorageFactory(fileOperationsService));
     const operationalTelemetry = new OperationalTelemetry();
 
     // Create ServerStartup with all required dependencies
@@ -140,6 +142,27 @@ describe('ServerStartup - Auto-Load Integration (Issue #1430)', () => {
   });
 
   describe('End-to-End Auto-Load Flow', () => {
+    it('warns once per auto-load discovery failure and counts each as a startup warning', async () => {
+      const attributed = { reference: path.join('2026-10-29', 'broken.yaml'),
+        error: new ElementUnreadableError('Element read failed', { failures: [{ reference: 'broken.yaml', reason: 'Definition content could not be read or validated' }] }) };
+      const unattributed = { error: new ElementUnreadableError('Memory discovery failed') };
+      jest.spyOn(memoryManager, 'getAutoLoadMemoryReport').mockResolvedValue({ items: [], failures: [attributed, unattributed], complete: false });
+      const warn = jest.spyOn(logger, 'warn');
+      const metrics = jest.spyOn(serverStartup['operationalTelemetry'], 'recordAutoLoadMetrics');
+      try {
+        await serverStartup.initialize();
+        const messages = warn.mock.calls.map(([message]) => String(message));
+        expect(messages).toEqual(expect.arrayContaining([
+          `[ServerStartup] Auto-load discovery failed for ${attributed.reference}: ${attributed.error.message}`,
+          `[ServerStartup] Auto-load discovery failed for collection: ${unattributed.error.message}`,
+        ]));
+        expect(messages.some(message => message.includes('No auto-load memories configured'))).toBe(false);
+        expect(metrics).toHaveBeenCalledWith(expect.objectContaining({ warningCount: 2, memoryCount: 0 }));
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
     it('should install seed memories on initialize (Issue #1430)', async () => {
       // Initialize server (installs seeds)
       // NOTE: ServerStartup.initialize() installs seeds but does NOT activate them

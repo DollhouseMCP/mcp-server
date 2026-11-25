@@ -10,6 +10,8 @@ import { PerformanceMonitor } from '../../../src/utils/PerformanceMonitor.js';
 import { createTestFileOperationsService } from '../../helpers/di-mocks.js';
 import * as os from 'os';
 import * as path from 'node:path';
+import { jest } from '@jest/globals';
+import { ElementReadError } from '../../../src/elements/base/ElementReadError.js';
 
 describe('CollectionIndexCache', () => {
   let indexCache: InstanceType<typeof CollectionIndexCache>;
@@ -41,10 +43,26 @@ describe('CollectionIndexCache', () => {
   });
 
   afterEach(async () => {
+    jest.restoreAllMocks();
     await container.dispose();
   });
 
   describe('getCacheStats', () => {
+    it.each([false, true])('reports real failed refresh without marking stale data fresh (cached=%s)', async cached => {
+      const data = { version: '1.0', total_elements: 0, index: {}, generated: '2026-01-01', metadata: {} } as any;
+      const fetchedAt = new Date(0);
+      indexCache['cache'] = cached ? { data, fetchedAt } : null;
+      jest.spyOn(indexCache as any, 'loadFromDisk').mockResolvedValue(null);
+      jest.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Private network diagnostic'));
+      if (cached) {
+        const report = await indexCache.getIndexReport();
+        expect(report).toMatchObject({ complete: false, items: [data],
+          failures: [expect.objectContaining({ reference: 'collection' })] });
+        expect(indexCache['cache']?.fetchedAt).toBe(fetchedAt);
+        expect(indexCache.getCacheStats().isValid).toBe(false);
+      }
+      await expect(indexCache.getIndex()).rejects.toBeInstanceOf(ElementReadError);
+    });
     it('should return initial cache stats', () => {
       const stats = indexCache.getCacheStats();
       

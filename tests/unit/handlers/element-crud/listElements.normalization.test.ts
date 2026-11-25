@@ -80,6 +80,9 @@ describe('listElements parameter normalization (Issue #204)', () => {
       fileOperations: {},
       elementQueryService: mockQueryService as ElementQueryService,
     } as unknown as ElementCrudContext;
+    for (const key of ['skillManager', 'templateManager', 'agentManager', 'memoryManager', 'personaManager', 'ensembleManager'] as const) {
+      mockContext[key].listReport = jest.fn(async options => ({ items: await mockContext[key].list(options), failures: [], complete: true })) as any;
+    }
   });
 
   describe('Flat pagination params', () => {

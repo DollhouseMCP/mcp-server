@@ -279,6 +279,9 @@ describe('PortfolioModule', () => {
           ensembles: 0,
         },
         updated_at: NOW.toISOString(),
+        // Listings report their completeness and failures beside the survivors.
+        complete: true,
+        failures: [],
       },
     });
   });
@@ -300,6 +303,8 @@ describe('PortfolioModule', () => {
           ensembles: 0,
         },
         updated_at: null,
+        complete: true,
+        failures: [],
       },
     });
   });
@@ -332,6 +337,8 @@ describe('PortfolioModule', () => {
           name: REVIEW_HELPER_NAME,
           tags: ['review', 'code'],
         }],
+        complete: true,
+        failures: [],
       },
     });
   });

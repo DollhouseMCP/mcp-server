@@ -1,3 +1,8 @@
+import type { PolicyReport, PolicyReadFailure } from '../services/policy/PolicyReport.js';
+import type { CollectionReport } from '../elements/base/CollectionReport.js';
+import { ElementIndeterminateError, ElementReadError, clientReadFailureReason, type ElementReadFailure } from '../elements/base/ElementReadError.js';
+import { PolicyUnavailableError } from '../services/policy/PolicyUnavailableError.js';
+import { ValidationError } from '../security/errors.js';
 /**
  * ElementCRUDHandler - Handles all generic element CRUD operations
  *
@@ -69,7 +74,7 @@ import type { SessionActivationRegistry } from '../state/SessionActivationState.
 import type { ContextTracker } from '../security/encryption/ContextTracker.js';
 import type { ActivationMetricsTracker } from '../metrics/ActivationMetricsTracker.js';
 import type { BaseElementManager } from '../elements/base/BaseElementManager.js';
-import { formatValidationFailedError } from './element-crud/responseFormatter.js';
+import { formatUnavailableElementError, formatUnreadableElementError } from './element-crud/responseFormatter.js';
 import {
   findConfirmAdvisoryElements,
   findConfirmDenyingElement,
@@ -98,7 +103,9 @@ export class ElementCRUDHandler {
   private readonly policyCollectorFactory: ActivePolicyCollectorFactory;
   private readonly strategies: Map<string, ElementActivationStrategy>;
   private activePolicySnapshots = new Map<string, Promise<PolicyElement[]>>();
+  private activePolicyReports = new Map<string, Promise<PolicyReport<PolicyElement>>>();
   private readonly tenantPolicySnapshots = new WeakMap<MemoryManager, Map<string, Promise<PolicyElement[]>>>();
+  private readonly tenantPolicyReports = new WeakMap<MemoryManager, Map<string, Promise<PolicyReport<PolicyElement>>>>();
   private readonly memoryProvider?: TenantMemoryOperationProvider;
   private readonly forkOnEditStrategy?: import('../collection/shared-pool/ForkOnEditStrategy.js').ForkOnEditStrategy;
   private operationCheck?: () => void;
@@ -209,6 +216,11 @@ export class ElementCRUDHandler {
       snapshots = new Map(); this.tenantPolicySnapshots.set(operation.manager, snapshots);
     }
     bound.activePolicySnapshots = snapshots;
+    let reports = this.tenantPolicyReports.get(operation.manager);
+    if (!reports) {
+      reports = new Map(); this.tenantPolicyReports.set(operation.manager, reports);
+    }
+    bound.activePolicyReports = reports;
     return bound;
   }
 
@@ -257,6 +269,7 @@ export class ElementCRUDHandler {
       validationRegistry: this.validationRegistry,
       backupService: this.backupService,
       forkOnEditStrategy: this.forkOnEditStrategy,
+      getManagerForType: type => this.getManagerForType(type),
     };
   }
 
@@ -280,7 +293,9 @@ export class ElementCRUDHandler {
   }
 
   private invalidateActivePolicySnapshot(): void {
-    this.activePolicySnapshots.delete(this.getPolicySnapshotScope());
+    const scope = this.getPolicySnapshotScope();
+    this.activePolicySnapshots.delete(scope);
+    this.activePolicyReports.delete(scope);
   }
 
   /**
@@ -412,7 +427,7 @@ export class ElementCRUDHandler {
    * @param type - Element type (persona, skill, template, agent, memory, ensemble)
    * @returns Array of raw element objects
    */
-  async getElements(type: string): Promise<unknown[]> {
+  async getElements(type: string): Promise<CollectionReport<unknown>> {
     if (!this.memoryProvider) {
       this.operationCheck?.();
       return this.performGetElements(type);
@@ -423,25 +438,25 @@ export class ElementCRUDHandler {
     return result;
   }
 
-  private async performGetElements(type: string): Promise<unknown[]> {
+  private async performGetElements(type: string): Promise<CollectionReport<unknown>> {
     await this.ensureInitialized();
     const normalizedType = this.normalizeElementType(type);
 
     switch (normalizedType) {
       case ElementType.PERSONA:
-        return this.personaManager.list();
+        return this.personaManager.listReport();
       case ElementType.SKILL:
-        return this.skillManager.list();
+        return this.skillManager.listReport();
       case ElementType.TEMPLATE:
-        return this.templateManager.list();
+        return this.templateManager.listReport();
       case ElementType.AGENT:
-        return this.agentManager.list();
+        return this.agentManager.listReport();
       case ElementType.MEMORY:
-        return this.memoryManager.list();
+        return this.memoryManager.listReport();
       case ElementType.ENSEMBLE:
-        return this.ensembleManager.list();
+        return this.ensembleManager.listReport();
       default:
-        return [];
+        throw new Error(`Unknown element type: ${type}`);
     }
   }
 
@@ -501,7 +516,9 @@ export class ElementCRUDHandler {
       }
 
       // Issue #762: Export policies to bridge after activation
-      this.policyExportService?.exportPolicies().catch(() => {});
+      this.policyExportService?.exportPolicies().catch(error => {
+        logger.warn('Failed to export policies after element activation', { error });
+      });
 
       return { content: result.content };
     } catch (error) {
@@ -602,15 +619,38 @@ export class ElementCRUDHandler {
     }
   }
 
+  /**
+   * The active-policy report. Enforcement and recovery read it fresh (the default); an advisory
+   * caller such as the prescriptive digest may pass `allowCoalescing` and share an overlapping
+   * report, as getActiveElementsForPolicy does.
+   */
+  async getActiveElementsForPolicyReport(options: { allowCoalescing?: boolean } = {}): Promise<PolicyReport<PolicyElement>> {
+    const bound = this.memoryProvider ? await this.bindMemoryOperation() : this;
+    bound.operationCheck?.();
+    const report = options.allowCoalescing ? await bound.coalescedPolicyReport() : await bound.policyCollector.collectActiveElementsForReport();
+    bound.operationCheck?.();
+    return report;
+  }
+
+  private async coalescedPolicyReport(): Promise<PolicyReport<PolicyElement>> {
+    const scope = this.getPolicySnapshotScope();
+    const existing = this.activePolicyReports.get(scope);
+    if (existing) return existing;
+    // The digest is advisory: it joins an in-flight report, or takes the collection refresh for the
+    // active elements and the ensemble members alike, evicting only what that refresh reports changed.
+    const report = this.policyCollector.collectActiveElementsForReport({ freshness: 'advisory' });
+    this.activePolicyReports.set(scope, report);
+    try {
+      return await report;
+    } finally {
+      if (this.activePolicyReports.get(scope) === report) this.activePolicyReports.delete(scope);
+    }
+  }
+
   async getPolicyElementsForReport(
     sessionId?: string,
     options: { allowCoalescing?: boolean } = {},
-  ): Promise<Array<{
-    type: string;
-    name: string;
-    metadata: Record<string, unknown>;
-    sessionIds?: string[];
-  }>> {
+  ): Promise<PolicyReport<PolicyElement & { sessionIds?: string[] }>> {
     if (!this.memoryProvider) {
       this.operationCheck?.();
       return this.performGetPolicyElementsForReport(sessionId, options);
@@ -624,12 +664,9 @@ export class ElementCRUDHandler {
   private async performGetPolicyElementsForReport(
     sessionId?: string,
     options: { allowCoalescing?: boolean } = {},
-  ): Promise<Array<{
-    type: string;
-    name: string;
-    metadata: Record<string, unknown>;
-    sessionIds?: string[];
-  }>> {
+  ): Promise<PolicyReport<PolicyElement & { sessionIds?: string[] }>> {
+    const failures: PolicyReadFailure[] = [];
+    let complete = true;
     const merged = new Map<string, {
       type: string;
       name: string;
@@ -667,12 +704,16 @@ export class ElementCRUDHandler {
       : {};
 
     if (includeCurrentSession) {
-      for (const activeElement of await this.getActiveElementsForPolicy(options)) {
+      const current = await this.policyCollector.collectActiveElementsForReport(indexOptions);
+      complete = current.complete;
+      failures.push(...current.failures);
+      for (const activeElement of current.items) {
         addElement(activeElement, currentSessionId ? [currentSessionId] : []);
       }
     }
 
     if (this.activationStore?.isEnabled()) {
+      const persistedFailures: PolicyReadFailure[] = [];
       const persistedStates = await this.activationStore.listPersistedActivationStates(sessionId);
       const indexedManagers: IndexedPolicyManagers = new Map();
       const persistedLookups = new Map<string, Promise<PolicyElement | null>>();
@@ -691,7 +732,7 @@ export class ElementCRUDHandler {
 
         const lookup = this.policyCollector.getIndexedPolicyManager(normalizedType, indexedManagers, indexOptions)
           .then(async (manager) => {
-            if (!manager) return null;
+            if (!manager) throw new PolicyUnavailableError('Policy manager is unavailable');
 
             let found = normalizedIdentity !== ''
               ? await manager.findByStorageIdentity(normalizedIdentity) as PolicyMemberElement | undefined
@@ -703,7 +744,8 @@ export class ElementCRUDHandler {
               found = await manager.findByName(normalizedFilename) as PolicyMemberElement | undefined;
             }
 
-            if (!found?.metadata || !this.hasGatekeeperPolicy(found.metadata)) {
+            if (!found) throw new PolicyUnavailableError('Persisted policy definition is missing');
+            if (!found.metadata || !this.hasGatekeeperPolicy(found.metadata)) {
               return null;
             }
 
@@ -728,13 +770,15 @@ export class ElementCRUDHandler {
       const mergeNext = async (iterator: Iterator<PersistedActivationStateSnapshot>): Promise<void> => {
         const next = iterator.next();
         if (next.done) return;
-        await this.mergePersistedPolicyState(next.value, addElement, findPersistedElement);
+        await this.mergePersistedPolicyState(next.value, addElement, findPersistedElement, persistedFailures);
         await mergeNext(iterator);
       };
       await mergeNext(persistedStates.values());
+      complete &&= persistedFailures.length === 0;
+      failures.push(...persistedFailures);
     }
 
-    return Array.from(merged.values()).map((entry) => ({
+    const items = Array.from(merged.values()).map((entry) => ({
       type: entry.type,
       name: entry.name,
       metadata: entry.metadata,
@@ -742,6 +786,7 @@ export class ElementCRUDHandler {
         ? { sessionIds: Array.from(entry.sessionIds).sort((a, b) => a.localeCompare(b)) }
         : {}),
     }));
+    return { items, failures, complete };
   }
 
   async releaseDeadlock(): Promise<{
@@ -778,13 +823,15 @@ export class ElementCRUDHandler {
     };
     snapshotFile?: string;
   }> {
-    const activeElementTargets = await this.collectActiveElementsForDeadlockRelief();
+    const failed: Array<{ type: string; name: string; error: string }> = [];
+    const activeElementTargets = await this.collectActiveElementsForDeadlockRelief(failed);
     const activeElements = activeElementTargets.map(({ type, name }) => ({ type, name }));
-    const activePolicyElements = await this.getActiveElementsForPolicy();
+    const policyReport = await this.policyCollector.collectActiveElementsForReport();
+    const activePolicyElements = policyReport.items;
+    failed.push(...policyReport.failures.map(failure => ({ type: failure.type, name: failure.reference ?? 'collection', error: failure.reason })));
     const sandboxingElement = findConfirmDenyingElement(activePolicyElements);
     const advisoryElements = findConfirmAdvisoryElements(activePolicyElements);
     const deactivated: Array<{ type: string; name: string }> = [];
-    const failed: Array<{ type: string; name: string; error: string }> = [];
 
     const deactivateNext = async (iterator: Iterator<DeadlockReliefElement>): Promise<void> => {
       const next = iterator.next();
@@ -829,7 +876,9 @@ export class ElementCRUDHandler {
 
     this.activationStore?.clearAll();
     this.invalidateActivePolicySnapshot();
-    this.policyExportService?.exportPolicies().catch(() => {});
+    this.policyExportService?.exportPolicies().catch(error => {
+      logger.warn('Failed to export policies after deadlock relief', { error });
+    });
 
     const failureSummary = failed.length > 0 ? ` with ${failed.length} failure(s)` : '';
 
@@ -868,29 +917,34 @@ export class ElementCRUDHandler {
     };
   }
 
-  private async collectForDeadlockRelief<T>(type: ElementType, collect: () => T[] | Promise<T[]>): Promise<T[]> {
-    try { return await collect(); } catch (error) {
-      logger.warn('Deadlock relief skipped unavailable element type', { type, error: error instanceof Error ? error.name : typeof error });
+  private async collectForDeadlockRelief<T>(type: ElementType, collect: () => Promise<CollectionReport<T>>,
+    failures: Array<{ type: string; name: string; error: string }>): Promise<T[]> {
+    try {
+      const report = await collect();
+      failures.push(...report.failures.map(failure => ({ type, name: failure.reference ?? 'collection', error: failure.error.message })));
+      return report.items;
+    } catch (error) {
+      failures.push({ type, name: 'collection', error: error instanceof Error ? error.message : String(error) });
       return [];
     }
   }
 
-  private async collectActiveElementsForDeadlockRelief(): Promise<DeadlockReliefElement[]> {
+  private async collectActiveElementsForDeadlockRelief(failures: Array<{ type: string; name: string; error: string }>): Promise<DeadlockReliefElement[]> {
     const activeElements: DeadlockReliefElement[] = [];
 
-    const activePersonas = await this.collectForDeadlockRelief(ElementType.PERSONA, () => this.personaManager.getActivePersonas());
+    const activePersonas = await this.collectForDeadlockRelief(ElementType.PERSONA, () => this.personaManager.getActiveReferenceReport(), failures);
     activeElements.push(...activePersonas.map((persona) => ({
       type: ElementType.PERSONA,
       name: persona.metadata.name,
     })));
 
-    const activeSkills = await this.collectForDeadlockRelief(ElementType.SKILL, () => this.skillManager.getActiveSkills());
+    const activeSkills = await this.collectForDeadlockRelief(ElementType.SKILL, () => this.skillManager.getActiveReferenceReport(), failures);
     activeElements.push(...activeSkills.map((skill) => ({
       type: ElementType.SKILL,
       name: skill.metadata.name,
     })));
 
-    const activeAgents = await this.collectForDeadlockRelief(ElementType.AGENT, () => this.agentManager.getActiveAgents());
+    const activeAgents = await this.collectForDeadlockRelief(ElementType.AGENT, () => this.agentManager.getActiveReferenceReport(), failures);
     activeElements.push(...activeAgents.map((agent) => {
       const activationIdentifier = this.agentManager.getActivationIdentity(agent)?.value;
       return {
@@ -900,13 +954,13 @@ export class ElementCRUDHandler {
       };
     }));
 
-    const activeMemories = await this.collectForDeadlockRelief(ElementType.MEMORY, () => this.memoryManager.getActiveMemories());
+    const activeMemories = await this.collectForDeadlockRelief(ElementType.MEMORY, () => this.memoryManager.getActiveReferenceReport(), failures);
     activeElements.push(...activeMemories.map((memory) => ({
       type: ElementType.MEMORY,
       name: memory.metadata.name,
     })));
 
-    const activeEnsembles = await this.collectForDeadlockRelief(ElementType.ENSEMBLE, () => this.ensembleManager.getActiveEnsembles());
+    const activeEnsembles = await this.collectForDeadlockRelief(ElementType.ENSEMBLE, () => this.ensembleManager.getActiveReferenceReport(), failures);
     activeElements.push(...activeEnsembles.map((ensemble) => ({
       type: ElementType.ENSEMBLE,
       name: ensemble.metadata.name,
@@ -965,6 +1019,7 @@ export class ElementCRUDHandler {
     state: PersistedActivationStateSnapshot,
     addElement: (element: { type: string; name: string; metadata: Record<string, unknown> }, sessionIds?: string[]) => void,
     findPersistedElement: (type: string, activation: PersistedActivation) => Promise<{ type: string; name: string; metadata: Record<string, unknown> } | null>,
+    failures: PolicyReadFailure[],
   ): Promise<void> {
     const candidates: Array<{ type: string; activation: PersistedActivation }> = [];
 
@@ -977,9 +1032,9 @@ export class ElementCRUDHandler {
     const resolved = await mapPolicyLookups(candidates, async (candidate) => {
       try {
         return await findPersistedElement(candidate.type, candidate.activation);
-      } catch {
-        // Match the previous allSettled behavior: one unreadable activation
-        // must not prevent other persisted policies from being reported.
+      } catch (cause) {
+        failures.push({ type: candidate.type, reference: candidate.activation.name,
+          reason: clientReadFailureReason(cause), sessionIds: [state.sessionId] });
         return null;
       }
     });
@@ -1040,7 +1095,9 @@ export class ElementCRUDHandler {
       }
 
       // Issue #762: Export policies to bridge after deactivation
-      this.policyExportService?.exportPolicies().catch(() => {});
+      this.policyExportService?.exportPolicies().catch(error => {
+        logger.warn('Failed to export policies after element deactivation', { error });
+      });
 
       return { content: result.content };
     } catch (error) {
@@ -1067,16 +1124,56 @@ export class ElementCRUDHandler {
     }
   }
 
-  private async deactivateStoredKey(strategy: ElementActivationStrategy, key: string): Promise<void> {
-    try {
-      await strategy.deactivate(key);
-    } catch (error) {
-      if (!(error instanceof ElementNotFoundError) && !(error instanceof ActivationLookupError)) throw error;
+  /**
+   * Targeted remediation while policy definitions are unavailable: clear one exact failed active
+   * reference without the full policy snapshot, and audit it as its own event.
+   */
+  async clearActivationReference(type: string, key: string, reason = 'Policy definitions are unavailable'): Promise<MCPResponse> {
+    if (this.memoryProvider) {
+      const bound = await this.bindMemoryOperation();
+      const result = await bound.clearActivationReference(type, key, reason);
+      bound.operationCheck?.();
+      return result;
     }
+    this.operationCheck?.();
+    const normalizedType = this.normalizeElementType(type);
+    const result = this.releaseStoredReference(normalizedType, key);
+    SecurityMonitor.logSecurityEvent({
+      type: 'POLICY_REFERENCE_RECOVERED',
+      severity: 'MEDIUM',
+      source: 'ElementCRUDHandler.clearActivationReference',
+      details: `Cleared the active ${normalizedType} reference ${JSON.stringify(key)} without a complete policy snapshot`,
+      additionalData: { elementType: normalizedType, key, reason },
+    });
+    const record = result.activationRecord;
+    if (record) this.getSessionActivationStore()?.recordDeactivation(
+      normalizedType, record.name, record.filename, record.identity,
+    );
+    this.invalidateActivePolicySnapshot();
+    this.policyExportService?.exportPolicies().catch(error => {
+      logger.warn('Failed to export policies after activation reference removal', { error });
+    });
+    return { content: result.content };
+  }
+
+  private releaseStoredReference(type: string, key: string): MCPResponse {
+    const record = findStoredActivation(this.getSessionActivationStore()?.getActivations(type) ?? [], key);
+    const liveKey = record?.identity?.value ?? record?.filename ?? record?.name ?? key;
+    const release = this.getManagerForType(type)?.releaseActivationReference(liveKey);
+    if (!release?.released && !record) throw new ElementNotFoundError(type, key);
+    const label = toSingularLabel(ELEMENT_TYPE_MAP[type]);
+    this.activationMetricsTracker.forget(label, liveKey);
+    this.activationMetricsTracker.forget(label, key);
+    if (record) this.activationMetricsTracker.forget(label, record.filename ?? record.name);
+    return {
+      content: [{ type: 'text', text: release?.message ?? `✅ Cleared stored ${type} reference ${JSON.stringify(key)}` }],
+      activationRecord: record ?? { name: key, identity: release?.identity },
+    };
   }
 
   private async prepareDeletedActivation(type: string, name: string, filename: string, target: DeletionTarget): Promise<DeletionCleanup> {
     this.operationCheck?.();
+    if ('kind' in target && target.kind === 'repair') return this.prepareRepairDeletedActivation(type, filename);
     const manager = this.getManagerForType(type);
     const store = this.getSessionActivationStore();
     const pending = manager?.beginActivationDeletion?.(filename);
@@ -1104,26 +1201,44 @@ export class ElementCRUDHandler {
     }
   }
 
-  private async completeDeletedActivation(
+  private prepareRepairDeletedActivation(type: string, filename: string): DeletionCleanup {
+    return atDeletionCommit(() => {
+      this.operationCheck?.();
+      this.getManagerForType(type)?.releaseActivationReference(filename);
+      const store = this.getSessionActivationStore();
+      for (const record of store?.getActivations(type) ?? []) {
+        if ((record.identity?.value ?? record.filename ?? record.name) !== filename) continue;
+        store?.recordDeactivation(type, record.name, record.filename, record.identity, record);
+        this.activationMetricsTracker.forget(toSingularLabel(ELEMENT_TYPE_MAP[type]), record.filename ?? record.name);
+      }
+      this.activationMetricsTracker.forget(toSingularLabel(ELEMENT_TYPE_MAP[type]), filename);
+      this.invalidateActivePolicySnapshot();
+      return () => this.policyExportService?.exportPolicies() ?? Promise.resolve();
+    });
+  }
+
+  private completeDeletedActivation(
     type: string, name: string, filename: string, clearLive: Array<() => boolean>,
     records: PersistedActivation[], store: IActivationStateStore | undefined,
   ): Promise<void> {
-    this.operationCheck?.();
-    if (clearLive.length > 0) {
-      if (clearLive.map(clear => clear()).includes(false)) return;
-    } else {
-      const strategy = this.strategies.get(type);
-      if (strategy) await this.deactivateStoredKey(strategy, name);
-    }
-    for (const record of records) {
-      store?.recordDeactivation(type, record.name, record.filename, record.identity, record);
-      this.activationMetricsTracker.forget(toSingularLabel(ELEMENT_TYPE_MAP[type]), record.filename ?? record.name);
-    }
-    this.activationMetricsTracker.forget(toSingularLabel(ELEMENT_TYPE_MAP[type]), name);
-    this.activationMetricsTracker.forget(toSingularLabel(ELEMENT_TYPE_MAP[type]), filename);
-    this.invalidateActivePolicySnapshot();
-    this.policyExportService?.exportPolicies().catch(error => {
-      logger.warn('Failed to export policies after element deletion', { error });
+    return new Promise<void>(resolve => {
+      this.operationCheck?.();
+      if (clearLive.length > 0) {
+        if (clearLive.map(clear => clear()).includes(false)) return resolve();
+      } else {
+        this.getManagerForType(type)?.releaseActivationReference(name);
+      }
+      for (const record of records) {
+        store?.recordDeactivation(type, record.name, record.filename, record.identity, record);
+        this.activationMetricsTracker.forget(toSingularLabel(ELEMENT_TYPE_MAP[type]), record.filename ?? record.name);
+      }
+      this.activationMetricsTracker.forget(toSingularLabel(ELEMENT_TYPE_MAP[type]), name);
+      this.activationMetricsTracker.forget(toSingularLabel(ELEMENT_TYPE_MAP[type]), filename);
+      this.invalidateActivePolicySnapshot();
+      this.policyExportService?.exportPolicies().catch(error => {
+        logger.warn('Failed to export policies after element deletion', { error });
+      });
+      resolve();
     });
   }
 
@@ -1133,17 +1248,10 @@ export class ElementCRUDHandler {
     try {
       return await strategy.deactivate(name);
     } catch (error) {
-      if (!(error instanceof ElementNotFoundError) && !(error instanceof ActivationLookupError)) throw error;
+      if (!(error instanceof ElementNotFoundError) && !(error instanceof ActivationLookupError) && !(error instanceof ElementReadError)) throw error;
       const record = findStoredActivation(this.getSessionActivationStore()?.getActivations(type) ?? [], name);
       if (!record) throw error;
-      // Retry with the exact stored live key (personas use filenames, agents use identities).
-      // Missing or unreadable definitions do not prevent clearing an exact saved record.
-      await this.deactivateStoredKey(strategy, record.identity?.value ?? record.filename ?? record.name);
-      // Use the persisted identity, never a guessed alias, for the normal removal path.
-      return {
-        content: [{ type: 'text', text: `✅ Cleared stored ${type} reference ${JSON.stringify(name)}` }],
-        activationRecord: record,
-      };
+      return this.releaseStoredReference(type, name);
     }
   }
 
@@ -1192,23 +1300,12 @@ export class ElementCRUDHandler {
     } catch (error) {
       // Issue #708: When element is "not found", check if it actually exists
       // on disk but failed validation. Return a distinct error in that case.
-      if (error instanceof ElementNotFoundError) {
-        const normalizedType = this.normalizeElementType(type);
-        const manager = this.getManagerForType(normalizedType);
-        if (manager && typeof manager.getInvalidElement === 'function') {
-          const invalidRecord = manager.getInvalidElement(name);
-          if (invalidRecord) {
-            return formatValidationFailedError(
-              normalizedType as ElementType,
-              name,
-              invalidRecord.reason,
-              invalidRecord.filePath
-            );
-          }
-        }
-        throw error;
-      }
+      if (error instanceof ElementNotFoundError) return this.invalidElementDetails(name, type, error);
+      const unreadable = this.readFailureDetails(name, type, error);
+      if (unreadable) return unreadable;
 
+      // A refused caller reference fails the operation like a missing element; it is not a result.
+      if (error instanceof ValidationError) throw error;
       logger.error(`Failed to get element details:`, { type, name, error });
       return {
         content: [{
@@ -1217,6 +1314,40 @@ export class ElementCRUDHandler {
         }]
       };
     }
+  }
+
+  /**
+   * A definition that could not be read answers with its client-safe reason and its own reference.
+   * A definition whose content was rejected keeps the invalid-element text; a storage failure
+   * establishes nothing about the file; an ambiguous name is not an invalid definition.
+   */
+  private readFailureDetails(name: string, type: string, error: unknown) {
+    const ambiguous = error instanceof ElementIndeterminateError && error.ambiguous;
+    const failures = error instanceof ElementReadError && error.kind !== 'absent' && !ambiguous ? error.failures : [];
+    // Typed provenance decides: a definition whose content was rejected is invalid; any other
+    // failure (storage, scan, indeterminate) is unavailable and claims nothing about the file.
+    const failure = failures.find(candidate => candidate.contentRejected) ?? failures[0];
+    if (!failure) return undefined;
+    return this.definitionFailureDetails(name, type, failure);
+  }
+
+  private definitionFailureDetails(name: string, type: string, failure: ElementReadFailure) {
+    const normalizedType = this.normalizeElementType(type) as ElementType;
+    return failure.contentRejected
+      ? formatUnreadableElementError(normalizedType, name, failure.reason, failure.reference)
+      : formatUnavailableElementError(normalizedType, name, failure.reason, failure.reference);
+  }
+
+  /** A prior read failure carries the same content-rejection provenance as a current failure. */
+  private invalidElementDetails(name: string, type: string, notFound: ElementNotFoundError) {
+    const normalizedType = this.normalizeElementType(type);
+    const invalidRecord = this.getManagerForType(normalizedType)?.getInvalidElement?.(name);
+    if (!invalidRecord) throw notFound;
+    return this.definitionFailureDetails(name, type, {
+      reference: invalidRecord.filePath,
+      reason: invalidRecord.clientSafeReason,
+      ...(invalidRecord.contentRejected ? { contentRejected: true as const } : {}),
+    });
   }
 
   /**
@@ -1534,12 +1665,12 @@ export class ElementCRUDHandler {
       const [elementType, strategy] = next.value;
       try {
         const result = await strategy.getActiveElements();
-        const text = result.content[0]?.text;
+        const text = result.content.map(item => item.text).join('\n');
         if (text) {
           sections.push(`[${elementType}]\n${text}`);
         }
       } catch (err) {
-        logger.debug(`Failed to get active ${elementType} elements`, { error: err });
+        sections.push(`[${elementType}]\nListing unavailable: ${err instanceof Error ? err.message : String(err)}`);
       }
       await collectNext(iterator);
     };

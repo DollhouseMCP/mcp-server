@@ -146,7 +146,7 @@ export class SharedPoolServiceRegistrar {
     });
 
     const { PublicElementDiscovery } = await import('./PublicElementDiscovery.js');
-    container.register('PublicElementDiscovery', () => new PublicElementDiscovery(sharedDir));
+    container.register('PublicElementDiscovery', () => new PublicElementDiscovery(sharedDir, container.resolve('FileOperationsService')));
 
     logger.info('[SharedPoolServiceRegistrar] All shared-pool services registered');
     return true;

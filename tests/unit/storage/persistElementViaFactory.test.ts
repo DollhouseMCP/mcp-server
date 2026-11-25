@@ -19,6 +19,7 @@ import type {
 
 function makeWritableLayer(): jest.Mocked<IWritableStorageLayer> {
   return {
+    cachedInstanceCurrency: 'unverifiable',
     scan: jest.fn(),
     hasCompletedScan: jest.fn(() => true),
     notifySaved: jest.fn(),
@@ -33,6 +34,7 @@ function makeWritableLayer(): jest.Mocked<IWritableStorageLayer> {
 
 function makeReadOnlyLayer(): IStorageLayer {
   return {
+    cachedInstanceCurrency: 'currency-check',
     scan: jest.fn(),
     hasCompletedScan: jest.fn(() => true),
     notifySaved: jest.fn(),

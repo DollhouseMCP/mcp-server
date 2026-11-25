@@ -88,8 +88,11 @@ describe('autoIncrementVersion in editElement', () => {
 
     // Mock FileLockManager instance methods so FileOperationsService
     // actually writes/reads files (auto-mock makes them return undefined).
+    // Mirrors the real contract: the write reports the written file's version.
     (fileLockManager as any).atomicWriteFile = jest.fn(async (filePath: string, content: string) => {
       await fs.writeFile(filePath, content, 'utf-8');
+      const written = await fs.stat(filePath);
+      return { mtimeMs: written.mtimeMs, sizeBytes: written.size };
     });
     (fileLockManager as any).atomicReadFile = jest.fn(async (filePath: string) => {
       return fs.readFile(filePath, 'utf-8');
@@ -101,6 +104,11 @@ describe('autoIncrementVersion in editElement', () => {
       ensureInitialized: async () => {},
       getPersonaIndicator: () => '🎭'
     } as any;
+    context.getManagerForType = (type: string) => ({
+      [ElementType.PERSONA]: context.personaManager, [ElementType.SKILL]: context.skillManager,
+      [ElementType.TEMPLATE]: context.templateManager, [ElementType.AGENT]: context.agentManager,
+      [ElementType.MEMORY]: context.memoryManager, [ElementType.ENSEMBLE]: context.ensembleManager,
+    } as Record<string, unknown>)[type];
   });
 
   afterEach(async () => {

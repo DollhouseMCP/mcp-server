@@ -2,7 +2,8 @@
  * Server setup and initialization
  */
 
-import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+type ProtocolServer = McpServer['server'];
 import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError } from "@modelcontextprotocol/sdk/types.js";
 import type { ToolRegistry } from '../handlers/ToolRegistry.js';
 // import { getUserTools } from './tools/UserTools.js'; // DEPRECATED - replaced by dollhouse_config
@@ -10,6 +11,7 @@ import type { ToolRegistry } from '../handlers/ToolRegistry.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { logger } from '../utils/logger.js';
+import { BestEffortDelivery } from '../logging/BestEffortDelivery.js';
 import { LRUCache } from '../cache/LRUCache.js';
 import { getValidatedToolCacheTTL } from '../config/performance-constants.js';
 import { generatePrescriptiveDigest } from './PrescriptiveDigest.js';
@@ -24,8 +26,8 @@ export class ServerSetup {
   private static readonly TOOL_CACHE_KEY = 'tool_discovery_list';
   /** Issue #706: Max ms to wait for deferred setup before proceeding anyway. */
   private static readonly DEFERRED_SETUP_TIMEOUT_MS = 10_000;
-  private toolCache: LRUCache<Tool[]>;
-  private contextTracker: ContextTracker;
+  private readonly toolCache: LRUCache<Tool[]>;
+  private readonly contextTracker: ContextTracker;
   private readonly sessionResolver?: SessionResolver;
   private elementCrudHandler: ElementCRUDHandler | null = null;
   /** Issue #706 Phase 4: Promise that resolves when deferred setup completes. */
@@ -70,7 +72,7 @@ export class ServerSetup {
   /**
    * Initialize the server with all tools and handlers
    */
-  setupServer(server: Server, toolRegistry: ToolRegistry, elementCrudHandler?: ElementCRUDHandler): void {
+  setupServer(server: ProtocolServer, toolRegistry: ToolRegistry, elementCrudHandler?: ElementCRUDHandler): void {
     this.elementCrudHandler = elementCrudHandler ?? null;
 
     // Setup request handlers
@@ -79,33 +81,25 @@ export class ServerSetup {
     this.setupToolRegistryChangeHandler(server, toolRegistry);
   }
 
-  private setupToolRegistryChangeHandler(server: Server, toolRegistry: ToolRegistry): void {
+  private setupToolRegistryChangeHandler(server: ProtocolServer, toolRegistry: ToolRegistry): void {
     toolRegistry.onChange((event) => {
       this.invalidateToolCache('ToolRegistry change');
       if (event.toolNames.length === 0) return;
       // Best-effort client notification: a notification failure (sync or async)
       // must never crash tool registration.
-      try {
-        server.sendToolListChanged().catch(error => {
-          logger.debug('ToolDiscoveryCache: Tool list changed notification was not delivered', {
-            error: error instanceof Error ? error.message : String(error),
-            reason: event.reason,
-            toolNames: event.toolNames,
-          });
+      const delivery = new BestEffortDelivery('ToolDiscoveryCache', (_source, _suppressed, errorType) => {
+        logger.debug('ToolDiscoveryCache: Tool list changed notification was not delivered', {
+          error: errorType, reason: event.reason, toolNames: event.toolNames,
         });
-      } catch (error) {
-        logger.debug('ToolDiscoveryCache: Tool list changed notification could not be sent', {
-          error: error instanceof Error ? error.message : String(error),
-          reason: event.reason,
-        });
-      }
+      });
+      delivery.run(() => server.sendToolListChanged());
     });
   }
   
   /**
    * Setup the ListToolsRequest handler with caching
    */
-  private setupListToolsHandler(server: Server, toolRegistry: ToolRegistry): void {
+  private setupListToolsHandler(server: ProtocolServer, toolRegistry: ToolRegistry): void {
     server.setRequestHandler(ListToolsRequestSchema, async (request) => {
       const session = this.sessionResolver?.(request);
       const context = session
@@ -146,9 +140,6 @@ export class ServerSetup {
   }
   
   /**
-   * Setup the CallToolRequest handler
-   */
-  /**
    * Issue #492: Prescriptive digest for active element context recovery.
    * After context compaction, the LLM loses active element instructions;
    * this digest tells it how to recover them. Best-effort — never fails a response.
@@ -156,18 +147,24 @@ export class ServerSetup {
   private async appendPrescriptiveDigest(response: any, toolName: string): Promise<void> {
     if (!this.elementCrudHandler || toolName === 'get_active_elements') return;
     try {
-      const activeElements = await this.elementCrudHandler.getActiveElementsForPolicy();
-      if (activeElements.length === 0) return;
-      const digest = generatePrescriptiveDigest(activeElements);
+      // Advisory: the digest may share an overlapping report; enforcement reads its own, fresh.
+      const report = await this.elementCrudHandler.getActiveElementsForPolicyReport({ allowCoalescing: true });
+      if (report.items.length === 0 && report.complete) return;
+      const digest = generatePrescriptiveDigest(report.items);
+      const failures = report.failures.map(failure => `${failure.type}: ${failure.reference ?? 'collection'}: ${failure.reason}`);
       if (response?.content?.[0]?.type === 'text') {
         response.content[0].text += '\n\n' + digest;
+        if (!report.complete) response.content[0].text += '\nPolicy context incomplete:\n' + failures.join('\n');
       }
-    } catch {
-      // Best-effort — never fail a tool response for the digest
+    } catch (cause) {
+      if (response?.content?.[0]?.type === 'text') {
+        response.content[0].text += '\nPolicy context unavailable: ' + (cause instanceof Error ? cause.message : String(cause));
+      }
     }
   }
 
-  private setupCallToolHandler(server: Server, toolRegistry: ToolRegistry): void {
+  /** Setup the CallToolRequest handler */
+  private setupCallToolHandler(server: ProtocolServer, toolRegistry: ToolRegistry): void {
     server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const execute = async () => {
       // Issue #706 Phase 4: Hold first request(s) until deferred setup completes

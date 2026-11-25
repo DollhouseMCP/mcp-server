@@ -34,6 +34,21 @@ describe('Container Startup - Behavior (Non-Flaky)', () => {
   });
 
   describe('Parallel Check Behavior', () => {
+    it('sets up handlers without reading caller-owned persona definitions', async () => {
+      await container.preparePortfolio();
+      const manager = container.resolve<any>('PersonaManager');
+      const storage = manager.storageLayer;
+      const collection = jest.spyOn(storage, 'readCollection');
+      const indexed = jest.spyOn(storage, 'readIndexedPath');
+      const load = jest.spyOn(manager, 'load');
+      const reload = jest.spyOn(manager, 'reload');
+      await container.bootstrapHandlers();
+      expect(collection).not.toHaveBeenCalled();
+      expect(indexed).not.toHaveBeenCalled();
+      expect(load).not.toHaveBeenCalled();
+      expect(reload).not.toHaveBeenCalled();
+    });
+
     it('should call both migration and portfolio checks', async () => {
       const migrationManager = container.resolve<any>('MigrationManager');
       const portfolioManager = container.resolve<any>('PortfolioManager');

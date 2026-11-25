@@ -8,6 +8,7 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import type { HandlerRegistry } from '../../../../src/handlers/mcp-aql/MCPAQLHandler.js';
 import { MCPAQLHandler } from '../../../../src/handlers/mcp-aql/MCPAQLHandler.js';
+import { requireCompletePolicyReport } from '../../../../src/services/policy/PolicyReport.js';
 import { Gatekeeper } from '../../../../src/handlers/mcp-aql/Gatekeeper.js';
 import { GatekeeperHandler } from '../../../../src/handlers/mcp-aql/GatekeeperHandler.js';
 import { PermissionLevel } from '../../../../src/handlers/mcp-aql/GatekeeperTypes.js';
@@ -61,15 +62,16 @@ describe('MCPAQLHandler', () => {
       elementCRUD: {
         createElement: jest.fn().mockResolvedValue({ name: 'test-element' }),
         listElements: jest.fn().mockResolvedValue([]),
-        getElements: jest.fn().mockResolvedValue([
+        getElements: jest.fn().mockResolvedValue({ complete: true, failures: [], items: [
           { metadata: { name: TEST_PERSONA_NAME, description: TEST_PERSONA_DESCRIPTION }, content: TEST_CONTENT },
-        ]),
+        ] }),
         getElementDetails: jest.fn().mockResolvedValue({ name: 'test', type: 'persona' }),
         editElement: jest.fn().mockResolvedValue({ updated: true }),
         validateElement: jest.fn().mockResolvedValue({ valid: true }),
         deleteElement: jest.fn().mockResolvedValue({ deleted: true }),
         activateElement: jest.fn().mockResolvedValue({ activated: true }),
         deactivateElement: jest.fn().mockResolvedValue({ deactivated: true }),
+        clearActivationReference: jest.fn().mockResolvedValue({ content: [{ type: 'text', text: 'Reference cleared' }] }),
         releaseDeadlock: jest.fn().mockResolvedValue({
           sessionId: 'test-session',
           deactivated: [],
@@ -78,7 +80,7 @@ describe('MCPAQLHandler', () => {
         }),
         getActiveElements: jest.fn().mockResolvedValue([]),
         getActiveElementsForPolicy: jest.fn().mockResolvedValue([]),
-        getPolicyElementsForReport: jest.fn().mockResolvedValue([]),
+        getPolicyElementsForReport: jest.fn().mockResolvedValue({ items: [], failures: [], complete: true }),
       },
       memoryManager: {
         find: jest.fn().mockResolvedValue({
@@ -151,7 +153,7 @@ describe('MCPAQLHandler', () => {
 
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error).toContain('policy store unavailable');
+      expect(result.error).toContain('Storage or validation operation failed');
     }
     expect(mockRegistry.elementCRUD.listElements).not.toHaveBeenCalled();
   });
@@ -447,7 +449,7 @@ describe('MCPAQLHandler', () => {
     });
 
     it('uses reportable policy elements for dashboard session views', async () => {
-      (mockRegistry.elementCRUD.getPolicyElementsForReport as jest.Mock).mockResolvedValue([
+(mockRegistry.elementCRUD.getPolicyElementsForReport as jest.Mock).mockResolvedValue({ complete: true, failures: [], items: [
         {
           type: 'skill',
           name: 'audit-trace-demo',
@@ -462,7 +464,7 @@ describe('MCPAQLHandler', () => {
           },
           sessionIds: ['session-demo-1'],
         },
-      ]);
+      ] });
 
       const result = await handler.handleRead({
         operation: 'get_effective_cli_policies',
@@ -484,7 +486,7 @@ describe('MCPAQLHandler', () => {
 
   describe('evaluate_permission', () => {
     it('uses session-scoped reportable policy elements when session_id is provided', async () => {
-      (mockRegistry.elementCRUD.getPolicyElementsForReport as jest.Mock).mockResolvedValue([
+(mockRegistry.elementCRUD.getPolicyElementsForReport as jest.Mock).mockResolvedValue({ complete: true, failures: [], items: [
         {
           type: 'skill',
           name: 'audit-trace-demo',
@@ -498,7 +500,7 @@ describe('MCPAQLHandler', () => {
           },
           sessionIds: ['session-follower-1'],
         },
-      ]);
+      ] });
 
       const result = await handler.handleRead({
         operation: 'evaluate_permission',
@@ -758,10 +760,10 @@ describe('MCPAQLHandler', () => {
       });
 
       it('should support multi-word search matching individual words', async () => {
-        (mockRegistry.elementCRUD.getElements as jest.Mock).mockResolvedValue([
+(mockRegistry.elementCRUD.getElements as jest.Mock).mockResolvedValue({ complete: true, failures: [], items: [
           { metadata: { name: 'Code Review Expert', description: 'Reviews code for quality' }, content: '' },
           { metadata: { name: 'API Helper', description: 'Helps with API calls' }, content: '' },
-        ]);
+        ] });
 
         const input: OperationInput = {
           operation: 'search_elements',
@@ -781,12 +783,12 @@ describe('MCPAQLHandler', () => {
       });
 
       it('should support pagination params', async () => {
-        (mockRegistry.elementCRUD.getElements as jest.Mock).mockResolvedValue(
+        (mockRegistry.elementCRUD.getElements as jest.Mock).mockResolvedValue({ complete: true, failures: [], items:
           Array.from({ length: 30 }, (_, i) => ({
             metadata: { name: `Element ${i}`, description: `Description ${i}` },
             content: `test content ${i}`,
           }))
-        );
+        });
 
         const input: OperationInput = {
           operation: 'search_elements',
@@ -807,10 +809,10 @@ describe('MCPAQLHandler', () => {
       });
 
       it('should support sort params', async () => {
-        (mockRegistry.elementCRUD.getElements as jest.Mock).mockResolvedValue([
+(mockRegistry.elementCRUD.getElements as jest.Mock).mockResolvedValue({ complete: true, failures: [], items: [
           { metadata: { name: 'Zebra', description: 'test' }, content: '' },
           { metadata: { name: 'Apple', description: 'test' }, content: '' },
-        ]);
+        ] });
 
         const input: OperationInput = {
           operation: 'search_elements',
@@ -1703,13 +1705,14 @@ describe('MCPAQLHandler', () => {
         elementCRUD: {
           createElement: jest.fn().mockResolvedValue({ name: 'test-element' }),
           listElements: jest.fn().mockResolvedValue([]),
-          getElements: jest.fn().mockResolvedValue([]),
+          getElements: jest.fn().mockResolvedValue({ items: [], failures: [], complete: true }),
           getElementDetails: jest.fn().mockResolvedValue({}),
           editElement: jest.fn().mockResolvedValue({ updated: true }),
           validateElement: jest.fn().mockResolvedValue({ valid: true }),
           deleteElement: jest.fn().mockResolvedValue({ deleted: true }),
           activateElement: jest.fn().mockResolvedValue({ activated: true }),
           deactivateElement: jest.fn().mockResolvedValue({ deactivated: true }),
+          clearActivationReference: jest.fn().mockResolvedValue({ content: [{ type: 'text', text: 'Reference cleared' }] }),
           getActiveElements: jest.fn().mockResolvedValue([]),
           getActiveElementsForPolicy: jest.fn().mockResolvedValue([]),
           getPolicyElementsForReport: jest.fn().mockResolvedValue([]),
@@ -1861,6 +1864,70 @@ describe('MCPAQLHandler', () => {
         .toThrow('Gatekeeper instance is required');
     });
 
+    it.each(['broken-skill', 'healthy-skill'])('limits unavailable-policy recovery to the exact failed target (%s)', async target => {
+      const report = { items: [], failures: [{ type: 'skills', reference: 'broken-skill', reason: 'Definition unreadable' }], complete: false };
+      const crud = enforcingRegistry.elementCRUD as any;
+      crud.getActiveElementsForPolicy.mockImplementation(async () => requireCompletePolicyReport(report));
+      crud.getActiveElementsForPolicyReport = jest.fn().mockResolvedValue(report);
+      const result = await enforcingHandler.handleRead({ operation: 'deactivate_element',
+        params: { element_type: 'skill', element_name: target } });
+      if (target === 'broken-skill') {
+        expect(result.error).toBeUndefined();
+        expect(crud.clearActivationReference).toHaveBeenCalledWith('skill', target, 'Definition unreadable');
+        expect(crud.deactivateElement).not.toHaveBeenCalled();
+      }
+      expect(result).toMatchObject({ success: target === 'broken-skill' });
+      if (target === 'healthy-skill') {
+        expect(result.error).toContain('skills/broken-skill');
+        expect(result.error).toContain('Deactivate that exact reference: skills/broken-skill.');
+        expect(result.error).not.toContain('deadlock relief');
+        expect(crud.deactivateElement).not.toHaveBeenCalled();
+      }
+    });
+
+    it('refuses failed-reference recovery when any record other than the target failed too', async () => {
+      const report = { items: [], complete: false, failures: [
+        { type: 'skills', reference: 'broken-skill', reason: 'Definition unreadable' },
+        { type: 'ensembles', reference: 'broken-ensemble', reason: 'Definition unreadable' }] };
+      const crud = enforcingRegistry.elementCRUD as any;
+      crud.getActiveElementsForPolicy.mockImplementation(async () => requireCompletePolicyReport(report));
+      crud.getActiveElementsForPolicyReport = jest.fn().mockResolvedValue(report);
+      const result = await enforcingHandler.handleRead({ operation: 'deactivate_element',
+        params: { element_type: 'skill', element_name: 'broken-skill' } });
+      expect(result.success).toBe(false);
+      expect(crud.clearActivationReference).not.toHaveBeenCalled();
+      expect(crud.deactivateElement).not.toHaveBeenCalled();
+    });
+
+    it.each(['deny', 'confirm'])('honors a readable persona %s policy during failed-reference recovery', async restriction => {
+      const report = { items: [{ type: 'persona', name: 'Restrictive persona',
+        metadata: { gatekeeper: { [restriction]: ['deactivate_element'] } } }],
+      failures: [{ type: 'skills', reference: 'broken-skill', reason: 'Definition unreadable' }], complete: false };
+      const crud = enforcingRegistry.elementCRUD as any;
+      crud.getActiveElementsForPolicy.mockImplementation(async () => requireCompletePolicyReport(report));
+      crud.getActiveElementsForPolicyReport = jest.fn().mockResolvedValue(report);
+      const enforce = jest.spyOn(enforcingRegistry.gatekeeper, 'enforce');
+      const result = await enforcingHandler.handleRead({ operation: 'deactivate_element',
+        params: { element_type: 'skill', element_name: 'broken-skill' } });
+      if (restriction === 'deny') {
+        expect(result.success).toBe(false);
+        expect(crud.deactivateElement).not.toHaveBeenCalled();
+        expect(crud.clearActivationReference).not.toHaveBeenCalled();
+      } else {
+        expect(enforce.mock.results[0].value).toMatchObject({ confirmationPending: true, policySource: 'element_policy' });
+      }
+    });
+
+    it('names the failed reference and recovery options when refusing ordinary reads', async () => {
+      (enforcingRegistry.elementCRUD as any).getActiveElementsForPolicy.mockImplementation(async () =>
+        requireCompletePolicyReport({ items: [], failures: [{ type: 'skills', reference: 'broken-skill', reason: 'Definition unreadable' }], complete: false }));
+      const result = await enforcingHandler.handleRead({ operation: 'list_elements', params: { element_type: 'skill' } });
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('skills/broken-skill');
+      expect(result.error).toContain('Deactivate that exact reference: skills/broken-skill.');
+      expect(result.error).not.toContain('deadlock relief');
+    });
+
     it('should fail closed when getActiveElementsForPolicy is unavailable', async () => {
       // Make getActiveElementsForPolicy throw
       (enforcingRegistry.elementCRUD as any).getActiveElementsForPolicy
@@ -1878,7 +1945,7 @@ describe('MCPAQLHandler', () => {
 
       const result = await enforcingHandler.handleRead(input);
       expect(result.success).toBe(false);
-      expect(result.error).toContain('Manager unavailable');
+      expect(result.error).toContain('Storage or validation operation failed');
     });
   });
 

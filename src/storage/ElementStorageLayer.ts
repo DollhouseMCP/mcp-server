@@ -16,6 +16,7 @@ import { FileStorageBackend } from './FileStorageBackend.js';
 import type { FileOperationsService } from '../services/FileOperationsService.js';
 
 export interface ElementStorageLayerOptions {
+  elementType?: string;
   /** Absolute path to the element directory (static; used when no resolver is provided) */
   elementDir: string;
   /** File extension to filter (e.g. '.md') */
@@ -25,6 +26,7 @@ export interface ElementStorageLayerOptions {
   /** Override the storage backend (useful for testing) */
   storageBackend?: IStorageBackend;
   retainDirectoryState?: (dir: string) => boolean;
+  onFailedRecordRecovered?: (reference: string) => void;
   /**
    * Dynamic per-user directory resolver. When present, overrides the static
    * `elementDir` at call time. Used in HTTP multi-user mode where each
@@ -41,20 +43,22 @@ export class ElementStorageLayer extends FileStorageLayerBase<DirScanState> {
   private readonly retainDirectoryState?: (dir: string) => boolean;
   private readonly staticElementDir: string;
   private readonly elementDirResolver?: () => string;
-  private readonly fileExtension: string;
+  protected readonly fileExtension: string;
+  private readonly elementType?: string;
 
   constructor(
-    fileOperationsService: FileOperationsService,
+    private readonly fileOperationsService: FileOperationsService,
     options: ElementStorageLayerOptions
   ) {
     super(options.storageBackend ?? new FileStorageBackend(fileOperationsService),
       new DirectoryStateCache<DirScanState>(
         (_state, dir) => !this.retainDirectoryState?.(dir),
-      ), options.scanCooldownMs);
+      ), options.scanCooldownMs, options.onFailedRecordRecovered);
     this.retainDirectoryState = options.retainDirectoryState;
     this.staticElementDir = options.elementDir;
     this.elementDirResolver = options.elementDirResolver;
     this.fileExtension = options.fileExtension;
+    this.elementType = options.elementType;
   }
 
   /** The active element directory — dynamic when a resolver is present. */
@@ -82,6 +86,13 @@ export class ElementStorageLayer extends FileStorageLayerBase<DirScanState> {
     return state.table.entries().map(entry => entry.filePath);
   }
 
+  /** A definition read is audited by the layer that performs it. */
+  override async readContent(reference: string): Promise<string> {
+    const content = await super.readContent(reference);
+    this.fileOperationsService.auditElementRead(path.join(this.elementDir, reference), this.elementType ?? 'element', 'ElementStorageLayer.readContent');
+    return content;
+  }
+
   // ---- scan hooks (FileStorageLayerBase) ----
 
   /** Elements need only the shared directory state. */
@@ -106,7 +117,7 @@ export class ElementStorageLayer extends FileStorageLayerBase<DirScanState> {
   }
 
   protected readIndexEntry(content: string, relPath: string, stats: Map<string, { mtimeMs: number; sizeBytes: number }>): ElementIndexEntry {
-    const fm = FrontmatterParser.extractMetadata(content);
+    const fm = FrontmatterParser.extractMetadata(content, this.elementType, relPath);
     const meta = stats.get(relPath);
 
     return {

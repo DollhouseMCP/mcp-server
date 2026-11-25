@@ -321,6 +321,7 @@ document.addEventListener('DOMContentLoaded', function() {
         });
 
         console.log('✅ PROOF: Section-format default render:', result.content);
+        expect(result.error).toBeUndefined();
         expect(result.success).toBe(true);
         expect(result.content).toContain('<h1>My Dashboard</h1>');
         expect(result.content).toContain('<p>Welcome, Alice!</p>');

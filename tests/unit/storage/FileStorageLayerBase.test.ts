@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import { markContentRejection } from '../../../src/security/contentRejection.js';
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { FileStorageLayerBase, type DirScanState } from '../../../src/storage/FileStorageLayerBase.js';
 import { DirectoryStateCache } from '../../../src/storage/DirectoryStateCache.js';
@@ -15,6 +16,7 @@ function deferred<T>() {
 }
 
 class TestStorage extends FileStorageLayerBase {
+  protected readonly fileExtension = '.md';
   protected readonly scanLabel = 'TestStorage';
   protected get directory(): string { return TEST_DIR; }
   readonly events: string[] = [];
@@ -50,7 +52,9 @@ function setup(cooldown = 1000) {
     directoryExists: jest.fn<IStorageBackend['directoryExists']>().mockResolvedValue(true),
     listDirectories: jest.fn<IStorageBackend['listDirectories']>().mockResolvedValue([]),
     listFiles: jest.fn<IStorageBackend['listFiles']>().mockResolvedValue([]),
-    stat: jest.fn<IStorageBackend['stat']>(),
+    stat: jest.fn<IStorageBackend['stat']>().mockResolvedValue({
+      relativePath: 'one.md', absolutePath: path.join(TEST_DIR, 'one.md'), mtimeMs: 1, sizeBytes: 1,
+    }),
     statMany: jest.fn<IStorageBackend['statMany']>().mockResolvedValue({ stats: new Map([
       ['one.md', { relativePath: 'one.md', absolutePath: path.join(TEST_DIR, 'one.md'), mtimeMs: 1, sizeBytes: 1 }],
     ]), failures: new Map() }),
@@ -62,6 +66,121 @@ function setup(cooldown = 1000) {
 afterEach(() => jest.restoreAllMocks());
 
 describe('FileStorageLayerBase', () => {
+  it.each(['ENOENT', 'ENOTDIR'])('treats a %s read as absent only when it proves absence, on scan, recheck and save', async code => {
+    const { backend, layer } = setup(0);
+    const error = Object.assign(new Error('read target'), { code });
+    const read = jest.mocked(backend.readFile).mockRejectedValue(error);
+    const absent = code === 'ENOENT';
+    await layer.scan();
+    expect([...layer.state.table.unindexed().keys()]).toEqual(absent ? [] : ['one.md']);
+    if (!absent) expect(layer.state.table.unindexed().get('one.md')).toMatchObject({ code: 'ENOTDIR' });
+    expect(layer.state.table.get('one.md')?.status).toBe(absent ? undefined : 'failed');
+    // A recheck of the failed record sees the same failure and keeps it; a vanished file is dropped.
+    jest.mocked(backend.stat).mockResolvedValue({ relativePath: 'one.md', absolutePath: path.join(TEST_DIR, 'one.md'), mtimeMs: 2, sizeBytes: 1 });
+    expect((await layer.readIndexedPath(['one'])).unindexed).toEqual(absent ? [] : ['one.md']);
+    read.mockResolvedValue('One');
+    jest.mocked(backend.stat).mockResolvedValue({ relativePath: 'one.md', absolutePath: path.join(TEST_DIR, 'one.md'), mtimeMs: 3, sizeBytes: 1 });
+    await layer.readIndexedPath(['one']);
+    expect(layer.state.table.get('one.md')?.status).toBe(absent ? undefined : 'indexed');
+    read.mockRejectedValue(error);
+    await layer.notifySaved('one.md', path.join(TEST_DIR, 'one.md'));
+    expect(layer.state.table.get('one.md')?.status).toBe(absent ? undefined : 'failed');
+  });
+
+  it('coalesces concurrent failed-path checks without coalescing unrelated names', async () => {
+    const { backend, layer } = setup(60_000);
+    jest.mocked(backend.readFile).mockRejectedValue(markContentRejection(new Error('invalid content')));
+    await layer.scan();
+    const entered = deferred<void>();
+    const finish = deferred<void>();
+    jest.mocked(backend.stat).mockImplementation(async () => {
+      entered.resolve();
+      await finish.promise;
+      return { relativePath: 'one.md', absolutePath: path.join(TEST_DIR, 'one.md'), mtimeMs: 1, sizeBytes: 1 };
+    });
+    const first = layer.readIndexedPath(['one']);
+    await entered.promise;
+    const second = layer.readIndexedPath(['one.md']);
+    finish.resolve();
+    await Promise.all([first, second]);
+    expect(backend.stat).toHaveBeenCalledTimes(1);
+    expect(backend.readFile).toHaveBeenCalledTimes(1);
+    expect(backend.statMany).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['clear', 'save', 'delete', 'dispose'] as const)('does not publish a delayed repair after %s', async action => {
+    const { backend, layer } = setup(60_000);
+    const read = jest.mocked(backend.readFile).mockRejectedValue(markContentRejection(new Error('invalid content')));
+    await layer.scan();
+    jest.mocked(backend.stat).mockResolvedValue({ relativePath: 'one.md', absolutePath: path.join(TEST_DIR, 'one.md'), mtimeMs: 2, sizeBytes: 1 });
+    const entered = deferred<void>();
+    const finish = deferred<string>();
+    read.mockImplementation(async () => { entered.resolve(); return finish.promise; });
+    const pending = layer.readIndexedPath(['one']);
+    await entered.promise;
+    const state = layer.state;
+    if (action === 'clear') layer.clear();
+    if (action === 'delete') layer.notifyDeleted('one.md');
+    if (action === 'save') state.table.applySaved('one.md', 3, {
+      filePath: 'one.md', name: 'Newer', mtimeMs: 3, sizeBytes: 1, description: '', version: '1', author: '', tags: [],
+    });
+    if (action === 'dispose') await layer.dispose();
+    finish.resolve('Stale');
+    if (action === 'dispose') await expect(pending).rejects.toThrow('disposed');
+    else await pending;
+    expect(state.table.getPathByName('Stale')).toBeUndefined();
+    if (action === 'save') expect(state.table.getPathByName('Newer')).toBe('one.md');
+  });
+
+  it('rechecks a failed path without rescanning siblings and recovers through name evidence', async () => {
+    const { backend, layer } = setup(60_000);
+    const stat = { relativePath: 'one.md', absolutePath: path.join(TEST_DIR, 'one.md'), mtimeMs: 1, sizeBytes: 1 };
+    jest.mocked(backend.stat).mockResolvedValue(stat);
+    const read = jest.mocked(backend.readFile).mockRejectedValue(markContentRejection(new Error('invalid content')));
+    await layer.scan();
+    // An unknown name casts the unattributed net: inside the cooldown the record is rechecked once, not once per call.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      expect((await layer.readIndexedPath(['unknown'])).unindexed).toEqual(['one.md']);
+    }
+    expect(backend.stat).toHaveBeenCalledTimes(1);
+    // A name the record could hold is rechecked on every lookup, so a repair is seen at once.
+    expect((await layer.readIndexedPath(['one'])).unindexed).toEqual(['one.md']);
+    expect(backend.stat).toHaveBeenCalledTimes(2);
+    expect(layer.events.filter(event => event === 'enumerate')).toHaveLength(1);
+    expect(backend.statMany).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledTimes(1);
+    jest.mocked(backend.stat).mockResolvedValue({ ...stat, mtimeMs: 2 });
+    read.mockResolvedValue('One');
+    expect(await layer.readIndexedPath(['One'])).toMatchObject({ path: 'one.md', authoritative: true, unindexed: [],
+      candidates: [{ reference: 'one.md', name: 'One' }] });
+    expect(backend.stat).toHaveBeenCalledTimes(3);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(backend.statMany).toHaveBeenCalledTimes(1);
+    expect(layer.events.filter(event => event === 'enumerate')).toHaveLength(1);
+  });
+
+  it('reuses only marked unchanged failures and retries changed bytes', async () => {
+    const { backend, layer } = setup(0);
+    const rejected = markContentRejection(new Error('invalid content'));
+    const read = jest.spyOn(backend, 'readFile').mockRejectedValue(rejected);
+    expect((await layer.scan()).added).toEqual(['one.md']);
+    expect((await layer.scan()).modified).toEqual(['one.md']);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(await layer.readIndexedPath(['One'])).toMatchObject({ authoritative: true, unindexed: ['one.md'] });
+    const stats = await backend.statMany(TEST_DIR, layer.files);
+    stats.stats.get('one.md')!.sizeBytes = 2;
+    read.mockResolvedValue('Repaired');
+    expect((await layer.scan()).modified).toEqual(['one.md']);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(layer.state.table.unindexed().size).toBe(0);
+  });
+
+  it('does not persist deterministic-failure reuse across hydration', () => {
+    const { layer } = setup(0);
+    layer.state.table.hydrate([], { 'one.md': { nameKey: 'one', mtimeMs: 1 } });
+    expect(layer.state.table.canReuseUnchanged('one.md', 1, 1)).toBe(false);
+  });
+
   it('retains a stat failure while indexing healthy siblings and retries after invalidation', async () => {
     const { backend, layer } = setup(0);
     const failure = Object.assign(new Error('symbolic link loop'), { code: 'ELOOP' });
@@ -71,8 +190,8 @@ describe('FileStorageLayerBase', () => {
     const first = await layer.scan();
     expect(first.added).toEqual(['one.md', 'loop.md']);
     expect(layer.state.table.entries().map(entry => entry.filePath)).toEqual(['one.md']);
-    expect(await layer.readIndexedPath(['One'])).toMatchObject({ authoritative: false, unindexed: ['loop.md'] });
-    expect(layer.state.table.unindexed().get('loop.md')).toEqual({ name: 'Error', code: 'ELOOP', reason: 'Cannot inspect storage path \"loop.md\" (ELOOP)' });
+    expect(await layer.readIndexedPath(['One'])).toMatchObject({ authoritative: true, unindexed: ['loop.md'] });
+    expect(layer.state.table.unindexed().get('loop.md')).toMatchObject({ name: 'Error', code: 'ELOOP', reason: 'Cannot inspect storage path \"loop.md\" (ELOOP)', candidateNames: ['loop'], unattributed: true });
     layer.invalidate();
     expect(layer.state.table.unindexed().has('loop.md')).toBe(true);
     expect((await layer.scan()).modified).toEqual(['loop.md']);
@@ -188,19 +307,19 @@ describe('FileStorageLayerBase', () => {
     const read = jest.spyOn(backend, 'readFile').mockRejectedValue(new Error('read unavailable'));
     const log = jest.spyOn(logger, 'warn').mockImplementation(() => {});
     await layer.scan();
-    expect(await layer.readIndexedPath(['One'])).toEqual({ path: undefined, indexComplete: true, authoritative: false, unindexed: ['one.md'] });
+    expect(await layer.readIndexedPath(['One'])).toMatchObject({ path: undefined, indexComplete: true, authoritative: true, unindexed: ['one.md'] });
     expect(layer.state.table.entries()).toEqual([]);
     const failures = new Map(layer.state.table.unindexed());
-    expect([...failures]).toEqual([['one.md', { reason: 'read unavailable', name: 'Error' }]]);
+    expect([...failures]).toEqual([['one.md', expect.objectContaining({ reason: 'read unavailable', name: 'Error', candidateNames: ['one'], unattributed: true })]]);
     await layer.scan();
-    expect(read).toHaveBeenCalledTimes(2);
+    expect(read).toHaveBeenCalledTimes(3);
     expect(log).toHaveBeenCalledTimes(1);
     expect(log).toHaveBeenCalledWith('TestStorage: failed to index one.md', { error: 'Error' });
     read.mockResolvedValue('One');
     expect((await layer.scan()).modified).toEqual(['one.md']);
-    expect(await layer.readIndexedPath(['One'])).toEqual({ path: 'one.md', indexComplete: true, authoritative: true, unindexed: [] });
+    expect(await layer.readIndexedPath(['One'])).toMatchObject({ path: 'one.md', indexComplete: true, authoritative: true, unindexed: [] });
     expect([...layer.state.table.unindexed()]).toEqual([]);
-    expect([...failures]).toEqual([['one.md', { reason: 'read unavailable', name: 'Error' }]]);
+    expect([...failures]).toEqual([['one.md', expect.objectContaining({ reason: 'read unavailable', name: 'Error', candidateNames: ['one'], unattributed: true })]]);
   });
 
   it('reports repair of a previously unindexed path as modified', async () => {
@@ -258,7 +377,7 @@ describe('FileStorageLayerBase', () => {
     const warn = jest.spyOn(logger, 'warn').mockImplementation(() => {});
     const diff = await layer.scan();
     expect(diff).toEqual({ added: [], modified: [], removed: warm ? ['one.md'] : [], unchanged: [] });
-    expect(await layer.readIndexedPath(['One'])).toEqual({ path: undefined, indexComplete: true, authoritative: true, unindexed: [] });
+    expect(await layer.readIndexedPath(['One'])).toMatchObject({ path: undefined, indexComplete: true, authoritative: true, unindexed: [] });
     expect(layer.state.table.get('one.md')).toBeUndefined();
     expect(warn).not.toHaveBeenCalled();
     read.mockResolvedValue('Recreated');
@@ -290,7 +409,7 @@ describe('FileStorageLayerBase', () => {
     read.mockRejectedValue(Object.assign(new Error('changed reason'), { code: 'EIO' }));
     await layer.scan();
     expect(warn).toHaveBeenCalledTimes(2);
-    expect(layer.state.table.unindexed().get('one.md')).toEqual({ reason: 'Cannot inspect storage path \"one.md\" (EIO)', name: 'Error', code: 'EIO' });
+    expect(layer.state.table.unindexed().get('one.md')).toMatchObject({ reason: 'Cannot inspect storage path \"one.md\" (EIO)', name: 'Error', code: 'EIO', candidateNames: ['one'], unattributed: true });
   });
 
   it('runs a trailing fresh scan after an in-flight rejection', async () => {
@@ -311,10 +430,10 @@ describe('FileStorageLayerBase', () => {
     const { layer } = setup();
     await layer.scan();
     const entry = layer.state.table.entries()[0];
-    layer.state.table.applyFailure(entry.filePath, { reason: 'failed', name: 'Error' });
+    layer.state.table.applyFailure(entry.filePath, { reason: 'failed', name: 'Error', candidateNames: [], unattributed: true });
     layer.state.table.applySaved(entry.filePath, entry.mtimeMs, entry);
     expect(layer.state.table.unindexed().size).toBe(0);
-    layer.state.table.applyFailure(entry.filePath, { reason: 'failed', name: 'Error' });
+    layer.state.table.applyFailure(entry.filePath, { reason: 'failed', name: 'Error', candidateNames: [], unattributed: true });
     layer.state.table.applyDeleted(entry.filePath);
     expect(layer.state.table.unindexed().size).toBe(0);
     expect(layer.state.table.entries().map(entry => entry.filePath)).toEqual([]);
@@ -351,7 +470,7 @@ it.each([100, 1000])('does linear table work for %s repeated failing paths', asy
   expect((await layer.scan()).modified).toHaveLength(count);
   expect(unindexed).toHaveBeenCalledTimes(1);
   expect(update).toHaveBeenCalledTimes(count);
-  expect(layer.state.table.isAuthoritative()).toBe(false);
+  expect(layer.state.table.isAuthoritative()).toBe(true);
   expect(layer.state.table.unindexed().size).toBe(count);
   expect(values).not.toHaveBeenCalled();
 });
@@ -361,4 +480,13 @@ it('rejects repeated clears instead of returning an empty joined scan indefinite
   jest.mocked(backend.directoryExists).mockImplementation(async () => { layer.clear(); return true; });
   await expect(layer.listSummaries()).rejects.toThrow('repeatedly invalidated');
   expect(backend.directoryExists).toHaveBeenCalledTimes(3);
+});
+
+describe('FileStorageLayerBase read contract', () => {
+  it('reads one reference under the scan policy', async () => {
+    const { backend, layer } = setup(0);
+    jest.mocked(backend.readFile).mockResolvedValue('One');
+    expect(await layer.readContent('one.md')).toBe('One');
+    await expect(layer.readContent(path.posix.join('..', 'outside.md'))).rejects.toThrow(/Path access denied|Path traversal detected/);
+  });
 });

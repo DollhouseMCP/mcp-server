@@ -23,9 +23,7 @@ export class TemplateActivationStrategy extends BaseActivationStrategy implement
    * @see Issue #275 - Handlers return success=true for missing elements
    */
   async activate(name: string): Promise<MCPResponse> {
-    // Use flexible finding to support both display name and filename
-    const allTemplates = await this.templateManager.list();
-    const template = await this.findElementFlexibly(name, allTemplates);
+    const template = await this.templateManager.findByName(name);
     if (!template) {
       this.throwNotFoundError(name, 'Template');
     }
@@ -74,9 +72,7 @@ export class TemplateActivationStrategy extends BaseActivationStrategy implement
    * @see Issue #275 - Handlers return success=true for missing elements
    */
   async getElementDetails(name: string): Promise<MCPResponse> {
-    // Use flexible finding to support both display name and filename
-    const allTemplates = await this.templateManager.list();
-    const template = await this.findElementFlexibly(name, allTemplates);
+    const template = await this.templateManager.findByName(name);
     if (!template) {
       this.throwNotFoundError(name, 'Template');
     }

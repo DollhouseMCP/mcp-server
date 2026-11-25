@@ -65,7 +65,11 @@ describe('PersonaElementManager Integration', () => {
 
     // Mock FileOperationsService
     mockFileOperationsService = {
-      readFile: jest.fn().mockResolvedValue(''),
+      readFile: jest.fn((...args: unknown[]) => mockFileOperationsService.readElementFile(...(args as [string]))),
+      readElementFile: jest.fn().mockResolvedValue(''),
+      auditElementRead: jest.fn(),
+      stat: jest.fn().mockResolvedValue({ isDirectory: () => true, isFile: () => false, mtimeMs: 0, size: 0 }),
+      listDirectoryWithTypes: jest.fn().mockResolvedValue([]),
       writeFile: jest.fn().mockResolvedValue(undefined),
       deleteFile: jest.fn().mockResolvedValue(undefined),
       exists: jest.fn().mockResolvedValue(false),
@@ -106,7 +110,7 @@ describe('PersonaElementManager Integration', () => {
       serializationService: new SerializationService(),
       metadataService,
       eventDispatcher: new ElementEventDispatcher(),
-    storageLayerFactory: createTestStorageFactory(),
+    storageLayerFactory: createTestStorageFactory(mockFileOperationsService),
       personaImporter: mockPersonaImporter,
       notifier: mockNotifier,
     });
@@ -281,7 +285,7 @@ describe('PersonaElementManager Integration', () => {
       expect(cacheStats.pathMappings).toBe(1);
 
       // Verify we can retrieve from cache
-      const cached = (personaManager as any).getCachedByAbsolutePath(
+      const cached = (personaManager as any)._cache.getCachedByAbsolutePath(
         path.join(mockPersonasDir, 'cached-persona.md')
       );
       expect(cached).toBeDefined();
@@ -335,7 +339,7 @@ describe('PersonaElementManager Integration', () => {
       expect(cacheStats.pathMappings).toBe(25);
 
       // Access first persona to update LRU order
-      const firstPersona = (personaManager as any).getCachedByAbsolutePath(
+      const firstPersona = (personaManager as any)._cache.getCachedByAbsolutePath(
         path.join(mockPersonasDir, 'persona-0.md')
       );
       expect(firstPersona).toBeDefined();
@@ -432,7 +436,7 @@ describe('PersonaElementManager Integration', () => {
       mockFileOperationsService.readElementFile = jest.fn<any>().mockResolvedValue('---\nname: Test\n---\nBody');
       jest.spyOn(personaManager as any, 'toPersonaElementMetadata')
         .mockImplementation(() => { throw new Error('metadata adapter failed'); });
-      await expect(personaManager.load('test.md')).rejects.toThrow('metadata adapter failed');
+      await expect(personaManager.load('test.md')).rejects.toMatchObject({ cause: expect.objectContaining({ message: 'metadata adapter failed' }) });
     });
 
     it.each(['serialization failed', 'Content too large'])('preserves export rejection: %s', async message => {
@@ -498,6 +502,7 @@ describe('PersonaElementManager Integration', () => {
 
     it('preserves canDelete dependency rejection through delete', async () => {
       const persona = await personaManager.importElement('---\nname: Test\n---\nInstructions');
+      jest.spyOn(personaManager as any, 'loadElementDefinition').mockResolvedValue(persona);
       jest.spyOn(personaManager['_loader'], 'loadElementSnapshot').mockImplementation(async () => {
         jest.spyOn(personaManager as any, 'getActivationSet')
           .mockImplementation(() => { throw new Error('activation state unavailable'); });
