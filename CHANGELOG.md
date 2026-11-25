@@ -75,6 +75,10 @@ First versioned build of the 2.1 beta line. Not published to npm; deployed to th
 
 Start beta line for 2.1 hosted HTTP and expanded description limits.
 
+## [2.0.44] - 2026-11-25
+
+- Fix ensemble activation so it can still find and activate personas after they leave the cache. (#3295, #3299)
+
 ## [2.0.43] - Unreleased
 
 - Harden the shipped element file helper with the same nonexecuting frontmatter admission and restricted YAML/JSON serialization used by element managers. Preserve ordinary Markdown/body handling; reject unsupported metadata values before writing.
