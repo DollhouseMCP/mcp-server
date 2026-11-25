@@ -292,7 +292,7 @@ function eventIdOf(block: unknown): unknown {
 }
 
 function blockedAtOf(block: unknown): number {
-  const date = isStateObject(block) && typeof block.blockedAt === 'string' ? Date.parse(block.blockedAt) : NaN;
+  const date = isStateObject(block) && typeof block.blockedAt === 'string' ? Date.parse(block.blockedAt) : Number.NaN;
   return Number.isNaN(date) ? 0 : date;
 }
 
