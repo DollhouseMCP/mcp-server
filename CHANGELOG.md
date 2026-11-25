@@ -6,6 +6,10 @@
 
 - Prepare `@dollhousemcp/safety` 1.0.4 with UUIDv4 verification challenge IDs, preserving public declarations, display codes and one-time store behavior. Align the server dependency floor with the safety workspace for the existing safety-first publisher; publication/provenance and beta consumer qualification remain separate release gates. (#3000, #2656)
 
+## [2.0.44] - 2026-11-25
+
+- Fix ensemble activation so it can still find and activate personas after they leave the cache. (#3295, #3299)
+
 ## [2.0.43] - Unreleased
 
 - Harden the shipped element file helper with the same nonexecuting frontmatter admission and restricted YAML/JSON serialization used by element managers. Preserve ordinary Markdown/body handling; reject unsupported metadata values before writing.
