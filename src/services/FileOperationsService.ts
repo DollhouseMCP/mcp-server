@@ -4,7 +4,6 @@ import * as path from 'node:path';
 import { FileLockManager, type WrittenFileVersion } from '../security/fileLockManager.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { logger } from '../utils/logger.js';
-import { FileLock } from '../utils/FileLock.js';
 import { ElementType } from '../portfolio/types.js';
 import { validatePath } from '../security/InputValidator.js';
 
@@ -416,6 +415,7 @@ export class FileOperationsService implements IFileOperationsService {
   async withWriteLock<T>(filePath: string, operation: () => Promise<T>): Promise<T> {
     const validatedPath = await this.enforceWriteAllowlist(filePath, 'withWriteLock');
     await this.enforceWriteAllowlist(`${validatedPath}.lock`, 'withWriteLock');
+    const { FileLock } = await import('../utils/FileLock.js');
     const lock = new FileLock(validatedPath);
     const result = await lock.withLock(operation, { stale: Infinity });
     if (result === null) {
@@ -434,7 +434,9 @@ export class FileOperationsService implements IFileOperationsService {
 
       // Use 'wx' flag for atomic creation - fails if file already exists
       // This prevents TOCTOU race conditions
-      const fileHandle = await fs.open(validatedPath, 'wx', options.mode);
+      const fileHandle = options.mode === undefined
+        ? await fs.open(validatedPath, 'wx')
+        : await fs.open(validatedPath, 'wx', options.mode);
       try {
         await fileHandle.writeFile(content, { encoding: options.encoding ?? 'utf-8' });
         if (options.onWritten) {
