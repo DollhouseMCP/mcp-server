@@ -20,7 +20,7 @@ function deadLocalOwner(marker: string): number | undefined {
   const match = OWNER_NAME.exec(marker);
   if (!match || match[2] !== HOST) return undefined;
   const pid = Number(match[1]);
-  if (pid > 0x7fff_ffff) return undefined;
+  if (pid > 2_147_483_647) return undefined;
   try {
     process.kill(pid, 0);
   } catch (error) {
