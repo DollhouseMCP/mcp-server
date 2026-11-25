@@ -50,8 +50,6 @@ describe('Prescriptive Digest Integration (Issue #492)', () => {
       },
     });
 
-    // Allow cache to settle
-    await new Promise(r => setTimeout(r, 2000));
   });
 
   afterEach(async () => {

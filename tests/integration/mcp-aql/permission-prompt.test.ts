@@ -13,7 +13,7 @@ import { DollhouseMCPServer } from '../../../src/index.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
 import type { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
 import type { ElementCRUDHandler } from '../../../src/handlers/ElementCRUDHandler.js';
-import { createPortfolioTestEnvironment, preConfirmAllOperations, waitForCacheSettle, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
+import { createPortfolioTestEnvironment, preConfirmAllOperations, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
 
 const EXTERNAL_FILE_PATH = '/some/file.ts';
 const SOURCE_FILE_PATH = 'src/index.ts';
@@ -53,7 +53,6 @@ describe('permission_prompt Integration', () => {
       },
     });
     expect(createResult.success).toBe(true);
-    await waitForCacheSettle();
     await mcpAqlHandler.handleRead({
       operation: 'activate_element',
       params: { element_name: name, element_type: 'personas' },
@@ -364,9 +363,6 @@ describe('permission_prompt Integration', () => {
       });
       expect(createResult.success).toBe(true);
 
-      // Allow cache to settle (Issue #276)
-      await waitForCacheSettle();
-
       const activateResult = await mcpAqlHandler.handleRead({
         operation: 'activate_element',
         params: {
@@ -494,8 +490,6 @@ describe('permission_prompt Integration', () => {
       });
       expect(createResult.success).toBe(true);
 
-      await waitForCacheSettle();
-
       await mcpAqlHandler.handleRead({
         operation: 'activate_element',
         params: { element_name: 'policy-test-persona', element_type: 'personas' },
@@ -558,8 +552,6 @@ describe('permission_prompt Integration', () => {
         },
       });
       expect(createResult.success).toBe(true);
-
-      await waitForCacheSettle();
 
       const activateResult = await mcpAqlHandler.handleRead({
         operation: 'activate_element',
@@ -773,7 +765,6 @@ describe('permission_prompt Integration', () => {
         },
       });
       expect(createResult.success).toBe(true);
-      await waitForCacheSettle();
       const activateResult = await mcpAqlHandler.handleRead({
         operation: 'activate_element',
         params: { element_name: name, element_type: 'personas' },
@@ -839,7 +830,6 @@ describe('permission_prompt Integration', () => {
         },
       });
       expect(createResult.success).toBe(true);
-      await waitForCacheSettle();
       const activateResult = await mcpAqlHandler.handleRead({
         operation: 'activate_element',
         params: { element_name: name, element_type: type },
@@ -1128,8 +1118,6 @@ describe('permission_prompt Integration', () => {
         },
       });
 
-      await waitForCacheSettle();
-
       await mcpAqlHandler.handleRead({
         operation: 'activate_element',
         params: { element_name: 'advisory-test-persona', element_type: 'personas' },
@@ -1188,8 +1176,6 @@ describe('permission_prompt Integration', () => {
       });
       expect(createResult.success).toBe(true);
 
-      await waitForCacheSettle();
-
       const activateResult = await mcpAqlHandler.handleRead({
         operation: 'activate_element',
         params: { element_name: 'restricted-persona', element_type: 'personas' },
@@ -1226,8 +1212,6 @@ describe('permission_prompt Integration', () => {
       });
       expect(createResult.success).toBe(true);
 
-      await waitForCacheSettle();
-
       const activateResult = await mcpAqlHandler.handleRead({
         operation: 'activate_element',
         params: { element_name: 'restricted-skill', element_type: 'skills' },
@@ -1260,8 +1244,6 @@ This skill should still activate.
 `,
         'utf8',
       );
-
-      await waitForCacheSettle();
 
       const activateResult = await mcpAqlHandler.handleRead({
         operation: 'activate_element',
@@ -1320,8 +1302,6 @@ This skill should still activate.
       });
       expect(createResult.success).toBe(true);
 
-      await waitForCacheSettle();
-
       const activateResult = await mcpAqlHandler.handleRead({
         operation: 'activate_element',
         params: { element_name: 'approval-warning-persona', element_type: 'personas' },
@@ -1350,8 +1330,6 @@ This skill should still activate.
         },
       });
       expect(createResult.success).toBe(true);
-
-      await waitForCacheSettle();
 
       const activateResult = await mcpAqlHandler.handleRead({
         operation: 'activate_element',
@@ -1390,8 +1368,6 @@ This skill should still activate.
       });
       expect(createPersona.success).toBe(true);
 
-      await waitForCacheSettle();
-
       // Create an ensemble containing the persona
       const createEnsemble = await mcpAqlHandler.handleCreate({
         operation: 'create_element',
@@ -1414,8 +1390,6 @@ This skill should still activate.
         },
       });
       expect(createEnsemble.success).toBe(true);
-
-      await waitForCacheSettle();
 
       // Activate the ensemble
       const activateResult = await mcpAqlHandler.handleRead({
@@ -1456,8 +1430,6 @@ This skill should still activate.
       });
       expect(createPersona.success).toBe(true);
 
-      await waitForCacheSettle();
-
       // Create ensemble with its own denyPatterns
       const createEnsemble = await mcpAqlHandler.handleCreate({
         operation: 'create_element',
@@ -1486,8 +1458,6 @@ This skill should still activate.
         },
       });
       expect(createEnsemble.success).toBe(true);
-
-      await waitForCacheSettle();
 
       // Activate ensemble
       await mcpAqlHandler.handleRead({
@@ -1535,8 +1505,6 @@ This skill should still activate.
       });
       expect(createPersona.success).toBe(true);
 
-      await waitForCacheSettle();
-
       // Create ensemble without own restrictions
       const createEnsemble = await mcpAqlHandler.handleCreate({
         operation: 'create_element',
@@ -1559,8 +1527,6 @@ This skill should still activate.
         },
       });
       expect(createEnsemble.success).toBe(true);
-
-      await waitForCacheSettle();
 
       // Activate ensemble
       await mcpAqlHandler.handleRead({

@@ -364,27 +364,9 @@ Test project context for ensemble testing.`;
 
       expect(isSuccess(updateResult)).toBe(true);
 
-      // Verify update persisted (retry with exponential backoff for filesystem sync)
-      let updateVerified = false;
-      const backoffDelays = [0, 50, 150, 500, 1500]; // ms — escalating backoff
-      for (let attempt = 0; attempt < backoffDelays.length; attempt++) {
-        if (backoffDelays[attempt] > 0) {
-          await new Promise(r => setTimeout(r, backoffDelays[attempt]));
-        }
-        const getAfterUpdate = await elementCrudHandler.getElementDetails('test-ensemble', 'ensembles');
-        const updateText = extractText(getAfterUpdate);
-        if (updateText.includes('Updated description for E2E test')) {
-          updateVerified = true;
-          if (attempt > 0) {
-            console.log(`[ensemble-workflow] Update verified after ${attempt + 1} attempts (backoff: ${backoffDelays[attempt]}ms). Platform: ${process.platform}, Node: ${process.version}`);
-          }
-          break;
-        }
-        if (attempt === backoffDelays.length - 1) {
-          console.warn(`[ensemble-workflow] Update NOT verified after ${backoffDelays.length} attempts (total backoff: ${backoffDelays.reduce((a, b) => a + b, 0)}ms). Platform: ${process.platform}, Node: ${process.version}. Got: ${updateText.substring(0, 200)}`);
-        }
-      }
-      expect(updateVerified).toBe(true);
+      // An awaited edit publishes the updated cache and storage index before returning.
+      const getAfterUpdate = await elementCrudHandler.getElementDetails('test-ensemble', 'ensembles');
+      expect(extractText(getAfterUpdate)).toContain('Updated description for E2E test');
 
       // Step 5: Delete ensemble via MCP tool
       const deleteResult = await elementCrudHandler.deleteElement({
@@ -743,9 +725,6 @@ Test project context for ensemble testing.`;
       const creationSucceeded = isSuccess(createResult);
 
       if (creationSucceeded) {
-        // Brief delay to allow cache to update (Issue #276)
-        await new Promise(resolve => setTimeout(resolve, 500));
-
         // Validate
         const validateResult = await elementCrudHandler.validateElement({
           name: 'circular-ensemble',

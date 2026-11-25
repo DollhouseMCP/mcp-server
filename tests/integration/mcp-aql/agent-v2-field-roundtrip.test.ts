@@ -20,7 +20,6 @@ import { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
 import {
   createPortfolioTestEnvironment,
   preConfirmAllOperations,
-  waitForCacheSettle,
   type PortfolioTestEnvironment,
 } from '../../helpers/portfolioTestHelper.js';
 import path from 'path';
@@ -183,8 +182,6 @@ describe('Agent V2 field round-trip (Issue #722)', () => {
       params: V2_AGENT_PARAMS,
     });
     expect(createResult.success).toBe(true);
-
-    await waitForCacheSettle();
 
     const detailsResult = await mcpAqlHandler.handleRead({
       operation: 'get_element_details',

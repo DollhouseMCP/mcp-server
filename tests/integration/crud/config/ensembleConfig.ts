@@ -5,6 +5,7 @@
  * They support activation (multi-element orchestration) and nesting of other elements.
  */
 
+import { SECURITY_LIMITS } from '../../../../src/security/constants.js';
 import { ElementType } from '../../../../src/portfolio/types.js';
 import { ElementTypeTestConfig, ElementData } from './types.js';
 
@@ -26,7 +27,7 @@ function createEnsembleTestData(overrides?: Partial<ElementData>): ElementData {
         maxActiveElements: 10,
         maxExecutionTimeMs: 30000
       },
-      ...(overrides?.metadata || {})
+      ...overrides?.metadata
     }
   };
 
@@ -135,7 +136,7 @@ export const ENSEMBLE_CONFIG: ElementTypeTestConfig = {
 
   invalidExamples: [
     // FIX: Temporarily reduced - validation not fully implemented
-    // TODO: Add back when validation implemented
+    // Creation-validation coverage is incomplete; edit rejection is exercised below.
   ],
 
   // ============================================================================
@@ -155,7 +156,7 @@ export const ENSEMBLE_CONFIG: ElementTypeTestConfig = {
       ],
       invalidValues: [
         { value: '', expectedError: 'required|empty' },
-        { value: 'A'.repeat(501), expectedError: 'length|size' }
+        { value: 'A'.repeat(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH + 1), expectedError: 'length|size' }
       ]
     },
     {
@@ -288,7 +289,7 @@ export const ENSEMBLE_CONFIG: ElementTypeTestConfig = {
       name: 'name-required',
       description: 'Name field must be present and non-empty',
       validate: (data) => ({
-        valid: Boolean(data.name && data.name.trim()),
+        valid: Boolean(data.name?.trim()),
         message: 'Ensemble name is required'
       }),
       severity: 'error'
@@ -297,7 +298,7 @@ export const ENSEMBLE_CONFIG: ElementTypeTestConfig = {
       name: 'description-required',
       description: 'Description field must be present and non-empty',
       validate: (data) => ({
-        valid: Boolean(data.description && data.description.trim()),
+        valid: Boolean(data.description?.trim()),
         message: 'Ensemble description is required'
       }),
       severity: 'error'

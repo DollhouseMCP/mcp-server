@@ -252,8 +252,6 @@ describe('Memory CRUDE Operations Integration', () => {
         },
       });
 
-      // Allow cache to settle
-      await new Promise(resolve => setTimeout(resolve, 500));
     });
 
     describe('list_elements for memories', () => {
@@ -504,8 +502,6 @@ describe('Memory CRUDE Operations Integration', () => {
         },
       });
 
-      // Allow filesystem flush
-      await new Promise(resolve => setTimeout(resolve, 500));
 
       // Dispose and recreate server to simulate restart
       await server.dispose();
@@ -563,8 +559,6 @@ describe('Memory CRUDE Operations Integration', () => {
         },
       });
 
-      // Allow filesystem flush
-      await new Promise(resolve => setTimeout(resolve, 500));
 
       // Dispose and recreate server to simulate restart
       await server.dispose();
@@ -893,8 +887,6 @@ describe('Memory CRUDE Operations Integration', () => {
         });
       }
 
-      // Allow cache to settle
-      await new Promise(resolve => setTimeout(resolve, 500));
     });
 
     describe('Batch-like operations', () => {
@@ -1084,7 +1076,6 @@ describe('Memory CRUDE Operations Integration', () => {
           },
         });
 
-        await new Promise(resolve => setTimeout(resolve, 500));
       });
 
       it('should retrieve memory that agent references', async () => {
@@ -1155,7 +1146,6 @@ describe('Memory CRUDE Operations Integration', () => {
           },
         });
 
-        await new Promise(resolve => setTimeout(resolve, 500));
       });
 
       it('should maintain memory entries for persona learning', async () => {
@@ -1239,7 +1229,6 @@ describe('Memory CRUDE Operations Integration', () => {
           });
         }
 
-        await new Promise(resolve => setTimeout(resolve, 500));
       });
 
       it('should allow multiple agents to reference same memory', async () => {

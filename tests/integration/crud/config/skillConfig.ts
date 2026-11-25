@@ -5,6 +5,7 @@
  * They support activation and can have parameters that affect execution.
  */
 
+import { SECURITY_LIMITS } from '../../../../src/security/constants.js';
 import { ElementType } from '../../../../src/portfolio/types.js';
 import { ElementTypeTestConfig, ElementData } from './types.js';
 
@@ -115,7 +116,7 @@ export const SKILL_CONFIG: ElementTypeTestConfig = {
 
   invalidExamples: [
     // FIX: Temporarily reduced invalid examples - many validations not implemented yet
-    // TODO: Add back when validation is implemented:
+    // Creation-validation gaps tracked separately from the invalid edit descriptors below:
     // - Empty name/description validation
     // - Complexity enum validation
     // - Proficiency level range validation
@@ -138,7 +139,7 @@ export const SKILL_CONFIG: ElementTypeTestConfig = {
       ],
       invalidValues: [
         { value: '', expectedError: 'required|empty' },
-        { value: 'A'.repeat(501), expectedError: 'length|size' }
+        { value: 'A'.repeat(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH + 1), expectedError: 'length|size' }
       ]
     },
     {
@@ -247,7 +248,7 @@ export const SKILL_CONFIG: ElementTypeTestConfig = {
       name: 'name-required',
       description: 'Name field must be present and non-empty',
       validate: (data) => ({
-        valid: Boolean(data.name && data.name.trim()),
+        valid: Boolean(data.name?.trim()),
         message: 'Skill name is required'
       }),
       severity: 'error'
@@ -256,7 +257,7 @@ export const SKILL_CONFIG: ElementTypeTestConfig = {
       name: 'description-required',
       description: 'Description field must be present and non-empty',
       validate: (data) => ({
-        valid: Boolean(data.description && data.description.trim()),
+        valid: Boolean(data.description?.trim()),
         message: 'Skill description is required'
       }),
       severity: 'error'
@@ -265,7 +266,7 @@ export const SKILL_CONFIG: ElementTypeTestConfig = {
       name: 'instructions-required',
       description: 'Instructions must be present and non-empty',
       validate: (data) => ({
-        valid: Boolean(data.content && data.content.trim()),
+        valid: Boolean(data.content?.trim()),
         message: 'Skill instructions are required'
       }),
       severity: 'error'

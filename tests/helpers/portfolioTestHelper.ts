@@ -159,19 +159,6 @@ export function preConfirmAllOperations(container: DollhouseContainer): Gatekeep
  * @param container - An initialized DollhouseContainer with Gatekeeper registered
  * @returns The resolved Gatekeeper instance for reuse
  */
-/**
- * Wait for cache to settle after element creation.
- *
- * Issue #276: Element managers use async cache invalidation, so newly created
- * elements may not be immediately visible to read operations. This centralizes
- * the settle delay so a future deterministic solution only needs one change.
- *
- * @param ms - Settle time in milliseconds (default: 2000)
- */
-export function waitForCacheSettle(ms = 2000): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
 export function resetGatekeeperConfirmations(container: DollhouseContainer): Gatekeeper {
   let gatekeeper: Gatekeeper;
   try {

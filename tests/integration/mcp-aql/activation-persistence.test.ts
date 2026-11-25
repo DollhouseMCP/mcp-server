@@ -1052,8 +1052,6 @@ describe('Activation Persistence Integration (Issue #598)', () => {
       }) as OperationResult;
       expect(createResult.success).toBe(true);
 
-      // Allow cache settle
-      await new Promise(resolve => setTimeout(resolve, 500));
 
       // Step 2: Activate the skill via MCP-AQL
       const activateResult = await mcpAqlHandler.handleRead({
@@ -1086,7 +1084,6 @@ describe('Activation Persistence Integration (Issue #598)', () => {
       }) as OperationResult;
       expect(createResult.success).toBe(true);
 
-      await new Promise(resolve => setTimeout(resolve, 500));
 
       // Activate via MCP-AQL
       const activateResult = await mcpAqlHandler.handleRead({
@@ -1119,7 +1116,6 @@ describe('Activation Persistence Integration (Issue #598)', () => {
         },
       });
 
-      await new Promise(resolve => setTimeout(resolve, 500));
 
       await mcpAqlHandler.handleRead({
         operation: 'activate_element',
@@ -1162,7 +1158,6 @@ describe('Activation Persistence Integration (Issue #598)', () => {
         },
       });
 
-      await new Promise(resolve => setTimeout(resolve, 500));
 
       await mcpAqlHandler.handleRead({
         operation: 'activate_element',
