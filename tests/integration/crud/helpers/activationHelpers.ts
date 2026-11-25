@@ -13,7 +13,7 @@
 import type { DollhouseMCPServer } from '../../../../src/index.js';
 import type { ElementTypeTestConfig, ActivationConfig } from '../config/types.js';
 import { ElementType } from '../../../../src/portfolio/types.js';
-import { activateElementViaTool, getActiveElementsViaTool, waitForElement } from './serverSetup.js';
+import { activateElementViaTool, getActiveElementsViaTool } from './serverSetup.js';
 import { assertElementActivated } from './crudTestHelpers.js';
 
 /**
@@ -46,7 +46,7 @@ export function prepareActivationContext(
   }
 
   // Get test context if available
-  if (activationConfig.testContexts && activationConfig.testContexts[contextIndex]) {
+  if (activationConfig.testContexts?.[contextIndex]) {
     return activationConfig.testContexts[contextIndex].context;
   }
 
@@ -117,14 +117,11 @@ export function verifyActivationResult(
  * Verify element is in active state
  *
  * Checks that element appears in active elements list.
- * Uses retry logic to handle race conditions where activation state
- * may not be immediately visible (especially on macOS with parallel tests).
+ * Awaited activation publishes active state before returning.
  *
  * @param server - Server instance
  * @param elementName - Name of element
  * @param elementType - Type of element
- * @param maxRetries - Maximum number of retries (default: 3)
- * @param retryDelay - Delay between retries in ms (default: 100)
  * @returns True if element is active
  *
  * @example
@@ -137,28 +134,10 @@ export function verifyActivationResult(
 export async function verifyElementActive(
   server: DollhouseMCPServer,
   elementName: string,
-  elementType: ElementType,
-  maxRetries: number = 3,
-  retryDelay: number = 100
+  elementType: ElementType
 ): Promise<boolean> {
-  // Retry logic to handle race conditions in parallel test execution
-  // This addresses flakiness observed on macOS Node 20.x/22.x (PR #32, #34)
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    const result = await getActiveElementsViaTool(server, elementType);
-
-    // Parse result to check if element is in active list
-    const text = result.content[0].text.toLowerCase();
-    if (text.includes(elementName.toLowerCase())) {
-      return true;
-    }
-
-    // Wait before retrying (skip delay on last attempt)
-    if (attempt < maxRetries - 1) {
-      await new Promise(resolve => setTimeout(resolve, retryDelay));
-    }
-  }
-
-  return false;
+  const result = await getActiveElementsViaTool(server, elementType);
+  return result.content[0].text.toLowerCase().includes(elementName.toLowerCase());
 }
 
 /**
@@ -203,14 +182,14 @@ export async function executeActivationWithContexts(
     return results;
   }
 
-  // Execute with each test context
-  for (let i = 0; i < activationConfig.testContexts.length; i++) {
-    const context = prepareActivationContext(config, i);
+  // Activations share state, so preserve context order.
+  return activationConfig.testContexts.reduce(async (previous, _, index) => {
+    const completed = await previous;
+    const context = prepareActivationContext(config, index);
     const result = await executeActivation(server, elementName, elementType, context);
-    results.push({ result, context });
-  }
-
-  return results;
+    completed.push({ result, context });
+    return completed;
+  }, Promise.resolve(results));
 }
 
 /**
@@ -350,9 +329,6 @@ export async function createActivatableElement(
     instructions: elementData.instructions,
     metadata: elementData.metadata,
   });
-
-  // Wait for element to be available (handles race condition in full suite runs)
-  await waitForElement(server, elementData.name, elementType);
 
   return result;
 }

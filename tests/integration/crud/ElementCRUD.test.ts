@@ -28,7 +28,7 @@
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from '@jest/globals';
 import { ELEMENT_TYPE_REGISTRY } from './config/elementTypeRegistry.js';
-import { setupTestServer, TestServerContext, createElementViaTool, editElementViaTool, deleteElementViaTool, validateElementViaTool, listElementsViaTool, getElementDetailsViaTool, waitForElement, waitForElementDeleted } from './helpers/serverSetup.js';
+import { setupTestServer, TestServerContext, createElementViaTool, editElementViaTool, deleteElementViaTool, validateElementViaTool, listElementsViaTool, getElementDetailsViaTool } from './helpers/serverSetup.js';
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import {
   assertElementCreated,
@@ -74,6 +74,16 @@ import type { ElementTypeTestConfig, ElementData } from './config/types.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 /* eslint-enable @typescript-eslint/no-unused-vars */
+
+// Known product bug #3300: edit_element does not run the element's validate(); remove .failing when fixed.
+const knownInvalidEditFields: Partial<Record<ElementType, readonly string[]>> = {
+  // #3300 also covers proficiency_level: the edit registry ignores this field,
+  // and edit_element does not run validate() to check its range.
+  [ElementType.SKILL]: ['metadata.complexity', 'metadata.proficiency_level'],
+  [ElementType.AGENT]: ['metadata.decisionFramework', 'metadata.riskTolerance', 'metadata.maxConcurrentGoals'],
+  [ElementType.MEMORY]: ['metadata.storageBackend', 'metadata.privacyLevel', 'metadata.maxEntries'],
+  [ElementType.ENSEMBLE]: ['metadata.activationStrategy', 'metadata.conflictResolution', 'metadata.maxNestingDepth'],
+};
 
 // ============================================================================
 // Helper Functions
@@ -210,9 +220,6 @@ describe.each(ELEMENT_TYPE_REGISTRY)(
         // Verify first creation succeeded (ensures file is written)
         expect(firstResult.content[0].text).toMatch(/✅|created|success/i);
 
-        // Small delay for macOS file system visibility
-        await new Promise(resolve => setTimeout(resolve, 50));
-
         // Now attempt to create duplicate - should fail
         const result = await createElementViaTool(context.server, {
           name: element.name,
@@ -272,8 +279,7 @@ describe.each(ELEMENT_TYPE_REGISTRY)(
           metadata: element.metadata,
         });
 
-        // Wait for element to be available (handles race condition in full suite runs)
-        await waitForElement(context.server, element.name, config.type);
+        assertElementRetrieved(await getElementDetailsViaTool(context.server, element.name, config.type), { name: element.name });
       });
 
       it('should retrieve element by name', async () => {
@@ -428,47 +434,30 @@ describe.each(ELEMENT_TYPE_REGISTRY)(
         }
       );
 
-      // FIX: Issue #276 - This test is flaky due to cache timing issues
-      // Elements created immediately before this test may not be findable
-      // TODO: Investigate cache invalidation in BaseElementManager
-      it.skip('should reject invalid field values', async () => {
-        // Find editable field with invalid values
-        const fieldWithInvalid = config.editableFields.find(
-          f => f.invalidValues && f.invalidValues.length > 0
-        );
+      config.editableFields.flatMap(field =>
+        (field.invalidValues ?? []).map((invalidValue, index) => ({ path: field.path, index, ...invalidValue }))
+      ).forEach(({ path: fieldPath, index, value, expectedError }) => {
+        describe(`invalid ${fieldPath} case ${index}`, () => {
+          let element: ElementData;
+          // Setup failures must remain failures, even when the edit is a known bug.
+          beforeEach(async () => {
+            // Fresh valid element for every value: an accepted mutation cannot taint another case.
+            element = config.factory({ name: uniqueName("probe") });
+            const created = await createElementViaTool(context.server, {
+              name: element.name, type: config.type, description: element.description,
+              content: element.content, instructions: element.instructions, metadata: element.metadata,
+            });
+            assertElementCreated(created, { name: element.name });
+            expect(created.isError).not.toBe(true);
+          });
 
-        if (!fieldWithInvalid) {
-          // Skip if no invalid values configured
-          return;
-        }
-
-        // Create element to edit
-        const element = config.factory({ name: uniqueName("invalid-update") });
-        await createElementViaTool(context.server, {
-          name: element.name,
-          type: config.type,
-          description: element.description,
-          content: element.content,
-          instructions: element.instructions,
-          metadata: element.metadata,
+          const test = knownInvalidEditFields[config.type]?.includes(fieldPath) ? it.failing : it;
+          test(`should reject invalid field ${fieldPath} case ${index}`, async () => {
+            const result = await editElementViaTool(context.server, element.name, config.type, fieldPath, value);
+            expect(result.isError === true || result.content[0].text.includes('❌')).toBe(true);
+            expect(result.content[0].text).toMatch(new RegExp(expectedError, 'i'));
+          });
         });
-
-        // FIX: Issue #276 - Add delay for cache propagation before edit operations
-        // Without this, the element may not be findable immediately after creation
-        await new Promise(resolve => setTimeout(resolve, 200));
-
-        // Test each invalid value
-        for (const invalidValue of fieldWithInvalid.invalidValues!) {
-          const result = await editElementViaTool(
-            context.server,
-            element.name,
-            config.type,
-            fieldWithInvalid.path,
-            invalidValue
-          );
-
-          assertOperationFailed(result);
-        }
       });
 
       it('should update nested metadata fields', async () => {
@@ -626,9 +615,6 @@ describe.each(ELEMENT_TYPE_REGISTRY)(
 
         // Delete element
         await deleteElementViaTool(context.server, element.name, config.type);
-
-        // FIX: Issue #53 - Wait for deletion to propagate (handles index/cache race conditions)
-        await waitForElementDeleted(context.server, element.name, config.type);
 
         // FIX: Issue #275 - Handlers now throw ElementNotFoundError instead of returning error content
         await expect(
@@ -817,16 +803,11 @@ describe.each(ELEMENT_TYPE_REGISTRY)(
 
           await executeActivation(context.server, element.name, config.type);
 
-          // Small delay for macOS file system visibility and activation state sync
-          await new Promise(resolve => setTimeout(resolve, 100));
-
-          // Verify in active list (increased retries for macOS Node 20.x flakiness)
+          // Awaited activation must be visible immediately.
           const isActive = await verifyElementActive(
             context.server,
             element.name,
-            config.type,
-            8,    // maxRetries: increased from 5 to 8 for macOS Node 20.x
-            250   // retryDelay: increased from 200ms to 250ms
+            config.type
           );
           expect(isActive).toBe(true);
         });

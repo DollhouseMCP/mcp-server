@@ -142,9 +142,6 @@ describe('MCP Tools Security Tests', () => {
         // First create a safe persona (v2: use createElement)
         await server.createElement({ name: uniqueName, type: 'persona', description: 'Safe description', content: 'Safe instructions' });
 
-        // Brief delay to allow cache to update (Issue #276 - cache timing)
-        await new Promise(resolve => setTimeout(resolve, 100));
-
         // Try to inject via edit
         const result = await server.editElement({ name: uniqueName, type: 'persona', input: { name: payload } });
         

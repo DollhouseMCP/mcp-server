@@ -5,6 +5,7 @@
  * They support activation which changes the AI's behavior immediately.
  */
 
+import { SECURITY_LIMITS } from '../../../../src/security/constants.js';
 import { ElementType } from '../../../../src/portfolio/types.js';
 import { ElementTypeTestConfig, ElementData } from './types.js';
 
@@ -111,7 +112,7 @@ export const PERSONA_CONFIG: ElementTypeTestConfig = {
       ],
       invalidValues: [
         { value: '', expectedError: 'required|empty' },
-        { value: 'A'.repeat(501), expectedError: 'length|size' }
+        { value: 'A'.repeat(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH + 1), expectedError: 'length|size' }
       ]
     },
     {

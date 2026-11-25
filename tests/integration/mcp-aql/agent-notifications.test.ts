@@ -17,7 +17,7 @@ import { DollhouseContainer } from '../../../src/di/Container.js';
 import type { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
 import type { AgentManager } from '../../../src/elements/agents/AgentManager.js';
 import type { DangerZoneEnforcer } from '../../../src/security/DangerZoneEnforcer.js';
-import { createPortfolioTestEnvironment, preConfirmAllOperations, waitForCacheSettle, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
+import { createPortfolioTestEnvironment, preConfirmAllOperations, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
 
 const PAUSE_AGENT_NAME = 'pause-agent';
 const IDEMPOTENT_AGENT_NAME = 'idempotent-agent';
@@ -93,8 +93,6 @@ describe('Agent Notification System', () => {
       console.log(`createAgent('${name}') failed:`, result.message);
     }
     expect(result.success).toBe(true);
-    // Issue #276: Allow cache to settle
-    await waitForCacheSettle();
   }
 
   async function executeAgent(name: string, params: Record<string, unknown> = {}) {

@@ -12,9 +12,6 @@ import * as os from 'os';
 import { ElementType } from '../../src/portfolio/types.js';
 import { ElementNotFoundError } from '../../src/utils/ErrorHandler.js';
 
-// CI-compatible cache settling time (Issue #276, #506)
-const CACHE_SETTLE_MS = 2000;
-
 // Define the element types to test
 // Uses plain {name}.md naming convention — directory provides type context
 const TEST_ELEMENTS = [
@@ -653,9 +650,6 @@ description: missing closing quote "
         content: '# Temporary Skill\n\nThis is a temporary skill for cache testing.'
       });
 
-      // Brief delay to allow cache to update (Issue #276, #506)
-      await new Promise(resolve => setTimeout(resolve, CACHE_SETTLE_MS));
-
       // Verify it exists
       const details = await server.getElementDetails(tempName, ElementType.SKILL);
       expect(details.content?.[0]?.text).toContain(tempName);
@@ -736,9 +730,6 @@ description: missing closing quote "
         content: '# Member Skill\n\nThis is a member skill for ensemble reference testing.'
       });
 
-      // Brief delay to allow cache to update (Issue #276, #506)
-      await new Promise(resolve => setTimeout(resolve, CACHE_SETTLE_MS));
-
       // Create ensemble referencing the skill
       const ensembleName = 'CRUDV-Reference-Test-Ensemble';
       const createResult = await server.createElement({
@@ -757,9 +748,6 @@ description: missing closing quote "
       const creationSucceeded = !createResult.isError && !createResult.content?.[0]?.text?.includes('❌');
 
       if (creationSucceeded) {
-        // Brief delay to allow cache to update (Issue #276)
-        await new Promise(resolve => setTimeout(resolve, 1000));
-
         // Delete the skill
         await server.deleteElement({ name: skillName, type: ElementType.SKILL });
 
@@ -930,9 +918,6 @@ This was added directly to the filesystem.
         description: 'CamelCase test',
         content: '# CamelCase Skill\n\nThis is a camel case skill for naming convention testing.'
       });
-
-      // Brief delay to allow cache to update (Issue #646, #276, #506)
-      await new Promise(resolve => setTimeout(resolve, CACHE_SETTLE_MS));
 
       const typeDir = path.join(tempPortfolioDir, ElementType.PERSONA);
       const filePath = path.join(typeDir, expectedFilename);

@@ -15,7 +15,7 @@ import { DollhouseMCPServer } from '../../../src/index.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
 import type { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
 import { SecureYamlParser } from '../../../src/security/secureYamlParser.js';
-import { createPortfolioTestEnvironment, preConfirmAllOperations, waitForCacheSettle, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
+import { createPortfolioTestEnvironment, preConfirmAllOperations, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
 import path from 'path';
 import fs from 'fs/promises';
 
@@ -195,8 +195,6 @@ describe('MCP-AQL CREATE Endpoint Integration', () => {
       });
       expect(createResult.success).toBe(true);
 
-      await waitForCacheSettle();
-
       const readResult = await mcpAqlHandler.handleRead({
         operation: 'get_element',
         elementType: 'ensemble',
@@ -227,9 +225,6 @@ describe('MCP-AQL CREATE Endpoint Integration', () => {
 
       expect(createResult.success).toBe(true);
 
-      // Allow cache settle time
-      await waitForCacheSettle();
-
       // This is the critical assertion — get_element must find it without a server restart
       const readResult = await mcpAqlHandler.handleRead({
         operation: 'get_element',
@@ -255,8 +250,6 @@ describe('MCP-AQL CREATE Endpoint Integration', () => {
 
       expect(createResult.success).toBe(true);
 
-      await waitForCacheSettle();
-
       const readResult = await mcpAqlHandler.handleRead({
         operation: 'get_element',
         elementType: 'skill',
@@ -280,8 +273,6 @@ describe('MCP-AQL CREATE Endpoint Integration', () => {
       });
 
       expect(createResult.success).toBe(true);
-
-      await waitForCacheSettle();
 
       const listResult = await mcpAqlHandler.handleRead({
         operation: 'list_elements',
@@ -309,8 +300,6 @@ describe('MCP-AQL CREATE Endpoint Integration', () => {
       });
 
       expect(createResult.success).toBe(true);
-
-      await waitForCacheSettle();
 
       const listResult = await mcpAqlHandler.handleRead({
         operation: 'list_elements',
@@ -360,8 +349,6 @@ describe('MCP-AQL CREATE Endpoint Integration', () => {
 
       expect(createResult.success).toBe(true);
       expect((createResult.data as { isError?: boolean } | undefined)?.isError).not.toBe(true);
-
-      await waitForCacheSettle();
 
       const listResult = await mcpAqlHandler.handleRead({
         operation: 'list_elements',
@@ -531,25 +518,26 @@ metadata:
       expect(result.success).toBe(true);
     });
 
-    // FIX: Issue #276 - Test skipped due to cache timing issues between create and import operations
-    // Elements created via handleCreate are not immediately visible for import duplicate checking
-    it.skip('should reject import when element exists and overwrite is false', async () => {
+    it('should reject import when element exists and overwrite is false', async () => {
       // First create an element
-      await mcpAqlHandler.handleCreate({
+      const created = await mcpAqlHandler.handleCreate({
         operation: 'create_element',
         params: {
           element_name: 'existing-element',
           element_type: 'personas',
           description: 'Original element',
-          content: 'Original content',
+          content: '# Original Persona\n\nOriginal content for duplicate import validation.',
         },
       });
+
+      expect(created).toMatchObject({ success: true });
 
       // Try to import with same name without overwrite
       const exportPackage = {
         exportVersion: '1.0',
         exportedAt: new Date().toISOString(),
         elementType: 'personas',
+        elementName: 'existing-element',
         format: 'json',
         data: JSON.stringify({
           element_name: 'existing-element',
@@ -797,8 +785,6 @@ metadata:
         });
 
         expect(createResult.success).toBe(true);
-
-        await waitForCacheSettle();
 
         const readResult = await mcpAqlHandler.handleRead({
           operation: 'get_element',

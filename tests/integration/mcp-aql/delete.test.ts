@@ -182,29 +182,30 @@ describe('MCP-AQL DELETE Endpoint Integration', () => {
       }
     });
 
-    // FIX: Issue #276 - Test skipped due to cache timing issues between create and delete operations
-    // Elements created via handleCreate are not immediately visible for delete operations
-    it.skip('should delete multiple different element types', async () => {
+    it('should delete multiple different element types', async () => {
       // Create multiple element types
-      await mcpAqlHandler.handleCreate({
+      const personaCreated = await mcpAqlHandler.handleCreate({
         operation: 'create_element',
         params: {
           element_name: 'multi-delete-persona',
           element_type: 'personas',
           description: 'Persona for multi-type delete test',
-          content: 'Content',
+          content: '# Multi Delete Persona\n\nPersona content for immediate deletion.',
         },
       });
 
-      await mcpAqlHandler.handleCreate({
+      const templateCreated = await mcpAqlHandler.handleCreate({
         operation: 'create_element',
         params: {
           element_name: 'multi-delete-template',
           element_type: 'templates',
           description: 'Template for multi-type delete test',
-          content: 'Template {{var}}',
+          content: '# Multi Delete Template\n\nTemplate content with {{var}} for deletion.',
         },
       });
+
+      expect(personaCreated).toMatchObject({ success: true });
+      expect(templateCreated).toMatchObject({ success: true });
 
       // Delete persona
       const personaResult = await mcpAqlHandler.handleDelete({

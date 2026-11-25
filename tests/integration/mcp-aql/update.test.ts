@@ -9,6 +9,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from '@jest/globals';
 import { DollhouseMCPServer } from '../../../src/index.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
+import type { SkillManager } from '../../../src/elements/skills/SkillManager.js';
 import type { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
 import { createPortfolioTestEnvironment, preConfirmAllOperations, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
 import path from 'path';
@@ -156,8 +157,7 @@ describe('MCP-AQL UPDATE Endpoint Integration', () => {
       expect(fileContent).toContain('Auto-mapped description update');
     });
 
-    // TODO: Content field editing returns stale data from MCP response format
-    it.skip('should edit element content', async () => {
+    it('should edit element content', async () => {
       const createResult = await mcpAqlHandler.handleCreate({
         operation: 'create_element',
         params: {
@@ -175,8 +175,7 @@ describe('MCP-AQL UPDATE Endpoint Integration', () => {
         params: {
           element_name: 'content-edit-skill',
           element_type: 'skills',
-          field: 'content',
-          value: newContent,
+          input: { content: newContent },
         },
       });
 
@@ -193,9 +192,14 @@ describe('MCP-AQL UPDATE Endpoint Integration', () => {
 
       expect(getResult.success).toBe(true);
       if (getResult.success) {
-        const element = getResult.data as any;
-        expect(element.content).toContain('Updated Test Skill');
-        expect(element.content).toContain('This is the new content.');
+        const data = getResult.data as { content: Array<{ text: string }> };
+        const text = data.content.map(block => block.text).join('\n');
+        // Skill details display instructions; v2 reference content is separate.
+        expect(text).toContain('Original Content');
+        const skill = await container.resolve<SkillManager>('SkillManager').findByName('content-edit-skill');
+        expect(skill?.content).toBe(newContent);
+        const persisted = await fs.readFile(path.join(env.testDir, 'skills', 'content-edit-skill.md'), 'utf8');
+        expect(persisted).toContain(newContent);
       }
     });
 
@@ -283,8 +287,7 @@ describe('MCP-AQL UPDATE Endpoint Integration', () => {
       }
     });
 
-    // TODO: elementType parameter lookup returns stale data
-    it.skip('should use elementType parameter when provided', async () => {
+    it('should use elementType parameter when provided', async () => {
       const createResult = await mcpAqlHandler.handleCreate({
         operation: 'create_element',
         params: {
@@ -301,8 +304,7 @@ describe('MCP-AQL UPDATE Endpoint Integration', () => {
         elementType: 'skill' as any,
         params: {
           element_name: 'elementtype-test-skill',
-          field: 'description',
-          value: 'Updated via elementType parameter',
+          input: { description: 'Updated via elementType parameter' },
         },
       });
 
@@ -319,8 +321,8 @@ describe('MCP-AQL UPDATE Endpoint Integration', () => {
 
       expect(getResult.success).toBe(true);
       if (getResult.success) {
-        const element = getResult.data as any;
-        expect(element.metadata?.description).toBe('Updated via elementType parameter');
+        const data = getResult.data as { content: Array<{ text: string }> };
+        expect(data.content.map(block => block.text).join('\n')).toContain('Updated via elementType parameter');
       }
     });
 

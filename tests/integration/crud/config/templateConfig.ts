@@ -5,6 +5,7 @@
  * They support activation through rendering with provided variables.
  */
 
+import { SECURITY_LIMITS } from '../../../../src/security/constants.js';
 import { ElementType } from '../../../../src/portfolio/types.js';
 import { ElementTypeTestConfig, ElementData } from './types.js';
 
@@ -34,7 +35,7 @@ function createTemplateTestData(overrides?: Partial<ElementData>): ElementData {
         }
       ],
       triggers: ['generate', 'create'],
-      ...(overrides?.metadata || {})
+      ...overrides?.metadata
     }
   };
 
@@ -147,7 +148,7 @@ export const TEMPLATE_CONFIG: ElementTypeTestConfig = {
 
   invalidExamples: [
     // FIX: Temporarily reduced - validation not fully implemented
-    // TODO: Add back when validation implemented
+    // Creation-validation coverage is incomplete; edit rejection is exercised below.
   ],
 
   // ============================================================================
@@ -167,7 +168,7 @@ export const TEMPLATE_CONFIG: ElementTypeTestConfig = {
       ],
       invalidValues: [
         { value: '', expectedError: 'required|empty' },
-        { value: 'A'.repeat(501), expectedError: 'length|size' }
+        { value: 'A'.repeat(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH + 1), expectedError: 'length|size' }
       ]
     },
     {
@@ -269,7 +270,7 @@ export const TEMPLATE_CONFIG: ElementTypeTestConfig = {
       name: 'name-required',
       description: 'Name field must be present and non-empty',
       validate: (data) => ({
-        valid: Boolean(data.name && data.name.trim()),
+        valid: Boolean(data.name?.trim()),
         message: 'Template name is required'
       }),
       severity: 'error'
@@ -278,7 +279,7 @@ export const TEMPLATE_CONFIG: ElementTypeTestConfig = {
       name: 'description-required',
       description: 'Description field must be present and non-empty',
       validate: (data) => ({
-        valid: Boolean(data.description && data.description.trim()),
+        valid: Boolean(data.description?.trim()),
         message: 'Template description is required'
       }),
       severity: 'error'
@@ -287,7 +288,7 @@ export const TEMPLATE_CONFIG: ElementTypeTestConfig = {
       name: 'content-required',
       description: 'Content must be present and non-empty',
       validate: (data) => ({
-        valid: Boolean(data.content && data.content.trim()),
+        valid: Boolean(data.content?.trim()),
         message: 'Template content is required'
       }),
       severity: 'error'

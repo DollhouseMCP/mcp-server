@@ -39,7 +39,6 @@ import {
   createPortfolioTestEnvironment,
   preConfirmAllOperations,
   resetGatekeeperConfirmations,
-  waitForCacheSettle,
   type PortfolioTestEnvironment,
 } from '../../helpers/portfolioTestHelper.js';
 
@@ -143,8 +142,6 @@ describe('Gatekeeper allowElementPolicyOverrides kill switch (Issue #679/#683)',
       },
     });
     expect(createResult.success).toBe(true);
-
-    await waitForCacheSettle();
 
     const activateResult = await mcpAqlHandler.handleRead({
       operation: 'activate_element',
@@ -271,8 +268,6 @@ describe('Gatekeeper allowElementPolicyOverrides kill switch (Issue #679/#683)',
       });
       expect(createResult.success).toBe(true);
 
-      await waitForCacheSettle();
-
       await mcpAqlHandler.handleRead({
         operation: 'activate_element',
         params: { element_name: 'restrictive-persona', element_type: 'personas' },
@@ -317,7 +312,6 @@ describe('Gatekeeper allowElementPolicyOverrides kill switch (Issue #679/#683)',
         },
       });
       expect(allowPersonaResult.success).toBe(true);
-      await waitForCacheSettle();
 
       await mcpAqlHandler.handleRead({
         operation: 'activate_element',
@@ -336,7 +330,6 @@ describe('Gatekeeper allowElementPolicyOverrides kill switch (Issue #679/#683)',
         },
       });
       expect(confirmPersonaResult.success).toBe(true);
-      await waitForCacheSettle();
 
       await mcpAqlHandler.handleRead({
         operation: 'activate_element',

@@ -20,7 +20,7 @@ import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import { DollhouseMCPServer } from '../../../src/index.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
 import { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
-import { createPortfolioTestEnvironment, preConfirmAllOperations, waitForCacheSettle, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
+import { createPortfolioTestEnvironment, preConfirmAllOperations, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
 
 describe('Search/Query/Filter Pipeline Integration (Issue #431)', () => {
   let env: PortfolioTestEnvironment;
@@ -128,9 +128,6 @@ describe('Search/Query/Filter Pipeline Integration (Issue #431)', () => {
         metadata: { category: 'writing' },
       },
     });
-
-    // Allow cache to settle after element creation (see Issue #276)
-    await waitForCacheSettle();
   }
 
   // ==========================================================================
@@ -231,7 +228,7 @@ describe('Search/Query/Filter Pipeline Integration (Issue #431)', () => {
           items?: unknown[];
           pagination?: { totalItems: number; page: number; pageSize: number; hasNextPage: boolean; hasPrevPage: boolean };
         };
-        expect(data1.items!.length).toBe(1);
+        expect(data1.items!).toHaveLength(1);
         expect(data1.pagination!.page).toBe(1);
         expect(data1.pagination!.pageSize).toBe(1);
         expect(data1.pagination!.hasPrevPage).toBe(false);
@@ -684,7 +681,7 @@ describe('Search/Query/Filter Pipeline Integration (Issue #431)', () => {
           items?: unknown[];
           pagination?: { totalItems: number; totalPages: number; hasNextPage: boolean; hasPrevPage: boolean };
         };
-        expect(data.items!.length).toBe(0);
+        expect(data.items!).toHaveLength(0);
         expect(data.pagination!.totalItems).toBe(0);
         expect(data.pagination!.hasNextPage).toBe(false);
         expect(data.pagination!.hasPrevPage).toBe(false);

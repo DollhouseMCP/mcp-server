@@ -18,7 +18,7 @@ import { DollhouseMCPServer } from '../../../src/index.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
 import { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
 import { AgentManager } from '../../../src/elements/agents/AgentManager.js';
-import { createPortfolioTestEnvironment, preConfirmAllOperations, waitForCacheSettle, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
+import { createPortfolioTestEnvironment, preConfirmAllOperations, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
 
 describe('Agent execution lifecycle edge cases', () => {
   let env: PortfolioTestEnvironment;
@@ -65,8 +65,6 @@ describe('Agent execution lifecycle edge cases', () => {
       console.log(`createAgent('${name}') failed:`, result.message);
     }
     expect(result.success).toBe(true);
-    // Issue #276: Allow cache to settle
-    await waitForCacheSettle();
   }
 
   async function executeAgent(name: string, params: Record<string, unknown> = {}) {

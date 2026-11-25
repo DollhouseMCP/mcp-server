@@ -19,7 +19,7 @@ import { DollhouseMCPServer } from '../../../src/index.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
 import { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
 import { Gatekeeper } from '../../../src/handlers/mcp-aql/Gatekeeper.js';
-import { createPortfolioTestEnvironment, preConfirmAllOperations, waitForCacheSettle, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
+import { createPortfolioTestEnvironment, preConfirmAllOperations, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
 
 describe('Gatekeeper Confirm/Retry Flow (Issue #1601)', () => {
   let env: PortfolioTestEnvironment;
@@ -137,8 +137,6 @@ describe('Gatekeeper Confirm/Retry Flow (Issue #1601)', () => {
         },
       });
 
-      await waitForCacheSettle();
-
       // #1653: Both deletes succeed — auto-confirm handles each one
       const delete1 = await mcpAqlHandler.handleDelete({
         operation: 'delete_element',
@@ -173,8 +171,6 @@ describe('Gatekeeper Confirm/Retry Flow (Issue #1601)', () => {
         },
       });
       expect(createResult.success).toBe(true);
-
-      await waitForCacheSettle();
 
       const activateResult = await mcpAqlHandler.handleRead({
         operation: 'activate_element',

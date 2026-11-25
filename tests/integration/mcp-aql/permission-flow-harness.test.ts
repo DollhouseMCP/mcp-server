@@ -33,12 +33,6 @@ import {
 /** Number of elements to create when testing session-scope persistence. */
 const SESSION_PERSISTENCE_COUNT = 3;
 
-/** Maximum time (ms) to wait for an element to become visible after creation. */
-const ELEMENT_POLL_TIMEOUT_MS = 5000;
-
-/** Polling interval (ms) between element visibility checks. */
-const ELEMENT_POLL_INTERVAL_MS = 100;
-
 /** Characters that must never appear in test content (injection prevention). */
 const UNSAFE_CONTENT_PATTERNS = /<script>|{{|`\$\{|eval\(|__proto__/i;
 
@@ -85,65 +79,20 @@ function validateTestContent(content: string, context: string): void {
   }
 }
 
-/**
- * Wait for an element to become visible via get_element after creation.
- * Uses polling instead of arbitrary delay for deterministic behavior.
- *
- * @param handler - MCPAQLHandler instance
- * @param name - Element name to poll for
- * @param type - Element type (e.g., 'skills', 'personas')
- * @param timeoutMs - Maximum time to wait (default: ELEMENT_POLL_TIMEOUT_MS)
- * @throws If element is not found within the timeout
- */
-async function waitForElement(
-  handler: MCPAQLHandler,
-  name: string,
-  type: string,
-  timeoutMs: number = ELEMENT_POLL_TIMEOUT_MS
-): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const result = await handler.handleRead({
-        operation: 'get_element',
-        element_type: type,
-        params: { element_name: name, element_type: type },
-      });
-      if (result.success) return;
-    } catch { /* element not yet visible, keep polling */ }
-    await new Promise(resolve => setTimeout(resolve, ELEMENT_POLL_INTERVAL_MS));
-  }
-  throw new Error(`Element '${name}' (${type}) not found after ${timeoutMs}ms`);
+/** Assert foreground creation is immediately visible through the public read API. */
+async function assertElementVisible(handler: MCPAQLHandler, name: string, type: string): Promise<void> {
+  const result = await handler.handleRead({
+    operation: 'get_element', element_type: type,
+    params: { element_name: name, element_type: type },
+  });
+  expect(result).toMatchObject({ success: true });
 }
 
-/**
- * Wait for an element activation to propagate by polling get_active_elements.
- *
- * @param handler - MCPAQLHandler instance
- * @param name - Element name that should appear in active elements
- * @param timeoutMs - Maximum time to wait (default: ELEMENT_POLL_TIMEOUT_MS)
- * @throws If element is not active within the timeout
- */
-async function waitForActivation(
-  handler: MCPAQLHandler,
-  name: string,
-  timeoutMs: number = ELEMENT_POLL_TIMEOUT_MS
-): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const result = await handler.handleRead({
-        operation: 'get_active_elements',
-        params: {},
-      });
-      if (result.success) {
-        const text = JSON.stringify(result.data);
-        if (text.includes(name)) return;
-      }
-    } catch { /* not yet propagated, keep polling */ }
-    await new Promise(resolve => setTimeout(resolve, ELEMENT_POLL_INTERVAL_MS));
-  }
-  throw new Error(`Element '${name}' not found in active elements after ${timeoutMs}ms`);
+/** Assert awaited activation has published its active state. */
+async function assertActivationVisible(handler: MCPAQLHandler, name: string): Promise<void> {
+  const result = await handler.handleRead({ operation: 'get_active_elements', params: {} });
+  expect(result).toMatchObject({ success: true });
+  expect(JSON.stringify(result.data)).toContain(name);
 }
 
 /**
@@ -247,7 +196,7 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
       gatekeeper.recordConfirmation('create_element', PermissionLevel.CONFIRM_SESSION);
 
       await createTestElement(mcpAqlHandler, gatekeeper, 'delete-test-skill');
-      await waitForElement(mcpAqlHandler, 'delete-test-skill', 'skills');
+      await assertElementVisible(mcpAqlHandler, 'delete-test-skill', 'skills');
 
       // #1653: Delete now auto-confirms — the host's tool approval is the primary gate
       const deleteResult = await mcpAqlHandler.handleDelete({
@@ -272,7 +221,7 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
       });
       expect(createResult.success).toBe(true);
 
-      await waitForElement(mcpAqlHandler, "pre-confirmed-skill", "skills");
+      await assertElementVisible(mcpAqlHandler, "pre-confirmed-skill", "skills");
 
       // Edit should work
       const editResult = await mcpAqlHandler.handleUpdate({
@@ -316,7 +265,7 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
         },
       });
 
-      await waitForElement(mcpAqlHandler, 'restrictive-persona', 'personas');
+      await assertElementVisible(mcpAqlHandler, 'restrictive-persona', 'personas');
 
       // Activate the restrictive persona
       await mcpAqlHandler.handleRead({
@@ -324,7 +273,7 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
         params: { element_name: 'restrictive-persona', element_type: 'personas' },
       });
 
-      await waitForActivation(mcpAqlHandler, "restrictive-persona");
+      await assertActivationVisible(mcpAqlHandler, "restrictive-persona");
 
       // Even with all operations pre-confirmed, the element deny should block
       const createResult = await mcpAqlHandler.handleCreate({
@@ -352,7 +301,7 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
         },
       });
 
-      await waitForElement(mcpAqlHandler, 'step-test-agent', 'agents');
+      await assertElementVisible(mcpAqlHandler, 'step-test-agent', 'agents');
 
       const execResult = await mcpAqlHandler.handleExecute({
         operation: 'execute_agent',
@@ -426,7 +375,7 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
         },
       });
 
-      await waitForElement(mcpAqlHandler, 'policy-test-ensemble', 'ensembles');
+      await assertElementVisible(mcpAqlHandler, 'policy-test-ensemble', 'ensembles');
 
       // Activate the ensemble
       await mcpAqlHandler.handleRead({
@@ -434,7 +383,7 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
         params: { element_name: 'policy-test-ensemble', element_type: 'ensembles' },
       });
 
-      await waitForActivation(mcpAqlHandler, "policy-test-ensemble");
+      await assertActivationVisible(mcpAqlHandler, "policy-test-ensemble");
 
       // git push --force should be denied by element policy
       const denyResult = await mcpAqlHandler.handleRead({
@@ -479,14 +428,14 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
         },
       });
 
-      await waitForElement(mcpAqlHandler, 'confirm-test-ensemble', 'ensembles');
+      await assertElementVisible(mcpAqlHandler, 'confirm-test-ensemble', 'ensembles');
 
       await mcpAqlHandler.handleRead({
         operation: 'activate_element',
         params: { element_name: 'confirm-test-ensemble', element_type: 'ensembles' },
       });
 
-      await waitForActivation(mcpAqlHandler, "confirm-test-ensemble");
+      await assertActivationVisible(mcpAqlHandler, "confirm-test-ensemble");
 
       // gh pr merge should require confirmation
       const confirmResult = await mcpAqlHandler.handleRead({
@@ -537,14 +486,14 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
         },
       });
 
-      await waitForElement(mcpAqlHandler, 'restrictive-ensemble', 'ensembles');
+      await assertElementVisible(mcpAqlHandler, 'restrictive-ensemble', 'ensembles');
 
       await mcpAqlHandler.handleRead({
         operation: 'activate_element',
         params: { element_name: 'restrictive-ensemble', element_type: 'ensembles' },
       });
 
-      await waitForActivation(mcpAqlHandler, "restrictive-ensemble");
+      await assertActivationVisible(mcpAqlHandler, "restrictive-ensemble");
 
       // curl should be denied — not in any allowlist
       const result = await mcpAqlHandler.handleRead({
@@ -718,14 +667,14 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
         },
       });
 
-      await waitForElement(mcpAqlHandler, 'deny-delete-persona', 'personas');
+      await assertElementVisible(mcpAqlHandler, 'deny-delete-persona', 'personas');
 
       await mcpAqlHandler.handleRead({
         operation: 'activate_element',
         params: { element_name: 'deny-delete-persona', element_type: 'personas' },
       });
 
-      await waitForActivation(mcpAqlHandler, "deny-delete-persona");
+      await assertActivationVisible(mcpAqlHandler, "deny-delete-persona");
 
       // Revoke pre-confirmations so we test the confirm flow
       gatekeeper.revokeAllConfirmations();
@@ -763,7 +712,7 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
         },
       });
 
-      await waitForElement(mcpAqlHandler, 'approval-count-agent', 'agents');
+      await assertElementVisible(mcpAqlHandler, 'approval-count-agent', 'agents');
 
       // Revoke all confirmations to test from clean state
       gatekeeper.revokeAllConfirmations();
@@ -791,7 +740,7 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
         },
       });
 
-      await waitForElement(mcpAqlHandler, "entry-test-memory", "memories");
+      await assertElementVisible(mcpAqlHandler, "entry-test-memory", "memories");
 
       // Revoke all to test clean state
       gatekeeper.revokeAllConfirmations();
@@ -838,7 +787,7 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
         },
       });
 
-      await waitForElement(mcpAqlHandler, 'step-confirm-agent', 'agents');
+      await assertElementVisible(mcpAqlHandler, 'step-confirm-agent', 'agents');
 
       const execResult = await mcpAqlHandler.handleExecute({
         operation: 'execute_agent',
@@ -890,7 +839,7 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
         },
       });
 
-      await waitForElement(mcpAqlHandler, 'deny-create-persona', 'personas');
+      await assertElementVisible(mcpAqlHandler, 'deny-create-persona', 'personas');
 
       // Activate it
       await mcpAqlHandler.handleRead({
@@ -898,7 +847,7 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
         params: { element_name: 'deny-create-persona', element_type: 'personas' },
       });
 
-      await waitForActivation(mcpAqlHandler, 'deny-create-persona');
+      await assertActivationVisible(mcpAqlHandler, 'deny-create-persona');
 
       // Revoke all pre-confirmations — rely purely on auto-confirm
       gatekeeper.revokeAllConfirmations();

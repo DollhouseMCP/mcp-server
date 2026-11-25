@@ -21,7 +21,7 @@ import { DollhouseContainer } from '../../../src/di/Container.js';
 import { ElementType } from '../../../src/handlers/mcp-aql/types.js';
 import type { ExportPackage } from '../../../src/handlers/mcp-aql/shared.js';
 import { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
-import { createPortfolioTestEnvironment, preConfirmAllOperations, waitForCacheSettle, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
+import { createPortfolioTestEnvironment, preConfirmAllOperations, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
 
 const PERSONA_1_NAME = 'test-persona-1';
 const CODE_REVIEW_SKILL = 'code-review';
@@ -148,11 +148,6 @@ describe('MCP-AQL READ Endpoint Integration', () => {
         metadata: { autonomous: false },
       },
     });
-
-    // FIX: Issue #276 - Delay to allow cache to update after element creation
-    // Personas in particular need time for the cache to settle before read operations
-    // Increased to 2000ms based on continued test flakiness across multiple runs
-    await waitForCacheSettle();
   }
 
   describe('list_elements operation', () => {
@@ -876,7 +871,6 @@ describe('MCP-AQL READ Endpoint Integration', () => {
       });
 
       expect(createResult.success).toBe(true);
-      await waitForCacheSettle();
 
       const renderResult = await mcpAqlHandler.handleRead({
         operation: 'render',
@@ -1546,8 +1540,6 @@ describe('MCP-AQL READ Endpoint Integration', () => {
           },
         },
       });
-
-      await waitForCacheSettle();
     });
 
     it('should get ensemble by name', async () => {
