@@ -8,8 +8,9 @@
  * @since v1.0.0
  */
 
-import { execFileSync, execSync } from 'child_process';
+import { execFile, execFileSync, execSync } from 'child_process';
 import { platform } from 'os';
+import { promisify } from 'util';
 
 const MACOS_DIALOG_SCRIPT = `on run argv
   set dialogTitle to item 1 of argv
@@ -26,6 +27,146 @@ const MACOS_DIALOG_SCRIPT = `on run argv
     display dialog dialogMessage with title dialogTitle with icon caution buttons {cancelButton, confirmButton} default button confirmButton
   end if
 end run`;
+
+const runNativeDialog = promisify(execFile);
+const RESET_TITLE = 'Reset blocked-agent state';
+const RESET_TEXT = 'Reset the unavailable blocked-agent file? The damaged file will be kept as evidence.';
+const BASIC_TEXT = 'Basic approval protects against agents limited to MCP tools.';
+const PROOF_TEXT = 'Enter a current authenticator code or a backup code.';
+const RESET_BUTTON = 'Reset';
+const MACOS_RESET_SCRIPT = `on run argv
+  set dialogTitle to item 1 of argv
+  set dialogMessage to item 2 of argv
+  set timeLimit to (item 3 of argv) as integer
+  if item 4 of argv is "proof" then
+    set reply to display dialog dialogMessage with title dialogTitle buttons {"Cancel", "Reset"} default button "Cancel" cancel button "Cancel" default answer "" with hidden answer giving up after timeLimit
+  else
+    set reply to display dialog dialogMessage with title dialogTitle buttons {"Cancel", "Reset"} default button "Cancel" cancel button "Cancel" giving up after timeLimit
+  end if
+  if gave up of reply then return "timeout"
+  if button returned of reply is not "Reset" then return "cancel"
+  if item 4 of argv is "proof" then return "reset" & linefeed & text returned of reply
+  return "reset"
+end run`;
+
+const WINDOWS_RESET_SCRIPT = `$ErrorActionPreference = 'Stop'
+if (-not [Environment]::UserInteractive) { exit 2 }
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$form = New-Object Windows.Forms.Form
+$form.Text = 'Reset blocked-agent state'
+$form.ClientSize = New-Object Drawing.Size(450, 155)
+$form.StartPosition = 'CenterScreen'
+$form.FormBorderStyle = 'FixedDialog'
+$form.MinimizeBox = $false
+$form.MaximizeBox = $false
+$form.TopMost = $true
+$label = New-Object Windows.Forms.Label
+$label.Location = New-Object Drawing.Point(14, 12)
+$label.Size = New-Object Drawing.Size(422, 58)
+$label.Text = 'Reset the unavailable blocked-agent file? The damaged file will be kept as evidence.' + [Environment]::NewLine
+$form.Controls.Add($label)
+$proof = $env:DOLLHOUSE_NATIVE_RESET_PROOF -eq '1'
+$inputBox = New-Object Windows.Forms.TextBox
+if ($proof) {
+  $label.Text += 'Enter a current authenticator code or a backup code.'
+  $inputBox.Location = New-Object Drawing.Point(14, 75)
+  $inputBox.Width = 422
+  $inputBox.MaxLength = 64
+  $inputBox.UseSystemPasswordChar = $true
+  $form.Controls.Add($inputBox)
+} else {
+  $label.Text += 'Basic approval protects against agents limited to MCP tools.'
+}
+$cancel = New-Object Windows.Forms.Button
+$cancel.Text = 'Cancel'
+$cancel.Location = New-Object Drawing.Point(270, 115)
+$cancel.DialogResult = 'Cancel'
+$form.Controls.Add($cancel)
+$reset = New-Object Windows.Forms.Button
+$reset.Text = 'Reset'
+$reset.Location = New-Object Drawing.Point(353, 115)
+$reset.DialogResult = 'OK'
+$form.Controls.Add($reset)
+$form.AcceptButton = $cancel
+$form.CancelButton = $cancel
+$form.ActiveControl = $cancel
+try {
+  if ($form.ShowDialog() -ne 'OK') { [Console]::Out.Write('cancel'); exit 0 }
+  [Console]::Out.Write('reset')
+  if ($proof) { [Console]::Out.Write([Environment]::NewLine + $inputBox.Text) }
+} finally { $form.Dispose() }`;
+
+export type BlockResetDialogResult =
+  | { confirmed: true; code?: string }
+  | { confirmed: false; reason: 'cancelled' | 'timeout' | 'unavailable' };
+
+function parseResetResponse(stdout: string, requireCode: boolean): BlockResetDialogResult {
+  const [action, code, extra] = stdout.trim().split(/\r?\n/u);
+  if (action === 'timeout') return { confirmed: false, reason: 'timeout' };
+  if (action !== 'reset' || extra !== undefined) return { confirmed: false, reason: 'cancelled' };
+  if (!requireCode && code === undefined) return { confirmed: true };
+  return code ? { confirmed: true, code } : { confirmed: false, reason: 'cancelled' };
+}
+
+/** Request explicit user consent. Proof travels only through the child output pipe. */
+export async function showBlockResetDialog(requireCode: boolean, timeoutMs: number): Promise<BlockResetDialogResult> {
+  if (timeoutMs <= 0) return { confirmed: false, reason: 'timeout' };
+  const timeout = Math.ceil(timeoutMs / 1000);
+  const message = `${RESET_TEXT}\n\n${requireCode ? PROOF_TEXT : BASIC_TEXT}`;
+  const options = { encoding: 'utf8', timeout: timeoutMs, maxBuffer: 4096, windowsHide: true } as const;
+  try {
+    switch (platform()) {
+      case 'darwin': {
+        const { stdout } = await runNativeDialog('/usr/bin/osascript', [
+          '-e', MACOS_RESET_SCRIPT, '--', RESET_TITLE, message, String(timeout), requireCode ? 'proof' : 'basic',
+        ], options);
+        return parseResetResponse(stdout, requireCode);
+      }
+      case 'linux':
+        return await showZenityReset(message, requireCode, options);
+      case 'win32': {
+        const script = Buffer.from(WINDOWS_RESET_SCRIPT, 'utf16le').toString('base64');
+        const { stdout } = await runNativeDialog('powershell.exe', [
+          '-NoProfile', '-NonInteractive', '-STA', '-EncodedCommand', script,
+        ], { ...options, env: { ...process.env, DOLLHOUSE_NATIVE_RESET_PROOF: requireCode ? '1' : '0' } });
+        return parseResetResponse(stdout, requireCode);
+      }
+      default:
+        return { confirmed: false, reason: 'unavailable' };
+    }
+  } catch (error) {
+    const failure = error as { code?: number; killed?: boolean; stderr?: string };
+    if (failure.killed || failure.code === 5) return { confirmed: false, reason: 'timeout' };
+    if ((failure.code === 1 && !failure.stderr?.trim()) || failure.stderr?.includes('(-128)')) {
+      return { confirmed: false, reason: 'cancelled' };
+    }
+    // Process diagnostics can contain user input. Never relay stdout or stderr.
+    return { confirmed: false, reason: 'unavailable' };
+  }
+}
+
+async function showZenityReset(
+  message: string, requireCode: boolean, options: { encoding: 'utf8'; timeout: number; maxBuffer: number },
+): Promise<BlockResetDialogResult> {
+  if (!process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) return { confirmed: false, reason: 'unavailable' };
+  const deadline = performance.now() + options.timeout;
+  let code: string | undefined;
+  if (requireCode) {
+    const { stdout } = await runNativeDialog('zenity', [
+      '--entry', '--hide-text', '--title', RESET_TITLE, '--text', PROOF_TEXT,
+    ], options);
+    code = stdout.trim();
+    if (!code) return { confirmed: false, reason: 'cancelled' };
+  }
+  const remaining = Math.floor(deadline - performance.now());
+  if (remaining <= 0) return { confirmed: false, reason: 'timeout' };
+  await runNativeDialog('zenity', [
+    '--question', '--default-cancel', '--no-markup', '--title', RESET_TITLE,
+    '--text', message, '--ok-label', RESET_BUTTON, '--cancel-label', 'Cancel',
+  ], { ...options, timeout: remaining });
+  return code ? { confirmed: true, code } : { confirmed: true };
+}
 
 /**
  * Escape shell argument for Unix shells (bash, sh, zsh)
