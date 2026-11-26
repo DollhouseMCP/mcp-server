@@ -17,7 +17,9 @@ describe('file state diagnostics', () => {
       const fileOps = { readFile: async () => content } as unknown as FileOperationsService;
       const directory = path.join(os.tmpdir(), 'state-diagnostics');
       const store = kind === 'confirmation' ? new FileConfirmationStore(fileOps, directory, 'session')
-        : kind === 'challenge' ? new FileChallengeStore(fileOps, directory, 'session', 0)
+        : kind === 'challenge' ? new FileChallengeStore(fileOps, {
+          resolve: async () => ({ keyId: 'test', key: Buffer.alloc(32, 0x5d) }),
+        }, directory, 'session', 0)
         : new FileActivationStateStore(fileOps, directory, 'session');
       await store.initialize();
       expect(warn).toHaveBeenCalledWith(expect.stringMatching(/unsupportedVersion|invalid/), expect.anything());

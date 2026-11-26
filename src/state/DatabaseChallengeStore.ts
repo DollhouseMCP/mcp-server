@@ -10,12 +10,15 @@
  * @since v2.2.0 — Phase 4, Step 4.2
  */
 
-import { timingSafeEqual } from 'node:crypto';
 import { logger } from '../utils/logger.js';
+import { and, eq } from 'drizzle-orm';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import type { StoredChallenge } from '@dollhousemcp/safety';
 import type { DatabaseInstance } from '../database/connection.js';
-import type { IChallengeStore } from './IChallengeStore.js';
+import { withUserContext } from '../database/rls.js';
+import { sessions } from '../database/schema/sessions.js';
+import type { ChallengeMetadata, IChallengeStore } from './IChallengeStore.js';
+import { ChallengeVerifier, hasLegacyChallengeCodes, type ChallengeKeyResolver, type PersistedChallenge } from './challenge-verifier.js';
 import {
   validateDbStoreParams,
   handleDbInitializeError,
@@ -36,7 +39,8 @@ export class DatabaseChallengeStore implements IChallengeStore {
   private readonly userId: string;
   private readonly sessionId: string;
 
-  private readonly challenges = new Map<string, StoredChallenge>();
+  private challenges = new Map<string, PersistedChallenge>();
+  private readonly verifier: ChallengeVerifier;
   private cleanupInterval: NodeJS.Timeout | null = null;
   private initialized = false;
   private readonly persistQueue: PersistQueue;
@@ -45,12 +49,14 @@ export class DatabaseChallengeStore implements IChallengeStore {
     db: DatabaseInstance,
     userId: string,
     sessionId: string,
+    keyResolver: ChallengeKeyResolver,
     autoCleanupIntervalMs: number = 60000,
   ) {
     validateDbStoreParams(userId, sessionId);
     this.db = db;
     this.userId = userId;
     this.sessionId = sessionId;
+    this.verifier = new ChallengeVerifier(keyResolver, JSON.stringify([userId, sessionId]));
     this.persistQueue = new PersistQueue({
       storeName: STORE_NAME,
       stateType: 'challenge state',
@@ -73,23 +79,16 @@ export class DatabaseChallengeStore implements IChallengeStore {
     this.initialized = true;
 
     try {
+      await this.verifier.initialize();
       await ensureSessionRow(this.db, this.userId, this.sessionId);
 
       const row = await loadSessionRow(this.db, this.userId, this.sessionId);
       if (!row) return;
 
-      // Clear before populating to prevent duplicates on re-initialization
-      this.challenges.clear();
-
-      const raw = row.challenges as Array<[string, StoredChallenge]> | null;
-      if (!Array.isArray(raw)) return;
-
-      const now = Date.now();
-      for (const [challengeId, challenge] of raw) {
-        if (!challengeId || !challenge) continue;
-        if (now > challenge.expiresAt) continue;
-        this.challenges.set(challengeId, challenge);
-      }
+      if (!Array.isArray(row.challenges)) return;
+      this.challenges = hasLegacyChallengeCodes(row.challenges)
+        ? await this.restoreLegacySnapshot()
+        : await this.verifier.loadEntries(row.challenges);
 
       if (this.challenges.size > 0) {
         logger.info(
@@ -109,12 +108,29 @@ export class DatabaseChallengeStore implements IChallengeStore {
     }
   }
 
+  private restoreLegacySnapshot(): Promise<Map<string, PersistedChallenge>> {
+    return withUserContext(this.db, this.userId, async tx => {
+      const scope = and(eq(sessions.userId, this.userId), eq(sessions.sessionId, this.sessionId));
+      const [row] = await tx.select({ challenges: sessions.challenges }).from(sessions).where(scope).for('update');
+      const entries = Array.isArray(row?.challenges) ? row.challenges : [];
+      const legacy = hasLegacyChallengeCodes(entries);
+      const challenges = await this.verifier.loadEntries(entries, legacy);
+      if (legacy) await tx.update(sessions).set({ challenges: Array.from(challenges) }).where(scope);
+      return challenges;
+    });
+  }
+
   set(challengeId: string, challenge: StoredChallenge): void {
-    this.challenges.set(challengeId, challenge);
+    this.challenges.set(challengeId, this.verifier.seal(challengeId, challenge));
     this.persistAsync();
   }
 
-  get(challengeId: string): StoredChallenge | undefined {
+  get(challengeId: string): ChallengeMetadata | undefined {
+    const challenge = this.lookup(challengeId);
+    return challenge && { expiresAt: challenge.expiresAt, reason: challenge.reason };
+  }
+
+  private lookup(challengeId: string): PersistedChallenge | undefined {
     const challenge = this.challenges.get(challengeId);
     if (!challenge) return undefined;
 
@@ -128,20 +144,14 @@ export class DatabaseChallengeStore implements IChallengeStore {
   }
 
   verify(challengeId: string, code: string): boolean {
-    const challenge = this.get(challengeId);
+    const challenge = this.lookup(challengeId);
     if (!challenge) return false;
-
-    // Timing-safe comparison to prevent side-channel attacks
-    const expected = Buffer.from(challenge.code, 'utf8');
-    const actual = Buffer.from(code, 'utf8');
-    const matches = expected.length === actual.length
-      && timingSafeEqual(expected, actual);
 
     // Delete challenge after verification attempt (one-time use)
     this.challenges.delete(challengeId);
     this.persistAsync();
 
-    return matches;
+    return this.verifier.matches(challengeId, challenge, code);
   }
 
   cleanup(): void {

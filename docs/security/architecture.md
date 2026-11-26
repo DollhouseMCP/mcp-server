@@ -180,7 +180,7 @@ The `DangerZoneEnforcer` provides programmatic blocking for the highest-risk saf
 1. The Autonomy Evaluator detects a `DANGER_ZONE` safety tier.
 2. A verification challenge is created with a display code and UUID challenge ID.
 3. `DangerZoneEnforcer.block()` adds the agent to the blocked list with the challenge ID.
-4. The display code is shown via OS-native dialog (AppleScript on macOS, zenity on Linux, PowerShell on Windows) and is **never** included in the LLM-facing response.
+4. The server sends the display code to a native dialog through the child's stdin. The LLM-facing response contains the challenge ID.
 5. The human reads the code from the dialog and tells the LLM.
 6. The LLM calls `verify_challenge` with the challenge ID and code.
 7. On successful verification, `DangerZoneEnforcer.unblock()` removes the block.

@@ -18,6 +18,8 @@
 
 import type { StoredChallenge } from '@dollhousemcp/safety';
 
+export type ChallengeMetadata = Pick<StoredChallenge, 'expiresAt' | 'reason'>;
+
 /**
  * Persistence-only contract for verification challenges.
  */
@@ -41,7 +43,7 @@ export interface IChallengeStore {
    * Auto-deletes expired entries on access.
    * @param challengeId - Unique challenge identifier
    */
-  get(challengeId: string): StoredChallenge | undefined;
+  get(challengeId: string): ChallengeMetadata | undefined;
 
   /**
    * Verify a challenge code.

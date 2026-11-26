@@ -299,7 +299,7 @@ export class GatekeeperHandler {
     this.verifyCode(store, challengeId, code);
     let result: unknown;
     try { result = await this.unblockVerifiedAgent(challengeId); } catch (error) {
-      store.set(challengeId, challengePreCheck);
+      store.set(challengeId, { ...challengePreCheck, code });
       this.deps.verificationMetrics.recordFailure();
       throw error;
     }
@@ -356,7 +356,7 @@ export class GatekeeperHandler {
   private getChallengePreCheck(
     store: NonNullable<HandlerRegistry['verificationStore']>,
     challengeId: string
-  ): { code: string; expiresAt: number; reason: string } {
+  ): { expiresAt: number; reason: string } {
     const challengePreCheck = store.get(challengeId);
     if (challengePreCheck) {
       return challengePreCheck;

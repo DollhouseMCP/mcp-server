@@ -905,7 +905,9 @@ Persists Gatekeeper confirmations and CLI approvals to `confirmations`, `cli_app
 
 **DatabaseChallengeStore** (`src/state/DatabaseChallengeStore.ts`)
 
-Persists verification challenge state to the `challenges` JSONB column. Includes a configurable auto-cleanup interval for expired challenges. Writes are fire-and-forget.
+Persists challenge metadata and keyed verifiers to the `challenges` JSONB column. File-backed sessions use the same verifier format. The verifier binds the session, challenge ID, reason and expiry using the existing audit HMAC key. Ordinary writes are queued.
+
+When a session opens, its legacy records are rewritten under the file write lock or PostgreSQL row lock. An unexpired legacy challenge remains usable after the protected write succeeds. Expired challenges are discarded. This conversion covers the session's current state. Historical backups and unopened legacy sessions retain their original data until handled by retention or reopened.
 
 ### PersistQueue
 

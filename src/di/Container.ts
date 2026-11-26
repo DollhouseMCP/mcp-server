@@ -975,6 +975,7 @@ export class DollhouseContainer {
     } catch (error) {
       logger.warn('[Container] DangerZoneEnforcer initialization failed:', error);
     }
+    if (env.DOLLHOUSE_TRANSPORT === 'stdio') await this.resolve<IChallengeStore>('ChallengeStore').initialize?.();
     timer?.endPhase('danger_zone_init');
   }
 
@@ -1559,7 +1560,7 @@ export class DollhouseContainer {
       child.register('ConfirmationStore', () =>
         new DbConfirmation(db, httpUserId, sid, (this.hasRegistration('AuditHmacResolver') ? this.resolve<AuditHmacResolver>('AuditHmacResolver') : undefined)));
       child.register('ChallengeStore', () =>
-        new DbChallenge(db, httpUserId, sid));
+        new DbChallenge(db, httpUserId, sid, this.resolve('AuditHmacResolver')));
       child.register('VerificationStore', () => child.resolve('ChallengeStore'));
       child.register('GatekeeperSession', () =>
         new GatekeeperSession(undefined, 100, undefined, child.resolve('ConfirmationStore'), sid, (this.hasRegistration('AuditHmacResolver') ? this.resolve<AuditHmacResolver>('AuditHmacResolver') : undefined)));
@@ -1569,7 +1570,7 @@ export class DollhouseContainer {
       child.register('ConfirmationStore', () =>
         new FileConfirmationStore(this.resolve('FileOperationsService'), userStateDir, sid, (this.hasRegistration('AuditHmacResolver') ? this.resolve<AuditHmacResolver>('AuditHmacResolver') : undefined)));
       child.register('ChallengeStore', () =>
-        new FileChallengeStore(this.resolve('FileOperationsService'), userStateDir, sid));
+        new FileChallengeStore(this.resolve('FileOperationsService'), this.resolve('AuditHmacResolver'), userStateDir, sid));
       child.register('VerificationStore', () => child.resolve('ChallengeStore'));
       child.register('GatekeeperSession', () =>
         new GatekeeperSession(undefined, 100, undefined, child.resolve('ConfirmationStore'), sid, (this.hasRegistration('AuditHmacResolver') ? this.resolve<AuditHmacResolver>('AuditHmacResolver') : undefined)));
