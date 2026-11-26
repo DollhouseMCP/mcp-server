@@ -8,12 +8,13 @@
 import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import express from 'express';
 import request from 'supertest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Secret, TOTP } from 'otpauth';
 import { ConsoleTokenStore } from '../../../../src/web/console/consoleToken.js';
 import { createTokenRoutes } from '../../../../src/web/routes/tokenRoutes.js';
+import { createTotpRoutes } from '../../../../src/web/routes/totpRoutes.js';
 
 function currentTotpCode(base32Secret: string): string {
   const totp = new TOTP({
@@ -36,6 +37,7 @@ async function enrollTotp(store: ConsoleTokenStore): Promise<string> {
 async function buildApp(store: ConsoleTokenStore) {
   const app = express();
   app.use('/api/console/token', createTokenRoutes({ store }));
+  app.use('/api/console/totp', createTotpRoutes({ store }));
   return app;
 }
 
@@ -110,6 +112,37 @@ describe('GET /api/console/token/info', () => {
     expect(res.body.totp.enrolled).toBe(true);
     expect(res.body.totp.enrolledAt).toBeTruthy();
     expect(res.body.totp.backupCodesRemaining).toBe(10);
+  });
+
+  it('serves the console during recovery and resumes protected approvals after confirming new enrollment', async () => {
+    await writeFile(store.getFilePath(), '{');
+    const recovered = await store.ensureInitialized('Kermit');
+    const app = await buildApp(store);
+    const newBearer = `Bearer ${recovered.token}`;
+    const pending = {
+      requestId: 'token-recovery', sessionId: 'test-session', operationDigest: 'test-digest',
+      expiresAt: Date.now() + 60_000,
+    };
+
+    await request(app).get('/api/console/token/info').set('Authorization', bearer).expect(401);
+    const info = await request(app).get('/api/console/token/info').set('Authorization', newBearer).expect(200);
+    expect(info.body.totp).toMatchObject({ enrollmentState: 'recovering', enrolled: null });
+    await expect(store.confirmApprovalFromDialog(pending, async () => ({ confirmed: true })))
+      .resolves.toBe('unavailable');
+
+    const begin = await request(app).post('/api/console/totp/enroll/begin').set('Authorization', newBearer).send({}).expect(200);
+    const confirm = (code: string) => request(app).post('/api/console/totp/enroll/confirm')
+      .set('Authorization', newBearer).send({ pendingId: begin.body.pendingId, code });
+    await confirm('invalid').expect(400);
+    await expect(store.lookupApprovalEnrollment()).resolves.toBe('unknown');
+    await confirm(currentTotpCode(begin.body.secret)).expect(200);
+
+    const enrolled = await request(app).get('/api/console/token/info').set('Authorization', newBearer).expect(200);
+    expect(enrolled.body.totp.enrolled).toBe(true);
+    expect(enrolled.body.totp).not.toHaveProperty('enrollmentState');
+    await expect(store.confirmApprovalFromDialog(pending, async () => ({
+      confirmed: true, code: currentTotpCode(begin.body.secret),
+    }))).resolves.toBe('approved');
   });
 
   it('returns the token file path', async () => {

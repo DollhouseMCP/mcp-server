@@ -228,6 +228,21 @@ describe('Auth tab (security.js) — #1791', () => {
   });
 
   describe('TOTP panel rendering', () => {
+    it('shows the recovery banner and offers authenticator setup', async () => {
+      mockFetchSuccess(win, {
+        ...MOCK_TOKEN_INFO,
+        totp: { enrollmentState: 'recovering', enrolled: null, enrolledAt: null, backupCodesRemaining: 0 },
+      });
+      (win as any).DollhouseConsole.security.init();
+      await new Promise(r => setTimeout(r, 50));
+
+      const panel = win.document.getElementById('sec-totp-content');
+      expect(panel?.querySelector('[role="status"]')?.textContent).toContain('Protected approvals are paused');
+      expect(panel?.querySelector('#sec-totp-enroll')?.textContent).toBe('Set up authenticator again');
+      expect(panel?.textContent).not.toContain('Not enrolled');
+      expect(win.document.getElementById('sec-rotate-btn')).toHaveProperty('disabled', true);
+    });
+
     it('shows "Not enrolled" with Enroll button when TOTP is off', async () => {
       mockFetchSuccess(win, MOCK_TOKEN_INFO);
       (win as any).DollhouseConsole.security.init();

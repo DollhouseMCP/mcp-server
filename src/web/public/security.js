@@ -167,14 +167,19 @@
       var disableBtn = document.getElementById('sec-totp-disable');
       if (disableBtn) disableBtn.addEventListener('click', handleDisableTotp);
     } else {
+      var recovering = totp.enrollmentState === 'recovering';
       el.innerHTML = ''
         + '<div class="sec-totp-status sec-totp-status--not-enrolled">'
         +   '<span class="sec-status-dot sec-status-dot--amber"></span>'
-        +   '<strong>Not enrolled</strong>'
+        +   (recovering ? '<strong>Authenticator recovery</strong>' : '<strong>Not enrolled</strong>')
         + '</div>'
-        + '<p class="sec-hint">Enroll an authenticator app to enable token rotation and other privileged operations.</p>'
+        + (recovering
+          ? '<p class="sec-hint sec-hint--warn sec-recovery-banner" role="status">The console token file was recovered. Protected approvals are paused. Set up your authenticator again and confirm a code to resume them.</p>'
+          : '<p class="sec-hint">Enroll an authenticator app to enable token rotation and other privileged operations.</p>')
         + '<div class="sec-actions">'
-        +   '<button class="sec-btn sec-btn--primary" id="sec-totp-enroll">Enroll Authenticator</button>'
+        +   '<button class="sec-btn sec-btn--primary" id="sec-totp-enroll">'
+        +     (recovering ? 'Set up authenticator again' : 'Enroll Authenticator')
+        +   '</button>'
         + '</div>';
 
       var enrollBtn = document.getElementById('sec-totp-enroll');

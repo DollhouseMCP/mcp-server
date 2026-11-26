@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
-import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Secret, TOTP } from 'otpauth';
@@ -45,6 +45,11 @@ async function enrollTotp(store: ConsoleTokenStore): Promise<string> {
   const begin = store.beginTotpEnrollment();
   await store.confirmTotpEnrollment(begin.pendingId, currentTotpCode(begin.secret));
   return begin.secret;
+}
+
+function recoveryApproval() {
+  return { requestId: 'recovery-request', sessionId: 'fixture-session', operationDigest: 'fixture-digest',
+    expiresAt: Date.now() + 60_000 };
 }
 
 describe('ConsoleTokenStore', () => {
@@ -107,6 +112,117 @@ describe('ConsoleTokenStore', () => {
       expect(second.token).toBe(first.token);
       // Name stays the same — we don't overwrite on reload
       expect(second.name).toBe(first.name);
+    });
+
+    it('restores console access while preserving damaged bytes and keeping approvals closed on restart', async () => {
+      const damaged = Buffer.from([0xff, 0xfe, 0x7b]);
+      await writeFile(tokenFilePath, damaged);
+
+      const store = new ConsoleTokenStore(tokenFilePath);
+      const entry = await store.ensureInitialized('Kermit');
+      expect(store.verify(entry.token)?.id).toBe(entry.id);
+      expect(store.getTotpStatus()).toMatchObject({ enrollmentState: 'recovering', enrolled: null });
+      expect((await readTokenFileRaw(tokenFilePath))?.enrollmentState).toBe('recovering');
+
+      const copies = (await readdir(testDir)).filter(name => name.startsWith('console-token.auth.json.corrupt-'));
+      expect(copies).toHaveLength(1);
+      const evidence = join(testDir, copies[0]);
+      expect(await readFile(evidence)).toEqual(damaged);
+      if (process.platform !== 'win32') expect((await stat(evidence)).mode & 0o777).toBe(0o600);
+
+      const restarted = new ConsoleTokenStore(tokenFilePath);
+      await expect(restarted.ensureInitialized('Piggy')).resolves.toMatchObject({ id: entry.id });
+      const dialog = jest.fn(async () => ({ confirmed: true } as const));
+      await expect(restarted.lookupApprovalEnrollment()).resolves.toBe('unknown');
+      await expect(restarted.confirmApprovalFromDialog(recoveryApproval(), dialog)).resolves.toBe('unavailable');
+      expect(dialog).not.toHaveBeenCalled();
+    });
+
+    it('refuses proof until a valid enrolled token file is restored', async () => {
+      const store = new ConsoleTokenStore(tokenFilePath);
+      const entry = await store.ensureInitialized('Kermit');
+      const secret = await enrollTotp(store);
+      const enrolled = await readFile(tokenFilePath, 'utf8');
+      const file = JSON.parse(enrolled) as ConsoleTokenFile;
+      const damaged = JSON.stringify({ ...file, totp: {} });
+      await writeFile(tokenFilePath, damaged);
+
+      const replacement = await store.ensureInitialized('Kermit');
+      expect(store.verify(replacement.token)?.id).toBe(replacement.id);
+      await expect(store.verifyTotp(currentTotpCode(secret))).resolves.toEqual({ ok: false });
+      await expect(store.lookupApprovalEnrollment()).resolves.toBe('unknown');
+      expect(store.verify(entry.token)).toBeNull();
+
+      await writeFile(tokenFilePath, enrolled);
+      await expect(store.ensureInitialized('Kermit')).resolves.toMatchObject({ id: entry.id });
+      expect(store.getTotpStatus().enrolled).toBe(true);
+      await expect(store.verifyTotp(currentTotpCode(secret))).resolves.toMatchObject({ ok: true, method: 'totp' });
+      await expect(store.confirmApprovalFromDialog(recoveryApproval(), async () => ({
+        confirmed: true, code: currentTotpCode(secret),
+      }))).resolves.toBe('approved');
+    });
+
+    it('preserves enrollment evidence even if the token list is empty', async () => {
+      const store = new ConsoleTokenStore(tokenFilePath);
+      await store.ensureInitialized('Kermit');
+      await enrollTotp(store);
+      const file = JSON.parse(await readFile(tokenFilePath, 'utf8')) as ConsoleTokenFile;
+      const damaged = JSON.stringify({ ...file, tokens: [] });
+      await writeFile(tokenFilePath, damaged);
+
+      const restarted = new ConsoleTokenStore(tokenFilePath);
+      await expect(restarted.lookupApprovalEnrollment()).resolves.toBe('unknown');
+      await restarted.ensureInitialized('Piggy');
+      await expect(restarted.lookupApprovalEnrollment()).resolves.toBe('unknown');
+      const evidence = (await readdir(testDir)).find(name => name.startsWith('console-token.auth.json.corrupt-'));
+      expect(evidence).toBeDefined();
+      expect(await readFile(join(testDir, evidence!), 'utf8')).toBe(damaged);
+    });
+
+    it('keeps a malformed attempt to mark enrollment as unenrolled in recovery', async () => {
+      const store = new ConsoleTokenStore(tokenFilePath);
+      await store.ensureInitialized('Kermit');
+      const file = await readTokenFileRaw(tokenFilePath);
+      await writeFile(tokenFilePath, JSON.stringify({ ...file, enrollmentState: 'unenrolled' }));
+
+      const restarted = new ConsoleTokenStore(tokenFilePath);
+      await expect(restarted.lookupApprovalEnrollment()).resolves.toBe('unknown');
+      await restarted.ensureInitialized('Piggy');
+      expect((await readTokenFileRaw(tokenFilePath))?.enrollmentState).toBe('recovering');
+      await expect(restarted.lookupApprovalEnrollment()).resolves.toBe('unknown');
+    });
+
+    it('keeps a surviving approval state file when recreating a missing token', async () => {
+      const store = new ConsoleTokenStore(tokenFilePath);
+      await store.ensureInitialized('Kermit');
+      const approved = recoveryApproval();
+      await expect(store.confirmApprovalFromDialog(approved, async () => ({ confirmed: true }))).resolves.toBe('approved');
+      const statePath = `${tokenFilePath}.approval-state`;
+      const saved = await readFile(statePath, 'utf8');
+      await rm(tokenFilePath);
+
+      const restarted = new ConsoleTokenStore(tokenFilePath);
+      await restarted.ensureInitialized('Piggy');
+      await expect(restarted.lookupApprovalEnrollment()).resolves.toBe('unknown');
+      expect(await readFile(statePath, 'utf8')).toBe(saved);
+      const secret = await enrollTotp(restarted);
+      await expect(restarted.confirmApprovalFromDialog(approved, async () => ({
+        confirmed: true, code: currentTotpCode(secret),
+      }))).resolves.toBe('spent');
+    });
+
+    it('refuses an open basic dialog and stale enrollment after another store recovers the token file', async () => {
+      const store = new ConsoleTokenStore(tokenFilePath);
+      await store.ensureInitialized('Kermit');
+      const stale = store.beginTotpEnrollment();
+      await expect(store.confirmApprovalFromDialog(recoveryApproval(), async () => {
+        await writeFile(tokenFilePath, '{');
+        await new ConsoleTokenStore(tokenFilePath).ensureInitialized('Piggy');
+        return { confirmed: true };
+      })).resolves.toBe('unavailable');
+      await expect(store.confirmTotpEnrollment(stale.pendingId, currentTotpCode(stale.secret)))
+        .rejects.toMatchObject({ code: 'PENDING_NOT_FOUND' });
+      await expect(store.lookupApprovalEnrollment()).resolves.toBe('unknown');
     });
 
     it('generates distinct tokens across fresh installs', async () => {
