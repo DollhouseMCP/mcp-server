@@ -84,6 +84,15 @@ const { evaluateAutonomy, wouldAutoApprove, DEFAULT_AUTONOMY_CONFIG, getAutonomy
   '../../../../src/elements/agents/autonomyEvaluator.js'
 );
 
+function evaluateWithMockedDialog(context: AutonomyContext) {
+  const environment = jest.replaceProperty(process, 'env', { ...process.env, DOLLHOUSE_SUPPRESS_VERIFICATION_DIALOG: 'false' });
+  try {
+    return evaluateAutonomy(context);
+  } finally {
+    environment.restore();
+  }
+}
+
 describe('AutonomyEvaluator', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -585,7 +594,7 @@ describe('AutonomyEvaluator', () => {
           riskScore: 70,
         };
 
-        evaluateAutonomy(context);
+        evaluateWithMockedDialog(context);
 
         expect(mockShowVerificationDialog).toHaveBeenCalledWith(
           'ABC123',
@@ -628,7 +637,7 @@ describe('AutonomyEvaluator', () => {
           dangerZoneEnforcer: { block: jest.fn() },
         };
 
-        evaluateAutonomy(context);
+        evaluateWithMockedDialog(context);
 
         // Should store challenge code server-side
         expect(mockStoreSet).toHaveBeenCalledWith(
@@ -699,7 +708,7 @@ describe('AutonomyEvaluator', () => {
         };
 
         // Should not throw — dialog failure is non-fatal
-        const result = evaluateAutonomy(context);
+        const result = evaluateWithMockedDialog(context);
         expect(result.continue).toBe(false);
         expect(result.verification).toBeDefined();
       });

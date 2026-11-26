@@ -18,12 +18,14 @@ import { createPortfolioTestEnvironment, preConfirmAllOperations, type Portfolio
 // Only replace the OS display: generation, storage, enforcement and routing are real.
 const nativeSafety = await import('@dollhousemcp/safety');
 const nativeApproval = jest.fn<typeof nativeSafety.showNativeApprovalDialog>();
+const display = jest.fn<(code: string, reason: string, options: unknown) => unknown>();
 jest.unstable_mockModule('@dollhousemcp/safety', () => ({
   ...nativeSafety,
   showNativeApprovalDialog: nativeApproval,
+  showVerificationDialog: display,
+  showVerificationDialogAsync: async () => ({ success: true }),
 }));
 const safety = await import('../../../src/elements/agents/safetyTierService.js');
-const display = jest.fn<(code: string, reason: string, options: unknown) => unknown>();
 jest.unstable_mockModule('../../../src/elements/agents/safetyTierService.js', () => ({
   ...safety,
   showVerificationDialog: display,

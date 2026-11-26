@@ -39,6 +39,7 @@ describe('VerificationNotifier', () => {
   let mockChildProcess: { unref: jest.Mock; once: jest.Mock; stdin: { end: jest.Mock; on: jest.Mock } };
 
   beforeEach(() => {
+    jest.replaceProperty(process, 'env', { ...process.env, DOLLHOUSE_SUPPRESS_VERIFICATION_DIALOG: 'false' });
     notifier = new VerificationNotifier();
     mockChildProcess = { unref: jest.fn(), once: jest.fn(), stdin: { end: jest.fn(), on: jest.fn() } };
     mockSpawn.mockReturnValue(mockChildProcess);

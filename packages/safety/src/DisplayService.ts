@@ -155,7 +155,7 @@ function runApprovalDialogWithInput(
 export async function showNativeApprovalDialog(
   prompt: NativeApprovalPrompt, requireCode: boolean, timeoutMs: number,
 ): Promise<NativeApprovalDialogResult> {
-  if (process.env.SSH_CONNECTION || process.env.SSH_CLIENT || process.env.SSH_TTY) {
+  if (verificationDialogsSuppressed() || process.env.SSH_CONNECTION || process.env.SSH_CLIENT || process.env.SSH_TTY) {
     return { confirmed: false, reason: 'unavailable' };
   }
   if (timeoutMs <= 0) return { confirmed: false, reason: 'timeout' };
@@ -296,6 +296,7 @@ function linuxVerificationCommand(title: string, message: string): VerificationD
 const VERIFY_DIALOG_STDIO: ['pipe', 'ignore', 'ignore'] = ['pipe', 'ignore', 'ignore'];
 
 function prepareVerificationDialog(code: string, reason: string, options: DialogOptions): VerificationDialogCommand | DialogResult {
+  if (verificationDialogsSuppressed()) return { success: false, error: 'Verification dialogs are suppressed' };
   try {
     return verificationDialogCommand(code, reason, options);
   } catch (error) {
@@ -338,6 +339,7 @@ export async function showVerificationDialogAsync(code: string, reason: string, 
 
 /** Whether a supported native dialog tool is installed. */
 export function isDialogAvailable(): boolean {
+  if (verificationDialogsSuppressed()) return false;
   try {
     const currentPlatform = platform();
     return currentPlatform === 'darwin' || currentPlatform === 'win32' ||
@@ -345,4 +347,8 @@ export function isDialogAvailable(): boolean {
   } catch {
     return false;
   }
+}
+
+function verificationDialogsSuppressed(): boolean {
+  return process.env.DOLLHOUSE_SUPPRESS_VERIFICATION_DIALOG === 'true';
 }

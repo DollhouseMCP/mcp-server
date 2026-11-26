@@ -1,12 +1,22 @@
 import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
+import path from 'node:path';
 import { promisify } from 'node:util';
 
 // Replace only the OS dialog in this test process. The MCP handler, startup,
 // approval store and file operations run through their production entry points.
 const execFile = childProcess.execFile;
 const native = execFile[promisify.custom];
-const fixtureExecFile = (...args) => execFile(...args);
+const dialogCommands = new Set(['osascript', 'zenity', 'kdialog', 'xmessage', 'powershell.exe']);
+const isDialog = file => dialogCommands.has(path.basename(file));
+function guardedCommand(command) {
+  return (file, ...args) => {
+    if (isDialog(file)) throw new Error('Unstubbed native dialog in test fixture');
+    return command(file, ...args);
+  };
+}
+const fixtureExecFile = guardedCommand(execFile);
+const runUnstubbedCommand = guardedCommand(native);
 const expectedActions = new Map([
   ['Reset blocked-agent state', 'Reset'],
   ['Release blocked agent', 'Release'],
@@ -31,8 +41,11 @@ fixtureExecFile[promisify.custom] = (file, args, options) => {
     } } };
     return result;
   }
-  return native(file, args, options);
+  return runUnstubbedCommand(file, args, options);
 };
 
 childProcess.execFile = fixtureExecFile;
+childProcess.execFileSync = guardedCommand(childProcess.execFileSync);
+childProcess.spawn = guardedCommand(childProcess.spawn);
 syncBuiltinESMExports();
+process.env.DOLLHOUSE_SUPPRESS_VERIFICATION_DIALOG = 'false';

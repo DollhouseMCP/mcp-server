@@ -83,6 +83,7 @@ function environmentForHome(home, environment) {
   const defined = Object.fromEntries(Object.entries(environment).filter(([key, value]) =>
     value !== undefined && !(isPathOverride(key) && inheritedPaths.get(key) === value)));
   return { ...defined, HOME: home, DOLLHOUSE_HOME_DIR: home, USERPROFILE: home,
+    DOLLHOUSE_SUPPRESS_VERIFICATION_DIALOG: 'true',
     XDG_CONFIG_HOME: path.join(home, '.config'), XDG_CACHE_HOME: path.join(home, '.cache'),
     XDG_STATE_HOME: path.join(home, '.local', 'state'), XDG_DATA_HOME: path.join(home, '.local', 'share'),
     APPDATA: path.join(home, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(home, 'AppData', 'Local'),
@@ -99,7 +100,10 @@ function isolatedServerEnv(directory, environment = process.env) {
 function isolateNativeHome(directory) {
   const home = canonicalHome(directory);
   const npmPaths = npmFixturePaths(home, process.env);
-  const keys = new Set([...PLATFORM_KEYS, 'DOLLHOUSE_HOME_DIR', ...Object.keys(process.env).filter(isPathOverride), ...Object.keys(npmPaths)]);
+  const keys = new Set([
+    ...PLATFORM_KEYS, 'DOLLHOUSE_HOME_DIR', 'DOLLHOUSE_SUPPRESS_VERIFICATION_DIALOG',
+    ...Object.keys(process.env).filter(isPathOverride), ...Object.keys(npmPaths),
+  ]);
   const previous = Object.fromEntries([...keys].map(key => [key, process.env[key]]));
   const isolated = { ...environmentForHome(home, {}), ...npmPaths };
   for (const key of keys) {

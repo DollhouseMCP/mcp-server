@@ -9,7 +9,7 @@
  * functions, and error handling.
  */
 
-import { jest, describe, it, expect, beforeEach } from '@jest/globals';
+import { jest, describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import type { ExecFileSyncOptions, ExecSyncOptions } from 'child_process';
 
 // Mock modules before importing the tested module
@@ -30,9 +30,9 @@ jest.unstable_mockModule('os', () => ({
 }));
 
 // Import mocked modules
-const { execFileSync, execSync } = await import('child_process');
+const { execFileSync, execSync, spawn } = await import('child_process');
 const { platform } = await import('os');
-const { showVerificationDialog, showBlockResetDialog, showNativeApprovalDialog, isDialogAvailable } = await import(
+const { showVerificationDialog, showVerificationDialogAsync, showBlockResetDialog, showNativeApprovalDialog, isDialogAvailable } = await import(
   '../src/DisplayService.js'
 );
 
@@ -52,6 +52,24 @@ const mockPlatform = platform as jest.Mock<() => NodeJS.Platform>;
 describe('DisplayService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    jest.replaceProperty(process, 'env', { ...process.env, DOLLHOUSE_SUPPRESS_VERIFICATION_DIALOG: 'false' });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('suppresses every native verification entry point before invoking a binary', async () => {
+    process.env.DOLLHOUSE_SUPPRESS_VERIFICATION_DIALOG = 'true';
+    mockPlatform.mockReturnValue('darwin');
+    expect(showVerificationDialog('123456', 'Test')).toMatchObject({ success: false });
+    await expect(showVerificationDialogAsync('123456', 'Test')).resolves.toMatchObject({ success: false });
+    await expect(showBlockResetDialog(false, 20_000)).resolves.toEqual({ confirmed: false, reason: 'unavailable' });
+    expect(isDialogAvailable()).toBe(false);
+    expect(mockExecSync).not.toHaveBeenCalled();
+    expect(mockExecFileSync).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+    expect(runNativeDialog).not.toHaveBeenCalled();
   });
 
   describe('showBlockResetDialog', () => {
