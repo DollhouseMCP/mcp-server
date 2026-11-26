@@ -100,7 +100,7 @@ export const OPERATION_POLICY_OVERRIDES: Record<string, OperationPolicy> = {
   },
   request_blocked_agent_reset: {
     defaultLevel: PermissionLevel.AUTO_APPROVE,
-    rationale: 'Permit requesting the desktop prompt. The reset requires independent local approval.',
+    rationale: 'Permit requesting the desktop prompt. The reset requires out-of-band approval in the local dialog.',
     canBeElevated: false,
   },
   beetlejuice_beetlejuice_beetlejuice: {

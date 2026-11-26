@@ -10,7 +10,7 @@
 
 import { execFile, execFileSync, execSync } from 'child_process';
 import { platform } from 'os';
-import { promisify } from 'util';
+import { promisify } from 'node:util';
 
 const MACOS_DIALOG_SCRIPT = `on run argv
   set dialogTitle to item 1 of argv

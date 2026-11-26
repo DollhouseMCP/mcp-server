@@ -290,6 +290,7 @@ Auth & verification:
 { operation: "configure_oauth", params: { client_id: "your-client-id" } }
 { operation: "verify_challenge", params: { code: "ABC123" } }
 { operation: "release_deadlock" }
+{ operation: "request_blocked_agent_reset" }
 { operation: "beetlejuice_beetlejuice_beetlejuice" }
 
 Batch operations: Use the operations array to execute multiple operations sequentially in a single request.
