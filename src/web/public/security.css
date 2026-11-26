@@ -278,6 +278,11 @@
   font-weight: 600;
 }
 
+.sec-recovery-banner {
+  border-inline-start: 3px solid currentColor;
+  padding: 0.5rem 0.75rem;
+}
+
 .sec-error {
   color: #b91c1c;
   padding: 1rem;

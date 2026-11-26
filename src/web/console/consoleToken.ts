@@ -79,7 +79,7 @@ const TOKEN_BYTES = 32;
 
 /** File mode for the token file — owner read/write only. */
 const TOKEN_FILE_MODE = 0o600;
-const TOKEN_FILE_RECOVERY_MESSAGE = 'Console token file needs recovery. Restore a valid enrolled token file.';
+const TOKEN_FILE_RECOVERY_MESSAGE = 'Console token file needs recovery. Restart the console to recover or restore a valid enrolled token file.';
 const APPROVAL_ATTEMPT_LIMIT = 10;
 const APPROVAL_WINDOW_MS = 60_000;
 export const DIALOG_APPROVAL_TTL_MS = 300_000;
@@ -258,11 +258,16 @@ export interface TotpState {
  * Returned from the status endpoint and from store methods that need to
  * report enrollment state to callers.
  */
-export interface TotpStatus {
+export type TotpStatus = {
   enrolled: boolean;
   enrolledAt: string | null;
   backupCodesRemaining: number;
-}
+} | {
+  enrollmentState: 'recovering';
+  enrolled: null;
+  enrolledAt: null;
+  backupCodesRemaining: 0;
+};
 
 /**
  * Result of `beginTotpEnrollment` — the caller needs all of these to show a
@@ -314,6 +319,7 @@ interface PendingEnrollment {
   secret: string;
   label: string;
   expiresAt: number;
+  tokenId?: string;
 }
 
 /**
@@ -346,6 +352,7 @@ export interface ConsoleTokenFile {
   version: typeof TOKEN_FILE_VERSION;
   tokens: ConsoleTokenEntry[];
   totp: TotpState;
+  enrollmentState?: 'recovering';
   /** Once set, a missing approval state file requires recovery. */
   approvalStateInitialized?: true;
 }
@@ -475,7 +482,7 @@ function isValidTokenEntry(raw: unknown): boolean {
   return (
     typeof e.id === 'string' && e.id.length > 0 &&
     typeof e.name === 'string' &&
-    typeof e.token === 'string' && e.token.length > 0 &&
+    typeof e.token === 'string' && TOKEN_FORMAT.test(e.token) &&
     typeof e.kind === 'string' &&
     Array.isArray(e.scopes) &&
     typeof e.createdAt === 'string'
@@ -494,6 +501,10 @@ function isValidTotpState(raw: unknown): raw is TotpState {
   return enrolled === true && typeof secret === 'string' && /^[A-Z2-7]{32}$/i.test(secret);
 }
 
+function isValidEnrollmentState(state: unknown, totp: TotpState): boolean {
+  return state === undefined || (state === 'recovering' && totp.enrolled === false);
+}
+
 /**
  * Validate that a parsed JSON object conforms to the expected token file schema.
  * Returns a typed ConsoleTokenFile or null if invalid.
@@ -505,6 +516,7 @@ function validateTokenFile(raw: unknown): ConsoleTokenFile | null {
   if (obj.version !== TOKEN_FILE_VERSION) return null;
   if (!Array.isArray(obj.tokens) || obj.tokens.length === 0) return null;
   if (!isValidTotpState(obj.totp)) return null;
+  if (!isValidEnrollmentState(obj.enrollmentState, obj.totp)) return null;
   if (!obj.tokens.every(isValidTokenEntry)) return null;
   if (obj.approvalStateInitialized !== undefined && obj.approvalStateInitialized !== true) return null;
 
@@ -623,13 +635,17 @@ export class ConsoleTokenStore {
   }
 
   private rejectTokenFile(reason: string): never {
+    this.clearCachedCredentials();
+    logger.warn('[ConsoleToken] Token file needs recovery', { path: this.filePath, reason });
+    throw new TotpError(TOKEN_FILE_RECOVERY_MESSAGE, 'STORE_NOT_INITIALIZED');
+  }
+
+  private clearCachedCredentials(): void {
     this.tokenFileNeedsRecovery = true;
     this.data = null;
     this.rebuildTokenBuffers();
     this.pendingEnrollments.clear();
     this.graceEntries.length = 0;
-    logger.warn('[ConsoleToken] Token file needs recovery', { path: this.filePath, reason });
-    throw new TotpError(TOKEN_FILE_RECOVERY_MESSAGE, 'STORE_NOT_INITIALIZED');
   }
 
   private retainLastUsedAt(file: ConsoleTokenFile): void {
@@ -672,11 +688,14 @@ export class ConsoleTokenStore {
   private async initializeTokenFile(puppetName: string): Promise<ConsoleTokenEntry> {
     const readResult = await this.readWithStatus();
     if (readResult.status === 'ok') {
-      if (this.tokenFileNeedsRecovery && !readResult.data.totp.enrolled) {
-        this.rejectTokenFile('restored file has no confirmed enrollment');
+      const file = readResult.data;
+      if (this.requiresRecovery(file) && file.enrollmentState !== 'recovering') {
+        file.enrollmentState = 'recovering';
+        await this.commitTokenFile(file);
+      } else {
+        this.publishTokenFile(file);
       }
       this.tokenFileNeedsRecovery = false;
-      this.publishTokenFile(readResult.data);
       logger.debug('[ConsoleToken] Loaded existing token file', {
         path: this.filePath,
         count: readResult.data.tokens.length,
@@ -684,14 +703,34 @@ export class ConsoleTokenStore {
       return readResult.data.tokens[0];
     }
 
+    if (readResult.status === 'unreadable') this.rejectTokenFile(readResult.reason);
+    const approvalStateKnown = this.data?.approvalStateInitialized === true ||
+      !await this.fileIsAbsent(this.dialogApprovalStatePath());
+    const recovering = readResult.status === 'corrupt' || this.data !== null ||
+      this.tokenFileNeedsRecovery || approvalStateKnown;
+    if (recovering) this.clearCachedCredentials();
     if (readResult.status === 'corrupt') {
-      this.rejectTokenFile(readResult.reason);
-    }
-    if (this.data || this.tokenFileNeedsRecovery) {
-      this.rejectTokenFile('file disappeared');
+      await this.preserveDamagedTokenFile(readResult.bytes, readResult.reason);
     }
 
-    // A missing file on first initialization is the only bootstrap case.
+    return this.createTokenFile(puppetName, recovering, approvalStateKnown);
+  }
+
+  private requiresRecovery(file: ConsoleTokenFile): boolean {
+    return file.enrollmentState === 'recovering' ||
+      (!file.totp.enrolled && (this.tokenFileNeedsRecovery ||
+        (this.data?.enrollmentState === 'recovering' && this.data.tokens[0].id !== file.tokens[0].id)));
+  }
+
+  private async preserveDamagedTokenFile(bytes: Buffer, reason: string): Promise<void> {
+    const evidencePath = `${this.filePath}.corrupt-${randomUUID()}`;
+    await writeFile(evidencePath, bytes, { flag: 'wx', mode: TOKEN_FILE_MODE });
+    logger.warn('[ConsoleToken] Preserved damaged token file before console recovery', { evidencePath, reason });
+  }
+
+  private async createTokenFile(
+    puppetName: string, recovering: boolean, approvalStateKnown: boolean,
+  ): Promise<ConsoleTokenEntry> {
     const now = new Date().toISOString();
     const initial: ConsoleTokenEntry = {
       id: randomUUID(),
@@ -712,9 +751,12 @@ export class ConsoleTokenStore {
       version: TOKEN_FILE_VERSION,
       tokens: [initial],
       totp: { enrolled: false, secret: null, backupCodes: [], enrolledAt: null },
+      ...(recovering ? { enrollmentState: 'recovering' } : {}),
+      ...(approvalStateKnown ? { approvalStateInitialized: true } : {}),
     };
 
     await this.commitTokenFile(file);
+    this.tokenFileNeedsRecovery = false;
     logger.info('[ConsoleToken] Created new token file', {
       path: this.filePath,
       id: initial.id,
@@ -811,6 +853,9 @@ export class ConsoleTokenStore {
    */
   getTotpStatus(): TotpStatus {
     this.assertTokenFileNotRecovering();
+    if (this.data?.enrollmentState === 'recovering') {
+      return { enrollmentState: 'recovering', enrolled: null, enrolledAt: null, backupCodesRemaining: 0 };
+    }
     const totp = this.data?.totp;
     if (!totp?.enrolled) {
       return { enrolled: false, enrolledAt: null, backupCodesRemaining: 0 };
@@ -832,7 +877,7 @@ export class ConsoleTokenStore {
   async lookupApprovalEnrollment(): Promise<ApprovalEnrollment> {
     if (this.tokenFileNeedsRecovery) return 'unknown';
     const snapshot = await this.readWithStatus();
-    if (snapshot.status !== 'ok') return 'unknown';
+    if (snapshot.status !== 'ok' || this.requiresRecovery(snapshot.data)) return 'unknown';
     return snapshot.data.totp.enrolled ? 'enrolled' : 'unenrolled';
   }
 
@@ -863,6 +908,7 @@ export class ConsoleTokenStore {
     const snapshot = await this.readWithStatus();
     if (snapshot.status !== 'ok' || this.tokenFileNeedsRecovery) return 'unavailable';
     const file = snapshot.data;
+    if (this.requiresRecovery(file)) return 'unavailable';
     if (file.totp.enrolled !== (enrollment === 'enrolled')) return 'unavailable';
     const state = await this.readDialogApprovalState(file);
     const now = Date.now();
@@ -947,6 +993,7 @@ export class ConsoleTokenStore {
       secret: secret.base32,
       label: displayLabel,
       expiresAt,
+      tokenId: this.data?.tokens[0].id,
     });
 
     logger.debug('[ConsoleToken] TOTP enrollment begun', { pendingId, label: displayLabel });
@@ -984,7 +1031,7 @@ export class ConsoleTokenStore {
   ): Promise<TotpEnrollmentConfirm> {
     this.sweepExpiredEnrollments();
     const pending = this.pendingEnrollments.get(pendingId);
-    if (!pending) {
+    if (!pending || (this.requiresRecovery(file) && pending.tokenId !== file.tokens[0].id)) {
       throw new TotpError('Pending enrollment not found or expired', 'PENDING_NOT_FOUND');
     }
 
@@ -1025,6 +1072,7 @@ export class ConsoleTokenStore {
       backupCodes: hashedCodes,
       enrolledAt,
     };
+    delete file.enrollmentState;
     await this.commitTokenFile(file);
     this.pendingEnrollments.delete(pendingId);
 
@@ -1284,24 +1332,25 @@ export class ConsoleTokenStore {
   private async readWithStatus(): Promise<
     | { status: 'ok'; data: ConsoleTokenFile }
     | { status: 'missing' }
-    | { status: 'corrupt'; reason: string }
+    | { status: 'corrupt'; reason: string; bytes: Buffer }
+    | { status: 'unreadable'; reason: string }
   > {
-    let content: string;
+    let bytes: Buffer;
     try {
-      content = await readFile(this.filePath, 'utf8');
+      bytes = await readFile(this.filePath);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT' && await this.fileIsAbsent(this.filePath)) {
         return { status: 'missing' };
       }
-      return { status: 'corrupt', reason: 'file could not be read' };
+      return { status: 'unreadable', reason: 'file could not be read' };
     }
     try {
-      const parsed = JSON.parse(content);
+      const parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
       const validated = validateTokenFile(parsed);
-      if (!validated) return { status: 'corrupt', reason: 'schema validation failed' };
+      if (!validated) return { status: 'corrupt', reason: 'schema validation failed', bytes };
       return { status: 'ok', data: validated };
     } catch {
-      return { status: 'corrupt', reason: 'invalid JSON' };
+      return { status: 'corrupt', reason: 'invalid JSON', bytes };
     }
   }
 
