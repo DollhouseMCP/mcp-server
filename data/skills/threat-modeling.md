@@ -12,32 +12,29 @@ proficiency_levels:
   intermediate: "STRIDE methodology and attack tree analysis"
   advanced: "Custom frameworks and quantitative risk modeling"
 parameters:
-  methodology:
-    type: "string"
+  - name: methodology
+    type: "enum"
     description: "Threat modeling methodology"
     default: "STRIDE"
-    enum: ["STRIDE", "PASTA", "OCTAVE", "TRIKE", "VAST", "hybrid"]
-  scope:
-    type: "string"
+    options: ["STRIDE", "PASTA", "OCTAVE", "TRIKE", "VAST", "hybrid"]
+  - name: scope
+    type: "enum"
     description: "Analysis scope"
     default: "application"
-    enum: ["application", "system", "network", "organization", "supply_chain"]
-  risk_appetite:
-    type: "string"
+    options: ["application", "system", "network", "organization", "supply_chain"]
+  - name: risk_appetite
+    type: "enum"
     description: "Organization's risk tolerance"
     default: "moderate"
-    enum: ["low", "moderate", "high", "very_high"]
-  compliance_requirements:
-    type: "array"
-    description: "Regulatory requirements to consider"
-    default: []
-    enum: ["PCI-DSS", "HIPAA", "GDPR", "SOX", "ISO27001", "NIST"]
-  suite: "bundled-test-data"
-  purpose: "General test data for DollhouseMCP system validation"
-  created: "2025-08-20"
-  version: "1.0.0"
-  migrated: "2025-08-20T23:47:24.347Z"
-  originalPath: "data/skills/threat-modeling.md"
+    options: ["low", "moderate", "high", "very_high"]
+  - name: compliance_requirements
+    type: "string"
+    description: "Regulatory requirements to consider (comma-separated). Choices: PCI-DSS, HIPAA, GDPR, SOX, ISO27001, NIST."
+    default: ""
+suite: "bundled-test-data"
+purpose: "General test data for DollhouseMCP system validation"
+migrated: "2025-08-20T23:47:24.347Z"
+originalPath: "data/skills/threat-modeling.md"
 ---
 # Threat Modeling Skill
 

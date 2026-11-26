@@ -12,33 +12,30 @@ proficiency_levels:
   intermediate: "Correlation analysis and trend detection"
   advanced: "Predictive modeling and complex visualizations"
 parameters:
-  analysis_type:
-    type: "array"
-    description: "Types of analysis to perform"
-    default: ["descriptive", "diagnostic"]
-    enum: ["descriptive", "diagnostic", "predictive", "prescriptive"]
-  visualization_format:
+  - name: analysis_type
     type: "string"
+    description: "Types of analysis to perform (comma-separated). Choices: descriptive, diagnostic, predictive, prescriptive."
+    default: "descriptive, diagnostic"
+  - name: visualization_format
+    type: "enum"
     description: "Preferred visualization format"
     default: "auto"
-    enum: ["auto", "charts", "tables", "narrative", "dashboard"]
-  confidence_level:
+    options: ["auto", "charts", "tables", "narrative", "dashboard"]
+  - name: confidence_level
     type: "number"
     description: "Statistical confidence level"
     default: 0.95
     min: 0.90
     max: 0.99
-  handle_missing_data:
-    type: "string"
+  - name: handle_missing_data
+    type: "enum"
     description: "How to handle missing values"
     default: "interpolate"
-    enum: ["ignore", "interpolate", "drop", "flag"]
-  suite: "bundled-test-data"
-  purpose: "General test data for DollhouseMCP system validation"
-  created: "2025-08-20"
-  version: "1.0.0"
-  migrated: "2025-08-20T23:47:24.346Z"
-  originalPath: "data/skills/data-analysis.md"
+    options: ["ignore", "interpolate", "drop", "flag"]
+suite: "bundled-test-data"
+purpose: "General test data for DollhouseMCP system validation"
+migrated: "2025-08-20T23:47:24.346Z"
+originalPath: "data/skills/data-analysis.md"
 ---
 # Data Analysis Skill
 

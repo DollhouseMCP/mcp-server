@@ -12,32 +12,29 @@ proficiency_levels:
   intermediate: "Complex plots and engaging dialogue"
   advanced: "Literary techniques and genre mastery"
 parameters:
-  genre:
-    type: "string"
+  - name: genre
+    type: "enum"
     description: "Writing genre"
     default: "general"
-    enum: ["general", "fantasy", "sci-fi", "mystery", "romance", "thriller", "literary", "comedy"]
-  tone:
-    type: "string"
+    options: ["general", "fantasy", "sci-fi", "mystery", "romance", "thriller", "literary", "comedy"]
+  - name: tone
+    type: "enum"
     description: "Overall tone"
     default: "balanced"
-    enum: ["lighthearted", "serious", "dramatic", "comedic", "dark", "inspirational", "balanced"]
-  perspective:
-    type: "string"
+    options: ["lighthearted", "serious", "dramatic", "comedic", "dark", "inspirational", "balanced"]
+  - name: perspective
+    type: "enum"
     description: "Narrative perspective"
     default: "third-person"
-    enum: ["first-person", "second-person", "third-person", "omniscient"]
-  style_elements:
-    type: "array"
-    description: "Stylistic elements to include"
-    default: ["dialogue", "description"]
-    enum: ["dialogue", "description", "action", "introspection", "humor", "metaphor", "symbolism"]
-  suite: "bundled-test-data"
-  purpose: "General test data for DollhouseMCP system validation"
-  created: "2025-08-20"
-  version: "1.0.0"
-  migrated: "2025-08-20T23:47:24.346Z"
-  originalPath: "data/skills/creative-writing.md"
+    options: ["first-person", "second-person", "third-person", "omniscient"]
+  - name: style_elements
+    type: "string"
+    description: "Stylistic elements to include (comma-separated). Choices: dialogue, description, action, introspection, humor, metaphor, symbolism."
+    default: "dialogue, description"
+suite: "bundled-test-data"
+purpose: "General test data for DollhouseMCP system validation"
+migrated: "2025-08-20T23:47:24.346Z"
+originalPath: "data/skills/creative-writing.md"
 ---
 # Creative Writing Skill
 

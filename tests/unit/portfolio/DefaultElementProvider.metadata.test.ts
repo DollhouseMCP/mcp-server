@@ -250,6 +250,12 @@ Content`;
   });
 
   describe('integration with copyElementFiles', () => {
+    it('honors the test marker in a raw YAML memory', async () => {
+      const file = path.join(tempDir, 'test-memory.yaml');
+      await fs.writeFile(file, 'metadata:\n  name: Test Memory\n  _dollhouseMCPTest: true\nentries: []\n');
+      await expect(provider['isDollhouseMCPTestElement'](file)).resolves.toBe(true);
+    });
+
     it('should block test elements in production environment', async () => {
       // Force production environment using FORCE_PRODUCTION_MODE
       const originalForceMode = process.env.FORCE_PRODUCTION_MODE;

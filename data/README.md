@@ -57,7 +57,7 @@ These files are explicitly included in package.json:
   "data/skills/**/*.md",
   "data/templates/**/*.md",
   "data/agents/**/*.md",
-  "data/memories/**/*.md",
+  "data/memories/**/*.yaml",
   "data/ensembles/**/*.md"
 ]
 ```

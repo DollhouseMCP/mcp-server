@@ -12,34 +12,32 @@ proficiency_levels:
   intermediate: "Context-aware translation with idioms"
   advanced: "Cultural adaptation and transcreation"
 parameters:
-  source_language:
+  - name: source_language
     type: "string"
     description: "Language to translate from"
     required: false
     default: "auto-detect"
-  target_language:
+  - name: target_language
     type: "string"
     description: "Language to translate to"
     required: true
-  formality:
-    type: "string"
+  - name: formality
+    type: "enum"
     description: "Formality level"
     default: "neutral"
-    enum: ["casual", "neutral", "formal", "professional"]
-  preserve_tone:
+    options: ["casual", "neutral", "formal", "professional"]
+  - name: preserve_tone
     type: "boolean"
     description: "Maintain original tone and style"
     default: true
-  cultural_adaptation:
+  - name: cultural_adaptation
     type: "boolean"
     description: "Adapt content for target culture"
     default: false
-  suite: "bundled-test-data"
-  purpose: "General test data for DollhouseMCP system validation"
-  created: "2025-08-20"
-  version: "1.0.0"
-  migrated: "2025-08-20T23:47:24.348Z"
-  originalPath: "data/skills/translation.md"
+suite: "bundled-test-data"
+purpose: "General test data for DollhouseMCP system validation"
+migrated: "2025-08-20T23:47:24.348Z"
+originalPath: "data/skills/translation.md"
 ---
 # Translation Skill
 

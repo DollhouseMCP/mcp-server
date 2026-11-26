@@ -32,7 +32,7 @@ elements:
 
   - element_name: "research"
     element_type: "skill"
-    role: "foundation"
+    role: "primary"
     priority: 85
     activation: "on-demand"
     purpose: "Market research and competitive analysis"
@@ -53,14 +53,14 @@ elements:
 
   - element_name: "project-context"
     element_type: "memory"
-    role: "foundation"
+    role: "primary"
     priority: 95
     activation: "always"
     purpose: "Maintain business context and decisions"
 
   - element_name: "task-manager"
     element_type: "agent"
-    role: "coordinator"
+    role: "primary"
     priority: 80
     activation: "conditional"
     condition: "project_planning || implementation_phase"

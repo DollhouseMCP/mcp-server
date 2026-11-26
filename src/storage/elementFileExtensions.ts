@@ -16,3 +16,11 @@ const EXTENSION_ALIASES: Readonly<Record<string, readonly string[]>> = { '.yaml'
 export function acceptedExtensions(extension: string): readonly string[] {
   return [extension, ...(EXTENSION_ALIASES[extension] ?? [])];
 }
+
+/** The seeder and the layout detector must agree on which shipped files are defaults. */
+export function isBundledElementFilename(filename: string, elementType: string): boolean {
+  return filename.endsWith('.md') || (
+    elementType === 'memories' && acceptedExtensions(ELEMENT_FILE_EXTENSIONS.memories)
+      .some(extension => filename.endsWith(extension))
+  );
+}

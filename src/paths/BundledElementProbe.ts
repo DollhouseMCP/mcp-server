@@ -2,6 +2,7 @@ import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { SEED_MEMORY_FILENAME } from '../elements/memories/constants.js';
 import { PackageResourceLocator } from './PackageResourceLocator.js';
+import { isBundledElementFilename } from '../storage/elementFileExtensions.js';
 
 /** Per-detection cache of shipped default bytes; never parse candidate element contents. */
 export class BundledElementProbe {
@@ -9,8 +10,8 @@ export class BundledElementProbe {
 
   async isBundled(file: string, elementType: string, relativePath: string): Promise<boolean> {
     if (elementType === 'memories' && path.dirname(relativePath) === 'system' && this.isSeed(path.basename(file))) return true;
-    // DefaultElementProvider copies top-level markdown files byte for byte.
-    if (path.extname(file) !== '.md' || path.dirname(relativePath) !== '.') return false;
+    // DefaultElementProvider copies top-level bundled files byte for byte.
+    if (!isBundledElementFilename(file, elementType) || path.dirname(relativePath) !== '.') return false;
     const source = path.join(new PackageResourceLocator().getPackageRoot(), 'data', elementType, path.basename(file));
     if (!this.defaults.has(source)) this.defaults.set(source, this.readDefault(source));
     const expected = await this.defaults.get(source);

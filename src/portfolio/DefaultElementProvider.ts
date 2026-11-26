@@ -8,6 +8,7 @@
 
 import { visitSequentially } from '../utils/visitSequentially.js';
 import * as fsSync from 'node:fs';
+import type { FileHandle } from 'node:fs/promises';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
@@ -19,6 +20,10 @@ import { readFrontmatter } from '../security/readFrontmatter.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { IFileOperationsService, isAbsentKindError, directoryExists } from '../services/FileOperationsService.js';
 import { ContentValidator } from '../security/contentValidator.js';
+import { SECURITY_LIMITS } from '../security/constants.js';
+import { acceptedExtensions, ELEMENT_FILE_EXTENSIONS, isBundledElementFilename } from '../storage/elementFileExtensions.js';
+
+const MEMORY_EXTENSIONS = acceptedExtensions(ELEMENT_FILE_EXTENSIONS.memories);
 
 // File operation constants
 export const FILE_CONSTANTS = {
@@ -595,25 +600,18 @@ export class DefaultElementProvider {
       
       try {
         const frontmatter = await readFrontmatter(fd, buffer);
-        if (frontmatter === null || frontmatter === undefined) return frontmatter;
+        if (frontmatter === null || (frontmatter === undefined && !MEMORY_EXTENSIONS.includes(path.extname(filePath)))) {
+          return frontmatter;
+        }
 
-        // Parse the YAML frontmatter safely
         try {
-          // SECURITY FIX (Issue #1228): Enable validateContent to block zero-width Unicode and other security threats
-          // SecureYamlParser provides additional validation, injection prevention, and content sanitization
-          // It expects full YAML with --- markers, so we reconstruct the frontmatter block
-          // We disable field-specific validation as this is general metadata parsing, not persona-specific
-          // but we MUST keep validateContent: true to ensure Unicode security validation runs
-          const fullYaml = `---\n${frontmatter}\n---`;
-          const parseResult = SecureYamlParser.parse(fullYaml, {
-            // REQUIRED: validateContent must be true to enable Unicode security validation including
-            // zero-width character detection (U+200B-U+200F, U+FEFF, etc.). Setting this to false
-            // would disable ALL content validation, creating a security bypass for Unicode-based attacks.
-            // See UnicodeValidator.normalize() for detection logic.
-            validateContent: true,
-            validateFields: false   // Field-specific validation is optional for general metadata parsing
-          });
-          const metadata = parseResult.data;
+          // Keep content validation enabled for both raw YAML and framed metadata (#1228).
+          const metadata = frontmatter === undefined
+            ? await this.readRawYamlMetadata(fd)
+            : SecureYamlParser.parse(`---\n${frontmatter}\n---`, {
+              validateContent: true,
+              validateFields: false,
+            }).data;
           
           // PERFORMANCE: Cache the metadata with file stats for future reads
           if (typeof metadata === 'object' && metadata !== null) {
@@ -653,6 +651,19 @@ export class DefaultElementProvider {
       logger.debug(`[DefaultElementProvider] Could not read metadata from ${filePath}: ${errorType}:${errorCode} - ${error?.message || error}`);
       return null;
     }
+  }
+
+  private async readRawYamlMetadata(file: FileHandle): Promise<Record<string, unknown> | null> {
+    const bytes = Buffer.alloc(SECURITY_LIMITS.MAX_YAML_LENGTH + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const { bytesRead } = await file.read(bytes, length, bytes.length - length, length);
+      if (bytesRead === 0) {
+        return SecureYamlParser.parseRawYaml(bytes.toString('utf8', 0, length));
+      }
+      length += bytesRead;
+    }
+    return null;
   }
 
   private async cacheMetadata(filePath: string, metadata: object): Promise<void> {
@@ -700,7 +711,7 @@ export class DefaultElementProvider {
   private async isDollhouseMCPTestElement(filePath: string): Promise<boolean | null> {
     try {
       const metadata = await this.readMetadataOnly(filePath);
-      return metadata === null ? null : metadata?._dollhouseMCPTest === true;
+      return metadata === null ? null : metadata?._dollhouseMCPTest === true || metadata?.metadata?._dollhouseMCPTest === true;
     } catch {
       // Error inspection or diagnostics in the reader can still reject; admission stays closed.
       return null;
@@ -817,7 +828,7 @@ export class DefaultElementProvider {
    * Copy all files from source directory to destination directory
    * Skips files that already exist to preserve user modifications
    */
-  private async copyElementFiles(sourceDir: string, destDir: string, elementType: string): Promise<number> {
+  private async copyElementFiles(sourceDir: string, destDir: string, elementType: ElementType): Promise<number> {
     let copiedCount = 0;
     
     
@@ -831,8 +842,7 @@ export class DefaultElementProvider {
       
       await visitSequentially(files.values(), async file => {
         
-        // Only copy markdown files
-        if (!file.endsWith(FILE_CONSTANTS.ELEMENT_EXTENSION)) {
+        if (!isBundledElementFilename(file, elementType)) {
           return;
         }
         

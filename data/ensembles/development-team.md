@@ -46,14 +46,14 @@ elements:
 
   - element_name: "project-context"
     element_type: "memory"
-    role: "foundation"
+    role: "primary"
     priority: 95
     activation: "always"
     purpose: "Maintain project knowledge and decisions"
 
   - element_name: "task-manager"
     element_type: "agent"
-    role: "coordinator"
+    role: "primary"
     priority: 80
     activation: "always"
     purpose: "Coordinate tasks and track progress"
