@@ -109,6 +109,57 @@ describe('ConsoleTokenStore', () => {
       expect(second.name).toBe(first.name);
     });
 
+    it('preserves a damaged token file and refuses initialization after restart', async () => {
+      const damaged = '{"version":1,"tokens":[';
+      await writeFile(tokenFilePath, damaged);
+
+      for (const name of ['Kermit', 'Piggy']) {
+        const store = new ConsoleTokenStore(tokenFilePath);
+        await expect(store.ensureInitialized(name)).rejects.toMatchObject({
+          code: 'STORE_NOT_INITIALIZED',
+          message: expect.stringContaining('recovery'),
+        });
+        expect(store.getPrimaryTokenValue()).toBeNull();
+        expect(() => store.getTotpStatus()).toThrow(/recovery/);
+        expect(await readFile(tokenFilePath, 'utf8')).toBe(damaged);
+      }
+    });
+
+    it('refuses proof until a valid enrolled token file is restored', async () => {
+      const store = new ConsoleTokenStore(tokenFilePath);
+      const entry = await store.ensureInitialized('Kermit');
+      const secret = await enrollTotp(store);
+      const enrolled = await readFile(tokenFilePath, 'utf8');
+      const file = JSON.parse(enrolled) as ConsoleTokenFile;
+      const damaged = JSON.stringify({ ...file, totp: {} });
+      await writeFile(tokenFilePath, damaged);
+
+      await expect(store.ensureInitialized('Kermit')).rejects.toMatchObject({ code: 'STORE_NOT_INITIALIZED' });
+      await expect(store.verifyTotp(currentTotpCode(secret))).rejects.toMatchObject({ code: 'STORE_NOT_INITIALIZED' });
+      expect(() => store.isTotpEnrolled()).toThrow(/recovery/);
+      expect(store.verify(entry.token)).toBeNull();
+      expect(await readFile(tokenFilePath, 'utf8')).toBe(damaged);
+
+      await writeFile(tokenFilePath, enrolled);
+      await expect(store.ensureInitialized('Kermit')).resolves.toMatchObject({ id: entry.id });
+      expect(store.getTotpStatus().enrolled).toBe(true);
+      await expect(store.verifyTotp(currentTotpCode(secret))).resolves.toMatchObject({ ok: true, method: 'totp' });
+    });
+
+    it('preserves enrollment evidence even if the token list is empty', async () => {
+      const store = new ConsoleTokenStore(tokenFilePath);
+      await store.ensureInitialized('Kermit');
+      await enrollTotp(store);
+      const file = JSON.parse(await readFile(tokenFilePath, 'utf8')) as ConsoleTokenFile;
+      const damaged = JSON.stringify({ ...file, tokens: [] });
+      await writeFile(tokenFilePath, damaged);
+
+      const restarted = new ConsoleTokenStore(tokenFilePath);
+      await expect(restarted.ensureInitialized('Piggy')).rejects.toMatchObject({ code: 'STORE_NOT_INITIALIZED' });
+      expect(() => restarted.getTotpStatus()).toThrow(/recovery/);
+      expect(await readFile(tokenFilePath, 'utf8')).toBe(damaged);
+    });
+
     it('generates distinct tokens across fresh installs', async () => {
       const store1 = new ConsoleTokenStore(tokenFilePath);
       const entry1 = await store1.ensureInitialized('Kermit');

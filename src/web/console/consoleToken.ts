@@ -45,7 +45,7 @@
 
 import { homedir, hostname, platform } from 'node:os';
 import { dirname, join } from 'node:path';
-import { mkdir, readFile, rename, writeFile, chmod, unlink, copyFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, writeFile, chmod, unlink, lstat } from 'node:fs/promises';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { Secret, TOTP } from 'otpauth';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
@@ -78,6 +78,7 @@ const TOKEN_BYTES = 32;
 
 /** File mode for the token file — owner read/write only. */
 const TOKEN_FILE_MODE = 0o600;
+const TOKEN_FILE_RECOVERY_MESSAGE = 'Console token file needs recovery. Restore a valid enrolled token file.';
 
 /**
  * TOTP configuration — RFC 6238 defaults. These are compiled-in so the
@@ -452,20 +453,29 @@ function isValidTokenEntry(raw: unknown): boolean {
   );
 }
 
+function isValidTotpState(raw: unknown): raw is TotpState {
+  if (!raw || typeof raw !== 'object') return false;
+  const { enrolled, secret, backupCodes, enrolledAt } = raw as Record<string, unknown>;
+  if (enrolledAt != null && typeof enrolledAt !== 'string') return false;
+  if (!Array.isArray(backupCodes) || !backupCodes.every(
+    (hash: unknown) => typeof hash === 'string' && /^[0-9a-f]{64}$/i.test(hash),
+  )) return false;
+  if (enrolled === false) return secret === null && backupCodes.length === 0;
+  // Both current and legacy enrollment use a 20-byte Base32 secret.
+  return enrolled === true && typeof secret === 'string' && /^[A-Z2-7]{32}$/i.test(secret);
+}
+
 /**
  * Validate that a parsed JSON object conforms to the expected token file schema.
  * Returns a typed ConsoleTokenFile or null if invalid.
- *
- * Strict validation — an unrecognized version or missing required fields
- * causes the file to be treated as corrupt so a fresh one can be written.
  */
 function validateTokenFile(raw: unknown): ConsoleTokenFile | null {
   if (!raw || typeof raw !== 'object') return null;
   const obj = raw as Record<string, unknown>;
 
   if (obj.version !== TOKEN_FILE_VERSION) return null;
-  if (!Array.isArray(obj.tokens)) return null;
-  if (!obj.totp || typeof obj.totp !== 'object') return null;
+  if (!Array.isArray(obj.tokens) || obj.tokens.length === 0) return null;
+  if (!isValidTotpState(obj.totp)) return null;
   if (!obj.tokens.every(isValidTokenEntry)) return null;
 
   return raw as ConsoleTokenFile;
@@ -484,6 +494,7 @@ type TotpVerification =
 export class ConsoleTokenStore {
   private readonly filePath: string;
   private data: ConsoleTokenFile | null = null;
+  private tokenFileNeedsRecovery = false;
   /**
    * Pre-converted Buffer cache keyed by entry id. Populated whenever `this.data`
    * is assigned (load, create, future rotation). Verify() reuses the stored
@@ -530,17 +541,32 @@ export class ConsoleTokenStore {
   }
 
   private async withCurrentTokenFile<T>(operation: (file: ConsoleTokenFile) => Promise<T>): Promise<T> {
+    this.assertTokenFileNotRecovering();
     if (!this.data) {
       throw new TotpError('Token store not initialized', 'STORE_NOT_INITIALIZED');
     }
     return this.withTokenFileLock(async () => {
       const latest = await this.readWithStatus();
-      if (latest.status !== 'ok' || latest.data.tokens.length === 0) {
-        throw new TotpError('Console token file is unavailable', 'STORE_NOT_INITIALIZED');
-      }
+      if (latest.status !== 'ok') this.rejectTokenFile(latest.status === 'missing' ? 'file disappeared' : latest.reason);
       this.retainLastUsedAt(latest.data);
       return operation(latest.data);
     });
+  }
+
+  private assertTokenFileNotRecovering(): void {
+    if (this.tokenFileNeedsRecovery) {
+      throw new TotpError(TOKEN_FILE_RECOVERY_MESSAGE, 'STORE_NOT_INITIALIZED');
+    }
+  }
+
+  private rejectTokenFile(reason: string): never {
+    this.tokenFileNeedsRecovery = true;
+    this.data = null;
+    this.rebuildTokenBuffers();
+    this.pendingEnrollments.clear();
+    this.graceEntries.length = 0;
+    logger.warn('[ConsoleToken] Token file needs recovery', { path: this.filePath, reason });
+    throw new TotpError(TOKEN_FILE_RECOVERY_MESSAGE, 'STORE_NOT_INITIALIZED');
   }
 
   private retainLastUsedAt(file: ConsoleTokenFile): void {
@@ -582,7 +608,11 @@ export class ConsoleTokenStore {
 
   private async initializeTokenFile(puppetName: string): Promise<ConsoleTokenEntry> {
     const readResult = await this.readWithStatus();
-    if (readResult.status === 'ok' && readResult.data.tokens.length > 0) {
+    if (readResult.status === 'ok') {
+      if (this.tokenFileNeedsRecovery && !readResult.data.totp.enrolled) {
+        this.rejectTokenFile('restored file has no confirmed enrollment');
+      }
+      this.tokenFileNeedsRecovery = false;
       this.publishTokenFile(readResult.data);
       logger.debug('[ConsoleToken] Loaded existing token file', {
         path: this.filePath,
@@ -591,14 +621,14 @@ export class ConsoleTokenStore {
       return readResult.data.tokens[0];
     }
 
-    // If the file existed but was corrupt, back it up before overwriting.
-    // Users may have hand-edited the file with custom names/labels — don't
-    // destroy their data silently. A timestamped copy lets them recover.
     if (readResult.status === 'corrupt') {
-      await this.backupCorruptFile();
+      this.rejectTokenFile(readResult.reason);
+    }
+    if (this.data || this.tokenFileNeedsRecovery) {
+      this.rejectTokenFile('file disappeared');
     }
 
-    // Create a fresh file with one initial token
+    // A missing file on first initialization is the only bootstrap case.
     const now = new Date().toISOString();
     const initial: ConsoleTokenEntry = {
       id: randomUUID(),
@@ -717,6 +747,7 @@ export class ConsoleTokenStore {
    * the secret or any backup code material.
    */
   getTotpStatus(): TotpStatus {
+    this.assertTokenFileNotRecovering();
     const totp = this.data?.totp;
     if (!totp?.enrolled) {
       return { enrolled: false, enrolledAt: null, backupCodesRemaining: 0 };
@@ -730,6 +761,7 @@ export class ConsoleTokenStore {
 
   /** Convenience: true if the user has a confirmed TOTP secret. */
   isTotpEnrolled(): boolean {
+    this.assertTokenFileNotRecovering();
     return Boolean(this.data?.totp?.enrolled && this.data.totp.secret);
   }
 
@@ -885,6 +917,7 @@ export class ConsoleTokenStore {
    * rejects the operation.
    */
   async verifyTotp(code: string): Promise<TotpVerification> {
+    this.assertTokenFileNotRecovering();
     if (!this.data) return { ok: false };
     return this.withCurrentTokenFile(async file => {
       const result = this.verifyTotpInFile(file, code);
@@ -1107,11 +1140,8 @@ export class ConsoleTokenStore {
   // --------------------------------------------------------------------
 
   /**
-   * Read the token file and distinguish missing from corrupt.
-   *
-   * Returning a tagged union lets `ensureInitialized()` back up corrupt files
-   * before overwriting them — users who hand-edited their tokens with custom
-   * names or labels deserve a recovery path instead of a silent destroy.
+   * Distinguish an absent file from invalid or unreadable state. Error messages
+   * from JSON.parse can contain file contents, so keep rejection reasons fixed.
    */
   private async readWithStatus(): Promise<
     | { status: 'ok'; data: ConsoleTokenFile }
@@ -1122,35 +1152,28 @@ export class ConsoleTokenStore {
     try {
       content = await readFile(this.filePath, 'utf8');
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { status: 'missing' };
-      return { status: 'corrupt', reason: err instanceof Error ? err.message : String(err) };
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT' && await this.tokenFileIsAbsent()) {
+        return { status: 'missing' };
+      }
+      return { status: 'corrupt', reason: 'file could not be read' };
     }
     try {
       const parsed = JSON.parse(content);
       const validated = validateTokenFile(parsed);
       if (!validated) return { status: 'corrupt', reason: 'schema validation failed' };
       return { status: 'ok', data: validated };
-    } catch (err) {
-      return { status: 'corrupt', reason: err instanceof Error ? err.message : String(err) };
+    } catch {
+      return { status: 'corrupt', reason: 'invalid JSON' };
     }
   }
 
-  /**
-   * Copy the current (presumed corrupt) token file to a timestamped backup
-   * alongside it so the user can recover hand-edited data after an accidental
-   * syntax error. Best-effort — failure to back up does not block creating
-   * a fresh file, since the primary goal is keeping the console usable.
-   */
-  private async backupCorruptFile(): Promise<void> {
-    const timestamp = new Date().toISOString().replaceAll(/[:.]/g, '-');
-    const backupPath = `${this.filePath}.corrupt-${timestamp}`;
+  private async tokenFileIsAbsent(): Promise<boolean> {
+    // readFile also reports ENOENT for a dangling symlink. Preserve it in place.
     try {
-      await copyFile(this.filePath, backupPath);
-      logger.warn(`[ConsoleToken] Corrupt token file backed up to ${backupPath} — a fresh token will be created`);
+      await lstat(this.filePath);
+      return false;
     } catch (err) {
-      logger.warn('[ConsoleToken] Could not back up corrupt token file, will overwrite in place', {
-        error: err instanceof Error ? err.message : String(err),
-      });
+      return (err as NodeJS.ErrnoException).code === 'ENOENT';
     }
   }
 
