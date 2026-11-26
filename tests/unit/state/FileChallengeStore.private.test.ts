@@ -6,14 +6,19 @@ import { FileLockManager } from '../../../src/security/fileLockManager.js';
 import { FileOperationsService } from '../../../src/services/FileOperationsService.js';
 import { FileChallengeStore } from '../../../src/state/FileChallengeStore.js';
 
-it('stores only a keyed verifier and consumes it after a file-backed restart', async () => {
+it('stores only a keyed verifier and consumes it after restarting with a rotated key', async () => {
   const state = await fs.mkdtemp(path.join(tmpdir(), 'private-challenge-'));
-  const keys = { resolve: async () => ({ keyId: 'test', key: Buffer.alloc(32, 0x1e) }) };
+  const originalKey = { keyId: 'test', key: Buffer.alloc(32, 0x1e) };
+  const keys = { resolve: async () => originalKey };
+  const rotatedKeys = {
+    resolve: async () => ({ keyId: 'rotated', key: Buffer.alloc(32, 0x2e) }),
+    resolveForKeyId: async (keyId: string) => keyId === originalKey.keyId ? originalKey : null,
+  };
   const ops = new FileOperationsService(new FileLockManager());
   const session = 'private-challenge-test';
   const code = 'SYNTHETIC-VERIFICATION';
   const first = new FileChallengeStore(ops, keys, state, session, 0);
-  const second = new FileChallengeStore(ops, keys, state, session, 0);
+  const second = new FileChallengeStore(ops, rotatedKeys, state, session, 0);
   try {
     await first.initialize();
     first.set('one', { code, expiresAt: Date.now() + 60_000, reason: 'review' });

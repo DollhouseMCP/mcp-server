@@ -15,9 +15,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { logger } from '../utils/logger.js';
 import type { FileOperationsService } from '../services/FileOperationsService.js';
-import type { StoredChallenge } from '@dollhousemcp/safety';
-import type { ChallengeMetadata, IChallengeStore } from './IChallengeStore.js';
-import { ChallengeVerifier, hasLegacyChallengeCodes, type ChallengeKeyResolver, type PersistedChallenge } from './challenge-verifier.js';
+import { ProtectedChallengeStore, hasLegacyChallengeCodes, type ChallengeKeyResolver, type PersistedChallenge } from './ProtectedChallengeStore.js';
 import { validateExternalSessionId } from './FileActivationStateStore.js';
 import { isStateObject, logPersistedStateIssue, readPersistedState, type PersistedStateRead } from './persistence-utils.js';
 import { PersistQueue } from './PersistQueue.js';
@@ -39,16 +37,13 @@ type SnapshotRead = PersistedStateRead<{ version: number; challenges: unknown[] 
 
 // ── Implementation ──────────────────────────────────────────────────
 
-export class FileChallengeStore implements IChallengeStore {
+export class FileChallengeStore extends ProtectedChallengeStore {
   private readonly fileOps: FileOperationsService;
   private readonly stateDir: string;
   private readonly sessionId: string;
   private readonly persistPath: string;
 
-  private challenges = new Map<string, PersistedChallenge>();
-  private readonly verifier: ChallengeVerifier;
   private readonly persistQueue: PersistQueue;
-  private cleanupInterval: NodeJS.Timeout | null = null;
 
   constructor(
     fileOps: FileOperationsService,
@@ -57,24 +52,15 @@ export class FileChallengeStore implements IChallengeStore {
     sessionId?: string,
     autoCleanupIntervalMs: number = 60000,
   ) {
+    const id = sessionId ? validateExternalSessionId(sessionId) : 'default';
+    const directory = stateDir ?? path.join(os.homedir(), '.dollhouse', 'state');
+    const filename = path.join(directory, `challenges-${id}.json`);
+    super(keyResolver, filename, autoCleanupIntervalMs);
     this.fileOps = fileOps;
-    this.sessionId = sessionId
-      ? validateExternalSessionId(sessionId)
-      : 'default';
-    this.stateDir = stateDir ?? path.join(os.homedir(), '.dollhouse', 'state');
-    this.persistPath = path.join(this.stateDir, `challenges-${this.sessionId}.json`);
-    this.verifier = new ChallengeVerifier(keyResolver, this.persistPath);
+    this.sessionId = id;
+    this.stateDir = directory;
+    this.persistPath = filename;
     this.persistQueue = new PersistQueue({ storeName: STORE_NAME, stateType: 'challenge state', sessionId: this.sessionId });
-
-    if (autoCleanupIntervalMs > 0) {
-      this.cleanupInterval = setInterval(() => {
-        this.cleanup();
-      }, autoCleanupIntervalMs);
-
-      if (this.cleanupInterval.unref) {
-        this.cleanupInterval.unref();
-      }
-    }
   }
 
   /**
@@ -85,11 +71,12 @@ export class FileChallengeStore implements IChallengeStore {
     try {
       await this.verifier.initialize();
       const data = await this.readSnapshot();
-      this.challenges = this.needsRewrite(data)
+      const challenges = this.needsRewrite(data)
         ? await this.fileOps.withWriteLock(this.persistPath, async () => this.restore(await this.readSnapshot()))
         : await this.restore(data);
-      if (this.challenges.size > 0) {
-        logger.info(`[FileChallengeStore] Restored ${this.challenges.size} challenge(s) for session '${this.sessionId}'`);
+      this.replaceChallenges(challenges);
+      if (challenges.size > 0) {
+        logger.info(`[FileChallengeStore] Restored ${challenges.size} challenge(s) for session '${this.sessionId}'`);
       }
     } catch {
       logPersistedStateIssue('invalid', STORE_NAME, this.sessionId);
@@ -121,93 +108,29 @@ export class FileChallengeStore implements IChallengeStore {
       return new Map();
     }
     const challenges = await this.verifier.loadEntries(entries, version === 1);
-    if (this.needsRewrite(data)) await this.persistToDisk(challenges);
+    if (this.needsRewrite(data)) await this.persistToDisk(Array.from(challenges));
     return challenges;
-  }
-
-  set(challengeId: string, challenge: StoredChallenge): void {
-    this.challenges.set(challengeId, this.verifier.seal(challengeId, challenge));
-    this.persistAsync();
-  }
-
-  get(challengeId: string): ChallengeMetadata | undefined {
-    const challenge = this.lookup(challengeId);
-    return challenge && { expiresAt: challenge.expiresAt, reason: challenge.reason };
-  }
-
-  private lookup(challengeId: string): PersistedChallenge | undefined {
-    const challenge = this.challenges.get(challengeId);
-    if (!challenge) return undefined;
-
-    if (Date.now() > challenge.expiresAt) {
-      this.challenges.delete(challengeId);
-      this.persistAsync();
-      return undefined;
-    }
-
-    return challenge;
-  }
-
-  verify(challengeId: string, code: string): boolean {
-    const challenge = this.lookup(challengeId);
-    if (!challenge) return false;
-
-    // Delete challenge after verification attempt (one-time use)
-    this.challenges.delete(challengeId);
-    this.persistAsync();
-
-    return this.verifier.matches(challengeId, challenge, code);
-  }
-
-  cleanup(): void {
-    const now = Date.now();
-    let changed = false;
-    for (const [id, challenge] of this.challenges.entries()) {
-      if (now > challenge.expiresAt) {
-        this.challenges.delete(id);
-        changed = true;
-      }
-    }
-    if (changed) {
-      this.persistAsync();
-    }
-  }
-
-  clear(): void {
-    this.challenges.clear();
-    this.persistAsync();
-  }
-
-  size(): number {
-    return this.challenges.size;
   }
 
   awaitPendingWrites(): Promise<void> {
     return this.persistQueue.awaitPending();
   }
 
-  destroy(): void {
-    if (this.cleanupInterval) {
-      clearInterval(this.cleanupInterval);
-      this.cleanupInterval = null;
-    }
-  }
-
   // ── Private persistence methods ───────────────────────────────────
 
-  private persistAsync(): void {
+  protected persistAsync(): void {
     this.persistQueue.enqueueFireAndForget(async () => {
       await fs.mkdir(this.stateDir, { recursive: true, mode: 0o700 });
-      await this.fileOps.withWriteLock(this.persistPath, () => this.persistToDisk(this.challenges));
+      await this.fileOps.withWriteLock(this.persistPath, () => this.persistToDisk(this.challengeEntries()));
     });
   }
 
-  private async persistToDisk(challenges: ReadonlyMap<string, PersistedChallenge>): Promise<void> {
+  private async persistToDisk(challenges: [string, PersistedChallenge][]): Promise<void> {
     const state: PersistedChallengeState = {
       version: 2,
       sessionId: this.sessionId,
       lastUpdated: new Date().toISOString(),
-      challenges: Array.from(challenges.entries()),
+      challenges,
     };
 
     await this.fileOps.writeFile(this.persistPath, JSON.stringify(state, null, 2));
