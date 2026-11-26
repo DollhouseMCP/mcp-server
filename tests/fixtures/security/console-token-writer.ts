@@ -7,7 +7,7 @@ import { ConsoleTokenStore } from '../../../src/web/console/consoleToken.js';
 
 const [operation, tokenFile] = process.argv.slice(2);
 if (operation === 'abandon-lock') {
-  await withRecoverableFileWriteLock(`${tokenFile}.lock`, async () => process.exit(0));
+  await withRecoverableFileWriteLock(`${tokenFile}.lock`, () => process.exit(0));
 } else {
   const store = new ConsoleTokenStore(tokenFile);
   await store.ensureInitialized('Fixture');
