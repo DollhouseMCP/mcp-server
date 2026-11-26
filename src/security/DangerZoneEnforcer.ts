@@ -663,13 +663,14 @@ export class DangerZoneEnforcer {
       return { blocked: false };
     }
 
+    const codeParameter = localStdio ? '' : ', code: "<code from screen>"';
     return {
       blocked: true,
       eventId: context.eventId,
       reason: context.reason,
       // Issue #142 / #405: Actionable verify_challenge instructions
       resolution: context.verificationId
-        ? `Use verify_challenge with params { challenge_id: "${context.verificationId}"${localStdio ? '' : ', code: "<code from screen>"'} } to unblock this agent.`
+        ? `Use verify_challenge with params { challenge_id: "${context.verificationId}"${codeParameter} } to unblock this agent.`
         : 'Contact administrator to enable danger zone operations',
       verificationId: context.verificationId,
       sessionId: context.sessionId,

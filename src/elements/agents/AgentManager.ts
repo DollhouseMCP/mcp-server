@@ -106,7 +106,7 @@ export interface AgentManagerDeps extends ElementManagerDeps {
   /** Issue #1948: DangerZoneEnforcer for autonomy evaluation. */
   dangerZoneEnforcer?: DangerZoneBlocker;
   /** Issue #1948: VerificationStore/ChallengeStore for danger zone verification codes. */
-  verificationStore?: AutonomyContext['verificationStore'];
+  verificationStore?: NonNullable<AutonomyContext['verificationStore']>;
 }
 
 interface AgentExecutionInvocationContext {
@@ -222,7 +222,7 @@ export class AgentManager extends BaseElementManager<Agent> {
   private readonly memoryRegistry?: DatabaseTenantMemoryRegistry;
   private _elementManagerResolver?: (managerName: string) => ResolvedElementManager | null;
   private _dangerZoneEnforcer?: DangerZoneBlocker;
-  private _verificationStore?: AutonomyContext['verificationStore'];
+  private _verificationStore: AutonomyContext['verificationStore'];
   private static warnedDbModeOrphanedStateFiles = false;
 
   constructor(deps: AgentManagerDeps) {

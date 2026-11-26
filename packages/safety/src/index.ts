@@ -56,7 +56,7 @@ export {
   showBlockResetDialog,
   showNativeApprovalDialog,
   isDialogAvailable,
-  type BlockResetDialogResult,
+  type NativeApprovalDialogResult as BlockResetDialogResult,
   type NativeApprovalDialogResult,
   type DialogOptions,
   type DialogResult,

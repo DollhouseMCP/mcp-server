@@ -115,8 +115,6 @@ export type NativeApprovalDialogResult =
   | { confirmed: true; code?: string }
   | { confirmed: false; reason: 'cancelled' | 'timeout' | 'unavailable' };
 
-export type BlockResetDialogResult = NativeApprovalDialogResult;
-
 interface NativeApprovalPrompt {
   title: string;
   summary: string;
@@ -133,7 +131,7 @@ function parseApprovalResponse(stdout: string, requireCode: boolean): NativeAppr
   return code ? { confirmed: true, code } : { confirmed: false, reason: 'cancelled' };
 }
 
-export function showBlockResetDialog(requireCode: boolean, timeoutMs: number): Promise<BlockResetDialogResult> {
+export function showBlockResetDialog(requireCode: boolean, timeoutMs: number): Promise<NativeApprovalDialogResult> {
   return showNativeApprovalDialog({
     title: 'Reset blocked-agent state',
     summary: 'Reset the unavailable blocked-agent file? The damaged file will be kept as evidence.',
