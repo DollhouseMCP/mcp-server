@@ -14,7 +14,7 @@
  * @since v2.1.0 - Durable block storage (Issue #402)
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { validateAgentName } from './validateAgentName.js';
 import { logger } from '../utils/logger.js';
 import { SecurityMonitor } from './securityMonitor.js';
@@ -35,6 +35,9 @@ export type BlockReleaseResult =
   | { released: false; reason: BlockReleaseReason; agentName?: string };
 
 export type LocalBlockResetResult = DialogApprovalResult | 'busy' | 'changed' | 'not_needed' | 'unsupported';
+export type LocalBlockReleaseResult =
+  | { status: 'approved'; agentName: string }
+  | { status: Exclude<DialogApprovalResult, 'approved'> | BlockReleaseReason | 'changed' | 'not_found' };
 type ApproveLocalReset = (
   request: DialogApprovalRequest, commit: (approved: DialogApprovalRequest) => Promise<boolean>,
 ) => Promise<DialogApprovalResult>;
@@ -150,6 +153,7 @@ export class DangerZoneEnforcer {
   private retryable = false;
   private unavailableReason = 'unavailable';
   private readonly resetPromptLimiter = new SlidingWindowRateLimiter(3, 60_000);
+  private readonly releasePromptLimiter = new SlidingWindowRateLimiter(3, 60_000);
   private retryAfter = 0;
   private loading: Promise<void> | undefined;
   private refreshing: Promise<void> | undefined;
@@ -509,6 +513,11 @@ export class DangerZoneEnforcer {
       return false;
     }
 
+    return this.removeReviewedBlock(context, verificationId);
+  }
+
+  private async removeReviewedBlock(context: BlockedContext, verificationId: string | undefined): Promise<boolean> {
+    const normalizedName = context.agentName;
     const blockDuration = Date.now() - context.blockedAt.getTime();
     const removed = await this.persistence.admit({ kind: 'remove', name: normalizedName, eventId: context.eventId });
     this.restoreProjected();
@@ -543,11 +552,7 @@ export class DangerZoneEnforcer {
   async releaseChallenge(challengeId: string, sessionId?: string): Promise<BlockReleaseResult> {
     await this.refresh();
     if (this.readiness !== 'ready') return { released: false, reason: 'unavailable' };
-    const block = Array.from(this.blockedContexts.values()).find(context => {
-      const original = context.originalRecord?.value;
-      return context.verificationId === challengeId
-        || (isStateObject(original) && original.verificationId === challengeId);
-    });
+    const block = this.findChallengeBlock(challengeId);
     if (!block) return { released: true };
     const restricted = this.releaseRestriction(block, sessionId);
     if (restricted) return { released: false, reason: restricted, agentName: block.agentName };
@@ -557,6 +562,60 @@ export class DangerZoneEnforcer {
     const reason = this.readiness !== 'ready' ? 'unavailable'
       : this.releaseRestriction(this.blockedContexts.get(block.agentName), sessionId) ?? 'declined';
     return { released: false, reason, agentName: block.agentName };
+  }
+
+  /** Bind approval to the exact block event before opening the server-owned dialog. */
+  async requestLocalRelease(
+    challengeId: string,
+    sessionId: string,
+    approve: (agentName: string, request: DialogApprovalRequest,
+      commit: (approved: DialogApprovalRequest) => Promise<boolean>) => Promise<DialogApprovalResult>,
+  ): Promise<LocalBlockReleaseResult> {
+    await this.refresh();
+    if (this.readiness !== 'ready' || this.shuttingDown) return { status: 'unavailable' };
+    const block = this.findChallengeBlock(challengeId);
+    if (!block) return { status: 'not_found' };
+    const restriction = this.releaseRestriction(block, sessionId);
+    if (restriction) return { status: restriction };
+    if (!block.eventId) return { status: 'admin-only' };
+    if (!this.releasePromptLimiter.tryAcquire()) return { status: 'rate_limited' };
+
+    const operationDigest = this.releaseDigest(block);
+    const request = { requestId: randomUUID(), sessionId, operationDigest, expiresAt: Date.now() + 60_000 };
+    let releaseFailure: 'changed' | 'unavailable' | undefined;
+    const status = await approve(block.agentName, request, async approved => {
+      if (approved.requestId !== request.requestId || approved.sessionId !== sessionId ||
+          approved.operationDigest !== operationDigest || approved.expiresAt !== request.expiresAt ||
+          request.expiresAt <= Date.now()) return false;
+      await this.refresh();
+      if (this.readiness !== 'ready' || this.shuttingDown) {
+        releaseFailure = 'unavailable';
+        return false;
+      }
+      const current = this.blockedContexts.get(block.agentName);
+      if (!current || this.releaseRestriction(current, sessionId) || this.releaseDigest(current) !== operationDigest) {
+        releaseFailure = 'changed';
+        return false;
+      }
+      const removed = await this.removeReviewedBlock(current, challengeId);
+      if (!removed) releaseFailure = this.readiness === 'ready' ? 'changed' : 'unavailable';
+      return removed;
+    });
+    return status === 'approved' ? { status, agentName: block.agentName } : { status: releaseFailure ?? status };
+  }
+
+  private findChallengeBlock(challengeId: string): BlockedContext | undefined {
+    return [...this.blockedContexts.values()].find(context => {
+      const original = context.originalRecord?.value;
+      return context.verificationId === challengeId
+        || (isStateObject(original) && original.verificationId === challengeId);
+    });
+  }
+
+  private releaseDigest(block: BlockedContext): string {
+    return createHash('sha256').update(JSON.stringify([
+      'release-block', block.agentName, block.eventId, block.verificationId, block.sessionId, block.blockedAt.getTime(),
+    ])).digest('hex');
   }
 
   private releaseRestriction(block: BlockedContext | undefined, sessionId?: string): BlockReleaseReason | undefined {
@@ -610,7 +669,7 @@ export class DangerZoneEnforcer {
       reason: context.reason,
       // Issue #142 / #405: Actionable verify_challenge instructions
       resolution: context.verificationId
-        ? `Use verify_challenge with params { challenge_id: "${context.verificationId}", code: "<code from screen>" } to unblock this agent.`
+        ? `Use verify_challenge with params { challenge_id: "${context.verificationId}"${localStdio ? '' : ', code: "<code from screen>"'} } to unblock this agent.`
         : 'Contact administrator to enable danger zone operations',
       verificationId: context.verificationId,
       sessionId: context.sessionId,

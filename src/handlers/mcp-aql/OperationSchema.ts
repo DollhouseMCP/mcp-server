@@ -1446,13 +1446,14 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
     handler: 'mcpAqlHandler',
     method: 'dispatchGatekeeper',
     category: CATEGORY.SECURITY,
-    description: 'Submit verification code to unblock a danger zone operation',
+    description: 'Request local approval to verify an action or release a blocked agent, or complete a legacy verification with its code',
     params: {
       challenge_id: { type: 'string', required: true, description: 'UUID v4 challenge ID from danger zone trigger; exact legacy safety IDs accepted for existing challenges during 2.1 migration' },
-      code: { type: 'string', required: true, description: 'Verification code displayed to the user' },
+      code: { type: 'string', description: 'For legacy verification only. A local block can only be approved in the server-owned dialog.' },
     },
     returns: { name: 'VerifyResult', kind: 'object', description: 'Verification status: { verified, challenge_id, agentName?, message }' },
     examples: [
+      '{ operation: "verify_challenge", params: { challenge_id: "550e8400-e29b-41d4-a716-446655440000" } }',
       '{ operation: "verify_challenge", params: { challenge_id: "550e8400-e29b-41d4-a716-446655440000", code: "ABC123" } }',
       // Response: { verified: true, challenge_id: "...", agentName: "my-agent", message: "Agent unblocked" }
     ],
@@ -1462,12 +1463,12 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
     handler: 'mcpAqlHandler',
     method: 'dispatchGatekeeper',
     category: CATEGORY.SECURITY,
-    description: 'Recover from a restrictive permission deadlock by showing a human-only verification code, then deactivating all active elements and clearing current-session activation state',
+    description: 'Request human approval to deactivate all active elements and clear current-session activation state after a permission deadlock',
     params: {
-      challenge_id: { type: 'string', description: 'Challenge ID from the first release_deadlock call' },
-      code: { type: 'string', description: 'Verification code displayed to the user for deadlock relief' },
+      challenge_id: { type: 'string', description: 'Legacy flow only. Local requests require no arguments.' },
+      code: { type: 'string', description: 'Legacy verification code. Local approval is collected in the desktop dialog.' },
     },
-    returns: { name: 'DeadlockReliefResult', kind: 'object', description: 'Two-step flow. First call returns { pending, challenge_id, message }. Second call with challenge_id + code returns { released, activeBeforeReset, deactivated, failed, likelyDeadlockCause, persistedStateCleared, snapshotFile?, message }.' },
+    returns: { name: 'DeadlockReliefResult', kind: 'object', description: 'Local result after the desktop dialog, or pending verification in the legacy flow. An approved request returns { released, activeBeforeReset, deactivated, failed, likelyDeadlockCause, persistedStateCleared, snapshotFile?, message }.' },
     examples: [
       '{ operation: "release_deadlock" }',
       '{ operation: "release_deadlock", params: { challenge_id: "550e8400-e29b-41d4-a716-446655440000", code: "ABC123" } }',
@@ -1492,10 +1493,9 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
     params: {
       agent_name: { type: 'string', description: 'Agent to block (defaults to "beetlejuice-test-agent")' },
     },
-    returns: { name: 'BeetlejuiceResult', kind: 'object', description: 'Challenge details: { challenge_id, agentName, expiresAt, message }. Code is displayed via OS dialog, never in response.' },
+    returns: { name: 'BeetlejuiceResult', kind: 'object', description: 'Challenge details: { triggered, challenge_id, agent_name, message }. In a local stdio session, call verify_challenge with the ID to open the approval dialog.' },
     examples: [
       '{ operation: "beetlejuice_beetlejuice_beetlejuice" }',
-      // Response: { challenge_id: "...", agentName: "beetlejuice-test-agent", expiresAt: "...", message: "Verification code displayed via system dialog" }
       '{ operation: "beetlejuice_beetlejuice_beetlejuice", params: { agent_name: "my-test-agent" } }',
     ],
   },
@@ -1578,7 +1578,7 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
     handler: 'mcpAqlHandler',
     method: 'dispatchGatekeeper',
     category: CATEGORY.SECURITY,
-    description: 'Approve a pending CLI tool permission request. Used by bridges (Zulip, Slack) to relay human approval for tools that require it.',
+    description: 'Request approval for a pending CLI tool permission in the desktop dialog on stdio. HTTP bridges can relay human approval through their existing flow.',
     params: {
       request_id: { type: 'string', required: true, description: 'Approval request ID from permission_prompt deny response (format: cli-<UUID>)' },
       scope: { type: 'string', description: '"single" (default, consumed on use), "input_session" (this exact input for the session, when permitted), or "tool_session" (all uses of that tool for the session)' },

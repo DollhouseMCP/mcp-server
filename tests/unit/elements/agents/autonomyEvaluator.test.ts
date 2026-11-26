@@ -528,6 +528,24 @@ describe('AutonomyEvaluator', () => {
     // Issue #142: Verification Store + DisplayService integration tests
     // =========================================================================
     describe('Verification flow (Issue #142)', () => {
+      it('records a dialog-only verification request on stdio', () => {
+        mockDetermineSafetyTier.mockReturnValue({ tier: 'verify', factors: ['High risk action'] });
+        const set = jest.fn();
+        const result = evaluateAutonomy({
+          ...baseContext,
+          nextActionHint: 'execute dangerous query',
+          riskScore: 70,
+          sessionTransport: 'stdio',
+          verificationStore: { set },
+        });
+        const [, record] = set.mock.calls[0];
+        expect(record).toMatchObject({ dialog: true });
+        expect(record).not.toHaveProperty('code');
+        expect(mockCreateVerificationChallenge).toHaveBeenCalledWith(expect.any(String), 'authenticator', expect.any(Number));
+        expect(mockShowVerificationDialog).not.toHaveBeenCalled();
+        expect(result.verification?.prompt).toContain('verify_challenge');
+      });
+
       it('should store verification code server-side when verify tier triggers', () => {
         mockDetermineSafetyTier.mockReturnValue({
           tier: 'verify',

@@ -669,9 +669,10 @@ describe('OperationSchema', () => {
         expect(GATEKEEPER_SCHEMAS.confirm_operation.params?.element_type?.required).toBeUndefined();
       });
 
-      it('should define required params for verify_challenge', () => {
+      it('requires the challenge ID and leaves the legacy code optional for verify_challenge', () => {
         expect(GATEKEEPER_SCHEMAS.verify_challenge.params?.challenge_id?.required).toBe(true);
-        expect(GATEKEEPER_SCHEMAS.verify_challenge.params?.code?.required).toBe(true);
+        expect(GATEKEEPER_SCHEMAS.verify_challenge.params?.code).toMatchObject({ type: 'string' });
+        expect(GATEKEEPER_SCHEMAS.verify_challenge.params?.code?.required).toBeUndefined();
       });
 
       it('should allow a challenge request or completion payload for release_deadlock', () => {

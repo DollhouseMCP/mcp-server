@@ -46,3 +46,35 @@ it('stores only a keyed verifier and consumes it after restarting with a rotated
     await fs.rm(state, { force: true, recursive: true });
   }
 });
+
+it('restores dialog-only requests without accepting any legacy code or an edited request', async () => {
+  const state = await fs.mkdtemp(path.join(tmpdir(), 'dialog-challenge-'));
+  const keys = { resolve: async () => ({ keyId: 'test', key: Buffer.alloc(32, 0x1e) }) };
+  const ops = new FileOperationsService(new FileLockManager());
+  const session = 'dialog-challenge-test';
+  const store = new FileChallengeStore(ops, keys, state, session, 0);
+  const restored = new FileChallengeStore(ops, keys, state, session, 0);
+  const tampered = new FileChallengeStore(ops, keys, state, session, 0);
+  try {
+    const request = { dialog: true as const, expiresAt: Date.now() + 60_000, reason: 'Review the next action' };
+    await store.initialize();
+    store.set('dialog', request);
+    await store.awaitPendingWrites();
+    const filename = path.join(state, `challenges-${session}.json`);
+    const onDisk = JSON.parse(await fs.readFile(filename, 'utf8'));
+    expect(onDisk.challenges[0][1]).not.toHaveProperty('code');
+    await restored.initialize();
+    expect(restored.verify('dialog', 'anything')).toBe(false);
+    expect(restored.get('dialog')).toEqual(request);
+
+    onDisk.challenges[0][1].reason = 'Edited after issuance';
+    await fs.writeFile(filename, JSON.stringify(onDisk));
+    await tampered.initialize();
+    expect(tampered.get('dialog')).toBeUndefined();
+  } finally {
+    store.destroy();
+    restored.destroy();
+    tampered.destroy();
+    await fs.rm(state, { force: true, recursive: true });
+  }
+});

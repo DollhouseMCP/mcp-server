@@ -13,8 +13,8 @@ import { StoredChallenge } from './types.js';
 /**
  * In-memory verification store
  */
-export class VerificationStore {
-  private challenges = new Map<string, StoredChallenge>();
+export class VerificationStore<T extends Omit<StoredChallenge, 'code'> & { code?: string } = StoredChallenge> {
+  private challenges = new Map<string, T>();
   private cleanupInterval: NodeJS.Timeout | null = null;
 
   constructor(autoCleanupIntervalMs: number = 60000) {
@@ -34,7 +34,7 @@ export class VerificationStore {
   /**
    * Store a verification challenge
    */
-  set(challengeId: string, challenge: StoredChallenge): void {
+  set(challengeId: string, challenge: T): void {
     this.challenges.set(challengeId, challenge);
   }
 
@@ -42,7 +42,7 @@ export class VerificationStore {
    * Retrieve a verification challenge
    * Returns undefined if not found or expired
    */
-  get(challengeId: string): StoredChallenge | undefined {
+  get(challengeId: string): T | undefined {
     const challenge = this.challenges.get(challengeId);
     if (!challenge) {
       return undefined;
@@ -63,7 +63,7 @@ export class VerificationStore {
    */
   verify(challengeId: string, code: string): boolean {
     const challenge = this.get(challengeId);
-    if (!challenge) {
+    if (challenge?.code === undefined) {
       return false;
     }
 

@@ -7,6 +7,13 @@ import { promisify } from 'node:util';
 const execFile = childProcess.execFile;
 const native = execFile[promisify.custom];
 const fixtureExecFile = (...args) => execFile(...args);
+const expectedActions = new Map([
+  ['Reset blocked-agent state', 'Reset'],
+  ['Release blocked agent', 'Release'],
+  ['Release permission deadlock', 'Release'],
+  ['Verify agent action', 'Approve'],
+  ['Confirm CLI permission', 'Approve'],
+]);
 fixtureExecFile[promisify.custom] = (file, args, options) => {
   if (file === '/usr/bin/osascript' && args[1]?.includes('default button "Cancel"')) {
     return Promise.resolve({ stdout: 'reset\n', stderr: '' });
@@ -19,7 +26,7 @@ fixtureExecFile[promisify.custom] = (file, args, options) => {
     const result = new Promise(resolve => { receive = resolve; });
     result.child = { stdin: { once() {}, end(input) {
       const { title, approveLabel, requireCode } = JSON.parse(input);
-      const approved = title === 'Reset blocked-agent state' && approveLabel === 'Reset' && requireCode === false;
+      const approved = expectedActions.get(title) === approveLabel && requireCode === false;
       receive({ stdout: approved ? 'reset' : 'cancel', stderr: '' });
     } } };
     return result;
