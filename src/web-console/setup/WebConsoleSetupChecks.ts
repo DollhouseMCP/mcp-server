@@ -16,6 +16,7 @@
 
 export const WEB_CONSOLE_SETUP_CHECK_IDS = [
   'production_database_migrations',
+  'blocked_agent_state',
   'security_invalidation_multi_replica',
   'allowlist_authority_parity',
   'embedded_as_login_step_up',
@@ -62,6 +63,14 @@ export const WEB_CONSOLE_SETUP_CHECKS: Readonly<Record<WebConsoleSetupCheckId, W
     verification: 'server-probe',
     verifiedBy: 'The server checks that no migration in this release is newer than the applied-migration ledger, which is the rule the migration job itself uses, and takes the replica out of service if one is. It also compares the ledger with this release entry for entry by content hash, and reports a difference without stopping the server. Later migrations from a newer release are allowed.',
     remediation: 'If migrations are missing, run the database migration job for this release, then reload the status view. If the ledger does not match, a migration file changed after it was applied: compare the schema with this release before relying on it.',
+  },
+  blocked_agent_state: {
+    id: 'blocked_agent_state',
+    title: 'Blocked-agent state is readable',
+    proves: 'The database has no rejected blocked-agent snapshots.',
+    verification: 'server-probe',
+    verifiedBy: 'The server checks the row versions and agent names using the same validation as enforcement.',
+    remediation: 'Check database availability. A security administrator can review and recover an affected account in Security.',
   },
   security_invalidation_multi_replica: {
     id: 'security_invalidation_multi_replica',

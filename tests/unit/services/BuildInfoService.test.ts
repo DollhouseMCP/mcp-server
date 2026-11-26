@@ -13,6 +13,7 @@
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { BuildInfoService, BuildInfo } from '../../../src/services/BuildInfoService.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
+import type { DangerZoneEnforcer } from '../../../src/security/DangerZoneEnforcer.js';
 import {
   _resetPermissionHookStartupRepairSummaryForTests,
   repairPermissionHooksOnStartup,
@@ -56,6 +57,14 @@ describe('BuildInfoService', () => {
       expect(info.sessionId).toMatch(/^local-[a-f0-9]{10}$/);
       expect(info.runtimeSessionId).toMatch(new RegExp(`^${info.sessionId}-[a-z0-9]+$`));
       expect(info.sessionSource).toBe('derived');
+    });
+
+    it('reports blocked-agent state as a status without storage details', async () => {
+      const enforcer = container.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
+      jest.spyOn(enforcer, 'getBlockStateStatus').mockReturnValue('unavailable');
+      const info = await service.getBuildInfo();
+      expect(info.blockedAgentState).toBe('unavailable');
+      expect(service.formatBuildInfo(info)).toContain('**Blocked-agent state**: unavailable');
     });
 
     it('should populate package information', async () => {

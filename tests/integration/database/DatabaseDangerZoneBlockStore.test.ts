@@ -2,15 +2,23 @@ import { admissionPhases, pauseQueryResult, verifyAdmission, verifyBlockDrain, v
 import { conflictCases, verifyDeclinedWrite } from '../../helpers/blockConflicts.js';
 import { firstUseCases, verifyConcurrentFirstUse, verifyFirstUse } from '../../helpers/blockFirstUse.js';
 import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jest/globals';
-import { eq, sql } from 'drizzle-orm';
+import { randomUUID } from 'node:crypto';
+import { and, eq, sql } from 'drizzle-orm';
 import { DatabaseDangerZoneBlockStore } from '../../../src/state/DatabaseDangerZoneBlockStore.js';
 import { DangerZoneEnforcer } from '../../../src/security/DangerZoneEnforcer.js';
 import { dangerZoneBlocks, dangerZoneBlockEvidence } from '../../../src/database/schema/dangerZoneBlocks.js';
+import { users } from '../../../src/database/schema/users.js';
+import { adminAuditEvents } from '../../../src/database/schema/webConsole.js';
 import { withSystemContext } from '../../../src/database/admin.js';
 import { purgeUserScopedData } from '../../../src/database/userDataPurge.js';
 import { withUserContext, withUserRead } from '../../../src/database/rls.js';
 import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
 import { getTestDb, getTestAdminDb, ensureTestUser, ensureTestUserB, closeTestDb } from './test-db-helpers.js';
+import { PostgresRateLimitStore } from '../../../src/auth/embedded-as/storage/PostgresRateLimitStore.js';
+import { PostgresAdminAuditWriter } from '../../../src/web-console/audit/PostgresAdminAuditWriter.js';
+import { createSecurityAdminBlockRecoveryRoutes } from '../../../src/web-console/modules/security-admin/SecurityAdminBlockRecovery.js';
+import { CONSOLE_ADMIN_STEPUP_ACR, type ConsoleRequest } from '../../../src/web-console/platform/ConsolePlatformTypes.js';
+import { HmacConsoleOpaqueValueService } from '../../../src/web-console/security/ConsoleOpaqueValues.js';
 
 let user: string;
 let other: string;
@@ -67,6 +75,112 @@ describe('database block state', () => {
     expect(await enforcer.check('unlisted')).toMatchObject({
       blocked: true, reason: 'Blocked-agent state is unavailable.',
     });
+  });
+  it('keeps replicas closed on rejected state and replays queued blocks after a database reset', async () => {
+    await seed('future-version', record, 2);
+    const first = new DangerZoneEnforcer(store());
+    const second = new DangerZoneEnforcer(store());
+    const now = Date.now();
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(now);
+    try {
+      expect((await first.check('other')).blocked).toBe(true);
+      expect((await second.check('other')).blocked).toBe(true);
+      expect(await first.block('first-queued', 'Queued review', [])).toBe(false);
+      expect(await second.block('second-queued', 'Queued review', [])).toBe(false);
+
+      clock.mockReturnValue(now + 1001);
+      expect((await first.check('other')).blocked).toBe(true);
+      expect((await second.check('other')).blocked).toBe(true);
+      await store().reset();
+
+      clock.mockReturnValue(now + 2002);
+      expect((await first.check('other')).blocked).toBe(false);
+      expect((await second.check('other')).blocked).toBe(false);
+      expect((await second.check('first-queued')).blocked).toBe(true);
+      expect((await first.check('second-queued')).blocked).toBe(true);
+    } finally {
+      await Promise.all([first.shutdown(), second.shutdown()]);
+    }
+  });
+  it('resets only the selected rejected snapshot and rolls back if mandatory audit fails', async () => {
+    await seed('invalid-version', record, 2);
+    expect(await store(other).apply({ kind: 'put', name: 'bystander', block: record })).toBe(true);
+    const recovery = new DatabaseDangerZoneBlockStore(getTestAdminDb(), user);
+    const digest = await recovery.rejectedSnapshotDigest();
+    expect(digest).toMatch(/^[a-f0-9]{64}$/);
+    await seed('additional-block');
+    const audit = jest.fn(async () => {});
+    expect(await recovery.resetRejected(digest!, audit)).toBe(false);
+    expect(audit).not.toHaveBeenCalled();
+
+    const currentDigest = (await recovery.rejectedSnapshotDigest())!;
+    await expect(recovery.resetRejected(currentDigest, async () => {
+      throw new Error('Audit unavailable');
+    })).rejects.toThrow('Audit unavailable');
+    expect(await recovery.rejectedSnapshotDigest()).toBe(currentDigest);
+    expect(await getTestAdminDb().select().from(dangerZoneBlockEvidence)).toEqual([]);
+
+    const outcomes = await Promise.all([recovery.resetRejected(currentDigest, audit), recovery.resetRejected(currentDigest, audit)]);
+    expect(outcomes.sort()).toEqual([false, true]);
+    expect(audit).toHaveBeenCalledTimes(1);
+    expect(await recovery.rejectedSnapshotDigest()).toBeNull();
+    expect(await store(other).load()).toEqual({ status: 'loaded', value: { bystander: record } });
+    const [evidence] = await getTestAdminDb().select().from(dangerZoneBlockEvidence);
+    expect(evidence.userId).toBe(user);
+    expect(evidence.snapshot).toEqual([
+      expect.objectContaining({ agentName: 'additional-block', version: 1 }),
+      expect.objectContaining({ agentName: 'invalid-version', version: 2 }),
+    ]);
+  });
+  it('writes the confirmed hosted reset and its redacted audit event for the selected account', async () => {
+    const database = getTestAdminDb();
+    const adminId = randomUUID();
+    const targetId = randomUUID();
+    await database.insert(users).values([
+      { id: adminId, username: `block-reset-admin-${adminId}` }, { id: targetId, username: `block-reset-target-${targetId}` },
+    ]);
+    await database.insert(dangerZoneBlocks).values({
+      userId: targetId, agentName: 'invalid-version', version: 2, block: record, blockedAt: new Date(0),
+    });
+    await store(other).apply({ kind: 'put', name: 'bystander', block: record });
+    const auditKeys = { resolve: async () => ({ keyId: 'block-recovery-test', key: Buffer.alloc(32, 1) }) };
+    const now = new Date();
+    const correlationId = randomUUID();
+    const proof = '817341';
+    const prove = jest.fn(async () => ({ ok: true as const, method: 'totp' as const, authTime: now }));
+    const rateLimitStore = new PostgresRateLimitStore(database);
+    const [preview, reset] = createSecurityAdminBlockRecoveryRoutes({
+      database, auditKeys, auditWriter: new PostgresAdminAuditWriter(database, auditKeys), rateLimitStore,
+      opaqueValues: new HmacConsoleOpaqueValueService(Buffer.alloc(32, 2)), totp: { prove }, now: () => now,
+    });
+    const req = {
+      params: { user_id: targetId }, headers: {}, get: () => undefined,
+      consoleContext: { correlationId, receivedAt: now },
+      consoleAuthentication: {
+        userId: adminId, authSub: 'admin-block-recovery', sessionIdHash: Buffer.alloc(32, 3),
+        grantedCapabilities: ['console:admin:security'], authzVersion: 1,
+        elevation: { acr: CONSOLE_ADMIN_STEPUP_ACR, amr: ['otp'], authTime: now,
+          expiresAt: new Date(now.getTime() + 120_000), capabilities: ['console:admin:security'] },
+      },
+    } as unknown as ConsoleRequest;
+    try {
+      const reviewed = await preview.handler(req);
+      expect(reviewed.status).toBe(200);
+      const { approval_id, ...binding } = reviewed.body as { approval_id: string };
+      req.headers['idempotency-key'] = approval_id;
+      req.body = { ...binding, proof };
+      expect(await reset.handler(req)).toEqual({ status: 204 });
+      expect(prove).toHaveBeenCalledWith(adminId, proof);
+      expect(await store(targetId).load()).toEqual({ status: 'loaded', value: {} });
+      expect(await store(other).load()).toEqual({ status: 'loaded', value: { bystander: record } });
+      const [event] = await database.select().from(adminAuditEvents).where(and(
+        eq(adminAuditEvents.correlationId, correlationId), eq(adminAuditEvents.result, 'approved'),
+      ));
+      expect(event).toMatchObject({ actorUserId: adminId, targetUserId: targetId, argsRedacted: {} });
+      expect(JSON.stringify(event)).not.toContain(proof);
+    } finally {
+      await rateLimitStore.reset('security.users.blocked_agents.reset', adminId);
+    }
   });
   it('reports a declined block receipt and retains the stored challenge', async () => {
     const now = Date.now();

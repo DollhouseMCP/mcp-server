@@ -1054,6 +1054,12 @@ For deeper debugging, see [Logging](./logging.md) — the in-memory buffer + `qu
 
 Rotate cookie signing secret, invite token secret, GitHub OAuth secret, and Postgres password at least annually OR after any suspected compromise. See [Secret Rotation Runbook](./secret-rotation-runbook.md) for the per-secret procedure, invalidation impact, and multi-replica coordination.
 
+### Recover blocked-agent state in the console
+
+On a running PostgreSQL deployment, an elevated security administrator can open **Security → Blocked-agent recovery**, enter the affected account's UUID, and check its block state. The reset is available when the database can be read and that account's snapshot is rejected. For a database outage, restore the database connection and let enforcement reload the stored state.
+
+Review the account shown, then confirm the reset using your own authenticator or backup code. The approval expires after one minute. A changed snapshot calls for a new review. The reset saves the rejected rows as evidence and records the admin action in the same transaction. Replicas reload the repaired state and replay their queued blocks as they resume enforcement.
+
 ---
 
 ## Production checklist
@@ -1221,6 +1227,18 @@ Fix: set `DOLLHOUSE_PUBLIC_BASE_URL` to exactly your public URL, restart the ser
 - Add `depends_on` back if Postgres is in the same compose
 - Add a retry wrapper around the server's startup (the server itself does some retry, but caps quickly)
 - For managed Postgres, just retry the compose up after a few seconds — the connect pool establishes eventually
+
+### Legacy blocked-agent state import prevents startup
+
+Database-mode startup imports attributable `blocked-agents.json` snapshots before accepting sessions. An unreadable or rejected source can stop startup before the console is available. Use the server log or the HIGH security event `Legacy block state import failed` to identify the source path or setup step, the reason, and any error code.
+
+1. Pause the rollout and keep the affected service out of traffic. Identify the configured portfolio volume or service home that contains the reported source. For a per-user snapshot, confirm the account UUID before restoring anything.
+2. Preserve the original file and the failure record in protected operator storage before changing the source. Keep any evidence or replacement snapshot readable only by its owner.
+3. Correct the reported condition. For permissions or database failures, restore the service account's expected access or database availability. If the log says the import was recorded, correct the retention failure so the next startup can finish the rename using the existing receipt. For invalid content, restore a known-good, complete version 1 snapshot for the same account. If the file changed during import, identify and stop the competing writer before retrying.
+4. If no trustworthy replacement exists, have the responsible operator decide whether to proceed without migrating that source. Moving it out of the recognized import paths can omit its blocks from enforcement. Preserve the original and record the affected account and the authorized recovery decision before proceeding.
+5. Restart through the deployment's normal process. Check `/readyz`, confirm the expected import or retention outcome in the private logs, and verify that the affected account's expected blocks still deny execution before returning the service to traffic. If startup still fails, keep the recorded evidence and investigate the new failure reason.
+
+See [Blocked-agent persistence](../security/architecture.md#22-persistence) for source attribution, receipt behavior, and retained filenames.
 
 ### Sign-in flow returns 400 "redirect_uri mismatch"
 

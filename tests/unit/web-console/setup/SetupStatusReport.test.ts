@@ -68,6 +68,13 @@ describe('buildSetupStatusReport', () => {
     });
   });
 
+  it('reports rejected blocked-agent state without account or file details', async () => {
+    const { check } = await report({ hasRejectedBlockedAgentState: async () => true });
+    expect(check('blocked_agent_state')).toEqual({
+      definition: expect.objectContaining({ id: 'blocked_agent_state' }), state: 'failed',
+    });
+  });
+
   it('reports a failed probe as failed', async () => {
     const { check } = await report({
       databaseMigrations: () => Promise.resolve({

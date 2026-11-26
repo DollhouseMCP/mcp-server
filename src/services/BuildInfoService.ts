@@ -24,6 +24,7 @@ import {
 } from '../utils/permissionHooks.js';
 
 export interface BuildInfo {
+  blockedAgentState?: 'loading' | 'ready' | 'unavailable';
   sessionId: string;
   runtimeSessionId: string;
   sessionSource: 'env' | 'derived';
@@ -89,7 +90,7 @@ export class BuildInfoService {
   /** Issue #1948: Cache docker info (constant for process lifetime). */
   private _cachedDockerInfo: { isDocker: boolean; info?: string } | null = null;
 
-  constructor(fileOperations: IFileOperationsService) {
+  constructor(fileOperations: IFileOperationsService, private readonly blockStateStatus?: () => BuildInfo['blockedAgentState']) {
     this.startTime = new Date();
     this.fileOperations = fileOperations;
   }
@@ -180,11 +181,13 @@ export class BuildInfoService {
       startupTimingMs: this.startupTimer?.getReport(),
     };
     const sessionIdentity = resolveSessionIdentity();
+    const blockedAgentState = this.blockStateStatus?.();
 
     return {
       sessionId: sessionIdentity.sessionId,
       runtimeSessionId: sessionIdentity.runtimeSessionId,
       sessionSource: sessionIdentity.source,
+      ...(blockedAgentState ? { blockedAgentState } : {}),
       package: packageInfo,
       build: {
         timestamp: buildTimestamp,
@@ -287,6 +290,7 @@ export class BuildInfoService {
     lines.push('## 🚀 Server');
     lines.push(`- **Started**: ${info.server.startTime.toISOString()}`);
     lines.push(`- **Uptime**: ${this.formatUptime(info.server.uptime / 1000)}`);
+    if (info.blockedAgentState) lines.push(`- **Blocked-agent state**: ${info.blockedAgentState}`);
     lines.push(`- **MCP Connection**: ${info.server.mcpConnection ? '✅ Connected' : '❌ Disconnected'}`);
 
     if (info.permissionHooks) {

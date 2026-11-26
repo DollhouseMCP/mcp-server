@@ -201,6 +201,8 @@ Successful imports retain the source as `blocked-agents.json.imported-<uuid>` wi
 
 **If database-mode start-up stops on a blocked-agent file:** the error names the source path or setup step, a reason, and a recovery action. Invalid block state means malformed JSON, an unsupported version or shape, an invalid or duplicate agent name, or a file exceeding the size limit. Fix or replace the file, or move it out of the security directory for review, then restart. A non-regular or multiply linked file must be replaced with a regular, singly linked file; a changed file requires checking for concurrent writers. For read, inspection, chmod, or rename failures, use the reported errno to correct file permissions or the reported file condition. When an unattributed file cannot be set aside for review, preserve it, check permissions on the security directory, and restart; no import was attempted. When the message says the import itself was recorded, preserve the file and restart after correction to retry only retention; database writes are not repeated. Database or user-list failures require checking database availability and migration permissions; users-directory failures require checking directory access; setup or discovery failures require checking database-mode configuration and required services. Each failure records one error log and one HIGH security event, “Legacy block state import failed”, with safe reason and code fields.
 
+For operator steps before the console starts, see [Legacy blocked-agent state import prevents startup](../guides/production-hosting-runbook.md#legacy-blocked-agent-state-import-prevents-startup).
+
 ### 2.3 Security Properties
 
 - Agent name validation prevents path traversal and control characters

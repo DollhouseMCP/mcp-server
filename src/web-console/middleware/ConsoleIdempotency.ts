@@ -52,7 +52,8 @@ export async function executeWithConsoleIdempotency(
 
   let requestFingerprint;
   try {
-    requestFingerprint = fingerprintBody(req.body);
+    const fingerprintInput = route.idempotencyFingerprintBody ? route.idempotencyFingerprintBody(req.body) : req.body;
+    requestFingerprint = fingerprintBody(fingerprintInput);
   } catch (error) {
     if (error instanceof ConsoleStoreValidationError) {
       return validationProblem('Request body must be valid JSON for idempotency.');

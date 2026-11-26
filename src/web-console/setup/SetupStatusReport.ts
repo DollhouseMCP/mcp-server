@@ -24,6 +24,7 @@ import {
 export interface SetupStatusSources {
   /** Null without a database: there is no migration ledger. */
   readonly databaseMigrations: (() => Promise<MigrationLedgerResult>) | null;
+  readonly hasRejectedBlockedAgentState?: () => Promise<boolean>;
   readonly securityInvalidation: () => Promise<Pick<ConsoleSecurityInvalidationReadinessSnapshot, 'ready' | 'failureCodes'>>;
   /** Null unless the console's allowlist is the sign-in authority: otherwise there is one list. */
   readonly allowlistParity: (() => Promise<AllowlistParityResult>) | null;
@@ -48,8 +49,12 @@ const NO_DATABASE = 'This deployment has no database, so there is nothing to rea
 /** Every check in catalog order. Sources are asked together; one that fails affects only its own check. */
 export async function buildSetupStatusReport(sources: SetupStatusSources, now: () => Date = () => new Date()): Promise<SetupStatusReport> {
   const usage = sources.usage;
+  const hasRejectedBlockedAgentState = sources.hasRejectedBlockedAgentState;
   const results = await Promise.all([
     answered('production_database_migrations', sources.databaseMigrations, NO_DATABASE),
+    answered('blocked_agent_state', hasRejectedBlockedAgentState ? async () => ({
+      id: 'blocked_agent_state', state: await hasRejectedBlockedAgentState() ? 'failed' : 'passed',
+    }) : null, NO_DATABASE),
     guarded('security_invalidation_multi_replica', async () => describeInvalidation(await sources.securityInvalidation())),
     answered('allowlist_authority_parity', sources.allowlistParity,
       'This deployment has one sign-in allowlist, so there is nothing to compare.'),

@@ -191,6 +191,9 @@ import { createRuntimeSessionModule } from './modules/runtime-sessions/RuntimeSe
 import { createSelfServiceModule } from './modules/self-service/SelfServiceModule.js';
 import { createSelfSecurityModule } from './modules/self-security/SelfSecurityModule.js';
 import { createSecurityAdminModule } from './modules/security-admin/index.js';
+import type { AdminTotpService } from '../auth/embedded-as/totp/AdminTotpService.js';
+import { PostgresRateLimitStore } from '../auth/embedded-as/storage/PostgresRateLimitStore.js';
+import { DatabaseDangerZoneBlockStore } from '../state/DatabaseDangerZoneBlockStore.js';
 import {
   InMemoryOwnedActivityQuery,
   InMemoryOwnedMetricQuery,
@@ -657,6 +660,7 @@ export class WebConsoleRegistrar {
       // Asked by one page, not polled, but bounded all the same: it runs several reads.
       setupStatus: cacheProbe(() => buildSetupStatusReport({
         databaseMigrations: healthProbes.databaseMigrations,
+        hasRejectedBlockedAgentState: database ? () => DatabaseDangerZoneBlockStore.hasRejectedSnapshots(database) : undefined,
         securityInvalidation: healthProbes.securityInvalidationReadiness,
         allowlistParity: healthProbes.allowlistParity,
         auditTelemetry: healthProbes.auditTelemetry,
@@ -671,6 +675,15 @@ export class WebConsoleRegistrar {
       factorStore: stores.factorStore,
       invalidationStore: stores.securityInvalidationStore,
       authPolicyStore,
+      blockRecovery: database && container.hasRegistration('AdminTotpService') ? {
+        database,
+        auditKeys: container.resolve<AdminAuditHmacKeyResolver>('AuditHmacResolver'),
+        auditWriter: adminAuditWriter,
+        opaqueValues,
+        totp: container.resolve<AdminTotpService>('AdminTotpService'),
+        rateLimitStore: new PostgresRateLimitStore(database),
+        now: this.options.now,
+      } : undefined,
       now: this.options.now,
     }));
     registerRouteModule(registry, this.options, 'accountAdmin', () => createAccountAdminModule({

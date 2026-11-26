@@ -158,6 +158,8 @@ export interface ConsoleRouteDefinition {
   readonly elevation?: ConsoleElevationPolicy;
   readonly privacyClass?: ConsolePrivacyClass;
   readonly idempotency?: ConsoleIdempotencyPolicy;
+  /** Project only the fields that define the operation when the body carries a transient proof. */
+  readonly idempotencyFingerprintBody?: (body: unknown) => unknown;
   /**
    * Declarative route policy only. Enforcement is wired by the secured router
    * when the matching rate-limit middleware is installed.

@@ -18,6 +18,7 @@ import { escapeHtml, formatTimestamp, responseDetail } from './operations-ui.js'
 
 const KEYS_PATH = '/admin/security/signing-keys';
 const POLICY_PATH = '/admin/security/auth-policy';
+const BLOCK_RESET_PATH = '/admin/security/users/:user_id/blocked-agents/reset';
 
 let host;
 let sections = [];
@@ -67,7 +68,98 @@ function sectionDefinitions(hasRoute, notify) {
       view: createAuthPolicyView({ notify, canEdit: hasRoute('PUT', POLICY_PATH) }),
     });
   }
+  if (hasRoute('GET', BLOCK_RESET_PATH) && hasRoute('POST', BLOCK_RESET_PATH)) {
+    definitions.push({ id: 'block-recovery', label: 'Blocked-agent recovery', view: createBlockRecoveryView() });
+  }
   return definitions;
+}
+
+function createBlockRecoveryView() {
+  let panel;
+  let review;
+  let viewVersion = 0;
+
+  function mount(container) {
+    panel = container;
+    panel.innerHTML = `
+      <section class="secadmin-card" aria-label="Blocked-agent recovery">
+        <form data-recovery-review>
+          <label for="block-recovery-user">Account UUID</label>
+          <input id="block-recovery-user" type="text" required maxlength="36" autocomplete="off">
+          <button class="btn btn-ghost" type="submit">Check block state</button>
+        </form>
+        <p data-recovery-message role="status"></p>
+        <div data-recovery-approval hidden>
+          <p>Reset will preserve a copy of the unavailable snapshot and clear its blocks.</p>
+          <label for="block-recovery-proof">Your authenticator or backup code</label>
+          <input id="block-recovery-proof" type="password" maxlength="64" autocomplete="one-time-code">
+          <button class="btn btn-ghost" data-recovery-cancel type="button">Cancel</button>
+          <button class="btn btn-primary" data-recovery-reset type="button">Reset blocked-agent state</button>
+        </div>
+      </section>`;
+    panel.querySelector('[data-recovery-review]').addEventListener('submit', load);
+    panel.querySelector('#block-recovery-user').addEventListener('input', cancel);
+    panel.querySelector('[data-recovery-cancel]').addEventListener('click', cancel);
+    panel.querySelector('[data-recovery-reset]').addEventListener('click', reset);
+  }
+
+  function cancel() {
+    viewVersion += 1;
+    review = undefined;
+    panel.querySelector('#block-recovery-proof').value = '';
+    panel.querySelector('[data-recovery-approval]').hidden = true;
+  }
+
+  async function load(event) {
+    event.preventDefault();
+    cancel();
+    const version = viewVersion;
+    const input = panel.querySelector('#block-recovery-user');
+    const button = panel.querySelector('[data-recovery-review] button');
+    const userId = input.value.trim();
+    const path = BLOCK_RESET_PATH.replace(':user_id', encodeURIComponent(userId));
+    button.disabled = true;
+    message('Checking block state…');
+    const response = await get(path).catch(() => null);
+    if (!panel) return;
+    button.disabled = false;
+    if (viewVersion !== version) return;
+    if (response?.status !== 200) {
+      message(elevationHint(response) ?? responseDetail(response, 'Block state could not be checked.'));
+      return;
+    }
+    if (response.body?.state !== 'unavailable') {
+      message('This account has no rejected snapshot to reset.');
+      return;
+    }
+    review = { ...response.body, path };
+    message(`Blocked-agent state is unavailable for ${userId}.`);
+    panel.querySelector('[data-recovery-approval]').hidden = false;
+    panel.querySelector('[data-recovery-cancel]').focus();
+  }
+
+  async function reset() {
+    if (!review) return;
+    const proof = panel.querySelector('#block-recovery-proof').value;
+    if (!proof.trim()) {
+      message('Enter your authenticator or backup code.');
+      return;
+    }
+    const { path, approval_id, approval_tag, digest, expires_at } = review;
+    cancel();
+    const version = viewVersion;
+    message('Resetting blocked-agent state…');
+    const response = await post(path, { idempotencyKey: approval_id, body: { approval_tag, digest, expires_at, proof } }).catch(() => null);
+    if (!panel || viewVersion !== version) return;
+    message(response?.status === 204 ? 'Blocked-agent state reset. Evidence was preserved.'
+      : elevationHint(response) ?? responseDetail(response, 'Reset could not be confirmed. Check block state again.'));
+  }
+
+  function message(detail) {
+    panel.querySelector('[data-recovery-message]').textContent = detail;
+  }
+
+  return { mount, activate() {}, deactivate: cancel, destroy() { cancel(); panel = undefined; } };
 }
 
 function shell(definitions) {
@@ -97,6 +189,7 @@ function selectSection(id) {
     button?.setAttribute('aria-selected', String(active));
     if (panel) panel.hidden = !active;
     if (active) section.view.activate();
+    else section.view.deactivate?.();
   }
 }
 

@@ -169,6 +169,8 @@ export class AuthServiceRegistrar {
     if (!provider) return;
 
     container.register('AuthProvider', () => provider);
+    const { adminTotpService } = adminStepUp;
+    if (adminTotpService) container.register('AdminTotpService', () => adminTotpService);
     if (signInAllowlistAuthority) {
       container.register('SignInAllowlistAuthority', () => signInAllowlistAuthority);
       container.register('WebConsoleAccountAllowlistAuthorityCutoverComplete', () => true);

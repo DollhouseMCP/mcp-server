@@ -23,6 +23,21 @@ export interface AdminTotpRateLimitResult {
   allowed: boolean;
 }
 
+/** Reserve an attempt before checking a per-operation proof so concurrent requests share the limit. */
+export async function reserveAdminTotpAttempt(store: IRateLimitStore, scope: string, userId: string): Promise<boolean> {
+  const now = Date.now();
+  const attempt = await store.update<TotpProofState, boolean>(scope, userId, previous => {
+    if (previous && (!Number.isSafeInteger(previous.failures) || previous.failures < 1 ||
+        !Number.isSafeInteger(previous.firstFailureAt) || !Number.isSafeInteger(previous.lockedUntil))) {
+      throw new Error('Invalid authenticator attempt state');
+    }
+    if (previous && isLocked(previous, now)) return { state: previous, result: false };
+    const { state } = stepFailure(previous, now, IP_WINDOW_MS, IP_THRESHOLD, IP_LOCK_MS);
+    return { state, result: true };
+  }, { expiresAt: now + IP_LOCK_MS * 2 });
+  return attempt.result === true;
+}
+
 export async function checkAdminTotpRateLimit(
   store: IRateLimitStore | undefined,
   scope: string,

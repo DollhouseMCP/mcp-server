@@ -7,6 +7,7 @@ import type { IConsoleFactorStore } from '../../stores/IConsoleFactorStore.js';
 import type { IConsoleAuthPolicyStore } from '../../stores/IConsoleAuthPolicyStore.js';
 import type { IConsoleSecurityInvalidationStore } from '../../services/invalidation/IConsoleSecurityInvalidationStore.js';
 import { SecurityAdminService } from './SecurityAdminService.js';
+import { createSecurityAdminBlockRecoveryRoutes, type SecurityAdminBlockRecoveryOptions } from './SecurityAdminBlockRecovery.js';
 import {
   projectSecurityAuthPolicy,
   projectSecuritySigningKeyJob,
@@ -32,10 +33,12 @@ export interface SecurityAdminModuleOptions {
   readonly factorStore: IConsoleFactorStore;
   readonly invalidationStore: IConsoleSecurityInvalidationStore;
   readonly authPolicyStore: IConsoleAuthPolicyStore;
+  readonly blockRecovery?: SecurityAdminBlockRecoveryOptions;
   readonly now?: () => Date;
 }
 
 export function createSecurityAdminModule(options: SecurityAdminModuleOptions): ConsoleModuleDescriptor {
+  const blockRecoveryRoutes = options.blockRecovery ? createSecurityAdminBlockRecoveryRoutes(options.blockRecovery) : [];
   const service = new SecurityAdminService(
     options.signingKeyStore,
     options.factorStore,
@@ -154,8 +157,9 @@ export function createSecurityAdminModule(options: SecurityAdminModuleOptions): 
           req.consoleAuthentication?.userId ?? null,
         ),
       },
+      ...blockRecoveryRoutes,
     ],
-    auditOperations: SECURITY_AUDIT_IDS.map(id => ({ id })),
+    auditOperations: [...SECURITY_AUDIT_IDS.map(id => ({ id })), ...blockRecoveryRoutes.map(route => ({ id: route.auditOperation! }))],
   };
 }
 
