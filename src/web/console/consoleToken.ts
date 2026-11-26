@@ -681,8 +681,28 @@ export class ConsoleTokenStore {
    * @returns The primary (first) token entry — convenient for server startup
    *          to inject into HTML and stamp on followers.
    */
-  ensureInitialized(puppetName: string): Promise<ConsoleTokenEntry> {
-    return this.withTokenFileLock(() => this.initializeTokenFile(puppetName));
+  ensureInitialized(puppetName: string): Promise<ConsoleTokenEntry>;
+  ensureInitialized(puppetName: string, options: { readonly onlyIfBothAbsent: true }): Promise<ConsoleTokenEntry | undefined>;
+  async ensureInitialized(
+    puppetName: string, options?: { readonly onlyIfBothAbsent: true },
+  ): Promise<ConsoleTokenEntry | undefined> {
+    if (!options) return this.withTokenFileLock(() => this.initializeTokenFile(puppetName));
+    // Trusted stdio startup may provision a basic-tier file. Existing or
+    // inaccessible state belongs to the console's distinct recovery flow.
+    if (!await this.bothFilesAbsent()) return undefined;
+    return this.withTokenFileLock(async () => {
+      if (!await this.bothFilesAbsent()) return undefined;
+      const entry = await this.createTokenFile(puppetName, false, false);
+      logger.info('[ConsoleToken] Initialized basic-tier approvals during local stdio startup');
+      return entry;
+    });
+  }
+
+  private async bothFilesAbsent(): Promise<boolean> {
+    const absent = await Promise.all([
+      this.fileIsAbsent(this.filePath), this.fileIsAbsent(this.dialogApprovalStatePath()),
+    ]);
+    return absent.every(Boolean);
   }
 
   private async initializeTokenFile(puppetName: string): Promise<ConsoleTokenEntry> {

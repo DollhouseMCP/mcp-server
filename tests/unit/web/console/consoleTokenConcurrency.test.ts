@@ -53,6 +53,29 @@ function pendingApproval(): DialogApprovalRequest {
   };
 }
 
+it('creates one normal basic-tier file when two stdio startups race', async () => {
+  const homes = await Promise.all(['boot-first-', 'boot-second-'].map(prefix => mkdtemp(path.join(directory, prefix))));
+  const controller = new AbortController();
+  const children = homes.map(home => writer('bootstrap-stdio', home, controller.signal));
+  const completed = Promise.allSettled(children);
+  try {
+    await Promise.all(homes.map(home => waitForFile(path.join(home, 'ready'), 10000)));
+    children.forEach(child => child.child.stdin?.end());
+    const outcomes = (await completed).map(result => {
+      if (result.status === 'rejected') throw result.reason;
+      return JSON.parse(result.value.stdout) as { created: boolean };
+    });
+    expect(outcomes.filter(result => result.created)).toHaveLength(1);
+    expect(await new ConsoleTokenStore(tokenFile).lookupApprovalEnrollment()).toBe('unenrolled');
+    expect(await readdir(directory)).toEqual(expect.arrayContaining([path.basename(tokenFile)]));
+    expect(await readdir(directory)).not.toContain(`${path.basename(tokenFile)}.approval-state`);
+    if (process.platform !== 'win32') expect((await stat(tokenFile)).mode & 0o777).toBe(0o600);
+  } finally {
+    controller.abort();
+    await completed;
+  }
+}, 25000);
+
 async function proveInTwoProcesses(
   batches: readonly [DialogApprovalRequest[], DialogApprovalRequest[]], code: string,
 ): Promise<DialogApprovalResult[]> {

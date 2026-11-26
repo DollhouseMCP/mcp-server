@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
-import { mkdtemp, rm, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Secret, TOTP } from 'otpauth';
@@ -66,6 +66,27 @@ describe('ConsoleTokenStore', () => {
   });
 
   describe('ensureInitialized', () => {
+    it.each(['approval-file-only', 'corrupt-token', 'unreadable-token', 'recovering-token'])(
+      'leaves %s untouched during stdio bootstrap and refuses approval',
+      async state => {
+        const store = new ConsoleTokenStore(tokenFilePath);
+        if (state === 'approval-file-only') {
+          await writeFile(`${tokenFilePath}.approval-state`, '{"attempts":[],"spent":{}}');
+        } else if (state === 'unreadable-token') {
+          await mkdir(tokenFilePath);
+        } else {
+          await writeFile(tokenFilePath, '{');
+          if (state === 'recovering-token') await store.ensureInitialized('Console');
+        }
+        const names = await readdir(testDir);
+        await expect(store.ensureInitialized('Stdio', { onlyIfBothAbsent: true })).resolves.toBeUndefined();
+        expect(await readdir(testDir)).toEqual(names);
+        const dialog = jest.fn(async () => ({ confirmed: true } as const));
+        await expect(store.confirmApprovalFromDialog(recoveryApproval(), dialog)).resolves.toBe('unavailable');
+        expect(dialog).not.toHaveBeenCalled();
+      },
+    );
+
     it('creates a new token file on first run', async () => {
       const store = new ConsoleTokenStore(tokenFilePath);
       const entry = await store.ensureInitialized('Kermit');
