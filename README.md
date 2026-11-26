@@ -31,9 +31,9 @@
  CREATE or EDIT                    PORTFOLIO                   ACTIVATE → USE
  ─────────────────────────────────────────────────────────────────────────────
 
- "Create a skill for            📁 ~/.dollhouse/portfolio/    "Activate the Dollhouse
+ "Create a skill for            📁 Local portfolio            "Activate the Dollhouse
   writing blog posts"                                              Expert ensemble"
-                                 37 starter elements:
+                                 41 starter elements:
  "Edit the code review      ──▶  personas · skills ·       ──▶  Your AI now has
   persona to add security"       templates · agents ·           new behavior,
                                  memories · ensembles           capabilities, and
@@ -48,7 +48,7 @@
 - **Edit** any existing element to refine it
 - **Browse** the [community collection](https://dollhousemcp.github.io/collection/) and install elements made by other users
 
-Your **portfolio** (`~/.dollhouse/portfolio/` on macOS/Linux, `%USERPROFILE%\.dollhouse\portfolio\` on Windows) is a local folder that holds all your Dollhouse elements. It ships with 37 starters — including the **dollhouse-expert-suite** ensemble (persona + knowledge base) you can activate for guided help. Everything you create or install lands here. Share back to the community or sync to GitHub whenever you're ready.
+Your **portfolio** holds everything you create, edit, or install. A fresh 2.1 install using stdio stores the portfolio under `~/DollhouseMCP/users/local-user/portfolio/` (under your user profile on Windows). Existing flat installs keep `~/.dollhouse/portfolio/`. A fresh portfolio includes 41 starter elements, including the **dollhouse-expert-suite** ensemble for guided help. Share your elements with the community or sync them to GitHub when you're ready.
 
 ---
 
@@ -231,7 +231,7 @@ Policies stack across all active elements. If one persona allows an operation bu
 
 ## Portfolio
 
-Your Dollhouse elements live in a local portfolio at `~/.dollhouse/portfolio/` (macOS/Linux) or `%USERPROFILE%\.dollhouse\portfolio\` (Windows). Ask your AI to "open the portfolio browser" (or call `open_portfolio_browser` via MCP-AQL) to browse them visually. Activation is done through the LLM — ask it to "activate the Dollhouse code review persona" and it handles the rest.
+Ask your AI to "open the portfolio browser" (or call `open_portfolio_browser` via MCP-AQL) to browse your local portfolio. To activate an element, ask your AI to "activate the Dollhouse code review persona".
 
 <div align="center">
   <img src="docs/assets/portfolio-browser.png" alt="DollhouseMCP Portfolio Browser" width="700" />
@@ -332,7 +332,7 @@ Then point your MCP client at `node <path>/node_modules/@dollhousemcp/mcp-server
 |----------|---------|-------------|
 | `MCP_AQL_ENDPOINT_MODE` | `crude` | Endpoint mode: `crude`, `single` |
 | `MCP_INTERFACE_MODE` | `mcpaql` | Interface style: `mcpaql`, `discrete` |
-| `DOLLHOUSE_PORTFOLIO_DIR` | `~/.dollhouse/portfolio/` | Custom portfolio location |
+| `DOLLHOUSE_PORTFOLIO_DIR` | Detected from install layout | Custom portfolio root |
 | `GITHUB_TOKEN` | — | Personal access token for GitHub operations |
 
 > [Full environment variable reference](docs/guides/environment-variables.md) · [MCP client setup for other platforms](docs/guides/mcp-client-setup.md)

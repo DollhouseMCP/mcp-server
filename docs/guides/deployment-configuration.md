@@ -330,11 +330,11 @@ This layout applies when `~/.dollhouse/` exists on disk and the per-user migrati
   shared/
 ```
 
-This layout applies after running `npm run migrate:per-user` on a legacy install, or automatically on a fresh install that uses HTTP mode. Each user's data is sandboxed under their own `users/<userId>/` subtree. Cross-user filesystem access is blocked at the `PathValidator` level.
+The directory tree above applies after running `npm run migrate:per-user` on a legacy install. Each user's data is sandboxed under their own `users/<userId>/` subtree. Cross-user filesystem access is blocked at the `PathValidator` level.
 
 **New installs (no existing `~/.dollhouse/` directory):**
 
-On a fresh machine with no prior DollhouseMCP installation, the portfolio root moves to a platform-visible location and internal directories follow platform conventions. The per-user layout is used from the start.
+On a fresh machine with no prior DollhouseMCP installation, the portfolio root moves to a platform-visible location and internal directories follow platform conventions. The per-user layout is used from the start. The default local stdio user’s elements live under `~/DollhouseMCP/users/local-user/portfolio/`.
 
 *macOS:*
 

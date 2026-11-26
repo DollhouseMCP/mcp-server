@@ -203,8 +203,8 @@ export class DollhouseMCPServer implements IToolHandler {
     return this.server;
   }
   
-  private async initializePortfolio(): Promise<void> {
-    await this.container.preparePortfolio();
+  private async initializePortfolio(options?: { initializeLocalPortfolio: boolean }): Promise<void> {
+    await this.container.preparePortfolio(options);
     this.personasDir = this.container.getPersonasDir();
   }
   
@@ -778,7 +778,7 @@ export class DollhouseMCPServer implements IToolHandler {
     // deferred to completeDeferredSetup() which runs post-connect.
     try {
       timer.startPhase('portfolio_prepare', true);
-      await this.initializePortfolio();
+      await this.initializePortfolio({ initializeLocalPortfolio: true });
       timer.endPhase('portfolio_prepare');
 
       timer.startPhase('handler_creation', true);

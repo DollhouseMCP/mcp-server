@@ -392,7 +392,7 @@ export class DollhouseContainer {
    * (memory auto-load, activation restore, log hooks, danger zone init)
    * is deferred to completeDeferredSetup() which runs post-connect.
    */
-  public async preparePortfolio(): Promise<void> {
+  public async preparePortfolio(options: { initializeLocalPortfolio?: boolean } = {}): Promise<void> {
     // Path services must bootstrap before any manager resolution so
     // PathService is available for PortfolioManager and downstream.
     await new PathsServiceRegistrar().bootstrapAndRegister(this);
@@ -419,6 +419,10 @@ export class DollhouseContainer {
     );
     await this.runMigrationPhaseIfNeeded(timer, migrationManager, needsMigration);
     await this.initializePortfolioIfMissing(timer, portfolioManager, portfolioExists);
+    if (options.initializeLocalPortfolio && env.DOLLHOUSE_STORAGE_BACKEND === 'file') {
+      const session = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
+      await portfolioManager.initializeLocalUser(session.userId);
+    }
 
     // PERFORMANCE OPTIMIZATION: Initialize collection cache in background (non-blocking)
     // This is safe because collection cache is not critical for startup

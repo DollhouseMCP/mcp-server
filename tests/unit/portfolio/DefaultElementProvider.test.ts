@@ -168,6 +168,16 @@ describe('DefaultElementProvider', () => {
   });
   
   describe('copyFileWithVerification', () => {
+    it('leaves a destination created after the initial check alone', async () => {
+      const sourceFile = path.join(tempDir, 'source.md');
+      const destFile = path.join(tempDir, 'dest.md');
+      await fs.writeFile(sourceFile, 'Bundled content');
+      await fs.writeFile(destFile, 'User content');
+
+      await expect(provider['copyFileWithVerification'](sourceFile, destFile)).rejects.toMatchObject({ code: 'EEXIST' });
+      await expect(fs.readFile(destFile, 'utf8')).resolves.toBe('User content');
+    });
+
     it('should copy file and verify size matches', async () => {
       const sourceFile = path.join(tempDir, 'source.md');
       const destFile = path.join(tempDir, 'dest.md');

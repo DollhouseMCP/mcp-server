@@ -246,11 +246,12 @@ export class DefaultElementProvider {
   private async copyFileOp(sourcePath: string, destPath: string): Promise<void> {
     if (this.fileOperations) {
       return this.fileOperations.copyFile(sourcePath, destPath, {
-        source: 'DefaultElementProvider.copyFileOp'
+        source: 'DefaultElementProvider.copyFileOp',
+        exclusive: true,
       });
     }
     const { promises: fs } = await import('node:fs');
-    await fs.copyFile(sourcePath, destPath);
+    await fs.copyFile(sourcePath, destPath, fs.constants.COPYFILE_EXCL);
   }
 
   private async chmodFile(filePath: string, mode: number): Promise<void> {
@@ -921,6 +922,7 @@ export class DefaultElementProvider {
           });
         } catch (error) {
           const err = error as Error;
+          if ((error as NodeJS.ErrnoException).code === 'EEXIST') return;
           logger.error(
             `[DefaultElementProvider] Failed to copy ${normalizedFile.normalizedContent}`,
             { 
@@ -991,9 +993,11 @@ export class DefaultElementProvider {
     const attempts = Array.from({ length: COPY_RETRY_ATTEMPTS }, (_, index) => index + 1);
     await visitSequentially(attempts.values(), async attempt => {
       if (outcome.copied) return;
+      let created = false;
       try {
         // Copy the file
         await this.copyFileOp(sourcePath, destPath);
+        created = true;
 
         // Verify size matches
         const [sourceStats, destStats] = await Promise.all([
@@ -1040,13 +1044,15 @@ export class DefaultElementProvider {
         return;
 
       } catch (error) {
+        if (!created && (error as NodeJS.ErrnoException).code === 'EEXIST') throw error;
         outcome.lastError = error as Error;
 
-        // Clean up failed copy
-        try {
-          await this.deleteFileOp(destPath);
-        } catch {
-          // Ignore cleanup errors
+        if (created) {
+          try {
+            await this.deleteFileOp(destPath);
+          } catch {
+            // Ignore cleanup errors
+          }
         }
 
         if (attempt < COPY_RETRY_ATTEMPTS) {
