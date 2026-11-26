@@ -63,6 +63,12 @@ const LEGACY_ELEMENT_FIELD_REPLACEMENTS = {
 
 type LegacyElementField = keyof typeof LEGACY_ELEMENT_FIELD_REPLACEMENTS;
 
+const LEGACY_ELEMENT_ROLES: ReadonlyMap<string, ElementRole> = new Map([
+  ['foundation', 'primary'],
+  ['coordinator', 'primary'],
+  ['output', 'support'],
+]);
+
 export interface EnsembleManagerDeps extends ElementManagerDeps {
   activationMetricsTracker: ActivationMetricsTracker;
 }
@@ -153,15 +159,20 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     field: LegacyElementField,
   ): void {
     const replacement = LEGACY_ELEMENT_FIELD_REPLACEMENTS[field];
-    const fingerprint = this.getScopedCacheKey(`${ensembleName}:${index}:${field}`);
+    this.warnOnceForLegacyElement(
+      [ensembleName, index, field],
+      `Ensemble '${ensembleName}' element at index ${index} uses deprecated '${field}' field. Use '${replacement}' instead.`,
+    );
+  }
+
+  private warnOnceForLegacyElement(parts: (string | number)[], message: string): void {
+    const fingerprint = this.getScopedCacheKey(JSON.stringify(parts));
     if (this.legacyElementFieldWarnings.get(fingerprint)) {
       return;
     }
 
     this.legacyElementFieldWarnings.set(fingerprint, true);
-    logger.warn(
-      `Ensemble '${ensembleName}' element at index ${index} uses deprecated '${field}' field. Use '${replacement}' instead.`,
-    );
+    logger.warn(message);
   }
 
   private hasLegacyElementFields(elementsRaw: unknown): boolean {
@@ -356,10 +367,11 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
   }
 
   private parseElement(element: any, index: number, ensembleName: string): EnsembleElement {
-    const role = this.parseElementRole(element, index);
+    const elementName = this.parseElementName(element, index, ensembleName);
+    const role = this.parseElementRole(element.role, index, ensembleName, elementName);
     const activation = this.parseElementActivation(element, index);
     return {
-      element_name: this.parseElementName(element, index, ensembleName),
+      element_name: elementName,
       element_type: this.parseElementType(element, index, ensembleName),
       role,
       priority: this.parseElementPriority(element),
@@ -389,13 +401,21 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     return this.sanitizeText(rawType, SECURITY_LIMITS.MAX_TAG_LENGTH, false, `Invalid element type at index ${index}`);
   }
 
-  private parseElementRole(element: any, index: number): ElementRole {
+  private parseElementRole(rawRole: unknown, index: number, ensembleName: string, elementName: string): ElementRole {
     const role = this.sanitizeText(
-      element.role || ENSEMBLE_DEFAULTS.ELEMENT_ROLE,
+      rawRole || ENSEMBLE_DEFAULTS.ELEMENT_ROLE,
       SECURITY_LIMITS.MAX_ENUM_FIELD_LENGTH,
       false,
       `Invalid element role at index ${index}`,
     );
+    const replacement = LEGACY_ELEMENT_ROLES.get(role);
+    if (replacement) {
+      this.warnOnceForLegacyElement(
+        [ensembleName, elementName, role],
+        `Ensemble '${ensembleName}' element '${elementName}' uses deprecated role '${role}'. Use '${replacement}' instead.`,
+      );
+      return replacement;
+    }
     if (!ELEMENT_ROLES.includes(role as any)) {
       throw new Error(`${ENSEMBLE_ERRORS.INVALID_ELEMENT_ROLE}: ${role}`);
     }

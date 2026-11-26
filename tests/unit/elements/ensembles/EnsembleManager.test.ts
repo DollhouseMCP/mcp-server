@@ -1173,6 +1173,58 @@ elements:
       expect(loaded.metadata.elements[0].role).toBe('core');
     });
 
+    it.each([
+      ['foundation', 'primary'],
+      ['coordinator', 'primary'],
+      ['output', 'support'],
+    ])('loads legacy role %s, warns once, and saves it as %s', async (alias, canonical) => {
+      const filename = 'legacy-role.md';
+      const content = `---
+name: Legacy Role Ensemble
+elements:
+  - element_name: starter-member
+    element_type: skill
+    role: ${alias}
+---
+`;
+      await fs.writeFile(path.join(portfolioPath, 'ensembles', filename), content, 'utf-8');
+      atomicReadFileMock(fileLockManager).mockResolvedValue(content);
+      const warn = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+      try {
+        const ensemble = await ensembleManager.load(filename);
+        expect(ensemble.metadata.elements[0].role).toBe(canonical);
+        ensembleManager['uncacheByPath'](filename);
+        await ensembleManager.load(filename);
+        expect(warn.mock.calls.filter(([message]) => String(message).includes('uses deprecated role'))).toEqual([[
+          `Ensemble 'Legacy Role Ensemble' element 'starter-member' uses deprecated role '${alias}'. Use '${canonical}' instead.`,
+        ]]);
+
+        await ensembleManager.save(ensemble, filename);
+        const [, saved] = atomicWriteFileMock(fileLockManager).mock.calls.at(-1) as [string, string];
+        expect(saved).toContain(`role: ${canonical}`);
+        expect(saved).not.toContain(`role: ${alias}`);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('rejects an unknown role in a portfolio ensemble', async () => {
+      const filename = 'unknown-role.md';
+      const content = `---
+name: Unknown Role Ensemble
+elements:
+  - element_name: starter-member
+    element_type: skill
+    role: spectator
+---
+`;
+      await fs.writeFile(path.join(portfolioPath, 'ensembles', filename), content, 'utf-8');
+      atomicReadFileMock(fileLockManager).mockResolvedValue(content);
+      await expect(ensembleManager.load(filename)).rejects.toMatchObject({
+        cause: { message: 'Invalid element role: spectator' },
+      });
+    });
+
     it('loads ensemble with em-dash in description (#695)', async () => {
       const fileContent = `---
 name: Em-Dash Test

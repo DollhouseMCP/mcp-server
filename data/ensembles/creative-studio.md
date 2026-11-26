@@ -39,7 +39,7 @@ elements:
 
   - element_name: "research"
     element_type: "skill"
-    role: "foundation"
+    role: "primary"
     priority: 85
     activation: "on-demand"
     purpose: "Fact-checking and background research"
@@ -53,7 +53,7 @@ elements:
 
   - element_name: "conversation-history"
     element_type: "memory"
-    role: "foundation"
+    role: "primary"
     priority: 90
     activation: "always"
     purpose: "Maintain creative continuity and style preferences"

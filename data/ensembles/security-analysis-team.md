@@ -48,21 +48,21 @@ elements:
 
   - element_name: "research"
     element_type: "skill"
-    role: "foundation"
+    role: "primary"
     priority: 80
     activation: "on-demand"
     purpose: "CVE research and threat intelligence gathering"
 
   - element_name: "security-vulnerability-report"
     element_type: "template"
-    role: "output"
+    role: "support"
     priority: 75
     activation: "on-demand"
     purpose: "Structured vulnerability reporting"
 
   - element_name: "penetration-test-report"
     element_type: "template"
-    role: "output"
+    role: "support"
     priority: 75
     activation: "conditional"
     condition: "penetration_test_completed"
@@ -70,7 +70,7 @@ elements:
 
   - element_name: "threat-assessment-report"
     element_type: "template"
-    role: "output"
+    role: "support"
     priority: 70
     activation: "conditional"
     condition: "threat_model_completed"
@@ -78,7 +78,7 @@ elements:
 
   - element_name: "project-context"
     element_type: "memory"
-    role: "foundation"
+    role: "primary"
     priority: 95
     activation: "always"
     purpose: "Maintain security findings and remediation history"

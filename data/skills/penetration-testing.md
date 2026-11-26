@@ -12,31 +12,29 @@ proficiency_levels:
   intermediate: "Manual testing techniques and exploit development"
   advanced: "Advanced persistent threats and custom payload creation"
 parameters:
-  test_scope:
-    type: "array"
-    description: "Areas to test"
-    default: ["web_application", "network", "wireless", "social_engineering"]
-  methodology:
+  - name: test_scope
     type: "string"
+    description: "Areas to test (comma-separated)."
+    default: "web_application, network, wireless, social_engineering"
+  - name: methodology
+    type: "enum"
     description: "Testing methodology to follow"
     default: "OWASP"
-    enum: ["OWASP", "NIST", "PTES", "OSsTMM", "OWASP-WSTG"]
-  test_depth:
-    type: "string"
+    options: ["OWASP", "NIST", "PTES", "OSsTMM", "OWASP-WSTG"]
+  - name: test_depth
+    type: "enum"
     description: "Depth of testing"
     default: "comprehensive"
-    enum: ["surface", "standard", "comprehensive", "red_team"]
-  stealth_level:
-    type: "string"
+    options: ["surface", "standard", "comprehensive", "red_team"]
+  - name: stealth_level
+    type: "enum"
     description: "How stealthy to be"
     default: "normal"
-    enum: ["aggressive", "normal", "stealth", "passive"]
-  suite: "bundled-test-data"
-  purpose: "General test data for DollhouseMCP system validation"
-  created: "2025-08-20"
-  version: "1.0.0"
-  migrated: "2025-08-20T23:47:24.347Z"
-  originalPath: "data/skills/penetration-testing.md"
+    options: ["aggressive", "normal", "stealth", "passive"]
+suite: "bundled-test-data"
+purpose: "General test data for DollhouseMCP system validation"
+migrated: "2025-08-20T23:47:24.347Z"
+originalPath: "data/skills/penetration-testing.md"
 ---
 # Penetration Testing Skill
 

@@ -12,30 +12,28 @@ proficiency_levels:
   intermediate: "Multi-source synthesis and validation"
   advanced: "Academic-level research with citations"
 parameters:
-  research_depth:
-    type: "string"
+  - name: research_depth
+    type: "enum"
     description: "How deep to research"
     default: "standard"
-    enum: ["quick", "standard", "comprehensive", "exhaustive"]
-  source_types:
-    type: "array"
-    description: "Types of sources to consider"
-    default: ["academic", "industry", "news", "expert"]
-  citation_style:
+    options: ["quick", "standard", "comprehensive", "exhaustive"]
+  - name: source_types
     type: "string"
+    description: "Types of sources to consider (comma-separated)."
+    default: "academic, industry, news, expert"
+  - name: citation_style
+    type: "enum"
     description: "Citation format to use"
     default: "none"
-    enum: ["none", "APA", "MLA", "Chicago", "Harvard"]
-  fact_checking:
+    options: ["none", "APA", "MLA", "Chicago", "Harvard"]
+  - name: fact_checking
     type: "boolean"
     description: "Verify claims and cross-reference"
     default: true
-  suite: "bundled-test-data"
-  purpose: "General test data for DollhouseMCP system validation"
-  created: "2025-08-20"
-  version: "1.0.0"
-  migrated: "2025-08-20T23:47:24.347Z"
-  originalPath: "data/skills/research.md"
+suite: "bundled-test-data"
+purpose: "General test data for DollhouseMCP system validation"
+migrated: "2025-08-20T23:47:24.347Z"
+originalPath: "data/skills/research.md"
 ---
 # Research Skill
 

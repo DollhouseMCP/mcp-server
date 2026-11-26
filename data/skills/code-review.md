@@ -12,26 +12,24 @@ proficiency_levels:
   intermediate: "Design patterns and architecture review"
   advanced: "Security vulnerabilities and performance optimization"
 parameters:
-  language:
+  - name: language
     type: "string"
     description: "Programming language to review"
     required: false
     default: "auto-detect"
-  focus_areas:
-    type: "array"
-    description: "Specific areas to focus on"
-    default: ["security", "performance", "maintainability", "testing"]
-  severity_threshold:
+  - name: focus_areas
     type: "string"
+    description: "Specific areas to focus on (comma-separated)."
+    default: "security, performance, maintainability, testing"
+  - name: severity_threshold
+    type: "enum"
     description: "Minimum severity to report"
     default: "info"
-    enum: ["error", "warning", "info", "style"]
-  suite: "bundled-test-data"
-  purpose: "General test data for DollhouseMCP system validation"
-  created: "2025-08-20"
-  version: "1.0.0"
-  migrated: "2025-08-20T23:47:24.346Z"
-  originalPath: "data/skills/code-review.md"
+    options: ["error", "warning", "info", "style"]
+suite: "bundled-test-data"
+purpose: "General test data for DollhouseMCP system validation"
+migrated: "2025-08-20T23:47:24.346Z"
+originalPath: "data/skills/code-review.md"
 ---
 # Code Review Skill
 
