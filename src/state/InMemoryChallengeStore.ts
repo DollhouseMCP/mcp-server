@@ -11,25 +11,30 @@
  */
 
 import { VerificationStore } from '@dollhousemcp/safety';
-import type { ChallengeInput, IChallengeStore } from './IChallengeStore.js';
+import type { StoredChallenge } from '@dollhousemcp/safety';
+import type { ChallengeMetadata, IChallengeStore } from './IChallengeStore.js';
 
 export class InMemoryChallengeStore implements IChallengeStore {
-  private readonly inner: VerificationStore<ChallengeInput>;
+  private readonly inner: VerificationStore;
 
   constructor(autoCleanupIntervalMs?: number) {
-    this.inner = new VerificationStore<ChallengeInput>(autoCleanupIntervalMs);
+    this.inner = new VerificationStore(autoCleanupIntervalMs);
   }
 
-  set(challengeId: string, challenge: ChallengeInput): void {
+  set(challengeId: string, challenge: StoredChallenge): void {
     this.inner.set(challengeId, challenge);
   }
 
-  get(challengeId: string): ChallengeInput | undefined {
+  get(challengeId: string): StoredChallenge | undefined {
     return this.inner.get(challengeId);
   }
 
   verify(challengeId: string, code: string): boolean {
     return this.inner.verify(challengeId, code);
+  }
+
+  claimForDialog(challengeId: string, expected: ChallengeMetadata): (() => void) | undefined {
+    return this.inner.claimForDialog(challengeId, expected);
   }
 
   cleanup(): void {

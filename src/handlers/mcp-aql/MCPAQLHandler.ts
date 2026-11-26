@@ -620,7 +620,6 @@ export class MCPAQLHandler {
       getEndpointForOperation: (operation: string) => this.getEndpointForOperation(operation),
       issueDeadlockReliefChallenge: () => this.issueDeadlockReliefChallenge(),
       completeDeadlockRelief: (challengeId: string, code: string) => this.completeDeadlockRelief(challengeId, code, handlers),
-      reserveDeadlockReliefRequest: () => this.reserveDeadlockReliefRequest(),
       performApprovedDeadlockRelief: (requestId: string) => this.performDeadlockRelief(requestId, handlers),
       resolveVerificationRateLimiter: () => this.resolveVerificationRateLimiter(),
       resolvePermissionPromptLimiter: () => this.resolvePermissionPromptLimiter(),
@@ -1976,12 +1975,7 @@ export class MCPAQLHandler {
     }
   }
 
-  private issueDeadlockReliefChallenge(): {
-    pending: true;
-    challenge_id: string;
-    message: string;
-    warning: string;
-  } {
+  private issueDeadlockReliefChallenge() {
     const store = this.handlers.verificationStore;
     if (!store) {
       throw new Error('Verification system not available. Ensure the server is properly configured.');
@@ -1995,8 +1989,6 @@ export class MCPAQLHandler {
       reason: DEADLOCK_RELIEF_REASON,
     });
 
-    this.handlers.verificationNotifier?.showCode(code, DEADLOCK_RELIEF_DIALOG_REASON);
-
     SecurityMonitor.logSecurityEvent({
       type: 'DANGER_ZONE_TRIGGERED',
       severity: 'MEDIUM',
@@ -2009,10 +2001,13 @@ export class MCPAQLHandler {
     });
 
     return {
-      pending: true,
-      challenge_id: challengeId,
-      message: 'Deadlock relief requires human confirmation. A verification code has been displayed to the user.',
-      warning: 'Completing this flow will deactivate all active elements for the current session and clear persisted activation state.',
+      response: {
+        pending: true as const,
+        challenge_id: challengeId,
+        message: 'Deadlock relief requires human confirmation. A verification code has been displayed to the user.',
+        warning: 'Completing this flow will deactivate all active elements for the current session and clear persisted activation state.',
+      },
+      showCode: () => this.handlers.verificationNotifier?.showCode(code, DEADLOCK_RELIEF_DIALOG_REASON),
     };
   }
 

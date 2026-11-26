@@ -182,7 +182,7 @@ The `DangerZoneEnforcer` provides programmatic blocking for the highest-risk saf
 3. In a local stdio session, the agent calls `verify_challenge` with the ID. The desktop dialog asks the user to approve the release and collects their current authenticator or backup code if they enrolled.
 4. The server rechecks the session and the reviewed block before removing it.
 
-The legacy HTTP flow uses a display code delivered to a native dialog through the child's stdin. The bridge submits that code with the challenge ID to `verify_challenge`.
+The deprecated code flow remains available to existing clients, including stdio clients using the fallback. The human can submit the verification code with the same challenge ID. The code display receives the code through the child's stdin. Both approval methods use the session's verification rate limiter, and one successful approval consumes the challenge for both.
 
 ### 2.2 Persistence
 

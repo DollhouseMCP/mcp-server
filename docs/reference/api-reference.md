@@ -190,16 +190,16 @@ Import a persona from a file path or JSON string.
 
 ### verify_challenge
 
-Request approval to unblock an agent or verify an action. In a local stdio session, call with the challenge ID and approve in the server-owned desktop dialog. If an authenticator is enrolled, enter its current code or a backup code in that dialog.
+Request approval to unblock an agent. In a local stdio session, call with the challenge ID and approve in the server-owned desktop dialog. If an authenticator is enrolled, enter its current code or a backup code in that dialog. The existing code flow also supports action verification.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `challenge_id` | string | Yes | UUID challenge ID from danger zone trigger |
-| `code` | string | Legacy HTTP only | Verification code displayed to the user. Omit this parameter on stdio. |
+| `code` | string | When using the code flow | Deprecated fallback. Submit the user-entered verification code with the same challenge ID. |
 
 ### release_deadlock
 
-Request approval to deactivate the active elements and clear saved activation state for the current session. On stdio, call without parameters and approve in the desktop dialog. The legacy HTTP flow returns a challenge ID and accepts that ID and its verification code on a second call.
+Request approval to deactivate the active elements and clear saved activation state for the current session. On stdio, call without parameters to open the desktop dialog. If the desktop approval does not complete, the server returns a pending challenge ID. The deprecated fallback completes the request with that ID and the verification code given to the user. Either method consumes the same challenge when it succeeds.
 
 ### beetlejuice_beetlejuice_beetlejuice
 

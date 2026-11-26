@@ -55,7 +55,7 @@ function requestLocalReset(tokenStore: ConsoleTokenStore, dialog: ApprovalDialog
 }
 
 function requestLocalRelease(tokenStore: ConsoleTokenStore, dialog: ApprovalDialog, session = 'stdio-session') {
-  return enforcer.requestLocalRelease('block-challenge', session, (_agentName, request, commit) =>
+  return enforcer.requestLocalRelease('block-challenge', session, Date.now() + 60_000, () => () => undefined, (_agentName, request, commit) =>
     ApprovalService.approveFromDialog({ request, commit, tokenStore, dialog }));
 }
 

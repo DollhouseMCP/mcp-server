@@ -58,7 +58,6 @@
 import { logger } from '../../utils/logger.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { matchesPattern } from '../../utils/patternMatcher.js';
-import { DIALOG_APPROVAL_TTL_MS } from '../../web/console/consoleToken.js';
 import {
   determineSafetyTier,
   createVerificationChallenge,
@@ -444,13 +443,11 @@ function evaluateSafetyDirective(
   factors: string[],
 ): AutonomyDirective | undefined {
   if (!context.nextActionHint && context.riskScore === undefined) return undefined;
-  const useDialog = context.sessionTransport === 'stdio';
   const safetyResult = checkSafetyTier(
     context.nextActionHint || context.currentStepDescription,
     context.riskScore || 0,
     config.riskTolerance,
-    config.verificationTimeoutMinutes,
-    useDialog,
+    config.verificationTimeoutMinutes
   );
   factors.push(...safetyResult.factors);
 
@@ -458,12 +455,12 @@ function evaluateSafetyDirective(
     // Issue #142: Create verification challenge for danger zone unblocking
     const dzChallenge = createVerificationChallenge(
       `Danger zone verification: ${(context.nextActionHint || context.currentStepDescription).substring(0, 100)}`,
-      useDialog ? 'authenticator' : 'display_code',
+      'display_code',
       config.verificationTimeoutMinutes
     );
 
     // Store the code server-side and show via OS dialog (Issue #142)
-    if (!useDialog) storeAndDisplayChallenge(dzChallenge, context);
+    storeAndDisplayChallenge(dzChallenge, context);
 
     // Programmatic enforcement: block the agent from further execution
     // This prevents a compromised LLM from ignoring the danger zone warning
@@ -514,7 +511,9 @@ function evaluateSafetyDirective(
       // Issue #142: Include verification info (without displayCode) so LLM knows how to unblock
       verification: {
         verificationId: dzChallenge.challengeId,
-        prompt: useDialog ? 'Call verify_challenge with this ID to request human approval.' : dzChallenge.prompt,
+        prompt: context.sessionTransport === 'stdio'
+          ? 'Call verify_challenge with this ID to request desktop approval. A user can also provide the displayed code for this challenge.'
+          : dzChallenge.prompt,
         // displayCode intentionally omitted — shown via OS dialog only
         challengeType: dzChallenge.challengeType,
         expiresAt: dzChallenge.expiresAt,
@@ -523,25 +522,26 @@ function evaluateSafetyDirective(
   }
 
   if (safetyResult.verification) {
-    const { verificationId, displayCode, challengeType } = safetyResult.verification;
-    let { expiresAt, prompt } = safetyResult.verification;
-    if (useDialog) {
-      const expiry = Math.min(Date.parse(expiresAt), Date.now() + DIALOG_APPROVAL_TTL_MS);
-      context.verificationStore?.set(verificationId, {
-        dialog: true, expiresAt: expiry, reason: `Verify the next action for '${context.agentName}'?`,
-      });
-      expiresAt = new Date(expiry).toISOString();
-      prompt = 'Call verify_challenge with this ID to request human approval.';
-    } else {
-      storeAndDisplayChallenge({
-        challengeId: verificationId, displayCode, expiresAt,
+    // Issue #142: Store code server-side, show via OS dialog, strip displayCode
+    storeAndDisplayChallenge(
+      {
+        challengeId: safetyResult.verification.verificationId,
+        displayCode: safetyResult.verification.displayCode,
         reason: `Verify action: ${(context.nextActionHint || context.currentStepDescription).substring(0, 100)}`,
-      }, context);
-    }
+        expiresAt: safetyResult.verification.expiresAt,
+      },
+      context
+    );
     autonomyMetrics.recordPause(safetyResult.reason || 'verification_required', context.stepCount);
     autonomyMetrics.recordVerification();
     return buildDirective(false, safetyResult.reason, factors, {
-      verification: { verificationId, prompt, challengeType, expiresAt },
+      verification: {
+        verificationId: safetyResult.verification.verificationId,
+        prompt: safetyResult.verification.prompt,
+        // displayCode intentionally omitted — shown via OS dialog only (Issue #142)
+        challengeType: safetyResult.verification.challengeType,
+        expiresAt: safetyResult.verification.expiresAt,
+      },
       nextStepRisk: safetyResult.tier,
     });
   }
@@ -650,8 +650,7 @@ function checkSafetyTier(
   action: string,
   riskScore: number,
   riskTolerance: string,
-  verificationTimeoutMinutes: number = 5,
-  useDialog = false,
+  verificationTimeoutMinutes: number = 5
 ): SafetyTierResult {
   const factors: string[] = [];
 
@@ -710,7 +709,7 @@ function checkSafetyTier(
       // Create verification challenge
       const challenge = createVerificationChallenge(
         `Verify action: ${action.substring(0, 100)}`,
-        useDialog ? 'authenticator' : 'display_code',
+        'display_code',
         verificationTimeoutMinutes
       );
       return {

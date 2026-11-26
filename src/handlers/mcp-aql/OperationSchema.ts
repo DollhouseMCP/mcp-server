@@ -1446,10 +1446,10 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
     handler: 'mcpAqlHandler',
     method: 'dispatchGatekeeper',
     category: CATEGORY.SECURITY,
-    description: 'Request local approval to verify an action or release a blocked agent, or complete a legacy verification with its code',
+    description: 'Request desktop approval to release a blocked agent over stdio, or complete verification with a code',
     params: {
       challenge_id: { type: 'string', required: true, description: 'UUID v4 challenge ID from danger zone trigger; exact legacy safety IDs accepted for existing challenges during 2.1 migration' },
-      code: { type: 'string', description: 'For legacy verification only. A local block can only be approved in the server-owned dialog.' },
+      code: { type: 'string', description: 'Deprecated code fallback. Omit to request desktop block release over stdio.' },
     },
     returns: { name: 'VerifyResult', kind: 'object', description: 'Verification status: { verified, challenge_id, agentName?, message }' },
     examples: [
@@ -1465,8 +1465,8 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
     category: CATEGORY.SECURITY,
     description: 'Request human approval to deactivate all active elements and clear current-session activation state after a permission deadlock',
     params: {
-      challenge_id: { type: 'string', description: 'Legacy flow only. Local requests require no arguments.' },
-      code: { type: 'string', description: 'Legacy verification code. Local approval is collected in the desktop dialog.' },
+      challenge_id: { type: 'string', description: 'Pending challenge ID. Omit to start a new request.' },
+      code: { type: 'string', description: 'Deprecated code fallback. Submit with the pending challenge ID to complete verification.' },
     },
     returns: { name: 'DeadlockReliefResult', kind: 'object', description: 'Local result after the desktop dialog, or pending verification in the legacy flow. An approved request returns { released, activeBeforeReset, deactivated, failed, likelyDeadlockCause, persistedStateCleared, snapshotFile?, message }.' },
     examples: [
