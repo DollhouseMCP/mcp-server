@@ -3,10 +3,13 @@ import type { PolicyReport } from '../../services/policy/PolicyReport.js';
 import { effectiveCliApprovalScopes } from './CliApprovalScopes.js';
 import type { OperationRegistry } from './OperationRegistry.js';
 import { randomUUID } from 'node:crypto';
-import { generateDisplayCode } from '@dollhousemcp/safety';
+import { generateDisplayCode, showBlockResetDialog, type BlockResetDialogResult } from '@dollhousemcp/safety';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
-import type { BlockReleaseReason } from '../../security/DangerZoneEnforcer.js';
+import type { BlockReleaseReason, LocalBlockResetResult } from '../../security/DangerZoneEnforcer.js';
+import { env } from '../../config/env.js';
+import { ConsoleTokenStore } from '../../web/console/consoleToken.js';
+import { ApprovalService } from '../../web-console/modules/approvals/ApprovalService.js';
 import { getPermissionHookStatus } from '../../utils/permissionHooks.js';
 import {
   PERMISSION_AUTHORITY_HOSTS,
@@ -53,6 +56,24 @@ const RELEASE_FAILURE_MESSAGES: Record<BlockReleaseReason, string> = {
   'admin-only': 'This block requires administrative release. Contact an administrator.',
   session: 'Verify from the session that triggered the block.',
   declined: 'The block was already released or replaced. Retry the operation.',
+};
+
+type ResetResponse = LocalBlockResetResult | 'timeout' | 'desktop_unavailable' | 'invalid_request';
+
+const RESET_MESSAGES: Record<ResetResponse, string> = {
+  approved: 'Blocked-agent state reset. Queued blocks were retained.',
+  refused: 'The reset was not approved.',
+  unavailable: 'Reset is unavailable. Check the local authenticator enrollment and desktop session.',
+  desktop_unavailable: 'No supported desktop dialog is available. Contact the local operator.',
+  timeout: 'The reset dialog timed out.',
+  expired: 'The reset request expired. Request a new reset if needed.',
+  spent: 'The reset approval was already used.',
+  rate_limited: 'Too many reset attempts. Wait before requesting another reset.',
+  busy: 'Another blocked-agent reset request is in progress.',
+  changed: 'The blocked-agent file changed. Request a new reset if needed.',
+  not_needed: 'Blocked-agent state is available. No recovery reset is needed.',
+  unsupported: 'The reset is only available through local stdio with file-backed block state.',
+  invalid_request: 'The reset request accepts no parameters. Review the desktop prompt to approve it.',
 };
 
 interface VerificationMetricsRecorder {
@@ -111,6 +132,10 @@ function resolveFinalBehavior(
   return 'allow';
 }
 
+function resetResponse(status: ResetResponse) {
+  return { reset: status === 'approved', status, message: RESET_MESSAGES[status] };
+}
+
 export class GatekeeperHandler {
   constructor(private readonly deps: GatekeeperHandlerDeps) {}
 
@@ -119,6 +144,7 @@ export class GatekeeperHandler {
       confirm: () => this.confirm(params),
       verify: () => this.verify(params),
       releaseDeadlock: () => this.releaseDeadlock(params),
+      requestBlockedAgentReset: () => this.requestBlockedAgentReset(params),
       beetlejuice: () => this.beetlejuice(params),
       permissionPrompt: () => this.permissionPrompt(params),
       evaluatePermission: () => this.evaluatePermission(params),
@@ -132,6 +158,28 @@ export class GatekeeperHandler {
       throw new Error(`Unknown Gatekeeper method: ${method}`);
     }
     return await handler();
+  }
+
+  private async requestBlockedAgentReset(params: Record<string, unknown> = {}): Promise<unknown> {
+    const session = this.deps.contextTracker?.getSessionContext?.();
+    if (session?.transport !== 'stdio') return resetResponse('unsupported');
+    const enforcer = this.deps.handlers.dangerZoneEnforcer;
+    if (!enforcer) return resetResponse('unsupported');
+    if (Object.keys(params).length > 0) return resetResponse('invalid_request');
+    const tokenStore = new ConsoleTokenStore(env.DOLLHOUSE_CONSOLE_TOKEN_FILE);
+    const dialogState: { refusal?: Extract<BlockResetDialogResult, { confirmed: false }>['reason'] } = {};
+    const result = await enforcer.requestLocalReset(session.sessionId, (request, commit) =>
+      ApprovalService.approveFromDialog({
+        request, tokenStore, commit,
+        dialog: async (pending, enrollment) => {
+          const decision = await showBlockResetDialog(enrollment === 'enrolled', pending.expiresAt - Date.now());
+          if (!decision.confirmed) dialogState.refusal = decision.reason;
+          return decision;
+        },
+      }));
+    if (result === 'refused' && dialogState.refusal === 'unavailable') return resetResponse('desktop_unavailable');
+    if (result === 'refused' && dialogState.refusal === 'timeout') return resetResponse('timeout');
+    return resetResponse(result);
   }
 
   private async confirm(params: Record<string, unknown>): Promise<unknown> {

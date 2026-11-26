@@ -14,6 +14,8 @@ import { FileOperationsService } from '../../../src/services/FileOperationsServi
 import { FileDangerZoneBlockStore } from '../../../src/state/FileDangerZoneBlockStore.js';
 import { logger } from '../../../src/utils/logger.js';
 import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { ConsoleTokenStore, type ApprovalDialog } from '../../../src/web/console/consoleToken.js';
+import { ApprovalService } from '../../../src/web-console/modules/approvals/ApprovalService.js';
 
 const snapshot = (blocks: Record<string, unknown>) => JSON.stringify({ version: 1, blocks });
 const block = { reason: 'Requires review', blockedAt: new Date(0).toISOString() };
@@ -44,6 +46,66 @@ async function replace(content: string) {
   await fs.writeFile(staging, content);
   await fs.rename(staging, store.location);
 }
+
+function requestLocalReset(tokenStore: ConsoleTokenStore, dialog: ApprovalDialog) {
+  return enforcer.requestLocalReset('stdio-session', (request, commit) =>
+    ApprovalService.approveFromDialog({ request, commit, tokenStore, dialog }));
+}
+
+it('resets a rejected snapshot after an explicit basic approval and atomically retains queued blocks', async () => {
+  const tokenStore = new ConsoleTokenStore(path.join(directory, 'console-token'));
+  await tokenStore.ensureInitialized('Stdio', { onlyIfBothAbsent: true });
+  await fs.writeFile(store.location, rejected);
+  await enforcer.initialize();
+  enforcer.block('pending-agent', 'Queued before approval', [], 'before');
+  expect(await enforcer.check('unlisted', true)).toMatchObject({
+    blocked: true, reason: expect.stringContaining(store.location),
+    resolution: expect.stringContaining('request_blocked_agent_reset'),
+  });
+  expect(await enforcer.check('unlisted')).toMatchObject(denied);
+  await expect(requestLocalReset(tokenStore, async (request, enrollment) => {
+    expect(request.operationDigest).toBe(digest(rejected));
+    expect(enrollment).toBe('unenrolled');
+    enforcer.block('later-agent', 'Queued while the dialog was open', [], 'later');
+    return { confirmed: true };
+  })).resolves.toBe('approved');
+
+  const newSnapshot = JSON.parse(await fs.readFile(store.location, 'utf8'));
+  expect(Object.keys(newSnapshot.blocks).sort()).toEqual(['later-agent', 'pending-agent']);
+  const backups = (await fs.readdir(directory)).filter(name => name.endsWith('.backup'));
+  expect(backups).toHaveLength(1);
+  expect(await fs.readFile(path.join(directory, backups[0]))).toEqual(rejected);
+  expect(await enforcer.check('unlisted')).toEqual({ blocked: false });
+
+  const peer = new DangerZoneEnforcer(new FileDangerZoneBlockStore(fileOps, directory));
+  try {
+    expect(await peer.check('pending-agent')).toMatchObject({ blocked: true, verificationId: 'before' });
+    expect(await peer.check('later-agent')).toMatchObject({ blocked: true, verificationId: 'later' });
+  } finally {
+    await peer.shutdown();
+  }
+});
+
+it('refuses cancellation, concurrent prompts, and replacement before the approved reset', async () => {
+  const tokenStore = new ConsoleTokenStore(path.join(directory, 'console-token'));
+  await tokenStore.ensureInitialized('Stdio', { onlyIfBothAbsent: true });
+  interceptWatcher();
+  await fs.writeFile(store.location, rejected);
+  await enforcer.initialize();
+  await expect(requestLocalReset(tokenStore, async () => ({ confirmed: false }))).resolves.toBe('refused');
+  expect(await fs.readFile(store.location)).toEqual(rejected);
+
+  const changed = '{"version":2,"blocks":{}}';
+  const duplicate = jest.fn(async () => ({ confirmed: true } as const));
+  await expect(requestLocalReset(tokenStore, async () => {
+    await expect(requestLocalReset(tokenStore, duplicate)).resolves.toBe('busy');
+    await replace(changed);
+    return { confirmed: true };
+  })).resolves.toBe('changed');
+  expect(duplicate).not.toHaveBeenCalled();
+  expect(await fs.readFile(store.location, 'utf8')).toBe(changed);
+  expect(await enforcer.check('unlisted')).toMatchObject(denied);
+});
 
 function interceptWatcher() {
   let retry!: () => Promise<void>;

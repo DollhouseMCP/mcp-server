@@ -9,11 +9,18 @@ import { logger } from '../utils/logger.js';
 import type { IDangerZoneBlockStore, BlockMutation } from './IDangerZoneBlockStore.js';
 import { isStateObject, type PersistedStateRead } from './persistence-utils.js';
 import { MAX_BLOCK_SNAPSHOT_BYTES, readDangerZoneBlockSnapshot } from './readDangerZoneBlockSnapshot.js';
+import { withRecoverableFileWriteLock } from '../utils/RecoverableFileWriteLock.js';
 
 const REPAIR_PROBE_MS = 1000;
 type ReadResult = PersistedStateRead<Record<string, unknown>>;
 type RejectedRead = Exclude<ReadResult, { status: 'absent' | 'loaded' }>;
 class SnapshotChangedError extends Error {}
+export class ResetSnapshotChangedError extends Error {}
+
+interface BoundReset {
+  readonly expectedDigest: string;
+  readonly pendingBlocks: Record<string, unknown>;
+}
 
 interface RejectedSnapshot {
   revision?: string;
@@ -255,13 +262,30 @@ export class FileDangerZoneBlockStore implements IDangerZoneBlockStore {
     }
   }
 
-  async reset(): Promise<string> {
+  async readResetDigest(): Promise<string> {
+    const before = await this.fileOps.stat(this.location);
+    return digestOf(await this.readCheckedBytes(before, revisionOf(before)));
+  }
+
+  /** Admission is shared across stdio servers, independently of the snapshot writer lock. */
+  withResetDialog<T>(operation: () => Promise<T>): Promise<T> {
+    return withRecoverableFileWriteLock(`${this.location}.reset-dialog.lock`, operation, 200);
+  }
+
+  async reset(bound?: BoundReset): Promise<string> {
     return this.withLock(async () => {
+      if (bound) await this.requireResetDigest(bound.expectedDigest);
       const existingEvidence = await this.existingEvidence();
       const evidence = existingEvidence ?? await this.copyResetEvidence();
-      await this.writeSnapshot({});
+      if (bound) await this.requireResetDigest(bound.expectedDigest);
+      await this.writeSnapshot(bound?.pendingBlocks ?? {});
       return evidence;
     });
+  }
+
+  private async requireResetDigest(expected: string): Promise<void> {
+    const actual = await this.readResetDigest().catch(() => undefined);
+    if (actual !== expected) throw new ResetSnapshotChangedError('Blocked-agent file changed before reset');
   }
 
   private async copyResetEvidence(): Promise<string> {

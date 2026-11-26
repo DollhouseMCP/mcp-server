@@ -50,6 +50,15 @@ export class BlockPersistenceQueue {
     return snapshot;
   }
 
+  /** Blocks admitted during unavailability belong in the new durable snapshot. */
+  pendingBlocks(): Record<string, unknown> {
+    const blocks: Record<string, unknown> = Object.create(null);
+    for (const { mutation } of this.entries) {
+      if (mutation.kind === 'put') this.applyTo(blocks, mutation);
+    }
+    return blocks;
+  }
+
   /** Capture the reset boundary before later blocks are admitted. */
   resetBoundary(): () => void {
     const preceding = new Set(this.entries);

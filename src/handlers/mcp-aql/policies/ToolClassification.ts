@@ -60,6 +60,7 @@ const GATEKEEPER_ESSENTIAL_OPERATIONS = new Set([
   'confirm_operation',
   'verify_challenge',
   'release_deadlock',
+  'request_blocked_agent_reset',
   'permission_prompt',
   'introspect',
   'get_active_elements',

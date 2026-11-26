@@ -166,6 +166,11 @@ export const OPERATION_ROUTES: Record<string, OperationRoute> = {
     handler: 'Gatekeeper.releaseDeadlock',
     description: 'Use out-of-band verification to deactivate all active elements and clear current-session activation state',
   },
+  request_blocked_agent_reset: {
+    endpoint: 'CREATE',
+    handler: 'Gatekeeper.requestBlockedAgentReset',
+    description: 'Request local recovery of unavailable blocked-agent state through a server-owned desktop prompt',
+  },
   // Issue #503: Beetlejuice safe-trigger for danger zone verification testing
   beetlejuice_beetlejuice_beetlejuice: {
     endpoint: 'CREATE',
