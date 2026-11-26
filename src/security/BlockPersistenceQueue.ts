@@ -11,6 +11,7 @@ export class BlockPersistenceQueue {
   private readonly entries: Entry[] = [];
   private state: Record<string, unknown> = Object.create(null);
   private paused = true;
+  private recovering = false;
   private draining?: Promise<void>;
   private active?: Entry;
 
@@ -65,14 +66,24 @@ export class BlockPersistenceQueue {
   }
 
   /** Allow the ready owner to drain admitted mutations in order. */
-  resume(): Promise<void> {
+  async resume(): Promise<boolean> {
+    if (this.recovering) {
+      // Include blocks admitted while the repair was being read with writes paused.
+      for (const entry of this.entries) {
+        if (entry.mutation.kind === 'put') entry.mutation = { ...entry.mutation, replay: true };
+      }
+      this.recovering = false;
+    }
     this.paused = false;
     this.drain();
-    return this.draining ?? Promise.resolve();
+    const draining = this.draining;
+    await draining;
+    return draining !== undefined;
   }
 
   /** Retain blocks for recovery, but require a fresh request for failed releases. */
   unavailable(): void {
+    this.recovering = true;
     this.paused = false;
     for (let index = this.entries.length - 1; index >= 0; index--) {
       const entry = this.entries[index];
@@ -106,9 +117,9 @@ export class BlockPersistenceQueue {
       try {
         const applied = await this.store.apply(entry.mutation, snapshot);
         this.entries.shift();
-        if (applied) this.state = snapshot;
+        if (applied) this.state = typeof applied === 'object' ? applied.snapshot : snapshot;
         else await this.reconcile();
-        entry.settle(applied && this.ready());
+        entry.settle(Boolean(applied) && this.ready());
       } catch (error) {
         entry.settle(false);
         this.failed(error);

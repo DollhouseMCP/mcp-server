@@ -143,6 +143,8 @@ export class DangerZoneEnforcer {
   private retryAfter = 0;
   private loading: Promise<void> | undefined;
   private refreshing: Promise<void> | undefined;
+  private stopWatching?: () => void;
+  private shuttingDown = false;
   constructor(private readonly store: IDangerZoneBlockStore) {
     this.persistence = new BlockPersistenceQueue(store, () => this.readiness === 'ready',
       error => this.reportWriteFailure(error), () => this.readSnapshot(false));
@@ -186,10 +188,22 @@ export class DangerZoneEnforcer {
       return;
     }
     const retry = this.readiness === 'unavailable' && this.retryable && Date.now() >= this.retryAfter;
-    if (!this.refreshing && (this.readiness === 'ready' || retry)) {
-      this.refreshing = this.load(!retry).finally(() => { this.refreshing = undefined; });
-    }
+    if (this.readiness === 'ready' || retry) return this.startRefresh(!retry);
     await this.refreshing;
+  }
+
+  private startRefresh(refresh: boolean): Promise<void> {
+    this.refreshing ??= this.load(refresh).finally(() => { this.refreshing = undefined; });
+    return this.refreshing;
+  }
+
+  private async retryFileRecovery(): Promise<void> {
+    if (this.readiness === 'unavailable' && !this.shuttingDown) await this.startRefresh(false);
+  }
+
+  private stopFileRecovery(): void {
+    this.stopWatching?.();
+    this.stopWatching = undefined;
   }
 
   private async load(refresh: boolean): Promise<void> {
@@ -198,9 +212,11 @@ export class DangerZoneEnforcer {
     if (!recovering && this.readiness === 'unavailable') return;
     if (!await this.readSnapshot(refresh)) return;
     this.readiness = 'ready';
-    await this.persistence.resume();
+    const drained = await this.persistence.resume();
     if (this.readiness !== 'ready') return;
+    if (drained) this.restoreProjected();
     this.retryable = false;
+    this.stopFileRecovery();
     if (recovering) logger.info('Block-state storage recovered; enforcement is ready');
   }
 
@@ -249,6 +265,7 @@ export class DangerZoneEnforcer {
     this.readiness = 'unavailable';
     this.persistence.unavailable();
     this.restoreProjected();
+    if (!this.shuttingDown) this.stopWatching ??= this.store.watchForRecovery?.(() => this.retryFileRecovery());
     if (!entering) return;
     const diagnostics = {
       reason, location: this.store.location,
@@ -716,6 +733,7 @@ export class DangerZoneEnforcer {
       await this.persistence.resume();
       if (this.readiness !== 'ready') return false;
       this.retryable = false;
+      this.stopFileRecovery();
       this.totalClearAllCalls++;
       SecurityMonitor.logSecurityEvent({
         type: 'AUTONOMY_PAUSED', severity: 'HIGH', source: 'DangerZoneEnforcer.clearAll',
@@ -790,6 +808,13 @@ export class DangerZoneEnforcer {
   private serializeBlock(context: BlockedContext): PersistedBlock {
     const { agentName: _agentName, originalRecord: _originalRecord, ...block } = context;
     return { ...block, blockedAt: block.blockedAt.toISOString() };
+  }
+
+  /** Stop the owner's watcher and wait for writes or a recovery already in progress. */
+  shutdown(): Promise<boolean> {
+    this.shuttingDown = true;
+    this.stopFileRecovery();
+    return this.flush();
   }
 
   /** Wait for this owner's queued snapshots before shutdown. */

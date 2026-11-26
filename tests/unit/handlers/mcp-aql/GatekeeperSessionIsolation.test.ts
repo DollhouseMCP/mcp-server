@@ -290,6 +290,7 @@ describe('DangerZoneEnforcer session guard', () => {
 
   it('rejects cross-session unblock', async () => {
     const mockFileOps = {
+      withWriteLock: async (_file: string, operation: () => Promise<unknown>) => operation(),
       readFile: jest.fn<() => Promise<string>>().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' })),
       writeFile: jest.fn<() => Promise<void>>().mockResolvedValue(),
       createDirectory: jest.fn<() => Promise<void>>().mockResolvedValue(),
@@ -313,6 +314,7 @@ describe('DangerZoneEnforcer session guard', () => {
 
   it('allows unblock from same session', async () => {
     const mockFileOps = {
+      withWriteLock: async (_file: string, operation: () => Promise<unknown>) => operation(),
       readFile: jest.fn<() => Promise<string>>().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' })),
       writeFile: jest.fn<() => Promise<void>>().mockResolvedValue(),
       createDirectory: jest.fn<() => Promise<void>>().mockResolvedValue(),
@@ -332,6 +334,7 @@ describe('DangerZoneEnforcer session guard', () => {
 
   it('allows unblock when block has no sessionId (backward compat)', async () => {
     const mockFileOps = {
+      withWriteLock: async (_file: string, operation: () => Promise<unknown>) => operation(),
       readFile: jest.fn<() => Promise<string>>().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' })),
       writeFile: jest.fn<() => Promise<void>>().mockResolvedValue(),
       createDirectory: jest.fn<() => Promise<void>>().mockResolvedValue(),
@@ -350,6 +353,7 @@ describe('DangerZoneEnforcer session guard', () => {
 
   it('rejects unblock when block has sessionId but caller has none', async () => {
     const mockFileOps = {
+      withWriteLock: async (_file: string, operation: () => Promise<unknown>) => operation(),
       readFile: jest.fn<() => Promise<string>>().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' })),
       writeFile: jest.fn<() => Promise<void>>().mockResolvedValue(),
       createDirectory: jest.fn<() => Promise<void>>().mockResolvedValue(),
@@ -367,6 +371,7 @@ describe('DangerZoneEnforcer session guard', () => {
 
   it('check() returns sessionId in BlockCheckResult', async () => {
     const mockFileOps = {
+      withWriteLock: async (_file: string, operation: () => Promise<unknown>) => operation(),
       readFile: jest.fn<() => Promise<string>>().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' })),
       writeFile: jest.fn<() => Promise<void>>().mockResolvedValue(),
       createDirectory: jest.fn<() => Promise<void>>().mockResolvedValue(),

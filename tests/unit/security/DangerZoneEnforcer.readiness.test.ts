@@ -5,19 +5,27 @@ import os from 'node:os';
 import path from 'node:path';
 import { DangerZoneEnforcer } from '../../../src/security/DangerZoneEnforcer.js';
 import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
-import type { FileOperationsService } from '../../../src/services/FileOperationsService.js';
+import type { FileCreateOptions, FileOperationsService, FileReadOptions } from '../../../src/services/FileOperationsService.js';
 
 const record = { reason: 'Review required', blockedAt: 'invalid date', verificationId: 'challenge' };
 let directory: string;
 let filename: string;
-let readFile: jest.Mock<(file: string) => Promise<string>>;
+let readFile: jest.Mock<(file: string, options?: FileReadOptions) => Promise<string>>;
+const enforcers: DangerZoneEnforcer[] = [];
 let writeFile: jest.Mock<(file: string, content: string) => Promise<void>>;
 function instance() {
-  return new DangerZoneEnforcer(new FileDangerZoneBlockStore({ readFile, writeFile,
+  const enforcer = new DangerZoneEnforcer(new FileDangerZoneBlockStore({ readFile, writeFile,
+    withWriteLock: async (file: string, operation: () => Promise<unknown>) => operation(),
+    createFileExclusive: async (file: string, bytes: string, options: FileCreateOptions) => {
+      await fs.writeFile(file, bytes, { flag: 'wx', encoding: options.encoding, mode: options.mode });
+      return true;
+    },
     createDirectory: async (directory: string) => { await fs.mkdir(directory, { recursive: true }); },
     copyFile: async (source: string, target: string, options: { exclusive?: boolean }) => fs.copyFile(source, target, options.exclusive ? fs.constants.COPYFILE_EXCL : 0),
     chmod: (file: string, mode: number) => fs.chmod(file, mode),
   } as unknown as FileOperationsService, directory));
+  enforcers.push(enforcer);
+  return enforcer;
 }
 async function snapshot(blocks: Record<string, unknown>) {
   await fs.writeFile(filename, JSON.stringify({ version: 1, blocks }));
@@ -25,10 +33,14 @@ async function snapshot(blocks: Record<string, unknown>) {
 beforeEach(async () => {
   directory = await fs.mkdtemp(path.join(os.tmpdir(), 'block-readiness-'));
   filename = path.join(directory, 'blocked-agents.json');
-  readFile = jest.fn((file: string) => fs.readFile(file, 'utf8'));
+  readFile = jest.fn((file: string, options?: FileReadOptions) => fs.readFile(file, options?.encoding ?? 'utf8'));
   writeFile = jest.fn((file: string, content: string) => fs.writeFile(file, content));
 });
-afterEach(async () => { jest.restoreAllMocks(); await fs.rm(directory, { recursive: true, force: true }); });
+afterEach(async () => {
+  await Promise.all(enforcers.splice(0).map(enforcer => enforcer.shutdown()));
+  jest.restoreAllMocks();
+  await fs.rm(directory, { recursive: true, force: true });
+});
 
 describe('blocked-agent state readiness', () => {
   it.each(['EACCES', 'EIO', 'ETIMEDOUT', 'ENOTDIR'])('retains unavailable state after %s', async code => {

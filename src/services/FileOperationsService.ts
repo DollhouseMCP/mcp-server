@@ -63,6 +63,11 @@ export interface FileWriteOptions {
   onWritten?: (version: WrittenFileVersion) => void;
 }
 
+export interface FileCreateOptions extends FileWriteOptions {
+  /** Permissions applied before writing any data to the new file. */
+  mode?: number;
+}
+
 export interface FileOperationOptions {
   source?: string;
 }
@@ -176,7 +181,9 @@ export interface IFileOperationsService {
    * @param options - Write options
    * @returns true if created, false if file already existed
    */
-  createFileExclusive(filePath: string, content: string, options?: FileWriteOptions): Promise<boolean>;
+  createFileExclusive(filePath: string, content: string, options?: FileCreateOptions): Promise<boolean>;
+
+  withWriteLock<T>(filePath: string, operation: () => Promise<T>): Promise<T>;
 
   /**
    * Copy a file from source to destination
@@ -404,7 +411,16 @@ export class FileOperationsService implements IFileOperationsService {
     }
   }
 
-  async createFileExclusive(filePath: string, content: string, options: FileWriteOptions = {}): Promise<boolean> {
+  /** Serialize cooperating writers across processes without stealing a slow writer's lock. */
+  async withWriteLock<T>(filePath: string, operation: () => Promise<T>): Promise<T> {
+    const validatedPath = await this.enforceWriteAllowlist(filePath, 'withWriteLock');
+    const lockPath = `${validatedPath}.lock`;
+    await this.enforceWriteAllowlist(lockPath, 'withWriteLock');
+    const { withRecoverableFileWriteLock } = await import('../utils/RecoverableFileWriteLock.js');
+    return withRecoverableFileWriteLock(lockPath, operation);
+  }
+
+  async createFileExclusive(filePath: string, content: string, options: FileCreateOptions = {}): Promise<boolean> {
     try {
       const validatedPath = await this.enforceWriteAllowlist(filePath, 'createFileExclusive');
       const maxSize = options.maxSize ?? this.defaultMaxFileSize;
@@ -414,7 +430,9 @@ export class FileOperationsService implements IFileOperationsService {
 
       // Use 'wx' flag for atomic creation - fails if file already exists
       // This prevents TOCTOU race conditions
-      const fileHandle = await fs.open(validatedPath, 'wx');
+      const fileHandle = options.mode === undefined
+        ? await fs.open(validatedPath, 'wx')
+        : await fs.open(validatedPath, 'wx', options.mode);
       try {
         await fileHandle.writeFile(content, { encoding: options.encoding ?? 'utf-8' });
         if (options.onWritten) {

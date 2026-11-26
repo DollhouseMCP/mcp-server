@@ -6,6 +6,7 @@ import { DollhouseContainer } from '../../../src/di/Container.js';
 import { env } from '../../../src/config/env.js';
 import { DangerZoneEnforcer } from '../../../src/security/DangerZoneEnforcer.js';
 import { FileDangerZoneBlockStore } from '../../../src/state/FileDangerZoneBlockStore.js';
+import { FileLockManager } from '../../../src/security/fileLockManager.js';
 import { FileOperationsService } from '../../../src/services/FileOperationsService.js';
 import { logger } from '../../../src/utils/logger.js';
 import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
@@ -27,8 +28,9 @@ it('holds initialization and HTTP session creation until migration completes', a
   let release!: () => void;
   const migration = jest.spyOn(boundary, 'migrateLegacyDangerZoneBlocks').mockImplementation(() => new Promise<void>(resolve => { release = resolve; }));
   const initialize = jest.fn<() => Promise<void>>().mockResolvedValue();
+  const shutdown = jest.fn<() => Promise<boolean>>().mockResolvedValue(true);
   const factory = jest.fn(() => ({ load: async () => ({ status: 'absent' as const }) }));
-  container.register('DangerZoneEnforcer', () => ({ initialize, flush: async () => true }), { override: true });
+  container.register('DangerZoneEnforcer', () => ({ initialize, shutdown }), { override: true });
   container.register('DangerZoneBlockStoreFactory', () => factory, { override: true });
   const root = boundary.deferredDangerZoneInit();
   const user = boundary.getUserDangerZoneEnforcer('fixture', path.join(os.tmpdir(), 'unused'));
@@ -44,6 +46,7 @@ it('holds initialization and HTTP session creation until migration completes', a
     expect(await session).toEqual(expect.objectContaining({ message: expect.stringContaining('HTTP handler bundle not initialized') }));
     expect(initialize).toHaveBeenCalledTimes(1); expect(factory).toHaveBeenCalledTimes(1);
   } finally { release(); await container.dispose(); }
+  expect(shutdown).toHaveBeenCalledTimes(1);
 });
 it('reads the file in place without invoking migration in file mode', async () => {
   env.DOLLHOUSE_STORAGE_BACKEND = 'file';
@@ -54,12 +57,12 @@ it('reads the file in place without invoking migration in file mode', async () =
   const container = new DollhouseContainer();
   const boundary = container as unknown as Boundary;
   const migration = jest.spyOn(boundary, 'migrateLegacyDangerZoneBlocks');
-  const enforcer = new DangerZoneEnforcer(new FileDangerZoneBlockStore(new FileOperationsService(), directory));
+  const enforcer = new DangerZoneEnforcer(new FileDangerZoneBlockStore(new FileOperationsService(new FileLockManager()), directory));
   container.register('DangerZoneEnforcer', () => enforcer, { override: true });
   try {
     await boundary.deferredDangerZoneInit();
     expect(migration).not.toHaveBeenCalled();
-    expect(await enforcer.check('agent')).toMatchObject({ blocked: true });
+    expect(await enforcer.check('agent')).toMatchObject({ blocked: true, reason: 'Review required' });
     expect(await fs.readFile(filename, 'utf8')).toBe(content);
     expect(await fs.readdir(directory)).toEqual(['blocked-agents.json']);
   } finally { await container.dispose(); await fs.rm(directory, { recursive: true, force: true }); }
