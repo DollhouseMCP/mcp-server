@@ -135,7 +135,8 @@ describe('Fresh storage layout across startup and restart', () => {
     await fs.mkdir(path.join(home, '.dollhouse', 'logs'), { recursive: true });
     const packageRoot = path.join(home, 'package');
     await fs.cp(path.join(new PackageResourceLocator().getPackageRoot(), 'data'), path.join(packageRoot, 'data'), {
-      recursive: true, filter: async source => (await fs.stat(source)).isDirectory() || source.endsWith('.md'),
+      // The published package carries starter memory YAML alongside the Markdown assets.
+      recursive: true, filter: async source => (await fs.stat(source)).isDirectory() || /\.(md|yaml)$/u.test(source),
     });
     await expect(fs.lstat(path.join(packageRoot, 'data', 'HASHES.json'))).rejects.toMatchObject({ code: 'ENOENT' });
     jest.spyOn(PackageResourceLocator.prototype, 'getPackageRoot').mockReturnValue(packageRoot);

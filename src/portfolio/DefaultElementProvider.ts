@@ -21,7 +21,7 @@ import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { IFileOperationsService, isAbsentKindError, directoryExists } from '../services/FileOperationsService.js';
 import { ContentValidator } from '../security/contentValidator.js';
 import { SECURITY_LIMITS } from '../security/constants.js';
-import { acceptedExtensions, ELEMENT_FILE_EXTENSIONS } from '../storage/elementFileExtensions.js';
+import { acceptedExtensions, ELEMENT_FILE_EXTENSIONS, isBundledElementFilename } from '../storage/elementFileExtensions.js';
 
 const MEMORY_EXTENSIONS = acceptedExtensions(ELEMENT_FILE_EXTENSIONS.memories);
 
@@ -830,9 +830,6 @@ export class DefaultElementProvider {
    */
   private async copyElementFiles(sourceDir: string, destDir: string, elementType: ElementType): Promise<number> {
     let copiedCount = 0;
-    const extensions = elementType === ElementType.MEMORY
-      ? [FILE_CONSTANTS.ELEMENT_EXTENSION, ...MEMORY_EXTENSIONS]
-      : [FILE_CONSTANTS.ELEMENT_EXTENSION];
     
     
     try {
@@ -845,7 +842,7 @@ export class DefaultElementProvider {
       
       await visitSequentially(files.values(), async file => {
         
-        if (!extensions.some(extension => file.endsWith(extension))) {
+        if (!isBundledElementFilename(file, elementType)) {
           return;
         }
         

@@ -41,6 +41,16 @@ describe('BundledElementProbe', () => {
     expect(await probe.isBundled(candidate, 'skills', defaultName)).toBe(false);
   });
 
+  it('recognizes a shipped YAML memory while preserving edits as user content', async () => {
+    const name = 'conversation-history.yaml';
+    const source = path.join(new PackageResourceLocator().getPackageRoot(), 'data', 'memories', name);
+    const candidate = path.join(root, name);
+    await fs.copyFile(source, candidate);
+    expect(await probe.isBundled(candidate, 'memories', name)).toBe(true);
+    await fs.appendFile(candidate, '\nUser edits');
+    expect(await probe.isBundled(candidate, 'memories', name)).toBe(false);
+  });
+
   it('does not read the candidate when its shipped default is missing', async () => {
     const name = `${randomUUID()}.md`;
     const candidate = path.join(root, name);
