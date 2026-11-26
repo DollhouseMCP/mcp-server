@@ -569,8 +569,9 @@ describe('OperationsModule', () => {
 
     expect(result.status).toBe(200);
     expect(body.checked_at).toBe(NOW.toISOString());
-    expect(body.checks).toHaveLength(11);
-    expect(body.counts).toEqual({ passed: 1, pending: 8, failed: 1, not_applicable: 1 });
+    expect(body.checks).toHaveLength(12);
+    expect(body.counts).toEqual({ passed: 1, pending: 9, failed: 1, not_applicable: 1 });
+    expect(body.checks.find(check => check.id === 'blocked_agent_state')).toMatchObject({ state: 'pending', detail: null });
     const migrations = WEB_CONSOLE_SETUP_CHECKS.production_database_migrations;
     expect(body.checks[0]).toEqual({
       id: 'production_database_migrations',
