@@ -344,6 +344,13 @@ function storeAndDisplayChallenge(
   }
 }
 
+function storeLocalBlockChallenge(context: AutonomyContext, challengeId: string, expiresAt: string): void {
+  if (context.sessionTransport !== 'stdio') return;
+  context.verificationStore?.set(challengeId, {
+    dialog: 'block', expiresAt: Date.parse(expiresAt), reason: 'Release blocked agent',
+  });
+}
+
 /**
  * Evaluate whether an agent should continue autonomously or pause
  *
@@ -488,11 +495,7 @@ function evaluateSafetyDirective(
       logger.error('Agent block persistence failed', { agentName: context.agentName, error });
     });
 
-    if (useDialog) {
-      context.verificationStore?.set(dzChallenge.challengeId, {
-        dialog: 'block', expiresAt: Date.parse(dzChallenge.expiresAt), reason: 'Release blocked agent',
-      });
-    }
+    storeLocalBlockChallenge(context, dzChallenge.challengeId, dzChallenge.expiresAt);
 
     SecurityMonitor.logSecurityEvent({
       type: 'DANGER_ZONE_TRIGGERED',
