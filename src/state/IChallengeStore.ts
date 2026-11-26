@@ -18,7 +18,8 @@
 
 import type { StoredChallenge } from '@dollhousemcp/safety';
 
-export type ChallengeMetadata = Pick<StoredChallenge, 'expiresAt' | 'reason'>;
+export type ChallengeMetadata = Pick<StoredChallenge, 'expiresAt' | 'reason'> & { dialog?: true };
+export type ChallengeInput = StoredChallenge | (ChallengeMetadata & { dialog: true; code?: never });
 
 /**
  * Persistence-only contract for verification challenges.
@@ -35,7 +36,7 @@ export interface IChallengeStore {
    * @param challengeId - Unique challenge identifier (UUID v4)
    * @param challenge - The challenge to store
    */
-  set(challengeId: string, challenge: StoredChallenge): void;
+  set(challengeId: string, challenge: ChallengeInput): void;
 
   /**
    * Retrieve a verification challenge.
@@ -53,9 +54,6 @@ export interface IChallengeStore {
    * @param code - The verification code to check
    */
   verify(challengeId: string, code: string): boolean;
-
-  /** Claim the same entry after trusted dialog approval. Returns a rollback for uncommitted release. */
-  claimForDialog?(challengeId: string, expected: ChallengeMetadata): (() => void) | undefined;
 
   /**
    * Remove all expired challenges.

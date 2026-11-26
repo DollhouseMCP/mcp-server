@@ -25,8 +25,8 @@ function fixture() {
     resolveCliApprovalLimiter: () => RateLimiterFactory.createCliApprovalLimiter(),
     resolveVerificationRateLimiter: () => ({ isLimited: () => false, recordFailure: () => false }),
     verificationMetrics: { recordAttempt() {}, recordSuccess() {}, recordFailure() {}, recordExpired() {}, recordInvalidFormat() {}, recordRateLimited() {} },
-    issueDeadlockReliefChallenge: () => { throw new Error('Unexpected deadlock challenge'); }, completeDeadlockRelief: async () => undefined,
-    performApprovedDeadlockRelief: async () => undefined,
+    issueDeadlockReliefChallenge: () => undefined, completeDeadlockRelief: async () => undefined,
+    reserveDeadlockReliefRequest: () => undefined, performApprovedDeadlockRelief: async () => undefined,
     buildRateLimitDeny: () => ({ behavior: 'deny' }),
   });
   return { handler, collect, report, gatekeeper, enforce, recordConfirmation, createApproval, consume };

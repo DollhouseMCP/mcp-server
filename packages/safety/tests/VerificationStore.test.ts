@@ -61,20 +61,6 @@ describe('VerificationStore', () => {
     });
   });
 
-  it('claims the same challenge as the code verifier and restores an uncommitted claim only once', () => {
-    const challenge = { code: 'ABC123', expiresAt: Date.now() + 60_000, reason: 'Release' };
-    store.set('challenge1', challenge);
-
-    expect(store.claimForDialog('challenge1', { ...challenge, reason: 'Changed' })).toBeUndefined();
-    const restore = store.claimForDialog('challenge1', challenge);
-    expect(restore).toBeDefined();
-    expect(store.verify('challenge1', challenge.code)).toBe(false);
-    restore?.();
-    expect(store.verify('challenge1', challenge.code)).toBe(true);
-    restore?.();
-    expect(store.claimForDialog('challenge1', challenge)).toBeUndefined();
-  });
-
   describe('verify', () => {
     it('should verify correct code', () => {
       const challenge = {

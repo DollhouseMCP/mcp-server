@@ -153,6 +153,7 @@ export class DangerZoneEnforcer {
   private retryable = false;
   private unavailableReason = 'unavailable';
   private readonly resetPromptLimiter = new SlidingWindowRateLimiter(3, 60_000);
+  private readonly releasePromptLimiter = new SlidingWindowRateLimiter(3, 60_000);
   private retryAfter = 0;
   private loading: Promise<void> | undefined;
   private refreshing: Promise<void> | undefined;
@@ -567,8 +568,6 @@ export class DangerZoneEnforcer {
   async requestLocalRelease(
     challengeId: string,
     sessionId: string,
-    expiresAt: number,
-    claim: () => (() => void) | undefined,
     approve: (agentName: string, request: DialogApprovalRequest,
       commit: (approved: DialogApprovalRequest) => Promise<boolean>) => Promise<DialogApprovalResult>,
   ): Promise<LocalBlockReleaseResult> {
@@ -579,8 +578,10 @@ export class DangerZoneEnforcer {
     const restriction = this.releaseRestriction(block, sessionId);
     if (restriction) return { status: restriction };
     if (!block.eventId) return { status: 'admin-only' };
+    if (!this.releasePromptLimiter.tryAcquire()) return { status: 'rate_limited' };
+
     const operationDigest = this.releaseDigest(block);
-    const request = { requestId: challengeId, sessionId, operationDigest, expiresAt: Math.min(expiresAt, Date.now() + 60_000) };
+    const request = { requestId: randomUUID(), sessionId, operationDigest, expiresAt: Date.now() + 60_000 };
     let releaseFailure: 'changed' | 'unavailable' | undefined;
     const status = await approve(block.agentName, request, async approved => {
       if (approved.requestId !== request.requestId || approved.sessionId !== sessionId ||
@@ -596,16 +597,9 @@ export class DangerZoneEnforcer {
         releaseFailure = 'changed';
         return false;
       }
-      const restoreChallenge = claim();
-      if (!restoreChallenge) return false;
-      let removed = false;
-      try {
-        removed = await this.removeReviewedBlock(current, challengeId);
-        if (!removed) releaseFailure = this.readiness === 'ready' ? 'changed' : 'unavailable';
-        return removed;
-      } finally {
-        if (!removed) restoreChallenge();
-      }
+      const removed = await this.removeReviewedBlock(current, challengeId);
+      if (!removed) releaseFailure = this.readiness === 'ready' ? 'changed' : 'unavailable';
+      return removed;
     });
     return status === 'approved' ? { status, agentName: block.agentName } : { status: releaseFailure ?? status };
   }

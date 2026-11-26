@@ -13,8 +13,8 @@ import { StoredChallenge } from './types.js';
 /**
  * In-memory verification store
  */
-export class VerificationStore {
-  private challenges = new Map<string, StoredChallenge>();
+export class VerificationStore<T extends Omit<StoredChallenge, 'code'> & { code?: string } = StoredChallenge> {
+  private challenges = new Map<string, T>();
   private cleanupInterval: NodeJS.Timeout | null = null;
 
   constructor(autoCleanupIntervalMs: number = 60000) {
@@ -34,7 +34,7 @@ export class VerificationStore {
   /**
    * Store a verification challenge
    */
-  set(challengeId: string, challenge: StoredChallenge): void {
+  set(challengeId: string, challenge: T): void {
     this.challenges.set(challengeId, challenge);
   }
 
@@ -42,7 +42,7 @@ export class VerificationStore {
    * Retrieve a verification challenge
    * Returns undefined if not found or expired
    */
-  get(challengeId: string): StoredChallenge | undefined {
+  get(challengeId: string): T | undefined {
     const challenge = this.challenges.get(challengeId);
     if (!challenge) {
       return undefined;
@@ -57,26 +57,13 @@ export class VerificationStore {
     return challenge;
   }
 
-  /** Claim the reviewed challenge. The caller may restore it if the release could not be committed. */
-  claimForDialog(challengeId: string, expected: Omit<StoredChallenge, 'code'>): (() => void) | undefined {
-    const current = this.get(challengeId);
-    if (current?.expiresAt !== expected.expiresAt || current.reason !== expected.reason) return undefined;
-    this.challenges.delete(challengeId);
-    let canRestore = true;
-    return () => {
-      if (!canRestore) return;
-      canRestore = false;
-      if (!this.challenges.has(challengeId) && current.expiresAt > Date.now()) this.challenges.set(challengeId, current);
-    };
-  }
-
   /**
    * Verify a challenge code
    * Returns true if the code matches and hasn't expired
    */
   verify(challengeId: string, code: string): boolean {
     const challenge = this.get(challengeId);
-    if (!challenge) {
+    if (challenge?.code === undefined) {
       return false;
     }
 
