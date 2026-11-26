@@ -32,7 +32,7 @@ jest.unstable_mockModule('os', () => ({
 // Import mocked modules
 const { execFileSync, execSync } = await import('child_process');
 const { platform } = await import('os');
-const { showVerificationDialog, showBlockResetDialog, isDialogAvailable } = await import(
+const { showVerificationDialog, showBlockResetDialog, showNativeApprovalDialog, isDialogAvailable } = await import(
   '../src/DisplayService.js'
 );
 
@@ -118,6 +118,30 @@ describe('DisplayService', () => {
       expect(script).toContain('$form.CancelButton = $cancel');
       expect(script).toContain('UseSystemPasswordChar = $true');
       expect(script).not.toContain('123456');
+    });
+  });
+
+  it('keeps a Windows approval prompt on the input pipe and returns the masked proof', async () => {
+    mockPlatform.mockReturnValue('win32');
+    const input = jest.fn();
+    runNativeDialog.mockReturnValueOnce(Object.assign(
+      Promise.resolve({ stdout: 'reset\n123456', stderr: '' }),
+      { child: { stdin: { once: jest.fn(), end: input } } },
+    ));
+    await expect(showNativeApprovalDialog({
+      title: 'Release blocked agent',
+      summary: 'Release the block on sample-agent?',
+      approveLabel: 'Release',
+    }, true, 20_000)).resolves.toEqual({ confirmed: true, code: '123456' });
+    const [, args, options] = runNativeDialog.mock.calls[0];
+    expect(args.join(' ')).not.toContain('sample-agent');
+    expect(options).not.toHaveProperty('env');
+    expect(input).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(input.mock.calls[0][0]))).toMatchObject({
+      title: 'Release blocked agent',
+      message: expect.stringContaining('sample-agent'),
+      approveLabel: 'Release',
+      requireCode: true,
     });
   });
 

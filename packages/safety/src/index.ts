@@ -54,8 +54,10 @@ export {
   showVerificationDialog,
   showVerificationDialogAsync,
   showBlockResetDialog,
+  showNativeApprovalDialog,
   isDialogAvailable,
   type BlockResetDialogResult,
+  type NativeApprovalDialogResult,
   type DialogOptions,
   type DialogResult,
 } from './DisplayService.js';

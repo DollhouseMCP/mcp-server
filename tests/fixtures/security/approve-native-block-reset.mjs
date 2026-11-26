@@ -14,8 +14,15 @@ fixtureExecFile[promisify.custom] = (file, args, options) => {
   if (file === 'zenity' && args.includes('--default-cancel')) {
     return Promise.resolve({ stdout: '', stderr: '' });
   }
-  if (file === 'powershell.exe' && args.includes('-STA') && options.env?.DOLLHOUSE_NATIVE_RESET_PROOF === '0') {
-    return Promise.resolve({ stdout: 'reset', stderr: '' });
+  if (file === 'powershell.exe' && args.includes('-STA')) {
+    let receive;
+    const result = new Promise(resolve => { receive = resolve; });
+    result.child = { stdin: { once() {}, end(input) {
+      const { title, approveLabel, requireCode } = JSON.parse(input);
+      const approved = title === 'Reset blocked-agent state' && approveLabel === 'Reset' && requireCode === false;
+      receive({ stdout: approved ? 'reset' : 'cancel', stderr: '' });
+    } } };
+    return result;
   }
   return native(file, args, options);
 };
