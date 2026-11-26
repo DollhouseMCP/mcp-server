@@ -18,8 +18,9 @@
 
 import type { StoredChallenge } from '@dollhousemcp/safety';
 
-export type ChallengeMetadata = Pick<StoredChallenge, 'expiresAt' | 'reason'> & { dialog?: true };
-export type ChallengeInput = StoredChallenge | (ChallengeMetadata & { dialog: true; code?: never });
+type DialogChallengeKind = 'block' | 'action';
+export type ChallengeMetadata = Pick<StoredChallenge, 'expiresAt' | 'reason'> & { dialog?: DialogChallengeKind };
+export type ChallengeInput = StoredChallenge | (ChallengeMetadata & { dialog: DialogChallengeKind; code?: never });
 
 /**
  * Persistence-only contract for verification challenges.

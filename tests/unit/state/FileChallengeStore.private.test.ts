@@ -56,7 +56,7 @@ it('restores dialog-only requests without accepting any legacy code or an edited
   const restored = new FileChallengeStore(ops, keys, state, session, 0);
   const tampered = new FileChallengeStore(ops, keys, state, session, 0);
   try {
-    const request = { dialog: true as const, expiresAt: Date.now() + 60_000, reason: 'Review the next action' };
+    const request = { dialog: 'action' as const, expiresAt: Date.now() + 60_000, reason: 'Review the next action' };
     await store.initialize();
     store.set('dialog', request);
     await store.awaitPendingWrites();

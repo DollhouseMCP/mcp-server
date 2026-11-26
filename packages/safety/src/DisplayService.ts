@@ -155,6 +155,9 @@ function runApprovalDialogWithInput(
 export async function showNativeApprovalDialog(
   prompt: NativeApprovalPrompt, requireCode: boolean, timeoutMs: number,
 ): Promise<NativeApprovalDialogResult> {
+  if (process.env.SSH_CONNECTION || process.env.SSH_CLIENT || process.env.SSH_TTY) {
+    return { confirmed: false, reason: 'unavailable' };
+  }
   if (timeoutMs <= 0) return { confirmed: false, reason: 'timeout' };
   const timeout = Math.ceil(timeoutMs / 1000);
   const { title, approveLabel, summary } = prompt;

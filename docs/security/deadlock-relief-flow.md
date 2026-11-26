@@ -10,7 +10,17 @@ The goal is to provide a safe, human-confirmed escape hatch when:
 - the session can no longer approve normal recovery steps
 - the user needs to deactivate everything and recover control of the session
 
-## High-Level Behavior
+## Local stdio
+
+Call `release_deadlock` without parameters. Approve the operation in the server-owned desktop dialog. If an authenticator is enrolled, enter its current code or a backup code in the dialog.
+
+### Headless stdio
+
+An SSH session or an unavailable desktop leaves the current session's activation state in place. Ask the local operator to run the affected stdio session from a graphical desktop and request relief there. For persisted activations, use the same portfolio and `DOLLHOUSE_SESSION_ID`. When the normal deactivation flow is still available, deactivate the restrictive element directly.
+
+If an agent is also blocked by Danger Zone, follow the [offline single-block recovery runbook](../guides/dangerzone-offline-single-block-recovery.md) for that block.
+
+## Legacy HTTP behavior
 
 - The user or model calls `release_deadlock`.
 - Dollhouse creates a one-time verification challenge.
@@ -22,7 +32,7 @@ The goal is to provide a safe, human-confirmed escape hatch when:
   - clears the current session's persisted activation state
   - returns a summary of what was active, what was deactivated, likely deadlock causes, and any failures
 
-## Mermaid Flow
+## Legacy HTTP flow diagram
 
 ```mermaid
 flowchart TD

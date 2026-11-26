@@ -462,7 +462,6 @@ function evaluateSafetyDirective(
       config.verificationTimeoutMinutes
     );
 
-    // Store the code server-side and show via OS dialog (Issue #142)
     if (!useDialog) storeAndDisplayChallenge(dzChallenge, context);
 
     // Programmatic enforcement: block the agent from further execution
@@ -488,6 +487,12 @@ function evaluateSafetyDirective(
     )).catch(error => {
       logger.error('Agent block persistence failed', { agentName: context.agentName, error });
     });
+
+    if (useDialog) {
+      context.verificationStore?.set(dzChallenge.challengeId, {
+        dialog: 'block', expiresAt: Date.parse(dzChallenge.expiresAt), reason: 'Release blocked agent',
+      });
+    }
 
     SecurityMonitor.logSecurityEvent({
       type: 'DANGER_ZONE_TRIGGERED',
@@ -528,7 +533,7 @@ function evaluateSafetyDirective(
     if (useDialog) {
       const expiry = Math.min(Date.parse(expiresAt), Date.now() + DIALOG_APPROVAL_TTL_MS);
       context.verificationStore?.set(verificationId, {
-        dialog: true, expiresAt: expiry, reason: `Verify the next action for '${context.agentName}'?`,
+        dialog: 'action', expiresAt: expiry, reason: `Verify the next action for '${context.agentName}'?`,
       });
       expiresAt = new Date(expiry).toISOString();
       prompt = 'Call verify_challenge with this ID to request human approval.';

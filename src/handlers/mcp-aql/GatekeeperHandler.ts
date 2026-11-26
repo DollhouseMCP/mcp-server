@@ -6,7 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { generateDisplayCode, showBlockResetDialog, showNativeApprovalDialog, type BlockResetDialogResult } from '@dollhousemcp/safety';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
-import type { BlockReleaseReason, LocalBlockResetResult } from '../../security/DangerZoneEnforcer.js';
+import type { BlockReleaseReason, DesktopApprovalResult, LocalBlockResetResult } from '../../security/DangerZoneEnforcer.js';
 import { env } from '../../config/env.js';
 import type { ChallengeMetadata } from '../../state/IChallengeStore.js';
 import { ConsoleTokenStore, type DialogApprovalRequest } from '../../web/console/consoleToken.js';
@@ -59,6 +59,15 @@ const RELEASE_FAILURE_MESSAGES: Record<BlockReleaseReason, string> = {
   session: 'Verify from the session that triggered the block.',
   declined: 'The block was already released or replaced. Retry the operation.',
 };
+
+const BLOCK_RECOVERY_GUIDE = 'https://github.com/DollhouseMCP/mcp-server/blob/beta/docs/guides/dangerzone-offline-single-block-recovery.md';
+const DEADLOCK_RECOVERY_GUIDE = 'https://github.com/DollhouseMCP/mcp-server/blob/beta/docs/security/deadlock-relief-flow.md#headless-stdio';
+
+function desktopRecoveryMessage(status: string, guide: string): string | undefined {
+  if (status === 'desktop_unavailable') return `No usable desktop is available. Ask the local operator to follow ${guide}.`;
+  if (status === 'desktop_timeout') return `Desktop approval timed out. Ask the local operator to follow ${guide}.`;
+  return undefined;
+}
 
 type ResetResponse = LocalBlockResetResult | 'timeout' | 'desktop_unavailable' | 'invalid_request';
 
@@ -286,23 +295,7 @@ export class GatekeeperHandler {
     const challengeId = validateRequiredString(params, 'challenge_id', 'the verification challenge ID');
     const session = this.deps.contextTracker?.getSessionContext?.();
     if (session?.transport === 'stdio') {
-      this.checkVerificationRateLimit(challengeId);
-      this.validateChallengeId(challengeId);
-      if (Object.hasOwn(params, 'code')) {
-        throw new VerificationError(
-          GatekeeperErrorCode.VERIFICATION_FAILED,
-          'Local approval codes belong in the server-owned dialog. Request approval using only the challenge ID.',
-        );
-      }
-      const localRelease = await this.verifyLocalBlock(challengeId, session.sessionId);
-      if (localRelease) return localRelease;
-      const pending = this.deps.handlers.verificationStore?.get(challengeId);
-      if (pending?.dialog) return this.verifyLocalAction(challengeId, session.sessionId, pending);
-      this.deps.verificationMetrics.recordExpired();
-      throw new VerificationError(
-        GatekeeperErrorCode.VERIFICATION_TIMEOUT,
-        'Verification failed: no pending local approval matches this challenge. It may have expired or already been used.',
-      );
+      return this.verifyFromLocalDialog(challengeId, session.sessionId, params);
     }
     const code = validateRequiredString(params, 'code', 'the verification code displayed on your screen');
 
@@ -339,10 +332,33 @@ export class GatekeeperHandler {
     return result;
   }
 
-  private async verifyLocalBlock(challengeId: string, sessionId: string): Promise<unknown> {
+  private async verifyFromLocalDialog(challengeId: string, sessionId: string, params: Record<string, unknown>) {
+    this.checkVerificationRateLimit(challengeId);
+    this.validateChallengeId(challengeId);
+    if (Object.keys(params).some(key => key !== 'challenge_id')) {
+      throw new VerificationError(
+        GatekeeperErrorCode.VERIFICATION_FAILED,
+        'Local approval codes belong in the server-owned dialog. Request approval using only the challenge ID.',
+      );
+    }
+    const pending = this.deps.handlers.verificationStore?.get(challengeId);
+    if (pending?.dialog === 'block') {
+      const release = await this.verifyLocalBlock(challengeId, sessionId, pending.expiresAt);
+      if (release) return release;
+    } else if (pending?.dialog === 'action') {
+      return this.verifyLocalAction(challengeId, sessionId, pending);
+    }
+    this.deps.verificationMetrics.recordExpired();
+    throw new VerificationError(
+      GatekeeperErrorCode.VERIFICATION_TIMEOUT,
+      `Verification failed: the local challenge may have expired or already been used. For an agent that remains blocked, see ${BLOCK_RECOVERY_GUIDE}.`,
+    );
+  }
+
+  private async verifyLocalBlock(challengeId: string, sessionId: string, expiresAt: number): Promise<unknown> {
     const enforcer = this.deps.handlers.dangerZoneEnforcer;
     if (!enforcer) return undefined;
-    const result = await enforcer.requestLocalRelease(challengeId, sessionId, (agentName, request, commit) =>
+    const result = await enforcer.requestLocalRelease(challengeId, sessionId, expiresAt, (agentName, request, commit) =>
       this.collectLocalApproval(request, {
         title: 'Release blocked agent',
         summary: `Release the block on '${agentName}'?`,
@@ -358,7 +374,11 @@ export class GatekeeperHandler {
       };
     }
     this.deps.verificationMetrics.recordFailure();
-    return { verified: false, status: result.status, message: 'Block release was not approved.' };
+    return {
+      verified: false,
+      status: result.status,
+      message: desktopRecoveryMessage(result.status, BLOCK_RECOVERY_GUIDE) ?? 'Block release was not approved.',
+    };
   }
 
   private async verifyLocalAction(challengeId: string, sessionId: string, challenge: ChallengeMetadata) {
@@ -372,11 +392,11 @@ export class GatekeeperHandler {
       approveLabel: 'Approve',
     }, () => {
       const current = this.deps.handlers.verificationStore?.get(challengeId);
-      return Promise.resolve(current?.dialog === true && current.expiresAt === expiresAt && current.reason === reason);
+      return Promise.resolve(current?.dialog === 'action' && current.expiresAt === expiresAt && current.reason === reason);
     });
     if (status !== 'approved') {
       this.deps.verificationMetrics.recordFailure();
-      return { verified: false, status, message: 'The action was not approved.' };
+      return { verified: false, status, message: desktopRecoveryMessage(status, DEADLOCK_RECOVERY_GUIDE) ?? 'The action was not approved.' };
     }
     this.deps.verificationMetrics.recordSuccess();
     return { verified: true, message: 'Approval confirmed. You may now retry the operation.' };
@@ -571,25 +591,34 @@ export class GatekeeperHandler {
       release = await this.deps.performApprovedDeadlockRelief(pending.requestId);
       return true;
     });
-    return status === 'approved' ? release : { released: false, status, message: 'Deadlock relief was not approved.' };
+    return status === 'approved' ? release : {
+      released: false, status, message: desktopRecoveryMessage(status, DEADLOCK_RECOVERY_GUIDE) ?? 'Deadlock relief was not approved.',
+    };
   }
 
-  private collectLocalApproval(
+  private async collectLocalApproval(
     request: DialogApprovalRequest,
     prompt: Parameters<typeof showNativeApprovalDialog>[0],
     commit: (request: DialogApprovalRequest) => Promise<boolean>,
-  ) {
-    return ApprovalService.approveFromDialog({
+  ): Promise<DesktopApprovalResult> {
+    const dialogState: { refusal?: Extract<BlockResetDialogResult, { confirmed: false }>['reason'] } = {};
+    const result = await ApprovalService.approveFromDialog({
       request,
       tokenStore: new ConsoleTokenStore(env.DOLLHOUSE_CONSOLE_TOKEN_FILE),
-      dialog: (pending, enrollment) =>
-        showNativeApprovalDialog(prompt, enrollment === 'enrolled', pending.expiresAt - Date.now()),
+      dialog: async (pending, enrollment) => {
+        const decision = await showNativeApprovalDialog(prompt, enrollment === 'enrolled', pending.expiresAt - Date.now());
+        if (!decision.confirmed) dialogState.refusal = decision.reason;
+        return decision;
+      },
       commit: pending => {
         const current = this.deps.contextTracker?.getSessionContext?.();
         return current?.transport === 'stdio' && current.sessionId === pending.sessionId
           ? commit(pending) : Promise.resolve(false);
       },
     });
+    if (result === 'refused' && dialogState.refusal === 'unavailable') return 'desktop_unavailable';
+    if (result === 'refused' && dialogState.refusal === 'timeout') return 'desktop_timeout';
+    return result;
   }
 
   private async beetlejuice(params: Record<string, unknown>): Promise<unknown> {
@@ -613,9 +642,12 @@ export class GatekeeperHandler {
       throw new VerificationError(GatekeeperErrorCode.VERIFICATION_FAILED,
         'Unable to persist the requested block: block-state storage is unavailable. Agent operations remain denied; repair storage and retry.');
     }
-    if (session?.transport !== 'stdio') {
+    const expiresAt = Date.now() + 5 * 60 * 1000;
+    if (session?.transport === 'stdio') {
+      store.set(challengeId, { dialog: 'block', expiresAt, reason: 'Beetlejuice test trigger (Issue #503)' });
+    } else {
       const code = generateDisplayCode();
-      store.set(challengeId, { code, expiresAt: Date.now() + 5 * 60 * 1000, reason: 'Beetlejuice test trigger (Issue #503)' });
+      store.set(challengeId, { code, expiresAt, reason: 'Beetlejuice test trigger (Issue #503)' });
       this.deps.handlers.verificationNotifier?.showCode(code, `Agent '${agentName}' requires verification (Beetlejuice trigger)`);
     }
 

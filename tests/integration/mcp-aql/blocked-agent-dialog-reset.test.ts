@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { MAX_BLOCK_SNAPSHOT_BYTES } from '../../../src/state/readDangerZoneBlockSnapshot.js';
 import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
+import { callTool } from '../../helpers/httpTransportHelper.js';
 
 async function reservePort(): Promise<number> {
   const server = createServer();
@@ -28,11 +29,15 @@ function consoleIsListening(port: number): Promise<boolean> {
   });
 }
 
-function approvalTransport(home: string, portfolio: string, tokenFile: string, port: number): StdioClientTransport {
+function approvalTransport(
+  home: string, portfolio: string, tokenFile: string, port: number, desktop: 'local' | 'ssh' = 'local',
+): StdioClientTransport {
   const childEnv = Object.fromEntries(Object.entries(process.env)
     .filter(([, value]) => value !== undefined)) as Record<string, string>;
   delete childEnv.JEST_WORKER_ID;
   delete childEnv.NODE_OPTIONS;
+  delete childEnv.SSH_CLIENT;
+  delete childEnv.SSH_TTY;
   return new StdioClientTransport({
     command: process.execPath,
     args: ['--import', './tests/fixtures/security/approve-native-block-reset.mjs', 'dist/index.js'],
@@ -48,19 +53,24 @@ function approvalTransport(home: string, portfolio: string, tokenFile: string, p
       DOLLHOUSE_HTTP_WEB_CONSOLE: 'false',
       DOLLHOUSE_PERMISSION_SERVER: 'false',
       DOLLHOUSE_WEB_CONSOLE_PORT: String(port),
-      DISPLAY: ':fixture',
+      DISPLAY: desktop === 'local' ? ':fixture' : '',
+      WAYLAND_DISPLAY: '',
+      SSH_CONNECTION: desktop === 'ssh' ? '192.0.2.1 51500 192.0.2.2 22' : '',
       GITHUB_TOKEN: '',
     }),
     stderr: 'pipe',
   });
 }
 
-async function request(client: Client, operation: string, params: Record<string, unknown> = {}) {
+async function request(
+  client: Client, operation: string, params: Record<string, unknown> = {}, timeout?: number,
+) {
   const response = await client.callTool({
     name: 'mcp_aql_create', arguments: { operation, params },
-  });
+  }, undefined, { timeout });
   const [content] = response.content as { type: string; text: string }[];
-  return JSON.parse(content.text);
+  // Stdio adds an active-element policy digest after the JSON response.
+  return JSON.parse(content.text.split('\n\n', 1)[0]);
 }
 
 it.each(['malformed', 'oversized'] as const)('provisions basic approval with the console disabled and resets the %s snapshot', async kind => {
@@ -116,6 +126,56 @@ it('releases a block and a permission deadlock through the stdio dialog without 
     expect(await request(client, 'release_deadlock')).toMatchObject({
       success: true, data: { released: true, persistedStateCleared: true },
     });
+  } finally {
+    await client.close();
+    await transport.close();
+    await rm(home, { recursive: true, force: true });
+  }
+}, 40_000);
+
+it('refuses headless SSH releases promptly and points the operator to recovery', async () => {
+  const home = await mkdtemp(path.join(tmpdir(), 'stdio-headless-approval-'));
+  const portfolio = path.join(home, 'portfolio');
+  await mkdir(portfolio);
+  const snapshot = path.join(home, '.dollhouse', 'security', 'blocked-agents.json');
+  const transport = approvalTransport(home, portfolio, path.join(home, 'console-token.json'), await reservePort(), 'ssh');
+  const client = new Client({ name: 'headless-approval-fixture', version: '1.0.0' });
+  try {
+    await client.connect(transport);
+    const block = await request(client, 'beetlejuice_beetlejuice_beetlejuice');
+    expect(block).toMatchObject({ success: true, data: { challenge_id: expect.any(String) } });
+    const blockedBefore = await readFile(snapshot, 'utf8');
+    expect(await request(client, 'verify_challenge', { challenge_id: block.data.challenge_id }, 5_000))
+      .toMatchObject({
+        success: true,
+        data: {
+          verified: false, status: 'desktop_unavailable',
+          message: expect.stringContaining('docs/guides/dangerzone-offline-single-block-recovery.md'),
+        },
+      });
+    expect(await readFile(snapshot, 'utf8')).toBe(blockedBefore);
+
+    expect(await request(client, 'create_element', {
+      element_name: 'headless-fixture', element_type: 'skill',
+      description: 'Verify that a refused deadlock release preserves the active skill.',
+      content: 'Keep this skill active.',
+    })).toMatchObject({ success: true });
+    expect(await callTool(client, 'mcp_aql_read', {
+      operation: 'activate_element', params: { element_name: 'headless-fixture', element_type: 'skill' },
+    })).toContain("Skill 'headless-fixture' activated");
+    const listActiveSkills = () => callTool(client, 'mcp_aql_read', {
+      operation: 'get_active_elements', params: { element_type: 'skill' },
+    });
+    expect(await listActiveSkills()).toContain('Active skills: 🛠️ headless-fixture');
+    expect(await request(client, 'release_deadlock', {}, 5_000))
+      .toMatchObject({
+        success: true,
+        data: {
+          released: false, status: 'desktop_unavailable',
+          message: expect.stringContaining('docs/security/deadlock-relief-flow.md#headless-stdio'),
+        },
+      });
+    expect(await listActiveSkills()).toContain('Active skills: 🛠️ headless-fixture');
   } finally {
     await client.close();
     await transport.close();

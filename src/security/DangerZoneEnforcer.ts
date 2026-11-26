@@ -35,9 +35,10 @@ export type BlockReleaseResult =
   | { released: false; reason: BlockReleaseReason; agentName?: string };
 
 export type LocalBlockResetResult = DialogApprovalResult | 'busy' | 'changed' | 'not_needed' | 'unsupported';
+export type DesktopApprovalResult = DialogApprovalResult | 'desktop_unavailable' | 'desktop_timeout';
 export type LocalBlockReleaseResult =
   | { status: 'approved'; agentName: string }
-  | { status: Exclude<DialogApprovalResult, 'approved'> | BlockReleaseReason | 'changed' | 'not_found' };
+  | { status: Exclude<DesktopApprovalResult, 'approved'> | BlockReleaseReason | 'changed' | 'not_found' };
 type ApproveLocalReset = (
   request: DialogApprovalRequest, commit: (approved: DialogApprovalRequest) => Promise<boolean>,
 ) => Promise<DialogApprovalResult>;
@@ -568,9 +569,11 @@ export class DangerZoneEnforcer {
   async requestLocalRelease(
     challengeId: string,
     sessionId: string,
+    challengeExpiresAt: number,
     approve: (agentName: string, request: DialogApprovalRequest,
-      commit: (approved: DialogApprovalRequest) => Promise<boolean>) => Promise<DialogApprovalResult>,
+      commit: (approved: DialogApprovalRequest) => Promise<boolean>) => Promise<DesktopApprovalResult>,
   ): Promise<LocalBlockReleaseResult> {
+    if (challengeExpiresAt <= Date.now()) return { status: 'expired' };
     await this.refresh();
     if (this.readiness !== 'ready' || this.shuttingDown) return { status: 'unavailable' };
     const block = this.findChallengeBlock(challengeId);
@@ -581,8 +584,10 @@ export class DangerZoneEnforcer {
     if (!this.releasePromptLimiter.tryAcquire()) return { status: 'rate_limited' };
 
     const operationDigest = this.releaseDigest(block);
-    const request = { requestId: randomUUID(), sessionId, operationDigest, expiresAt: Date.now() + 60_000 };
-    let releaseFailure: 'changed' | 'unavailable' | undefined;
+    const request = {
+      requestId: randomUUID(), sessionId, operationDigest, expiresAt: Math.min(challengeExpiresAt, Date.now() + 60_000),
+    };
+    let releaseFailure: 'changed' | 'unavailable' | 'expired' | undefined;
     const status = await approve(block.agentName, request, async approved => {
       if (approved.requestId !== request.requestId || approved.sessionId !== sessionId ||
           approved.operationDigest !== operationDigest || approved.expiresAt !== request.expiresAt ||
@@ -593,6 +598,10 @@ export class DangerZoneEnforcer {
         return false;
       }
       const current = this.blockedContexts.get(block.agentName);
+      if (request.expiresAt <= Date.now()) {
+        releaseFailure = 'expired';
+        return false;
+      }
       if (!current || this.releaseRestriction(current, sessionId) || this.releaseDigest(current) !== operationDigest) {
         releaseFailure = 'changed';
         return false;

@@ -539,7 +539,7 @@ describe('AutonomyEvaluator', () => {
           verificationStore: { set },
         });
         const [, record] = set.mock.calls[0];
-        expect(record).toMatchObject({ dialog: true });
+        expect(record).toMatchObject({ dialog: 'action' });
         expect(record).not.toHaveProperty('code');
         expect(mockCreateVerificationChallenge).toHaveBeenCalledWith(expect.any(String), 'authenticator', expect.any(Number));
         expect(mockShowVerificationDialog).not.toHaveBeenCalled();

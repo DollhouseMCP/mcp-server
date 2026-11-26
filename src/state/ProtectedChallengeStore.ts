@@ -34,7 +34,7 @@ class ChallengeVerifier {
   seal(id: string, challenge: ChallengeInput): PersistedChallenge {
     if (!this.current) throw new Error('Verification challenge storage is unavailable.');
     const { expiresAt, reason } = challenge;
-    const metadata: ChallengeMetadata = { expiresAt, reason, ...('dialog' in challenge ? { dialog: true } : {}) };
+    const metadata: ChallengeMetadata = { expiresAt, reason, ...('dialog' in challenge ? { dialog: challenge.dialog } : {}) };
     return {
       ...metadata,
       keyId: this.current.keyId,
@@ -47,7 +47,7 @@ class ChallengeVerifier {
         !Number.isFinite(value.expiresAt) || Date.now() > value.expiresAt ||
         typeof value.keyId !== 'string' || typeof value.verifier !== 'string' || !VERIFIER.test(value.verifier)) return undefined;
     const { expiresAt, reason, keyId, verifier, dialog } = value;
-    return { expiresAt, reason, keyId, verifier, ...(dialog === true ? { dialog } : {}) };
+    return { expiresAt, reason, keyId, verifier, ...(dialog === 'block' || dialog === 'action' ? { dialog } : {}) };
   }
 
   async loadEntries(rows: readonly unknown[], allowLegacy = false): Promise<Map<string, PersistedChallenge>> {
@@ -84,7 +84,7 @@ class ChallengeVerifier {
   }
 
   private digest(key: Buffer, id: string, challenge: ChallengeMetadata, code?: string): Buffer {
-    const domain = challenge.dialog ? 'danger-zone-dialog:v1' : 'danger-zone-challenge:v1';
+    const domain = challenge.dialog ? `danger-zone-dialog:${challenge.dialog}:v1` : 'danger-zone-challenge:v1';
     const input = JSON.stringify([domain, this.scope, id, challenge.expiresAt, challenge.reason, code]);
     return createHmac('sha256', key).update(input).digest();
   }

@@ -214,7 +214,9 @@ describe('Autonomy challenge verification end to end', () => {
       expect(directive.continue).toBe(false);
       expect(directive.verification).not.toHaveProperty('displayCode');
       expect(display).not.toHaveBeenCalled();
-      expect(store.get(challengeId)).toBeUndefined();
+      expect(store.get(challengeId)).toEqual({
+        dialog: 'block', reason: 'Release blocked agent', expiresAt: Date.parse(directive.verification!.expiresAt),
+      });
       await enforcer.block('other-agent', 'Independent block', ['test'], randomUUID(), undefined, OWNER);
       await persistedAgents(['blocked-agent', 'other-agent']);
 
@@ -252,7 +254,7 @@ describe('Autonomy challenge verification end to end', () => {
       await tokenStore.confirmTotpEnrollment(enrollment.pendingId, totp.generate());
       const challengeId = randomUUID();
       const expiredId = randomUUID();
-      const request = { dialog: true as const, reason: 'Verify the next action', expiresAt: Date.now() + 60_000 };
+      const request = { dialog: 'action' as const, reason: 'Verify the next action', expiresAt: Date.now() + 60_000 };
       store.set(challengeId, request);
       store.set(expiredId, { ...request, expiresAt: Date.now() - 1 });
       expect((await verifyLocal(expiredId)).success).toBe(false);
@@ -266,6 +268,35 @@ describe('Autonomy challenge verification end to end', () => {
       expect(await verifyLocal(challengeId)).toMatchObject({
         success: true, data: { verified: false, status: 'spent' },
       });
+    });
+
+    it.each(['before prompting', 'with the prompt open'])('keeps an expired stdio block in place %s', async phase => {
+      const challengeId = randomUUID();
+      const expiresAt = Date.now() + (phase === 'before prompting' ? -1 : 60_000);
+      store.set(challengeId, { dialog: 'block', expiresAt, reason: 'Release blocked agent' });
+      await enforcer.block('expired-agent', 'Expired approval', ['test'], challengeId, undefined, OWNER);
+      await persistedAgents(['expired-agent']);
+
+      if (phase === 'before prompting') {
+        const result = await verifyLocal(challengeId);
+        expect(result).toMatchObject({ success: false, error: expect.stringContaining('expired') });
+        expect(nativeApproval).not.toHaveBeenCalled();
+      } else {
+        const clock = jest.spyOn(Date, 'now');
+        try {
+          nativeApproval.mockImplementationOnce(async () => {
+            clock.mockReturnValue(expiresAt + 1);
+            return { confirmed: true };
+          });
+          expect(await verifyLocal(challengeId)).toMatchObject({
+            success: true, data: { verified: false, status: 'expired' },
+          });
+        } finally {
+          clock.mockRestore();
+        }
+      }
+      expect((await enforcer.check('expired-agent')).blocked).toBe(true);
+      await persistedAgents(['expired-agent']);
     });
 
     it('requires a dialog decision for a pending CLI approval and rejects a second approval', async () => {

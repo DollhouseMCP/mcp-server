@@ -119,6 +119,19 @@ describe('DisplayService', () => {
       expect(script).toContain('UseSystemPasswordChar = $true');
       expect(script).not.toContain('123456');
     });
+
+    it('refuses an SSH session even when a display is set', async () => {
+      mockPlatform.mockReturnValue('darwin');
+      const environment = jest.replaceProperty(process, 'env', {
+        ...process.env, SSH_CONNECTION: '192.0.2.1 51500 192.0.2.2 22', DISPLAY: ':test',
+      });
+      try {
+        await expect(showBlockResetDialog(false, 20_000)).resolves.toEqual({ confirmed: false, reason: 'unavailable' });
+        expect(runNativeDialog).not.toHaveBeenCalled();
+      } finally {
+        environment.restore();
+      }
+    });
   });
 
   it('keeps a Windows approval prompt on the input pipe and returns the masked proof', async () => {
