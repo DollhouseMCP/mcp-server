@@ -3,7 +3,9 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { text } from 'node:stream/consumers';
 import { withRecoverableFileWriteLock } from '../../../src/utils/RecoverableFileWriteLock.js';
-import { ConsoleTokenStore, type DialogApprovalRequest } from '../../../src/web/console/consoleToken.js';
+import {
+  ConsoleTokenStore, type DialogApprovalRequest, type DialogApprovalResult,
+} from '../../../src/web/console/consoleToken.js';
 
 const [operation, tokenFile] = process.argv.slice(2);
 if (operation === 'abandon-lock') {
@@ -12,10 +14,11 @@ if (operation === 'abandon-lock') {
   const store = new ConsoleTokenStore(tokenFile);
   await writeFile(join(homedir(), 'ready'), '');
   const { requests, code } = JSON.parse(await text(process.stdin)) as { requests: DialogApprovalRequest[]; code: string };
-  const results = [];
-  for (const request of requests) {
+  const results: DialogApprovalResult[] = [];
+  await requests.reduce<Promise<void>>(async (previous, request) => {
+    await previous;
     results.push(await store.confirmApprovalFromDialog(request, async () => ({ confirmed: true, code })));
-  }
+  }, Promise.resolve());
   process.stdout.write(JSON.stringify(results));
 } else {
   const store = new ConsoleTokenStore(tokenFile);
