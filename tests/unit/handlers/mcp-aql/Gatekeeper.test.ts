@@ -24,6 +24,7 @@ import {
   getConfirmationRequiredOperations,
 } from '../../../../src/handlers/mcp-aql/policies/index.js';
 import type { ActiveElement } from '../../../../src/handlers/mcp-aql/policies/ElementPolicies.js';
+import { canOperationBeElevated, getOperationPolicy, OPERATION_POLICY_OVERRIDES } from '../../../../src/handlers/mcp-aql/policies/OperationPolicies.js';
 import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 
 const legacyGatekeeper: {
@@ -31,6 +32,103 @@ const legacyGatekeeper: {
 } = Gatekeeper;
 
 describe('Gatekeeper', () => {
+  it('keeps the effective permission table when changing how approvals are collected', () => {
+    const names = new Set([
+      ...Object.keys(BASE_OPERATION_REGISTRY.routes),
+      ...Object.keys(OPERATION_POLICY_OVERRIDES),
+    ]);
+    const table = [...names].sort().map(name => {
+      const endpoint = BASE_OPERATION_REGISTRY.getRoute(name)?.endpoint ?? 'dynamic';
+      const level = getDefaultPermissionLevel(name, BASE_OPERATION_REGISTRY);
+      const elevatable = canOperationBeElevated(name) ? '' : ' locked';
+      const override = getOperationPolicy(name) ? ' override' : '';
+      return `${name}: ${endpoint} ${level}${elevatable}${override}`;
+    });
+    expect(table.join('\n')).toMatchInlineSnapshot(`
+"abort_execution: EXECUTE CONFIRM_SINGLE_USE locked override
+activate_element: READ AUTO_APPROVE
+addEntry: CREATE CONFIRM_SESSION
+approve_cli_permission: EXECUTE AUTO_APPROVE locked override
+beetlejuice_beetlejuice_beetlejuice: CREATE AUTO_APPROVE override
+browse_collection: READ AUTO_APPROVE
+check_github_auth: READ AUTO_APPROVE
+clear: DELETE CONFIRM_SINGLE_USE locked override
+clear_github_auth: DELETE CONFIRM_SINGLE_USE locked override
+complete_execution: EXECUTE CONFIRM_SESSION override
+configure_oauth: CREATE CONFIRM_SESSION
+confirm_operation: EXECUTE AUTO_APPROVE override
+continue_execution: EXECUTE CONFIRM_SESSION override
+convert_skill_format: READ AUTO_APPROVE
+create_element: CREATE CONFIRM_SESSION
+create_integration_skill: dynamic AUTO_APPROVE override
+create_integration_spec: dynamic AUTO_APPROVE override
+deactivate_element: READ AUTO_APPROVE
+delete_element: DELETE CONFIRM_SINGLE_USE locked override
+dollhouse_config: READ AUTO_APPROVE
+edit_element: UPDATE CONFIRM_SINGLE_USE
+evaluate_permission: READ AUTO_APPROVE
+execute_agent: EXECUTE CONFIRM_SINGLE_USE locked override
+export_element: READ AUTO_APPROVE
+find_similar_elements: READ AUTO_APPROVE
+get_active_elements: READ AUTO_APPROVE
+get_build_info: READ AUTO_APPROVE
+get_cache_budget_report: READ AUTO_APPROVE
+get_capabilities: READ AUTO_APPROVE
+get_collection_cache_health: READ AUTO_APPROVE
+get_collection_content: READ AUTO_APPROVE
+get_effective_cli_policies: READ AUTO_APPROVE
+get_element: READ AUTO_APPROVE
+get_element_details: READ AUTO_APPROVE
+get_element_relationships: READ AUTO_APPROVE
+get_execution_state: READ AUTO_APPROVE
+get_gathered_data: READ AUTO_APPROVE
+get_pending_cli_approvals: READ AUTO_APPROVE
+get_permission_authority: READ AUTO_APPROVE
+get_relationship_stats: READ AUTO_APPROVE
+import_element: CREATE CONFIRM_SESSION
+import_persona: CREATE CONFIRM_SESSION
+init_portfolio: CREATE CONFIRM_SESSION
+install_collection_content: CREATE CONFIRM_SESSION
+integration_request: dynamic AUTO_APPROVE override
+introspect: READ AUTO_APPROVE
+list_elements: READ AUTO_APPROVE
+oauth_helper_status: READ AUTO_APPROVE
+open_logs: READ AUTO_APPROVE
+open_metrics: READ AUTO_APPROVE
+open_permissions: READ AUTO_APPROVE
+open_portfolio_browser: READ AUTO_APPROVE
+open_setup: READ AUTO_APPROVE
+permission_prompt: READ AUTO_APPROVE locked override
+portfolio_config: READ AUTO_APPROVE
+portfolio_element_manager: CREATE CONFIRM_SESSION
+portfolio_status: READ AUTO_APPROVE
+prepare_handoff: EXECUTE CONFIRM_SESSION override
+query_elements: READ AUTO_APPROVE
+query_logs: READ AUTO_APPROVE
+query_metrics: READ AUTO_APPROVE
+record_execution_step: CREATE CONFIRM_SESSION
+release_deadlock: CREATE AUTO_APPROVE locked override
+render: READ AUTO_APPROVE
+request_blocked_agent_reset: CREATE AUTO_APPROVE locked override
+resume_from_handoff: EXECUTE CONFIRM_SINGLE_USE locked override
+search: READ AUTO_APPROVE
+search_all: READ AUTO_APPROVE
+search_by_verb: READ AUTO_APPROVE
+search_collection: READ AUTO_APPROVE
+search_collection_enhanced: READ AUTO_APPROVE
+search_elements: READ AUTO_APPROVE
+search_portfolio: READ AUTO_APPROVE
+setup_github_auth: CREATE CONFIRM_SESSION
+submit_collection_content: CREATE CONFIRM_SESSION
+sync_portfolio: CREATE CONFIRM_SESSION
+update_integration_skill: dynamic AUTO_APPROVE override
+update_integration_spec: dynamic AUTO_APPROVE override
+upgrade_element: UPDATE CONFIRM_SINGLE_USE
+validate_element: READ AUTO_APPROVE
+verify_challenge: CREATE AUTO_APPROVE override"
+`);
+  });
+
   // Clean up security events after each test to prevent pollution
   afterEach(() => {
     SecurityMonitor.clearAllEventsForTesting();
