@@ -44,13 +44,14 @@
  */
 
 import { homedir, hostname, platform } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { mkdir, readFile, rename, writeFile, chmod, unlink, copyFile } from 'node:fs/promises';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { Secret, TOTP } from 'otpauth';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
+import { withRecoverableFileWriteLock } from '../../utils/RecoverableFileWriteLock.js';
 
 /** Directory for runtime state files — same as LeaderElection. */
 const RUN_DIR = join(homedir(), '.dollhouse', 'run');
@@ -470,11 +471,15 @@ function validateTokenFile(raw: unknown): ConsoleTokenFile | null {
   return raw as ConsoleTokenFile;
 }
 
+type TotpVerification =
+  | { ok: true; method: 'totp' | 'backup'; backupCodesRemaining: number }
+  | { ok: false };
+
 /**
  * Stateful store that owns the console token file and verifies presented tokens.
  *
- * Designed to live on the leader process. Followers should not construct this —
- * they read the file directly via `readTokenFileRaw()` for their own HTTP calls.
+ * The leader keeps a verification cache for HTTP requests. Token-file writers
+ * in every process take the same lock and base their changes on a fresh read.
  */
 export class ConsoleTokenStore {
   private readonly filePath: string;
@@ -519,6 +524,49 @@ export class ConsoleTokenStore {
     }
   }
 
+  private async withTokenFileLock<T>(operation: () => Promise<T>): Promise<T> {
+    await mkdir(dirname(this.filePath), { recursive: true, mode: 0o700 });
+    return withRecoverableFileWriteLock(`${this.filePath}.lock`, operation);
+  }
+
+  private async withCurrentTokenFile<T>(operation: (file: ConsoleTokenFile) => Promise<T>): Promise<T> {
+    if (!this.data) {
+      throw new TotpError('Token store not initialized', 'STORE_NOT_INITIALIZED');
+    }
+    return this.withTokenFileLock(async () => {
+      const latest = await this.readWithStatus();
+      if (latest.status !== 'ok' || latest.data.tokens.length === 0) {
+        throw new TotpError('Console token file is unavailable', 'STORE_NOT_INITIALIZED');
+      }
+      this.retainLastUsedAt(latest.data);
+      return operation(latest.data);
+    });
+  }
+
+  private retainLastUsedAt(file: ConsoleTokenFile): void {
+    // Local bearer verification updates usage in memory. Carry it forward
+    // only if the durable token still represents the same credential.
+    const cached = new Map(this.data?.tokens.map(entry => [entry.id, entry]));
+    for (const entry of file.tokens) {
+      const previous = cached.get(entry.id);
+      if (previous?.token === entry.token && previous.lastUsedAt &&
+        (!entry.lastUsedAt || previous.lastUsedAt > entry.lastUsedAt)) {
+        entry.lastUsedAt = previous.lastUsedAt;
+      }
+    }
+  }
+
+  private publishTokenFile(file: ConsoleTokenFile): void {
+    this.retainLastUsedAt(file);
+    this.data = file;
+    this.rebuildTokenBuffers();
+  }
+
+  private async commitTokenFile(file: ConsoleTokenFile): Promise<void> {
+    await this.write(file);
+    this.publishTokenFile(file);
+  }
+
   /**
    * Read the existing token file, or create a new one with a single initial
    * token if none exists. Idempotent — safe to call on every leader election.
@@ -528,11 +576,14 @@ export class ConsoleTokenStore {
    * @returns The primary (first) token entry — convenient for server startup
    *          to inject into HTML and stamp on followers.
    */
-  async ensureInitialized(puppetName: string): Promise<ConsoleTokenEntry> {
+  ensureInitialized(puppetName: string): Promise<ConsoleTokenEntry> {
+    return this.withTokenFileLock(() => this.initializeTokenFile(puppetName));
+  }
+
+  private async initializeTokenFile(puppetName: string): Promise<ConsoleTokenEntry> {
     const readResult = await this.readWithStatus();
     if (readResult.status === 'ok' && readResult.data.tokens.length > 0) {
-      this.data = readResult.data;
-      this.rebuildTokenBuffers();
+      this.publishTokenFile(readResult.data);
       logger.debug('[ConsoleToken] Loaded existing token file', {
         path: this.filePath,
         count: readResult.data.tokens.length,
@@ -570,9 +621,7 @@ export class ConsoleTokenStore {
       totp: { enrolled: false, secret: null, backupCodes: [], enrolledAt: null },
     };
 
-    await this.write(file);
-    this.data = file;
-    this.rebuildTokenBuffers();
+    await this.commitTokenFile(file);
     logger.info('[ConsoleToken] Created new token file', {
       path: this.filePath,
       id: initial.id,
@@ -754,14 +803,23 @@ export class ConsoleTokenStore {
    *
    * @throws Error if pendingId is unknown, expired, or code invalid.
    */
-  async confirmTotpEnrollment(pendingId: string, code: string): Promise<TotpEnrollmentConfirm> {
-    if (!this.data) {
-      throw new TotpError('Token store not initialized', 'STORE_NOT_INITIALIZED');
-    }
+  confirmTotpEnrollment(pendingId: string, code: string): Promise<TotpEnrollmentConfirm> {
+    return this.withCurrentTokenFile(file => this.confirmTotpEnrollmentInFile(file, pendingId, code));
+  }
+
+  private async confirmTotpEnrollmentInFile(
+    file: ConsoleTokenFile,
+    pendingId: string,
+    code: string,
+  ): Promise<TotpEnrollmentConfirm> {
     this.sweepExpiredEnrollments();
     const pending = this.pendingEnrollments.get(pendingId);
     if (!pending) {
       throw new TotpError('Pending enrollment not found or expired', 'PENDING_NOT_FOUND');
+    }
+
+    if (file.totp.enrolled) {
+      throw new TotpError('TOTP is already enrolled — disable existing enrollment before enrolling again', 'ALREADY_ENROLLED');
     }
 
     // Verify the presented code against the pending secret. `validate` returns
@@ -791,13 +849,13 @@ export class ConsoleTokenStore {
     const hashedCodes = plaintextCodes.map(hashBackupCode);
     const enrolledAt = new Date().toISOString();
 
-    this.data.totp = {
+    file.totp = {
       enrolled: true,
       secret: pending.secret,
       backupCodes: hashedCodes,
       enrolledAt,
     };
-    await this.write(this.data);
+    await this.commitTokenFile(file);
     this.pendingEnrollments.delete(pendingId);
 
     logger.info('[ConsoleToken] TOTP enrollment confirmed', {
@@ -823,27 +881,39 @@ export class ConsoleTokenStore {
    * Returns a discriminated result so the caller can distinguish "consumed
    * a backup code" (which the UI should surface with a warning about
    * remaining count) from "valid TOTP code" (normal case). Returns
-   * `{ ok: false }` on any failure — the caller should not retry within
-   * the same request lifecycle.
+   * `{ ok: false }` when the proof does not match. Unavailable storage
+   * rejects the operation.
    */
-  async verifyTotp(code: string): Promise<{ ok: true; method: 'totp' | 'backup'; backupCodesRemaining: number } | { ok: false }> {
-    if (!this.data?.totp?.enrolled || !this.data.totp.secret) {
-      return { ok: false };
-    }
+  async verifyTotp(code: string): Promise<TotpVerification> {
+    if (!this.data) return { ok: false };
+    return this.withCurrentTokenFile(async file => {
+      const result = this.verifyTotpInFile(file, code);
+      if (result.ok && result.method === 'backup') {
+        await this.commitTokenFile(file);
+        this.recordBackupConsumption(result);
+      } else {
+        this.publishTokenFile(file);
+      }
+      return result;
+    });
+  }
+
+  private verifyTotpInFile(file: ConsoleTokenFile, code: string): TotpVerification {
+    if (!file.totp.enrolled || !file.totp.secret) return { ok: false };
     const sanitized = code.replaceAll(/\s/g, '');
     if (!sanitized) return { ok: false };
 
     // Try live TOTP first — fast path, no disk write.
     const totp = new TOTP({
       issuer: TOTP_ISSUER,
-      label: this.data.tokens[0]?.name ?? 'console',
+      label: file.tokens[0]?.name ?? 'console',
       algorithm: TOTP_ALGORITHM,
       digits: TOTP_DIGITS,
       period: TOTP_PERIOD_SECONDS,
-      secret: Secret.fromBase32(this.data.totp.secret),
+      secret: Secret.fromBase32(file.totp.secret),
     });
     if (totp.validate({ token: sanitized, window: TOTP_VALIDATE_WINDOW }) !== null) {
-      return { ok: true, method: 'totp', backupCodesRemaining: this.data.totp.backupCodes.length };
+      return { ok: true, method: 'totp', backupCodesRemaining: file.totp.backupCodes.length };
     }
 
     // Fall back to backup code — normalize, hash, constant-time search.
@@ -851,8 +921,8 @@ export class ConsoleTokenStore {
     const inputHash = hashBackupCode(normalizedInput);
     const inputHashBuf = Buffer.from(inputHash, 'hex');
     let matchIndex = -1;
-    for (let i = 0; i < this.data.totp.backupCodes.length; i++) {
-      const storedBuf = Buffer.from(this.data.totp.backupCodes[i], 'hex');
+    for (let i = 0; i < file.totp.backupCodes.length; i++) {
+      const storedBuf = Buffer.from(file.totp.backupCodes[i], 'hex');
       if (storedBuf.length === inputHashBuf.length && timingSafeEqual(inputHashBuf, storedBuf)) {
         matchIndex = i;
         break;
@@ -872,20 +942,21 @@ export class ConsoleTokenStore {
       return { ok: false };
     }
 
-    // Consume the matched backup code — remove from storage and persist.
-    this.data.totp.backupCodes.splice(matchIndex, 1);
-    await this.write(this.data);
-    logger.info('[ConsoleToken] Backup code consumed', {
-      remaining: this.data.totp.backupCodes.length,
-    });
+    // The caller commits this removal together with any other token change.
+    file.totp.backupCodes.splice(matchIndex, 1);
+    return { ok: true, method: 'backup', backupCodesRemaining: file.totp.backupCodes.length };
+  }
+
+  private recordBackupConsumption(result: Extract<TotpVerification, { ok: true }>): void {
+    if (result.method !== 'backup') return;
+    logger.info('[ConsoleToken] Backup code consumed', { remaining: result.backupCodesRemaining });
     SecurityMonitor.logSecurityEvent({
       type: 'TOTP_BACKUP_CODE_CONSUMED',
       severity: 'MEDIUM',
       source: 'ConsoleTokenStore.verifyTotp',
       details: 'TOTP backup code consumed for console authentication',
-      additionalData: { remaining: this.data.totp.backupCodes.length },
+      additionalData: { remaining: result.backupCodesRemaining },
     });
-    return { ok: true, method: 'backup', backupCodesRemaining: this.data.totp.backupCodes.length };
   }
 
   /**
@@ -895,24 +966,26 @@ export class ConsoleTokenStore {
    *
    * @throws Error if not enrolled or code invalid.
    */
-  async disableTotp(code: string): Promise<void> {
-    if (!this.data) {
-      throw new TotpError('Token store not initialized', 'STORE_NOT_INITIALIZED');
-    }
-    if (!this.isTotpEnrolled()) {
+  disableTotp(code: string): Promise<void> {
+    return this.withCurrentTokenFile(file => this.disableTotpInFile(file, code));
+  }
+
+  private async disableTotpInFile(file: ConsoleTokenFile, code: string): Promise<void> {
+    if (!file.totp.enrolled || !file.totp.secret) {
       throw new TotpError('TOTP is not currently enrolled', 'NOT_ENROLLED');
     }
-    const result = await this.verifyTotp(code);
+    const result = this.verifyTotpInFile(file, code);
     if (!result.ok) {
       throw new TotpError(INVALID_TOTP_MESSAGE, 'INVALID_TOTP_CODE');
     }
-    this.data.totp = {
+    file.totp = {
       enrolled: false,
       secret: null,
       backupCodes: [],
       enrolledAt: null,
     };
-    await this.write(this.data);
+    await this.commitTokenFile(file);
+    this.recordBackupConsumption(result);
     logger.info('[ConsoleToken] TOTP disabled');
     SecurityMonitor.logSecurityEvent({
       type: 'TOTP_DISABLED',
@@ -961,41 +1034,35 @@ export class ConsoleTokenStore {
    * @throws TotpError TOTP_REQUIRED — TOTP not enrolled, rotation requires second-factor confirmation
    * @throws TotpError INVALID_TOTP_CODE — wrong code
    */
-  async rotatePrimary(confirmationCode: string): Promise<RotationResult> {
-    if (!this.data) {
-      throw new TotpError('Token store not initialized', 'STORE_NOT_INITIALIZED');
-    }
-    if (!this.isTotpEnrolled()) {
+  rotatePrimary(confirmationCode: string): Promise<RotationResult> {
+    return this.withCurrentTokenFile(file => this.rotatePrimaryInFile(file, confirmationCode));
+  }
+
+  private async rotatePrimaryInFile(file: ConsoleTokenFile, confirmationCode: string): Promise<RotationResult> {
+    if (!file.totp.enrolled || !file.totp.secret) {
       throw new TotpError(
         'Token rotation requires TOTP enrollment — enroll a second factor before rotating',
         'TOTP_REQUIRED',
       );
     }
-
-    // Step 1: verify the confirmation code.
-    const verification = await this.verifyTotp(confirmationCode);
+    const verification = this.verifyTotpInFile(file, confirmationCode);
     if (!verification.ok) {
       throw new TotpError(INVALID_TOTP_MESSAGE, 'INVALID_TOTP_CODE');
     }
 
-    // Step 2: stash the old token in the grace buffer.
-    const primary = this.data.tokens[0];
-    const graceDeadline = Date.now() + ROTATION_GRACE_MS;
-    this.sweepExpiredGraceEntries();
-    this.graceEntries.push({
-      buf: Buffer.from(primary.token, 'utf8'),
-      expiresAt: graceDeadline,
-    });
-
-    // Step 3: generate a new token, mutate the primary entry, persist.
+    const primary = file.tokens[0];
+    const previousToken = Buffer.from(primary.token, 'utf8');
     const rotatedAt = new Date().toISOString();
     primary.token = generateTokenValue();
     primary.createdAt = rotatedAt;
     primary.lastUsedAt = null;
     primary.createdVia = 'rotation';
 
-    await this.write(this.data);
-    this.rebuildTokenBuffers();
+    await this.commitTokenFile(file);
+    this.recordBackupConsumption(verification);
+    const graceDeadline = Date.now() + ROTATION_GRACE_MS;
+    this.sweepExpiredGraceEntries();
+    this.graceEntries.push({ buf: previousToken, expiresAt: graceDeadline });
 
     logger.info('[ConsoleToken] Primary token rotated', {
       id: primary.id,
@@ -1098,10 +1165,11 @@ export class ConsoleTokenStore {
    * permissions, or a different storage location).
    */
   private async write(file: ConsoleTokenFile): Promise<void> {
-    await mkdir(RUN_DIR, { recursive: true });
-    const tmpFile = `${this.filePath}.${process.pid}.tmp`;
+    const tmpFile = `${this.filePath}.${randomUUID()}.tmp`;
     try {
-      await writeFile(tmpFile, JSON.stringify(file, null, 2), 'utf8');
+      await writeFile(tmpFile, JSON.stringify(file, null, 2), {
+        encoding: 'utf8', flag: 'wx', mode: TOKEN_FILE_MODE,
+      });
       await chmod(tmpFile, TOKEN_FILE_MODE);
       await rename(tmpFile, this.filePath);
       this.warnIfWindowsPermissions();
