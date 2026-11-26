@@ -676,6 +676,11 @@ export class DollhouseContainer {
     }
 
     await this.completeSinkSetup(timer);
+    try {
+      await this.resolve<IChallengeStore>('ChallengeStore').initialize?.();
+    } catch {
+      logger.warn('[Container] Stdio challenge store initialization failed');
+    }
     await this.completeConsoleSetup(timer);
 
     this.deferredSetupComplete = true;
@@ -975,7 +980,6 @@ export class DollhouseContainer {
     } catch (error) {
       logger.warn('[Container] DangerZoneEnforcer initialization failed:', error);
     }
-    if (env.DOLLHOUSE_TRANSPORT === 'stdio') await this.resolve<IChallengeStore>('ChallengeStore').initialize?.();
     timer?.endPhase('danger_zone_init');
   }
 
