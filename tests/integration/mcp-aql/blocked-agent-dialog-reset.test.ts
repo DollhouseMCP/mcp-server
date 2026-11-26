@@ -5,6 +5,7 @@ import { createConnection, createServer } from 'node:net';
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { MAX_BLOCK_SNAPSHOT_BYTES } from '../../../src/state/readDangerZoneBlockSnapshot.js';
 import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
 
 async function reservePort(): Promise<number> {
@@ -27,7 +28,7 @@ function consoleIsListening(port: number): Promise<boolean> {
   });
 }
 
-it('provisions basic approval at trusted stdio startup with the console disabled and runs the dialog reset', async () => {
+it.each(['malformed', 'oversized'] as const)('provisions basic approval with the console disabled and resets the %s snapshot', async kind => {
   const home = await mkdtemp(path.join(tmpdir(), 'stdio-block-reset-'));
   const state = path.join(home, '.dollhouse', 'security');
   const portfolio = path.join(home, 'portfolio');
@@ -35,7 +36,9 @@ it('provisions basic approval at trusted stdio startup with the console disabled
   const damaged = path.join(state, 'blocked-agents.json');
   const port = await reservePort();
   await Promise.all([mkdir(state, { recursive: true }), mkdir(portfolio)]);
-  await writeFile(damaged, '{');
+  const bytes = kind === 'oversized' ? Buffer.alloc(MAX_BLOCK_SNAPSHOT_BYTES + 1, 0x20) : Buffer.from('{');
+  if (kind === 'oversized') bytes.write('{"version":1,"blocks":{}}');
+  await writeFile(damaged, bytes);
   const childEnv = Object.fromEntries(Object.entries(process.env)
     .filter(([, value]) => value !== undefined)) as Record<string, string>;
   delete childEnv.JEST_WORKER_ID;
@@ -76,10 +79,12 @@ it('provisions basic approval at trusted stdio startup with the console disabled
     };
     const invalid = await request({ approved: true });
     expect(invalid.data?.reset).not.toBe(true);
-    expect(await readFile(damaged, 'utf8')).toBe('{');
+    expect((await readFile(damaged)).equals(bytes)).toBe(true);
     expect(await request({})).toMatchObject({ success: true, data: { reset: true, status: 'approved' } });
     expect(JSON.parse(await readFile(damaged, 'utf8'))).toEqual({ version: 1, blocks: {} });
-    expect((await readdir(state)).filter(name => name.endsWith('.backup'))).toHaveLength(1);
+    const backups = (await readdir(state)).filter(name => name.endsWith('.backup'));
+    expect(backups).toHaveLength(1);
+    expect((await readFile(path.join(state, backups[0]))).equals(bytes)).toBe(true);
     expect(await consoleIsListening(port)).toBe(false);
   } finally {
     await client.close();

@@ -12,6 +12,7 @@ import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
 import { FileLockManager } from '../../../src/security/fileLockManager.js';
 import { FileOperationsService } from '../../../src/services/FileOperationsService.js';
 import { FileDangerZoneBlockStore } from '../../../src/state/FileDangerZoneBlockStore.js';
+import { MAX_BLOCK_SNAPSHOT_BYTES } from '../../../src/state/readDangerZoneBlockSnapshot.js';
 import { logger } from '../../../src/utils/logger.js';
 import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
 import { ConsoleTokenStore, type ApprovalDialog } from '../../../src/web/console/consoleToken.js';
@@ -52,21 +53,27 @@ function requestLocalReset(tokenStore: ConsoleTokenStore, dialog: ApprovalDialog
     ApprovalService.approveFromDialog({ request, commit, tokenStore, dialog }));
 }
 
-it('resets a rejected snapshot after an explicit basic approval and atomically retains queued blocks', async () => {
+it.each(['malformed', 'oversized'] as const)('resets the %s snapshot after basic approval and atomically retains queued blocks', async kind => {
   const tokenStore = new ConsoleTokenStore(path.join(directory, 'console-token'));
   await tokenStore.ensureInitialized('Stdio', { onlyIfBothAbsent: true });
-  await fs.writeFile(store.location, rejected);
+  const bytes = kind === 'oversized' ? Buffer.alloc(MAX_BLOCK_SNAPSHOT_BYTES + 1, 0x20) : rejected;
+  if (kind === 'oversized') bytes.write(snapshot({}));
+  const warnings = jest.spyOn(logger, 'warn');
+  await fs.writeFile(store.location, bytes);
   await enforcer.initialize();
-  enforcer.block('pending-agent', 'Queued before approval', [], 'before');
+  if (kind === 'oversized') {
+    expect(warnings).toHaveBeenCalledWith('Rejected blocked-agent snapshot', { reason: 'Block snapshot exceeds size limit' });
+  }
+  expect(await enforcer.block('pending-agent', 'Queued before approval', [], 'before')).toBe(false);
   expect(await enforcer.check('unlisted', true)).toMatchObject({
     blocked: true, reason: expect.stringContaining(store.location),
     resolution: expect.stringContaining('request_blocked_agent_reset'),
   });
   expect(await enforcer.check('unlisted')).toMatchObject(denied);
   await expect(requestLocalReset(tokenStore, async (request, enrollment) => {
-    expect(request.operationDigest).toBe(digest(rejected));
+    expect(request.operationDigest).toBe(digest(bytes));
     expect(enrollment).toBe('unenrolled');
-    enforcer.block('later-agent', 'Queued while the dialog was open', [], 'later');
+    expect(await enforcer.block('later-agent', 'Queued while the dialog was open', [], 'later')).toBe(false);
     return { confirmed: true };
   })).resolves.toBe('approved');
 
@@ -74,7 +81,7 @@ it('resets a rejected snapshot after an explicit basic approval and atomically r
   expect(Object.keys(newSnapshot.blocks).sort()).toEqual(['later-agent', 'pending-agent']);
   const backups = (await fs.readdir(directory)).filter(name => name.endsWith('.backup'));
   expect(backups).toHaveLength(1);
-  expect(await fs.readFile(path.join(directory, backups[0]))).toEqual(rejected);
+  expect((await fs.readFile(path.join(directory, backups[0]))).equals(bytes)).toBe(true);
   expect(await enforcer.check('unlisted')).toEqual({ blocked: false });
 
   const peer = new DangerZoneEnforcer(new FileDangerZoneBlockStore(fileOps, directory));
@@ -84,6 +91,21 @@ it('resets a rejected snapshot after an explicit basic approval and atomically r
   } finally {
     await peer.shutdown();
   }
+});
+
+it('refuses to replace a snapshot if the copied evidence does not match the approved digest', async () => {
+  const tokenStore = new ConsoleTokenStore(path.join(directory, 'console-token'));
+  await tokenStore.ensureInitialized('Stdio', { onlyIfBothAbsent: true });
+  const oversized = Buffer.alloc(MAX_BLOCK_SNAPSHOT_BYTES + 1, 0x20);
+  await fs.writeFile(store.location, oversized);
+  await enforcer.initialize();
+  jest.spyOn(fileOps, 'copyFile').mockImplementationOnce(async (_source, destination) => {
+    await fs.writeFile(destination, 'incomplete evidence');
+  });
+
+  await expect(requestLocalReset(tokenStore, async () => ({ confirmed: true }))).resolves.toBe('changed');
+  expect((await fs.readFile(store.location)).equals(oversized)).toBe(true);
+  expect(await enforcer.check('unlisted')).toMatchObject(denied);
 });
 
 it('refuses cancellation, concurrent prompts, and replacement before the approved reset', async () => {
