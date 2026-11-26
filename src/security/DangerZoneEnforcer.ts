@@ -191,6 +191,11 @@ export class DangerZoneEnforcer {
     return operation;
   }
 
+  /** Status for diagnostics. Storage location and failure details stay private. */
+  getBlockStateStatus(): 'loading' | 'ready' | 'unavailable' {
+    return this.readiness;
+  }
+
   /** Join routine reads; retry storage failures with a bounded per-owner backoff. */
   async refresh(): Promise<void> {
     if (this.loading || this.readiness === 'loading') {
@@ -235,7 +240,7 @@ export class DangerZoneEnforcer {
     try {
       const result = await this.store.load(refresh);
       if (result.status !== 'loaded' && result.status !== 'absent') {
-        this.markUnavailable(result.status, result.status === 'unreadable');
+        this.markUnavailable(result.status, result.status === 'unreadable' || this.store.retryRejectedSnapshots);
         return false;
       }
       const restored = new Map<string, BlockedContext>();
@@ -256,7 +261,7 @@ export class DangerZoneEnforcer {
       return true;
     } catch (error) {
       logger.warn('Blocked-agent snapshot could not be restored', { error });
-      this.markUnavailable('invalid');
+      this.markUnavailable('invalid', this.store.retryRejectedSnapshots);
       return false;
     }
   }

@@ -368,7 +368,11 @@ export class DollhouseContainer {
     // `this.deferredSetupComplete` — a Container-internal property
     // that cannot be passed through DiContainerFacade.
     this.register('BuildInfoService', () => {
-      const service = new BuildInfoService(this.resolve('FileOperationsService'));
+      const service = new BuildInfoService(this.resolve('FileOperationsService'), () => {
+        const active = this.resolve<SessionContainerRegistry>('SessionContainerRegistry').getActiveContainer();
+        const owner = active ?? (env.DOLLHOUSE_TRANSPORT === 'stdio' ? this : undefined);
+        return owner?.resolve<DangerZoneEnforcer>('DangerZoneEnforcer').getBlockStateStatus();
+      });
       // Issue #706: Wire startup instrumentation
       service.setStartupTimer(this.resolve<StartupTimer>('StartupTimer'));
       service.setDeferredSetupChecker(() => this.deferredSetupComplete);

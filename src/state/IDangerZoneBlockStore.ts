@@ -19,6 +19,8 @@ export type BlockMutation =
 /** Durable block snapshots, scoped to one user by the composition root. */
 export interface IDangerZoneBlockStore {
   readonly location: string;
+  /** Replicas can replace rejected state without a local file notification. */
+  readonly retryRejectedSnapshots?: boolean;
   /** A routine refresh can reuse a snapshot if the backing file is unchanged. */
   load(refresh?: boolean): Promise<PersistedStateRead<Record<string, unknown>>>;
   /** Optional notification used to force a fresh read during file-backed recovery. */

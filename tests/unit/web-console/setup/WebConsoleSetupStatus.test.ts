@@ -13,9 +13,10 @@ const MIGRATIONS = 'production_database_migrations';
 const SYNC = 'portfolio_sync_live_repository';
 
 describe('web console setup check catalog', () => {
-  it('lists the eleven checks in their established order', () => {
+  it('lists the twelve checks in their established order', () => {
     expect(WEB_CONSOLE_SETUP_CHECK_IDS).toEqual([
       'production_database_migrations',
+      'blocked_agent_state',
       'security_invalidation_multi_replica',
       'allowlist_authority_parity',
       'embedded_as_login_step_up',
@@ -51,6 +52,7 @@ describe('web console setup check catalog', () => {
       .filter(check => check.verification === verification).map(check => check.id);
     expect(idsVerifiedBy('server-probe')).toEqual([
       'production_database_migrations',
+      'blocked_agent_state',
       'security_invalidation_multi_replica',
       'allowlist_authority_parity',
       'audit_telemetry_projection',

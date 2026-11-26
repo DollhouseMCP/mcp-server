@@ -51,6 +51,12 @@ If a check's source cannot answer, for example because a query fails, that check
 
 **What to do.** If migrations are missing, run the migration job for this release. If the ledger does not match, a migration file was changed after a database had applied it: compare the schema with this release before relying on it. See [Updates](./production-hosting-runbook.md#updates) in the hosting runbook.
 
+### Blocked-agent state is readable
+
+`blocked_agent_state`
+
+The server checks database row versions and agent names with the same validation used during enforcement. A rejected snapshot makes this check fail. The report contains the status only. An elevated security admin can review an affected account under **Security → Blocked-agent recovery**. For startup import failures, follow the [production hosting runbook](./production-hosting-runbook.md#legacy-blocked-agent-state-import-prevents-startup).
+
 ### Security changes reach every replica
 
 `security_invalidation_multi_replica`. Operations health: `security_invalidation`.
