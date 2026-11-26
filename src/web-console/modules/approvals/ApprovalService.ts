@@ -7,6 +7,9 @@ import type { ConsoleApprovalScope, ConsoleApprovalStatus, SessionApprovalDto, S
 import type { ISessionApprovalEventSink } from './ApprovalEvents.js';
 import type { ConsoleApprovalRecord, SessionApprovalStore } from './ApprovalStore.js';
 import { toCliApprovalScope, toConsoleApprovalScope } from './ApprovalStore.js';
+import type {
+  ApprovalDialog, ConsoleTokenStore, DialogApprovalRequest, DialogApprovalResult,
+} from '../../../web/console/consoleToken.js';
 
 const DEFAULT_APPROVAL_TTL_MS = 300_000;
 
@@ -17,6 +20,26 @@ export class ApprovalService {
     readonly eventSink?: ISessionApprovalEventSink | null;
     readonly now?: () => Date;
   }) {}
+
+  /**
+   * Server-only entry point for dialog-backed operations. The token store calls
+   * the dialog directly and hands back a decision, so the proof cannot reach
+   * route middleware, the action's persistent record, or its audit event.
+   * The action checks the pending request and operation digest again at commit.
+   */
+  static async approveFromDialog(options: {
+    readonly request: DialogApprovalRequest;
+    readonly tokenStore: ConsoleTokenStore;
+    readonly dialog: ApprovalDialog;
+    readonly commit: (request: DialogApprovalRequest) => Promise<boolean>;
+  }): Promise<DialogApprovalResult> {
+    const { requestId, sessionId, operationDigest, expiresAt } = options.request;
+    const request = Object.freeze({ requestId, sessionId, operationDigest, expiresAt });
+    const result = await options.tokenStore.confirmApprovalFromDialog(request, options.dialog);
+    if (result !== 'approved') return result;
+    if (expiresAt <= Date.now()) return 'expired';
+    return await options.commit(request) ? 'approved' : 'refused';
+  }
 
   async list(req: ConsoleRequest, sessionId: string): Promise<ConsoleHandlerResult> {
     const actor = requireConsoleAuthentication(req);

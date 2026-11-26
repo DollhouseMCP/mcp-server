@@ -52,6 +52,7 @@ import { UnicodeValidator } from '../../security/validators/unicodeValidator.js'
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
 import { withRecoverableFileWriteLock } from '../../utils/RecoverableFileWriteLock.js';
+import { acquireSlidingWindow } from '../../utils/SlidingWindowRateLimiter.js';
 
 /** Directory for runtime state files — same as LeaderElection. */
 const RUN_DIR = join(homedir(), '.dollhouse', 'run');
@@ -79,6 +80,9 @@ const TOKEN_BYTES = 32;
 /** File mode for the token file — owner read/write only. */
 const TOKEN_FILE_MODE = 0o600;
 const TOKEN_FILE_RECOVERY_MESSAGE = 'Console token file needs recovery. Restore a valid enrolled token file.';
+const APPROVAL_ATTEMPT_LIMIT = 10;
+const APPROVAL_WINDOW_MS = 60_000;
+export const DIALOG_APPROVAL_TTL_MS = 300_000;
 
 /**
  * TOTP configuration — RFC 6238 defaults. These are compiled-in so the
@@ -342,6 +346,31 @@ export interface ConsoleTokenFile {
   version: typeof TOKEN_FILE_VERSION;
   tokens: ConsoleTokenEntry[];
   totp: TotpState;
+  /** Once set, a missing approval state file requires recovery. */
+  approvalStateInitialized?: true;
+}
+
+export type ApprovalEnrollment = 'enrolled' | 'unenrolled' | 'unknown';
+
+/** Metadata supplied by the server from a pending request. */
+export interface DialogApprovalRequest {
+  readonly requestId: string;
+  readonly sessionId: string;
+  readonly operationDigest: string;
+  readonly expiresAt: number;
+}
+
+export type ApprovalDialog = (
+  request: DialogApprovalRequest,
+  enrollment: Exclude<ApprovalEnrollment, 'unknown'>,
+) => Promise<{ confirmed: false } | { confirmed: true; code?: string }>;
+
+export type DialogApprovalResult =
+  'approved' | 'refused' | 'unavailable' | 'rate_limited' | 'spent' | 'expired';
+
+interface DialogApprovalState {
+  attempts: number[];
+  spent: Record<string, number>;
 }
 
 /**
@@ -477,6 +506,7 @@ function validateTokenFile(raw: unknown): ConsoleTokenFile | null {
   if (!Array.isArray(obj.tokens) || obj.tokens.length === 0) return null;
   if (!isValidTotpState(obj.totp)) return null;
   if (!obj.tokens.every(isValidTokenEntry)) return null;
+  if (obj.approvalStateInitialized !== undefined && obj.approvalStateInitialized !== true) return null;
 
   return raw as ConsoleTokenFile;
 }
@@ -484,6 +514,39 @@ function validateTokenFile(raw: unknown): ConsoleTokenFile | null {
 type TotpVerification =
   | { ok: true; method: 'totp' | 'backup'; backupCodesRemaining: number }
   | { ok: false };
+
+function isTimestamp(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+}
+
+function parseDialogApprovalState(content: string): DialogApprovalState {
+  const raw: unknown = JSON.parse(content);
+  if (!raw || typeof raw !== 'object') throw new Error('Invalid dialog approval state');
+  const { attempts, spent } = raw as Record<string, unknown>;
+  if (!Array.isArray(attempts) || !attempts.every(isTimestamp) ||
+      !spent || typeof spent !== 'object' || Array.isArray(spent)) {
+    throw new Error('Invalid dialog approval state');
+  }
+  const entries = Object.entries(spent);
+  if (!entries.every(([hash, expiry]) => TOKEN_FORMAT.test(hash) && isTimestamp(expiry))) {
+    throw new Error('Invalid dialog approval spend records');
+  }
+  return { attempts, spent: Object.fromEntries(entries) };
+}
+
+async function writePrivateJson(filePath: string, value: object): Promise<void> {
+  const tmpFile = `${filePath}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(tmpFile, JSON.stringify(value, null, 2), {
+      encoding: 'utf8', flag: 'wx', mode: TOKEN_FILE_MODE,
+    });
+    await chmod(tmpFile, TOKEN_FILE_MODE);
+    await rename(tmpFile, filePath);
+  } catch (err) {
+    try { await unlink(tmpFile); } catch { /* ignore */ }
+    throw err;
+  }
+}
 
 /**
  * Stateful store that owns the console token file and verifies presented tokens.
@@ -763,6 +826,81 @@ export class ConsoleTokenStore {
   isTotpEnrolled(): boolean {
     this.assertTokenFileNotRecovering();
     return Boolean(this.data?.totp?.enrolled && this.data.totp.secret);
+  }
+
+  /** Read enrollment from storage, independently of the lifetime of any web server. */
+  async lookupApprovalEnrollment(): Promise<ApprovalEnrollment> {
+    if (this.tokenFileNeedsRecovery) return 'unknown';
+    const snapshot = await this.readWithStatus();
+    if (snapshot.status !== 'ok') return 'unknown';
+    return snapshot.data.totp.enrolled ? 'enrolled' : 'unenrolled';
+  }
+
+  /**
+   * Collect proof directly in a server-owned dialog, then recheck the current
+   * enrollment and spend the request under the token writer lock.
+   */
+  async confirmApprovalFromDialog(request: DialogApprovalRequest, dialog: ApprovalDialog): Promise<DialogApprovalResult> {
+    const pending = Object.freeze({ ...request });
+    const remainingMs = pending.expiresAt - Date.now();
+    if (!isTimestamp(pending.expiresAt) || remainingMs <= 0 || remainingMs > DIALOG_APPROVAL_TTL_MS) return 'expired';
+    const enrollment = await this.lookupApprovalEnrollment();
+    if (enrollment === 'unknown') return 'unavailable';
+    try {
+      const decision = await dialog(pending, enrollment);
+      if (decision.confirmed !== true) return 'refused';
+      return await this.withTokenFileLock(() => this.spendDialogApproval(pending, enrollment, decision.code));
+    } catch {
+      // Neither proof values nor file/parser errors belong in a response or log.
+      logger.warn('[ConsoleToken] Dialog approval proof or state unavailable');
+      return 'unavailable';
+    }
+  }
+
+  private async spendDialogApproval(
+    request: DialogApprovalRequest, enrollment: 'enrolled' | 'unenrolled', code?: string,
+  ): Promise<DialogApprovalResult> {
+    const snapshot = await this.readWithStatus();
+    if (snapshot.status !== 'ok' || this.tokenFileNeedsRecovery) return 'unavailable';
+    const file = snapshot.data;
+    if (file.totp.enrolled !== (enrollment === 'enrolled')) return 'unavailable';
+    const state = await this.readDialogApprovalState(file);
+    const now = Date.now();
+    if (request.expiresAt <= now) return 'expired';
+    const key = createHash('sha256').update(JSON.stringify([request.sessionId, request.requestId])).digest('hex');
+    state.spent = Object.fromEntries(Object.entries(state.spent).filter(([, expiry]) => expiry > now));
+    if (Object.hasOwn(state.spent, key)) return 'spent';
+    const attempts = acquireSlidingWindow(state.attempts, APPROVAL_ATTEMPT_LIMIT, APPROVAL_WINDOW_MS, now);
+    if (!attempts) return 'rate_limited';
+    state.attempts = attempts;
+
+    const proof = file.totp.enrolled && code !== undefined ? this.verifyTotpInFile(file, code) : { ok: false } as const;
+    const approved = proof.ok || (!file.totp.enrolled && code === undefined);
+    if (approved) state.spent[key] = request.expiresAt;
+    // Persist the spend before consuming a backup code or allowing a decision.
+    // Failure between writes may refuse a request without approving it.
+    await writePrivateJson(this.dialogApprovalStatePath(), state);
+    if (!file.approvalStateInitialized || (proof.ok && proof.method === 'backup')) {
+      file.approvalStateInitialized = true;
+      await this.commitTokenFile(file);
+    }
+    if (proof.ok) this.recordBackupConsumption(proof);
+    return approved ? 'approved' : 'refused';
+  }
+
+  private dialogApprovalStatePath(): string {
+    return `${this.filePath}.approval-state`;
+  }
+
+  private async readDialogApprovalState(file: ConsoleTokenFile): Promise<DialogApprovalState> {
+    const statePath = this.dialogApprovalStatePath();
+    try {
+      return parseDialogApprovalState(await readFile(statePath, 'utf8'));
+    } catch (err) {
+      if (!file.approvalStateInitialized && (err as NodeJS.ErrnoException).code === 'ENOENT' &&
+          await this.fileIsAbsent(statePath)) return { attempts: [], spent: {} };
+      throw new Error('Dialog approval state is unavailable');
+    }
   }
 
   /**
@@ -1152,7 +1290,7 @@ export class ConsoleTokenStore {
     try {
       content = await readFile(this.filePath, 'utf8');
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT' && await this.tokenFileIsAbsent()) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT' && await this.fileIsAbsent(this.filePath)) {
         return { status: 'missing' };
       }
       return { status: 'corrupt', reason: 'file could not be read' };
@@ -1167,10 +1305,10 @@ export class ConsoleTokenStore {
     }
   }
 
-  private async tokenFileIsAbsent(): Promise<boolean> {
+  private async fileIsAbsent(filePath: string): Promise<boolean> {
     // readFile also reports ENOENT for a dangling symlink. Preserve it in place.
     try {
-      await lstat(this.filePath);
+      await lstat(filePath);
       return false;
     } catch (err) {
       return (err as NodeJS.ErrnoException).code === 'ENOENT';
@@ -1188,18 +1326,8 @@ export class ConsoleTokenStore {
    * permissions, or a different storage location).
    */
   private async write(file: ConsoleTokenFile): Promise<void> {
-    const tmpFile = `${this.filePath}.${randomUUID()}.tmp`;
-    try {
-      await writeFile(tmpFile, JSON.stringify(file, null, 2), {
-        encoding: 'utf8', flag: 'wx', mode: TOKEN_FILE_MODE,
-      });
-      await chmod(tmpFile, TOKEN_FILE_MODE);
-      await rename(tmpFile, this.filePath);
-      this.warnIfWindowsPermissions();
-    } catch (err) {
-      try { await unlink(tmpFile); } catch { /* ignore */ }
-      throw err;
-    }
+    await writePrivateJson(this.filePath, file);
+    this.warnIfWindowsPermissions();
   }
 
   /** One-shot flag so the Windows permissions warning is logged at most once. */

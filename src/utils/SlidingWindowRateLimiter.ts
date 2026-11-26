@@ -11,10 +11,19 @@ export class SlidingWindowRateLimiter {
 
   /** Returns true if the request is allowed, false if rate-limited. */
   tryAcquire(): boolean {
-    const now = Date.now();
-    this.timestamps = this.timestamps.filter(t => now - t < this.windowMs);
-    if (this.timestamps.length >= this.maxRequests) return false;
-    this.timestamps.push(now);
+    const updated = acquireSlidingWindow(this.timestamps, this.maxRequests, this.windowMs, Date.now());
+    if (!updated) return false;
+    this.timestamps = updated;
     return true;
   }
+}
+
+/** Apply the same window to timestamps kept in memory or under a file lock. */
+export function acquireSlidingWindow(
+  timestamps: readonly number[], maxRequests: number, windowMs: number, now: number,
+): number[] | null {
+  const active = timestamps.filter(timestamp => now - timestamp < windowMs);
+  if (active.length >= maxRequests) return null;
+  active.push(now);
+  return active;
 }
