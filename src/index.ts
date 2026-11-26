@@ -785,6 +785,10 @@ export class DollhouseMCPServer implements IToolHandler {
       await this.completeInitialization();
       timer.endPhase('handler_creation');
 
+      if (!this.container.hasRegistration('DatabaseInstance')) {
+        await this.initializeLocalApprovalState();
+      }
+
       // Initialize operational telemetry (async, non-blocking, never throws)
       const operationalTelemetry = this.container.resolve<OperationalTelemetry>('OperationalTelemetry');
       operationalTelemetry.initialize().catch(() => {
@@ -860,6 +864,18 @@ export class DollhouseMCPServer implements IToolHandler {
         `total ${report.totalMs}ms`);
     }).catch(() => { /* already logged */ });
 
+  }
+
+  private async initializeLocalApprovalState(): Promise<void> {
+    try {
+      const [{ ConsoleTokenStore }, { pickRandomTokenName }] = await Promise.all([
+        import('./web/console/consoleToken.js'), import('./web/console/SessionNames.js'),
+      ]);
+      const store = new ConsoleTokenStore(env.DOLLHOUSE_CONSOLE_TOKEN_FILE);
+      await store.ensureInitialized(pickRandomTokenName(), { onlyIfBothAbsent: true });
+    } catch {
+      logger.warn('[Startup] Local approval state could not be initialized');
+    }
   }
 }
 

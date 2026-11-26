@@ -23,6 +23,7 @@ describe('OperationRouter', () => {
         'addEntry',
         'verify_challenge',
         'release_deadlock',
+        'request_blocked_agent_reset',
         'beetlejuice_beetlejuice_beetlejuice',
         'install_collection_content',
         'submit_collection_content',
@@ -169,6 +170,7 @@ describe('OperationRouter', () => {
       expect(createOps).toContain('create_element');
       expect(createOps).toContain('record_execution_step');
       expect(createOps).toContain('release_deadlock');
+      expect(createOps).toContain('request_blocked_agent_reset');
     });
   });
 

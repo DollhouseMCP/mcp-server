@@ -179,7 +179,9 @@ export class AgentExecutionHandler {
     if (method === 'getState' || method === 'abort' || !this.handlers.dangerZoneEnforcer) {
       return;
     }
-    const blockCheck = await this.handlers.dangerZoneEnforcer.check(elementName);
+    const enforcer = this.handlers.dangerZoneEnforcer;
+    const localStdio = this.contextTracker?.getSessionContext?.()?.transport === 'stdio';
+    const blockCheck = localStdio ? await enforcer.check(elementName, true) : await enforcer.check(elementName);
     if (!blockCheck.blocked) {
       return;
     }

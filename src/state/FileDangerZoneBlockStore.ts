@@ -1,6 +1,6 @@
 import os from 'node:os';
 import path from 'node:path';
-import { watch, type FSWatcher, type Stats } from 'node:fs';
+import { createReadStream, promises as fs, watch, type FSWatcher, type Stats } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import type { FileOperationsService } from '../services/FileOperationsService.js';
 import { BlockStateValidationError } from '../security/BlockStateValidationError.js';
@@ -9,11 +9,18 @@ import { logger } from '../utils/logger.js';
 import type { IDangerZoneBlockStore, BlockMutation } from './IDangerZoneBlockStore.js';
 import { isStateObject, type PersistedStateRead } from './persistence-utils.js';
 import { MAX_BLOCK_SNAPSHOT_BYTES, readDangerZoneBlockSnapshot } from './readDangerZoneBlockSnapshot.js';
+import { withRecoverableFileWriteLock } from '../utils/RecoverableFileWriteLock.js';
 
 const REPAIR_PROBE_MS = 1000;
 type ReadResult = PersistedStateRead<Record<string, unknown>>;
 type RejectedRead = Exclude<ReadResult, { status: 'absent' | 'loaded' }>;
 class SnapshotChangedError extends Error {}
+export class ResetSnapshotChangedError extends Error {}
+
+interface BoundReset {
+  readonly expectedDigest: string;
+  readonly pendingBlocks: Record<string, unknown>;
+}
 
 interface RejectedSnapshot {
   revision?: string;
@@ -243,25 +250,61 @@ export class FileDangerZoneBlockStore implements IDangerZoneBlockStore {
     });
   }
 
-  private async existingEvidence(): Promise<string | undefined> {
+  private async existingEvidence(expectedDigest?: string): Promise<string | undefined> {
     const rejected = this.rejected;
     if (!rejected?.evidence) return undefined;
     try {
-      const current = digestOf(await this.readBytes(this.location));
-      const retained = digestOf(await this.readBytes(rejected.evidence));
+      const current = expectedDigest ?? await this.readResetDigest();
+      const retained = await this.readCheckedDigest(rejected.evidence);
       return current === rejected.digest && retained === current ? rejected.evidence : undefined;
     } catch {
       return undefined;
     }
   }
 
-  async reset(): Promise<string> {
+  private async readCheckedDigest(file: string): Promise<string> {
+    const before = await fs.stat(file);
+    if (!before.isFile()) throw new SnapshotChangedError('Blocked-agent path is not a regular file');
+    const hash = createHash('sha256');
+    let bytesRead = 0;
+    // Recovery binds approval to the raw bytes, including files too large to parse.
+    for await (const chunk of createReadStream(file)) {
+      hash.update(chunk);
+      bytesRead += chunk.length;
+    }
+    const after = await fs.stat(file);
+    if (revisionOf(after) !== revisionOf(before) || bytesRead !== before.size) {
+      throw new SnapshotChangedError('Blocked-agent file changed or the read was incomplete');
+    }
+    return hash.digest('hex');
+  }
+
+  readResetDigest(): Promise<string> {
+    return this.readCheckedDigest(this.location);
+  }
+
+  /** Admission is shared across stdio servers, independently of the snapshot writer lock. */
+  withResetDialog<T>(operation: () => Promise<T>): Promise<T> {
+    return withRecoverableFileWriteLock(`${this.location}.reset-dialog.lock`, operation, 200);
+  }
+
+  async reset(bound?: BoundReset): Promise<string> {
     return this.withLock(async () => {
-      const existingEvidence = await this.existingEvidence();
+      if (bound) await this.requireResetDigest(bound.expectedDigest);
+      const existingEvidence = await this.existingEvidence(bound?.expectedDigest);
       const evidence = existingEvidence ?? await this.copyResetEvidence();
-      await this.writeSnapshot({});
+      if (bound) {
+        if (!existingEvidence) await this.requireResetDigest(bound.expectedDigest, evidence);
+        await this.requireResetDigest(bound.expectedDigest);
+      }
+      await this.writeSnapshot(bound?.pendingBlocks ?? {});
       return evidence;
     });
+  }
+
+  private async requireResetDigest(expected: string, file = this.location): Promise<void> {
+    const actual = await this.readCheckedDigest(file).catch(() => undefined);
+    if (actual !== expected) throw new ResetSnapshotChangedError('Blocked-agent file changed before reset');
   }
 
   private async copyResetEvidence(): Promise<string> {

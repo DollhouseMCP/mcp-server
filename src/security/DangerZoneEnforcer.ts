@@ -22,6 +22,9 @@ import { EvictingQueue } from '../utils/EvictingQueue.js';
 import type { IDangerZoneBlockStore, PersistedBlock } from '../state/IDangerZoneBlockStore.js';
 import { BlockPersistenceQueue } from './BlockPersistenceQueue.js';
 import { isStateObject } from '../state/persistence-utils.js';
+import { FileDangerZoneBlockStore, ResetSnapshotChangedError } from '../state/FileDangerZoneBlockStore.js';
+import { SlidingWindowRateLimiter } from '../utils/SlidingWindowRateLimiter.js';
+import type { DialogApprovalRequest, DialogApprovalResult } from '../web/console/consoleToken.js';
 
 /** Rolling-window size for block-duration metrics (matches SecurityMonitor/LogManager). */
 const METRICS_WINDOW_SIZE = 1000;
@@ -30,6 +33,11 @@ export type BlockReleaseReason = 'unavailable' | 'admin-only' | 'session' | 'dec
 export type BlockReleaseResult =
   | { released: true; agentName?: string }
   | { released: false; reason: BlockReleaseReason; agentName?: string };
+
+export type LocalBlockResetResult = DialogApprovalResult | 'busy' | 'changed' | 'not_needed' | 'unsupported';
+type ApproveLocalReset = (
+  request: DialogApprovalRequest, commit: (approved: DialogApprovalRequest) => Promise<boolean>,
+) => Promise<DialogApprovalResult>;
 
 /**
  * Blocked execution context
@@ -140,6 +148,8 @@ export class DangerZoneEnforcer {
   private readonly persistence: BlockPersistenceQueue;
   private readiness: 'loading' | 'ready' | 'unavailable' = 'loading';
   private retryable = false;
+  private unavailableReason = 'unavailable';
+  private readonly resetPromptLimiter = new SlidingWindowRateLimiter(3, 60_000);
   private retryAfter = 0;
   private loading: Promise<void> | undefined;
   private refreshing: Promise<void> | undefined;
@@ -263,6 +273,7 @@ export class DangerZoneEnforcer {
     this.retryable = retryable;
     this.retryAfter = Date.now() + 1000;
     this.readiness = 'unavailable';
+    this.unavailableReason = reason;
     this.persistence.unavailable();
     this.restoreProjected();
     if (!this.shuttingDown) this.stopWatching ??= this.store.watchForRecovery?.(() => this.retryFileRecovery());
@@ -565,10 +576,17 @@ export class DangerZoneEnforcer {
    * }
    * ```
    */
-  async check(agentName: string): Promise<BlockCheckResult> {
+  async check(agentName: string, localStdio = false): Promise<BlockCheckResult> {
     validateAgentName(agentName, 'check');
     await this.refresh();
     if (this.readiness !== 'ready') {
+      if (localStdio && this.store instanceof FileDangerZoneBlockStore) {
+        return {
+          blocked: true,
+          reason: `Blocked-agent state is unavailable (${this.unavailableReason}) at ${this.store.location}.`,
+          resolution: 'Request a local reset using request_blocked_agent_reset and review the desktop prompt.',
+        };
+      }
       return {
         blocked: true, reason: 'Blocked-agent state is unavailable.',
         resolution: 'Contact an administrator.',
@@ -702,10 +720,56 @@ export class DangerZoneEnforcer {
     return true;
   }
 
-  private resetUnavailable(): Promise<boolean> {
+  /** A request can open the dialog. Only its shared approval commit can reset storage. */
+  async requestLocalReset(sessionId: string, approve: ApproveLocalReset): Promise<LocalBlockResetResult> {
+    const store = this.store;
+    if (!(store instanceof FileDangerZoneBlockStore)) return 'unsupported';
+    try {
+      return await store.withResetDialog(() => this.requestBoundReset(store, sessionId, approve));
+    } catch (error) {
+      return error instanceof Error && error.message === 'Timed out waiting for the file write lock'
+        ? 'busy' : 'unavailable';
+    }
+  }
+
+  private async requestBoundReset(
+    store: FileDangerZoneBlockStore, sessionId: string, approve: ApproveLocalReset,
+  ): Promise<LocalBlockResetResult> {
+    await this.refresh();
+    if (this.readiness !== 'unavailable') return 'not_needed';
+    const digest = await store.readResetDigest();
+    // Force validation of the snapshot immediately before offering a reset.
+    await this.startRefresh(false);
+    if (this.readiness !== 'unavailable') return 'not_needed';
+    if (await store.readResetDigest() !== digest) return 'changed';
+    if (!this.resetPromptLimiter.tryAcquire()) return 'rate_limited';
+
+    const request = { requestId: randomUUID(), sessionId, operationDigest: digest, expiresAt: Date.now() + 60_000 };
+    let changed = false;
+    const result = await approve(request, async approved => {
+      if (approved.requestId !== request.requestId || approved.sessionId !== sessionId ||
+          approved.operationDigest !== digest || approved.expiresAt !== request.expiresAt) return false;
+      if (this.refreshing) await this.refreshing;
+      if (this.readiness !== 'unavailable' || this.shuttingDown) {
+        changed = true;
+        return false;
+      }
+      return this.resetUnavailable(async pendingBlocks => {
+        try {
+          return await store.reset({ expectedDigest: digest, pendingBlocks });
+        } catch (error) {
+          changed = error instanceof ResetSnapshotChangedError;
+          throw error;
+        }
+      });
+    });
+    return changed ? 'changed' : result;
+  }
+
+  private resetUnavailable(resetLocal?: (pendingBlocks: Record<string, unknown>) => Promise<string>): Promise<boolean> {
     this.readiness = 'loading';
-    const clearPreceding = this.persistence.resetBoundary();
-    const reset = this.resetSnapshot(clearPreceding);
+    const rebase = resetLocal ? () => this.persistence.replace({}) : this.persistence.resetBoundary();
+    const reset = this.resetSnapshot(rebase, resetLocal);
     const operation = reset.then(() => undefined).finally(() => {
       if (this.loading === operation) this.loading = undefined;
     });
@@ -713,21 +777,24 @@ export class DangerZoneEnforcer {
     return reset;
   }
 
-  private async resetSnapshot(clearPreceding: () => void): Promise<boolean> {
+  private async resetSnapshot(
+    rebase: () => void, resetLocal?: (pendingBlocks: Record<string, unknown>) => Promise<string>,
+  ): Promise<boolean> {
+    const source = resetLocal ? 'DangerZoneEnforcer.requestLocalReset' : 'DangerZoneEnforcer.clearAll';
     try {
       await this.persistence.pause();
       SecurityMonitor.logSecurityEvent({
-        type: 'DANGER_ZONE_OPERATION', severity: 'HIGH', source: 'DangerZoneEnforcer.clearAll',
+        type: 'DANGER_ZONE_OPERATION', severity: 'HIGH', source,
         details: 'Administrative block-state reset authorized',
       });
-      const evidence = await this.store.reset();
+      const evidence = resetLocal ? await resetLocal(this.persistence.pendingBlocks()) : await this.store.reset();
       SecurityMonitor.logSecurityEvent({
-        type: 'DANGER_ZONE_OPERATION', severity: 'HIGH', source: 'DangerZoneEnforcer.clearAll',
+        type: 'DANGER_ZONE_OPERATION', severity: 'HIGH', source,
         details: evidence ? 'Administrative block-state reset authorized; evidence preserved'
           : 'Administrative block-state reset authorized; no evidence to preserve',
         additionalData: { evidence },
       });
-      clearPreceding();
+      rebase();
       this.restoreProjected();
       this.readiness = 'ready';
       await this.persistence.resume();
@@ -736,7 +803,7 @@ export class DangerZoneEnforcer {
       this.stopFileRecovery();
       this.totalClearAllCalls++;
       SecurityMonitor.logSecurityEvent({
-        type: 'AUTONOMY_PAUSED', severity: 'HIGH', source: 'DangerZoneEnforcer.clearAll',
+        type: 'AUTONOMY_PAUSED', severity: 'HIGH', source,
         details: 'Administrative block-state reset completed', additionalData: { evidence },
       });
       return true;

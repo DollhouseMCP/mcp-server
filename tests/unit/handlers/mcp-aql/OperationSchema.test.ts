@@ -640,11 +640,12 @@ describe('OperationSchema', () => {
     });
 
     describe('GATEKEEPER_SCHEMAS', () => {
-      it('should define 10 gatekeeper operations', () => {
-        expect(Object.keys(GATEKEEPER_SCHEMAS)).toHaveLength(10);
+      it('should define 11 gatekeeper operations', () => {
+        expect(Object.keys(GATEKEEPER_SCHEMAS)).toHaveLength(11);
         expect(GATEKEEPER_SCHEMAS.confirm_operation).toBeDefined();
         expect(GATEKEEPER_SCHEMAS.verify_challenge).toBeDefined();
         expect(GATEKEEPER_SCHEMAS.release_deadlock).toBeDefined();
+        expect(GATEKEEPER_SCHEMAS.request_blocked_agent_reset).toBeDefined();
         expect(GATEKEEPER_SCHEMAS.beetlejuice_beetlejuice_beetlejuice).toBeDefined();
         expect(GATEKEEPER_SCHEMAS.permission_prompt).toBeDefined();
         expect(GATEKEEPER_SCHEMAS.get_effective_cli_policies).toBeDefined();
@@ -657,6 +658,7 @@ describe('OperationSchema', () => {
         expect(GATEKEEPER_SCHEMAS.confirm_operation.endpoint).toBe('EXECUTE');
         expect(GATEKEEPER_SCHEMAS.verify_challenge.endpoint).toBe('CREATE');
         expect(GATEKEEPER_SCHEMAS.release_deadlock.endpoint).toBe('CREATE');
+        expect(GATEKEEPER_SCHEMAS.request_blocked_agent_reset.endpoint).toBe('CREATE');
         expect(GATEKEEPER_SCHEMAS.beetlejuice_beetlejuice_beetlejuice.endpoint).toBe('CREATE');
         // Issue #647: permission_prompt is a read-only policy evaluation
         expect(GATEKEEPER_SCHEMAS.permission_prompt.endpoint).toBe('READ');
@@ -675,6 +677,10 @@ describe('OperationSchema', () => {
       it('should allow a challenge request or completion payload for release_deadlock', () => {
         expect(GATEKEEPER_SCHEMAS.release_deadlock.params?.challenge_id?.required).toBeUndefined();
         expect(GATEKEEPER_SCHEMAS.release_deadlock.params?.code?.required).toBeUndefined();
+      });
+
+      it('should keep the local reset request parameterless', () => {
+        expect(GATEKEEPER_SCHEMAS.request_blocked_agent_reset.params).toEqual({});
       });
 
       it('should have optional agent_name for beetlejuice', () => {

@@ -13,7 +13,13 @@ import { jest, describe, it, expect, beforeEach } from '@jest/globals';
 import type { ExecFileSyncOptions, ExecSyncOptions } from 'child_process';
 
 // Mock modules before importing the tested module
+const runNativeDialog = jest.fn<(
+  file: string, args: readonly string[], options: object,
+) => Promise<{ stdout: string; stderr: string }>>();
+const { promisify } = await import('node:util');
+
 jest.unstable_mockModule('child_process', () => ({
+  execFile: Object.assign(jest.fn(), { [promisify.custom]: runNativeDialog }),
   execFileSync: jest.fn(),
   execSync: jest.fn(),
 }));
@@ -25,7 +31,7 @@ jest.unstable_mockModule('os', () => ({
 // Import mocked modules
 const { execFileSync, execSync } = await import('child_process');
 const { platform } = await import('os');
-const { showVerificationDialog, isDialogAvailable } = await import(
+const { showVerificationDialog, showBlockResetDialog, isDialogAvailable } = await import(
   '../src/DisplayService.js'
 );
 
@@ -45,6 +51,73 @@ const mockPlatform = platform as jest.Mock<() => NodeJS.Platform>;
 describe('DisplayService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+  });
+
+  describe('showBlockResetDialog', () => {
+    it('uses Cancel as the macOS default and receives masked proof only from the child output', async () => {
+      mockPlatform.mockReturnValue('darwin');
+      runNativeDialog.mockResolvedValueOnce({ stdout: 'reset\n123456\n', stderr: '' });
+      await expect(showBlockResetDialog(true, 20_000)).resolves.toEqual({ confirmed: true, code: '123456' });
+      const [command, args, options] = runNativeDialog.mock.calls[0];
+      expect(command).toBe('/usr/bin/osascript');
+      expect(args.join(' ')).toContain('default button "Cancel" cancel button "Cancel"');
+      expect(args.join(' ')).toContain('with hidden answer');
+      expect(args.join(' ')).not.toContain('123456');
+      expect(options).toMatchObject({ timeout: 20_000 });
+    });
+
+    it.each([
+      ['cancelled', { code: 1, stderr: 'execution error: User canceled. (-128)' }],
+      ['timeout', { killed: true, stdout: 'reset\n123456' }],
+      ['unavailable', { code: 'ENOENT', stderr: 'sensitive process output' }],
+    ])('refuses a %s native dialog without relaying output', async (reason, error) => {
+      mockPlatform.mockReturnValue('darwin');
+      runNativeDialog.mockRejectedValueOnce(error);
+      await expect(showBlockResetDialog(true, 20_000)).resolves.toEqual({ confirmed: false, reason });
+    });
+
+    it('uses Cancel by default for the final Linux reset after collecting masked proof', async () => {
+      mockPlatform.mockReturnValue('linux');
+      const oldDisplay = process.env.DISPLAY;
+      process.env.DISPLAY = ':test';
+      try {
+        runNativeDialog
+          .mockResolvedValueOnce({ stdout: '123456\n', stderr: '' })
+          .mockResolvedValueOnce({ stdout: '', stderr: '' });
+        await expect(showBlockResetDialog(true, 20_000)).resolves.toEqual({ confirmed: true, code: '123456' });
+        expect(runNativeDialog.mock.calls[0][1]).toContain('--hide-text');
+        const confirmation = runNativeDialog.mock.calls[1][1];
+        expect(confirmation).toEqual(expect.arrayContaining(['--question', '--default-cancel', '--ok-label', 'Reset']));
+        expect(confirmation.join(' ')).not.toContain('123456');
+      } finally {
+        if (oldDisplay === undefined) delete process.env.DISPLAY;
+        else process.env.DISPLAY = oldDisplay;
+      }
+    });
+
+    it('refuses on Linux with neither display variable', async () => {
+      mockPlatform.mockReturnValue('linux');
+      const env = jest.replaceProperty(process, 'env', { ...process.env, DISPLAY: '', WAYLAND_DISPLAY: '' });
+      try {
+        await expect(showBlockResetDialog(false, 20_000)).resolves.toEqual({ confirmed: false, reason: 'unavailable' });
+        expect(runNativeDialog).not.toHaveBeenCalled();
+      } finally {
+        env.restore();
+      }
+    });
+
+    it('sets Cancel as both default and Escape on Windows and keeps proof out of the command', async () => {
+      mockPlatform.mockReturnValue('win32');
+      runNativeDialog.mockResolvedValueOnce({ stdout: 'reset\r\n123456', stderr: '' });
+      await expect(showBlockResetDialog(true, 20_000)).resolves.toEqual({ confirmed: true, code: '123456' });
+      const [command, args] = runNativeDialog.mock.calls[0];
+      expect(command).toBe('powershell.exe');
+      const script = Buffer.from(args.at(-1)!, 'base64').toString('utf16le');
+      expect(script).toContain('$form.AcceptButton = $cancel');
+      expect(script).toContain('$form.CancelButton = $cancel');
+      expect(script).toContain('UseSystemPasswordChar = $true');
+      expect(script).not.toContain('123456');
+    });
   });
 
   describe('isDialogAvailable', () => {

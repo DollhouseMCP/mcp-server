@@ -98,6 +98,11 @@ export const OPERATION_POLICY_OVERRIDES: Record<string, OperationPolicy> = {
     rationale: 'Deadlock relief flow — requires out-of-band verification and must remain reachable even when confirmations are blocked',
     canBeElevated: false,
   },
+  request_blocked_agent_reset: {
+    defaultLevel: PermissionLevel.AUTO_APPROVE,
+    rationale: 'Permit requesting the desktop prompt. The reset requires out-of-band approval in the local dialog.',
+    canBeElevated: false,
+  },
   beetlejuice_beetlejuice_beetlejuice: {
     defaultLevel: PermissionLevel.AUTO_APPROVE,
     rationale: 'Test fixture for danger zone verification — must be auto-approved to avoid requiring confirmation to test',

@@ -1473,6 +1473,16 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
       '{ operation: "release_deadlock", params: { challenge_id: "550e8400-e29b-41d4-a716-446655440000", code: "ABC123" } }',
     ],
   },
+  request_blocked_agent_reset: {
+    endpoint: 'CREATE',
+    handler: 'mcpAqlHandler',
+    method: 'dispatchGatekeeper',
+    category: CATEGORY.SECURITY,
+    description: 'Ask the local operator to reset unavailable blocked-agent state in a desktop dialog',
+    params: {},
+    returns: { name: 'BlockedAgentResetResult', kind: 'object', description: 'Recovery status with fields reset, status, and message' },
+    examples: ['{ operation: "request_blocked_agent_reset" }'],
+  },
   beetlejuice_beetlejuice_beetlejuice: {
     endpoint: 'CREATE',
     handler: 'mcpAqlHandler',

@@ -443,7 +443,7 @@ export interface HandlerRegistry {
  */
 export interface CorrelationIdProvider extends SaveContextScope {
   getCorrelationId(): string | undefined;
-  getSessionContext?(): { sessionId: string } | undefined;
+  getSessionContext?(): { sessionId: string; transport?: 'stdio' | 'http' } | undefined;
 }
 
 interface MemoryCallerView {
