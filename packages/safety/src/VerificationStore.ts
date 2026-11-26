@@ -60,7 +60,7 @@ export class VerificationStore {
   /** Claim the reviewed challenge. The caller may restore it if the release could not be committed. */
   claimForDialog(challengeId: string, expected: Omit<StoredChallenge, 'code'>): (() => void) | undefined {
     const current = this.get(challengeId);
-    if (!current || current.expiresAt !== expected.expiresAt || current.reason !== expected.reason) return undefined;
+    if (current?.expiresAt !== expected.expiresAt || current.reason !== expected.reason) return undefined;
     this.challenges.delete(challengeId);
     let canRestore = true;
     return () => {

@@ -549,11 +549,16 @@ export class GatekeeperHandler {
       throw new Error('Request deadlock approval without parameters or supply a pending challenge ID.');
     }
     const issued = this.deps.issueDeadlockReliefChallenge();
-    if (local) {
-      const result = await this.requestLocalDeadlockRelief(session.sessionId, issued.response.challenge_id);
-      if (result.released) return result.result;
-      if (!this.deps.handlers.verificationStore?.get(issued.response.challenge_id)) return result;
-    }
+    if (local) return this.requestInitialDeadlockApproval(session.sessionId, issued);
+    issued.showCode();
+    return issued.response;
+  }
+
+  private async requestInitialDeadlockApproval(sessionId: string, issued: IssuedDeadlockChallenge) {
+    const challengeId = issued.response.challenge_id;
+    const result = await this.requestLocalDeadlockRelief(sessionId, challengeId);
+    if (result.released) return result.result;
+    if (!this.deps.handlers.verificationStore?.get(challengeId)) return result;
     issued.showCode();
     return issued.response;
   }
