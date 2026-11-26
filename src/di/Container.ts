@@ -676,6 +676,11 @@ export class DollhouseContainer {
     }
 
     await this.completeSinkSetup(timer);
+    try {
+      await this.resolve<IChallengeStore>('ChallengeStore').initialize?.();
+    } catch {
+      logger.warn('[Container] Stdio challenge store initialization failed');
+    }
     await this.completeConsoleSetup(timer);
 
     this.deferredSetupComplete = true;
@@ -1559,7 +1564,7 @@ export class DollhouseContainer {
       child.register('ConfirmationStore', () =>
         new DbConfirmation(db, httpUserId, sid, (this.hasRegistration('AuditHmacResolver') ? this.resolve<AuditHmacResolver>('AuditHmacResolver') : undefined)));
       child.register('ChallengeStore', () =>
-        new DbChallenge(db, httpUserId, sid));
+        new DbChallenge(db, httpUserId, sid, this.resolve('AuditHmacResolver')));
       child.register('VerificationStore', () => child.resolve('ChallengeStore'));
       child.register('GatekeeperSession', () =>
         new GatekeeperSession(undefined, 100, undefined, child.resolve('ConfirmationStore'), sid, (this.hasRegistration('AuditHmacResolver') ? this.resolve<AuditHmacResolver>('AuditHmacResolver') : undefined)));
@@ -1569,7 +1574,7 @@ export class DollhouseContainer {
       child.register('ConfirmationStore', () =>
         new FileConfirmationStore(this.resolve('FileOperationsService'), userStateDir, sid, (this.hasRegistration('AuditHmacResolver') ? this.resolve<AuditHmacResolver>('AuditHmacResolver') : undefined)));
       child.register('ChallengeStore', () =>
-        new FileChallengeStore(this.resolve('FileOperationsService'), userStateDir, sid));
+        new FileChallengeStore(this.resolve('FileOperationsService'), this.resolve('AuditHmacResolver'), userStateDir, sid));
       child.register('VerificationStore', () => child.resolve('ChallengeStore'));
       child.register('GatekeeperSession', () =>
         new GatekeeperSession(undefined, 100, undefined, child.resolve('ConfirmationStore'), sid, (this.hasRegistration('AuditHmacResolver') ? this.resolve<AuditHmacResolver>('AuditHmacResolver') : undefined)));

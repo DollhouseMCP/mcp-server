@@ -35,6 +35,7 @@ jest.unstable_mockModule('fs/promises', () => ({
 }));
 
 const { FileChallengeStore } = await import('../../../src/state/FileChallengeStore.js');
+const keys = { resolve: async () => ({ keyId: 'test', key: Buffer.alloc(32, 0x5d) }) };
 
 function createMockFileOps(options?: {
   readFileResult?: string;
@@ -53,6 +54,8 @@ function createMockFileOps(options?: {
   return {
     readFile: readFileMock,
     writeFile: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    chmod: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    withWriteLock: async <T>(_file: string, operation: () => Promise<T>) => operation(),
   } as ReturnType<typeof createMockFileOps>;
 }
 
@@ -60,11 +63,12 @@ describe('FileChallengeStore', () => {
   let store: InstanceType<typeof FileChallengeStore>;
   let mockFileOps: ReturnType<typeof createMockFileOps>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     jest.clearAllMocks();
     mockFileOps = createMockFileOps();
     // Disable auto-cleanup timer in tests (pass 0)
-    store = new FileChallengeStore(mockFileOps, TEST_STATE_DIR, 'test-session', 0);
+    store = new FileChallengeStore(mockFileOps, keys, TEST_STATE_DIR, 'test-session', 0);
+    await store.initialize();
   });
 
   afterEach(() => {
@@ -76,7 +80,7 @@ describe('FileChallengeStore', () => {
       const challenge = { code: '123456', expiresAt: Date.now() + 60000, reason: 'test' };
       store.set('challenge-1', challenge);
 
-      expect(store.get('challenge-1')).toEqual(challenge);
+      expect(store.get('challenge-1')).toEqual({ expiresAt: challenge.expiresAt, reason: challenge.reason });
       expect(store.size()).toBe(1);
     });
 
@@ -140,18 +144,36 @@ describe('FileChallengeStore', () => {
         ],
       };
       mockFileOps = createMockFileOps({ readFileResult: JSON.stringify(persisted) });
-      store = new FileChallengeStore(mockFileOps, TEST_STATE_DIR, 'test-session', 0);
+      store = new FileChallengeStore(mockFileOps, keys, TEST_STATE_DIR, 'test-session', 0);
 
       await store.initialize();
 
+      const migrated = mockFileOps.writeFile.mock.calls[0][1];
+      expect(migrated).not.toContain('"code"');
+      expect(migrated).not.toContain('"abc"');
+      expect(JSON.parse(migrated)).toMatchObject({ version: 2, challenges: [['c-active', expect.objectContaining({ reason: 'active' })]] });
       expect(store.size()).toBe(1);
-      expect(store.get('c-active')?.code).toBe('abc');
+      expect(store.get('c-active')).toMatchObject({ reason: 'active' });
       expect(store.get('c-expired')).toBeUndefined();
+      expect(store.verify('c-active', 'abc')).toBe(true);
+      await store.awaitPendingWrites();
     });
 
     it('should start fresh when no file exists', async () => {
       await store.initialize();
       expect(store.size()).toBe(0);
+    });
+
+    it('keeps a legacy challenge unavailable when its protected state cannot be written', async () => {
+      const persisted = JSON.stringify({
+        version: 1, challenges: [['pending', { code: 'OLDER', expiresAt: Date.now() + 60_000, reason: 'active' }]],
+      });
+      mockFileOps = createMockFileOps({ readFileResult: persisted });
+      mockFileOps.writeFile.mockRejectedValue(new Error('write unavailable'));
+      store = new FileChallengeStore(mockFileOps, keys, TEST_STATE_DIR, 'test-session', 0);
+      await store.initialize();
+      expect(store.get('pending')).toBeUndefined();
+      expect(store.verify('pending', 'OLDER')).toBe(false);
     });
   });
 
@@ -159,16 +181,21 @@ describe('FileChallengeStore', () => {
     it('should survive a write → read cycle', async () => {
       store.set('c1', { code: 'test-code', expiresAt: Date.now() + 300000, reason: 'round-trip test' });
 
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await store.awaitPendingWrites();
 
       const writtenContent = mockFileOps.writeFile.mock.calls[mockFileOps.writeFile.mock.calls.length - 1][1];
 
       const readMockFileOps = createMockFileOps({ readFileResult: writtenContent });
-      const store2 = new FileChallengeStore(readMockFileOps, TEST_STATE_DIR, 'test-session', 0);
+      expect(writtenContent).not.toContain('test-code');
+      expect(writtenContent).not.toContain('"code"');
+      const store2 = new FileChallengeStore(readMockFileOps, keys, TEST_STATE_DIR, 'test-session', 0);
       await store2.initialize();
 
       expect(store2.size()).toBe(1);
-      expect(store2.get('c1')?.code).toBe('test-code');
+      expect(store2.get('c1')).toMatchObject({ reason: 'round-trip test' });
+      expect(store2.verify('c1', 'test-code')).toBe(true);
+      expect(store2.verify('c1', 'test-code')).toBe(false);
+      await store2.awaitPendingWrites();
       store2.destroy();
     });
   });

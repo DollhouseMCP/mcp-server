@@ -22,6 +22,7 @@ jest.unstable_mockModule('child_process', () => ({
   execFile: Object.assign(jest.fn(), { [promisify.custom]: runNativeDialog }),
   execFileSync: jest.fn(),
   execSync: jest.fn(),
+  spawn: jest.fn(),
 }));
 
 jest.unstable_mockModule('os', () => ({
@@ -209,7 +210,7 @@ describe('DisplayService', () => {
         expect(result.error).toBeDefined();
       });
 
-      it('passes display values as argv instead of AppleScript source', () => {
+      it('keeps the message and code out of argv and AppleScript source', () => {
         mockExecFileSync.mockReturnValue(Buffer.from('button returned:Proceed'));
         const reason = 'Review \\"quoted" text\r\n$(marker) `marker`';
         const title = '-Title \\"quoted"';
@@ -224,7 +225,7 @@ describe('DisplayService', () => {
         expect(mockExecFileSync).toHaveBeenCalledTimes(1);
         expect(mockExecSync).not.toHaveBeenCalled();
 
-        const [file, args] = mockExecFileSync.mock.calls[0];
+        const [file, args, options] = mockExecFileSync.mock.calls[0];
         expect(file).toBe('/usr/bin/osascript');
         expect(args?.[0]).toBe('-e');
         expect(args?.[2]).toBe('--');
@@ -238,12 +239,14 @@ describe('DisplayService', () => {
         }
 
         expect(args?.[3]).toBe(title);
-        expect(args?.[4]).toBe(
+        expect(args?.join(' ')).not.toContain('123');
+        expect(options?.input).toBe(
           `${reason}\n\nVerification Code: -CODE\\"123\n\nEnter this code when prompted.`
         );
-        expect(args?.[5]).toBe(buttons[1]);
-        expect(args?.[6]).toBe(buttons[0]);
-        expect(args?.[7]).toBe('stop');
+        expect(options?.stdio).toEqual(['pipe', 'ignore', 'ignore']);
+        expect(args?.[4]).toBe(buttons[1]);
+        expect(args?.[5]).toBe(buttons[0]);
+        expect(args?.[6]).toBe('stop');
       });
 
       it('uses the same constant AppleScript for different input', () => {
@@ -264,15 +267,13 @@ describe('DisplayService', () => {
       });
 
       it('should try zenity first', () => {
-        // First call for 'which zenity' succeeds
-        // Second call for actual zenity dialog succeeds
-        mockExecSync
-          .mockReturnValueOnce(Buffer.from('/usr/bin/zenity'))
-          .mockReturnValueOnce(Buffer.from(''));
+        mockExecSync.mockReturnValueOnce(Buffer.from('/usr/bin/zenity'));
 
         const result = showVerificationDialog('TEST123', 'Test verification');
 
-        expect(mockExecSync).toHaveBeenCalledTimes(2);
+        expect(mockExecSync).toHaveBeenCalledTimes(1);
+        expect(mockExecFileSync).toHaveBeenCalledWith('zenity', ['--text-info', '--title=Verification Required'],
+          expect.objectContaining({ input: expect.stringContaining('TEST123') }));
         expect(result.success).toBe(true);
       });
 
@@ -291,6 +292,8 @@ describe('DisplayService', () => {
         });
 
         const result = showVerificationDialog('TEST123', 'Test verification');
+        expect(mockExecFileSync).toHaveBeenCalledWith('kdialog', ['--textbox', '-', '--title', 'Verification Required'],
+          expect.objectContaining({ input: expect.stringContaining('TEST123') }));
         expect(result.success).toBe(true);
       });
 
@@ -312,6 +315,8 @@ describe('DisplayService', () => {
         });
 
         const result = showVerificationDialog('TEST123', 'Test verification');
+        expect(mockExecFileSync).toHaveBeenCalledWith('xmessage', ['-center', '-file', '-'],
+          expect.objectContaining({ input: expect.stringContaining('TEST123') }));
         expect(result.success).toBe(true);
       });
 
@@ -354,14 +359,14 @@ describe('DisplayService', () => {
       });
 
       it('should return success when dialog is accepted', () => {
-        mockExecSync.mockReturnValue(Buffer.from(''));
+        mockExecFileSync.mockReturnValue(Buffer.from(''));
         const result = showVerificationDialog('TEST123', 'Test verification');
         expect(result.success).toBe(true);
         expect(result.buttonClicked).toBe('OK');
       });
 
       it('should return failure when dialog is cancelled', () => {
-        mockExecSync.mockImplementation(() => {
+        mockExecFileSync.mockImplementation(() => {
           const error = new Error('User cancelled');
           (error as NodeJS.ErrnoException).code = '1';
           throw error;
@@ -370,15 +375,17 @@ describe('DisplayService', () => {
         expect(result.success).toBe(false);
       });
 
-      it('should use Base64-encoded command for security', () => {
-        mockExecSync.mockReturnValue(Buffer.from(''));
+      it('runs a fixed encoded script and sends the message only through stdin', () => {
+        mockExecFileSync.mockReturnValue(Buffer.from(''));
         showVerificationDialog('TEST123', 'Test verification');
 
-        expect(mockExecSync).toHaveBeenCalled();
-        const command = mockExecSync.mock.calls[0][0] as string;
-
-        // Should use -EncodedCommand for safety
-        expect(command).toContain('powershell -EncodedCommand');
+        const [file, args, options] = mockExecFileSync.mock.calls[0];
+        expect(file).toBe('powershell.exe');
+        expect(args).toContain('-EncodedCommand');
+        const script = Buffer.from(args!.at(-1)!, 'base64').toString('utf16le');
+        expect(script).toContain('[Console]::In.ReadToEnd()');
+        expect(script).not.toContain('TEST123');
+        expect(options?.input).toEqual(expect.stringContaining('TEST123'));
       });
     });
 
@@ -429,15 +436,15 @@ describe('DisplayService', () => {
         });
 
         const args = mockExecFileSync.mock.calls[0][1];
-        expect(args?.[5]).toBe('Abort');
-        expect(args?.[6]).toBe('Confirm');
+        expect(args?.[4]).toBe('Abort');
+        expect(args?.[5]).toBe('Confirm');
       });
 
       it('should support different icon types', () => {
         showVerificationDialog('CODE123', 'Reason', { icon: 'error' });
 
         const args = mockExecFileSync.mock.calls[0][1];
-        expect(args?.[7]).toBe('stop');
+        expect(args?.[6]).toBe('stop');
       });
     });
   });

@@ -13,6 +13,8 @@ const mockExecSync = jest.fn();
 jest.unstable_mockModule('child_process', () => ({
   spawn: mockSpawn,
   execSync: mockExecSync,
+  execFile: jest.fn(),
+  execFileSync: jest.fn(),
 }));
 
 // Mock os.platform
@@ -34,11 +36,11 @@ const { VerificationNotifier } = await import('../../../src/services/Verificatio
 
 describe('VerificationNotifier', () => {
   let notifier: InstanceType<typeof VerificationNotifier>;
-  let mockChildProcess: { unref: jest.Mock };
+  let mockChildProcess: { unref: jest.Mock; once: jest.Mock; stdin: { end: jest.Mock; on: jest.Mock } };
 
   beforeEach(() => {
     notifier = new VerificationNotifier();
-    mockChildProcess = { unref: jest.fn() };
+    mockChildProcess = { unref: jest.fn(), once: jest.fn(), stdin: { end: jest.fn(), on: jest.fn() } };
     mockSpawn.mockReturnValue(mockChildProcess);
     mockExecSync.mockImplementation(() => ''); // default: tool found
     jest.clearAllMocks();
@@ -56,14 +58,16 @@ describe('VerificationNotifier', () => {
 
       expect(mockSpawn).toHaveBeenCalledTimes(1);
       expect(mockSpawn).toHaveBeenCalledWith(
-        'osascript',
-        expect.arrayContaining(['-e', expect.stringContaining('ABC123')]),
+        '/usr/bin/osascript',
+        expect.arrayContaining(['-e', expect.stringContaining('fileHandleWithStandardInput')]),
         expect.objectContaining({
           detached: true,
-          stdio: 'ignore',
+          stdio: ['pipe', 'ignore', 'ignore'],
         })
       );
       expect(mockChildProcess.unref).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(mockSpawn.mock.calls)).not.toContain('ABC123');
+      expect(mockChildProcess.stdin.end).toHaveBeenCalledWith(expect.stringContaining('ABC123'));
     });
 
     it('should spawn zenity on Linux when available', () => {
@@ -76,15 +80,17 @@ describe('VerificationNotifier', () => {
       expect(mockSpawn).toHaveBeenCalledWith(
         'zenity',
         expect.arrayContaining([
-          '--info',
-          expect.stringContaining('XYZ789'),
+          '--text-info',
+          '--title=DollhouseMCP Verification Required',
         ]),
         expect.objectContaining({
           detached: true,
-          stdio: 'ignore',
+          stdio: ['pipe', 'ignore', 'ignore'],
         })
       );
       expect(mockChildProcess.unref).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(mockSpawn.mock.calls)).not.toContain('XYZ789');
+      expect(mockChildProcess.stdin.end).toHaveBeenCalledWith(expect.stringContaining('XYZ789'));
     });
 
     it('should spawn powershell on Windows', () => {
@@ -94,14 +100,17 @@ describe('VerificationNotifier', () => {
 
       expect(mockSpawn).toHaveBeenCalledTimes(1);
       expect(mockSpawn).toHaveBeenCalledWith(
-        'powershell',
+        'powershell.exe',
         expect.arrayContaining(['-EncodedCommand', expect.any(String)]),
         expect.objectContaining({
           detached: true,
-          stdio: 'ignore',
+          stdio: ['pipe', 'ignore', 'ignore'],
         })
       );
       expect(mockChildProcess.unref).toHaveBeenCalledTimes(1);
+      const args = mockSpawn.mock.calls[0][1] as string[];
+      expect(Buffer.from(args.at(-1)!, 'base64').toString('utf16le')).not.toContain('WIN456');
+      expect(mockChildProcess.stdin.end).toHaveBeenCalledWith(expect.stringContaining('WIN456'));
     });
 
     it('should never throw on any error', () => {
@@ -112,10 +121,11 @@ describe('VerificationNotifier', () => {
       expect(() => notifier.showCode('ERR001', 'Error test')).not.toThrow();
     });
 
-    it('should log SecurityMonitor event on unsupported platform', () => {
+    it('should log SecurityMonitor event on unsupported platform', async () => {
       mockPlatform.mockReturnValue('freebsd');
 
       notifier.showCode('BSD001', 'Unsupported test');
+      await new Promise<void>(resolve => setImmediate(resolve));
 
       expect(mockLogSecurityEvent).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -127,11 +137,12 @@ describe('VerificationNotifier', () => {
       );
     });
 
-    it('should log SecurityMonitor event on spawn failure', () => {
+    it('should log SecurityMonitor event on spawn failure', async () => {
       mockPlatform.mockReturnValue('darwin');
-      mockSpawn.mockImplementation(() => { throw new Error('spawn failed'); });
+      mockSpawn.mockImplementation(() => { throw new Error('spawn failed with synthetic proof FAIL01'); });
 
       notifier.showCode('FAIL01', 'Failure test');
+      await new Promise<void>(resolve => setImmediate(resolve));
 
       expect(mockLogSecurityEvent).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -140,20 +151,23 @@ describe('VerificationNotifier', () => {
           source: 'VerificationNotifier.showCode',
         })
       );
+      expect(JSON.stringify(mockLogSecurityEvent.mock.calls)).not.toContain('FAIL01');
     });
 
-    it('should never include the code in SecurityMonitor log details', () => {
+    it('should never include the code in SecurityMonitor log details', async () => {
       mockPlatform.mockReturnValue('freebsd');
 
       notifier.showCode('SECRET42', 'Must not leak');
+      await new Promise<void>(resolve => setImmediate(resolve));
 
+      expect(mockLogSecurityEvent).toHaveBeenCalledTimes(1);
       for (const call of mockLogSecurityEvent.mock.calls) {
         const event = call[0] as Record<string, unknown>;
         expect(JSON.stringify(event)).not.toContain('SECRET42');
       }
     });
 
-    it('should use detached + stdio ignore for fire-and-forget', () => {
+    it('should use detached and discard output for fire-and-forget', () => {
       mockPlatform.mockReturnValue('darwin');
 
       notifier.showCode('DET001', 'Detach test');
@@ -163,7 +177,7 @@ describe('VerificationNotifier', () => {
         expect.any(Array),
         expect.objectContaining({
           detached: true,
-          stdio: 'ignore',
+          stdio: ['pipe', 'ignore', 'ignore'],
         })
       );
       expect(mockChildProcess.unref).toHaveBeenCalled();

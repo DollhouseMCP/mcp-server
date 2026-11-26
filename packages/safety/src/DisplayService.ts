@@ -8,16 +8,20 @@
  * @since v1.0.0
  */
 
-import { execFile, execFileSync, execSync } from 'child_process';
+import { execFile, execFileSync, execSync, spawn } from 'child_process';
 import { platform } from 'os';
 import { promisify } from 'node:util';
 
-const MACOS_DIALOG_SCRIPT = `on run argv
+const MACOS_DIALOG_SCRIPT = `use framework "Foundation"
+use scripting additions
+on run argv
   set dialogTitle to item 1 of argv
-  set dialogMessage to item 2 of argv
-  set cancelButton to item 3 of argv
-  set confirmButton to item 4 of argv
-  set dialogIcon to item 5 of argv
+  set cancelButton to item 2 of argv
+  set confirmButton to item 3 of argv
+  set dialogIcon to item 4 of argv
+  set inputFile to current application's NSFileHandle's fileHandleWithStandardInput()
+  set inputData to inputFile's readDataToEndOfFile()
+  set dialogMessage to (current application's NSString's alloc()'s initWithData:inputData encoding:(current application's NSUTF8StringEncoding)) as text
 
   if dialogIcon is "note" then
     display dialog dialogMessage with title dialogTitle with icon note buttons {cancelButton, confirmButton} default button confirmButton
@@ -27,6 +31,15 @@ const MACOS_DIALOG_SCRIPT = `on run argv
     display dialog dialogMessage with title dialogTitle with icon caution buttons {cancelButton, confirmButton} default button confirmButton
   end if
 end run`;
+
+const WINDOWS_DIALOG_SCRIPT = `
+$ErrorActionPreference = 'Stop'
+[Console]::InputEncoding = [System.Text.Encoding]::UTF8
+$dialog = [Console]::In.ReadToEnd() | ConvertFrom-Json
+Add-Type -AssemblyName System.Windows.Forms
+$result = [System.Windows.Forms.MessageBox]::Show($dialog.message, $dialog.title, $dialog.buttons, $dialog.icon)
+if ($result -eq 'OK') { exit 0 }
+exit 1`;
 
 const runNativeDialog = promisify(execFile);
 const RESET_TITLE = 'Reset blocked-agent state';
@@ -168,32 +181,6 @@ async function showZenityReset(
   return code ? { confirmed: true, code } : { confirmed: true };
 }
 
-/**
- * Escape shell argument for Unix shells (bash, sh, zsh)
- * SECURITY: Prevents command injection by wrapping in single quotes.
- *
- * This is the standard POSIX shell escaping pattern: the entire argument is
- * wrapped in single quotes, and any embedded single quotes are escaped as '\''.
- * Inside single quotes, ALL characters (including $, `, \, etc.) are literal
- * except for single quote itself — so only ' needs escaping.
- *
- * codeql[js/incomplete-sanitization] — False positive. Single-quote wrapping
- * makes all other special characters inert in POSIX shells. Only the single
- * quote character requires escaping, which this function handles correctly.
- */
-function escapeShellArg(arg: string): string {
-  // codeql[js/incomplete-sanitization] - Standard POSIX escaping; only ' needs handling inside single quotes
-  return "'" + arg.replace(/'/g, "'\\''") + "'";
-}
-
-/**
- * Escape argument for PowerShell commands
- * SECURITY: Prevents PowerShell command injection and variable expansion
- */
-function escapePowerShellArg(arg: string): string {
-  return arg.replace(/[`$"\\]/g, '`$&');
-}
-
 export interface DialogOptions {
   title?: string;
   icon?: 'info' | 'warning' | 'error';
@@ -206,279 +193,120 @@ export interface DialogResult {
   error?: string;
 }
 
-/**
- * Show a verification dialog with a code that the LLM cannot see
- *
- * The code is displayed in the dialog but NOT returned to stdout.
- * Only the button click result is returned.
- */
-export function showVerificationDialog(
-  code: string,
-  reason: string,
-  options: DialogOptions = {}
-): DialogResult {
-  const title = options.title || 'Verification Required';
-  const message = `${reason}\n\nVerification Code: ${code}\n\nEnter this code when prompted.`;
-
-  try {
-    const currentPlatform = platform();
-
-    if (currentPlatform === 'darwin') {
-      return showMacOSDialog(title, message, options);
-    } else if (currentPlatform === 'linux') {
-      return showLinuxDialog(title, message, options);
-    } else if (currentPlatform === 'win32') {
-      return showWindowsDialog(title, message, options);
-    } else {
-      // Fallback for unsupported platforms - NEVER log the code
-      console.error(`[DisplayService] Unsupported platform: ${currentPlatform}`);
-      console.error('[DisplayService] Verification required - code hidden for security');
-      console.error(`[DisplayService] Reason: ${reason}`);
-      return {
-        success: false,
-        error: `Unsupported platform: ${currentPlatform}`,
-      };
-    }
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
+interface VerificationDialogCommand {
+  readonly file: string;
+  readonly args: string[];
+  readonly input: string;
+  readonly button: string;
 }
 
-/**
- * Show dialog on macOS using osascript
- */
-function showMacOSDialog(
-  title: string,
-  message: string,
-  options: DialogOptions
-): DialogResult {
-  try {
-    const buttons = options.buttons || ['OK', 'Cancel'];
-    const icon = options.icon || 'warning';
+const LINUX_DIALOGS = [['zenity', 'which zenity'], ['kdialog', 'which kdialog'], ['xmessage', 'which xmessage']] as const;
 
-    // Map icon to AppleScript icon
-    const iconMap: Record<string, string> = {
-      info: 'note',
-      warning: 'caution',
-      error: 'stop',
-    };
-    const appleIcon = iconMap[icon] || 'caution';
-
-    // Keep untrusted display values out of AppleScript source. Passing them as
-    // argv also avoids invoking a shell, so neither language can reinterpret them.
-    execFileSync('/usr/bin/osascript', [
-      '-e',
-      MACOS_DIALOG_SCRIPT,
-      '--',
-      title,
-      message,
-      buttons[1],
-      buttons[0],
-      appleIcon,
-    ], {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'], // Don't inherit stdio
-    });
-
-    return {
-      success: true,
-      buttonClicked: buttons[0],
-    };
-  } catch (error) {
-    // User clicked Cancel or error occurred
-    return {
-      success: false,
-      error: 'Dialog cancelled or error occurred',
-    };
-  }
-}
-
-/**
- * Show dialog on Linux using zenity/kdialog/xmessage fallback chain
- */
-function showLinuxDialog(
-  title: string,
-  message: string,
-  options: DialogOptions
-): DialogResult {
-  // Try zenity first (most common)
-  try {
-    execSync('which zenity', { stdio: 'pipe' }); // NOSONAR - Intentional: Tool detection, no user input
-    return showZenityDialog(title, message, options);
-  } catch {
-    // zenity not found, try kdialog
+function findLinuxDialog(): typeof LINUX_DIALOGS[number][0] | undefined {
+  for (const [file, probe] of LINUX_DIALOGS) {
     try {
-      execSync('which kdialog', { stdio: 'pipe' }); // NOSONAR - Intentional: Tool detection, no user input
-      return showKDialogDialog(title, message, options);
-    } catch {
-      // kdialog not found, try xmessage as last resort
-      try {
-        execSync('which xmessage', { stdio: 'pipe' }); // NOSONAR - Intentional: Tool detection, no user input
-        return showXMessageDialog(title, message);
-      } catch {
-        // No GUI available - fallback to console
-        // SECURITY: Do NOT log the message as it may contain verification codes
-        console.error('[DisplayService] No GUI dialog available on Linux');
-        console.error(`[DisplayService] Title: ${title}`);
-        console.error('[DisplayService] Message content hidden for security');
-        return {
-          success: false,
-          error: 'No GUI dialog system available (tried zenity, kdialog, xmessage)',
-        };
-      }
-    }
+      execSync(probe, { stdio: 'ignore' }); // NOSONAR - Only the fixed tool probes above.
+      return file;
+    } catch { /* Try the next installed dialog. */ }
+  }
+  return undefined;
+}
+
+function verificationDialogCommand(code: string, reason: string, options: DialogOptions): VerificationDialogCommand {
+  const title = options.title ?? 'Verification Required';
+  const [confirm = 'OK', cancel = 'Cancel'] = options.buttons ?? [];
+  const icon = options.icon ?? 'warning';
+  const message = reason + '\n\nVerification Code: ' + code + '\n\nEnter this code when prompted.';
+  const currentPlatform = platform();
+
+  switch (currentPlatform) {
+    case 'darwin':
+      return {
+        file: '/usr/bin/osascript',
+        args: ['-e', MACOS_DIALOG_SCRIPT, '--', title, cancel, confirm, { info: 'note', warning: 'caution', error: 'stop' }[icon]],
+        input: message,
+        button: confirm,
+      };
+    case 'win32':
+      return {
+        file: 'powershell.exe',
+        args: ['-NoProfile', '-NonInteractive', '-STA', '-EncodedCommand', Buffer.from(WINDOWS_DIALOG_SCRIPT, 'utf16le').toString('base64')],
+        input: JSON.stringify({
+          message, title, buttons: options.buttons?.length === 1 ? 'OK' : 'OKCancel',
+          icon: { info: 'Information', warning: 'Warning', error: 'Error' }[icon],
+        }),
+        button: confirm,
+      };
+    case 'linux':
+      return linuxVerificationCommand(title, message);
+    default:
+      throw new Error('Unsupported platform: ' + currentPlatform);
   }
 }
 
-function showZenityDialog(
-  title: string,
-  message: string,
-  options: DialogOptions
-): DialogResult {
+function linuxVerificationCommand(title: string, message: string): VerificationDialogCommand {
+  const file = findLinuxDialog();
+  switch (file) {
+    case 'zenity':
+      return { file, args: ['--text-info', '--title=' + title], input: message, button: 'OK' };
+    case 'kdialog':
+      return { file, args: ['--textbox', '-', '--title', title], input: message, button: 'OK' };
+    case 'xmessage':
+      return { file, args: ['-center', '-file', '-'], input: title + '\n\n' + message, button: 'OK' };
+    default:
+      throw new Error('No GUI dialog system available (tried zenity, kdialog, xmessage)');
+  }
+}
+
+const VERIFY_DIALOG_STDIO: ['pipe', 'ignore', 'ignore'] = ['pipe', 'ignore', 'ignore'];
+
+function prepareVerificationDialog(code: string, reason: string, options: DialogOptions): VerificationDialogCommand | DialogResult {
   try {
-    const icon = options.icon || 'warning';
-    // SECURITY: Use escapeShellArg to prevent shell injection
-    // NOSONAR - Intentional: OS dialog via zenity, all inputs escaped with escapeShellArg
-    execSync(
-      `zenity --${icon} --title=${escapeShellArg(title)} --text=${escapeShellArg(message)} --no-wrap`,
-      {
-        stdio: ['pipe', 'pipe', 'pipe'],
-      }
-    );
-    return { success: true, buttonClicked: 'OK' };
+    return verificationDialogCommand(code, reason, options);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Verification dialog unavailable';
+    console.error('[DisplayService] ' + message + '. Message content hidden for security.');
+    return { success: false, error: message };
+  }
+}
+
+/** Display a legacy code using a private child input pipe. Only the button result is returned. */
+export function showVerificationDialog(code: string, reason: string, options: DialogOptions = {}): DialogResult {
+  const command = prepareVerificationDialog(code, reason, options);
+  if (!('file' in command)) return command;
+  try {
+    execFileSync(command.file, command.args, { input: command.input, stdio: VERIFY_DIALOG_STDIO, windowsHide: true });
+    return { success: true, buttonClicked: command.button };
   } catch {
-    return { success: false, error: 'Dialog cancelled' };
+    return { success: false, error: 'Dialog cancelled or error occurred' };
   }
 }
 
-function showKDialogDialog(
-  title: string,
-  message: string,
-  options: DialogOptions
-): DialogResult {
+/** Nonblocking variant used by server-side verification notifications. */
+export async function showVerificationDialogAsync(code: string, reason: string, options: DialogOptions = {}): Promise<DialogResult> {
+  const command = prepareVerificationDialog(code, reason, options);
+  if (!('file' in command)) return command;
   try {
-    const icon = options.icon || 'warning';
-    const iconMap: Record<string, string> = {
-      info: '--msgbox',
-      warning: '--sorry',
-      error: '--error',
-    };
-    const kdialogIcon = iconMap[icon] || '--sorry';
-
-    // SECURITY: Use escapeShellArg to prevent shell injection
-    // NOSONAR - Intentional: OS dialog via kdialog, all inputs escaped with escapeShellArg
-    execSync(
-      `kdialog ${kdialogIcon} ${escapeShellArg(message)} --title ${escapeShellArg(title)}`,
-      {
-        stdio: ['pipe', 'pipe', 'pipe'],
-      }
-    );
-    return { success: true, buttonClicked: 'OK' };
-  } catch {
-    return { success: false, error: 'Dialog cancelled' };
-  }
-}
-
-function showXMessageDialog(title: string, message: string): DialogResult {
-  try {
-    const fullMessage = `${title}\n\n${message}`;
-    // SECURITY: Use escapeShellArg to prevent shell injection
-    // NOSONAR - Intentional: OS dialog via xmessage, input escaped with escapeShellArg
-    execSync(`xmessage -center ${escapeShellArg(fullMessage)}`, {
-      stdio: ['pipe', 'pipe', 'pipe'],
+    const exitCode = await new Promise<number | null>((resolve, reject) => {
+      const child = spawn(command.file, command.args, { detached: true, stdio: VERIFY_DIALOG_STDIO, windowsHide: true });
+      child.once('error', reject);
+      child.once('exit', resolve);
+      child.stdin.on('error', reject);
+      child.stdin.end(command.input);
+      child.unref();
     });
-    return { success: true, buttonClicked: 'OK' };
+    return exitCode === 0 ? { success: true, buttonClicked: command.button } : { success: false, error: 'Dialog cancelled' };
   } catch {
-    return { success: false, error: 'Dialog cancelled' };
+    return { success: false, error: 'Failed to start verification dialog' };
   }
 }
 
-/**
- * Show dialog on Windows using PowerShell
- */
-function showWindowsDialog(
-  title: string,
-  message: string,
-  options: DialogOptions
-): DialogResult {
-  try {
-    const buttons = options.buttons || ['OK', 'Cancel'];
-    const icon = options.icon || 'warning';
-
-    // Map icon to PowerShell MessageBoxIcon
-    const iconMap: Record<string, string> = {
-      info: 'Information',
-      warning: 'Warning',
-      error: 'Error',
-    };
-    const psIcon = iconMap[icon] || 'Warning';
-
-    // SECURITY: Escape message and title for PowerShell single-quoted strings
-    // Single quotes in PowerShell are escaped by doubling them
-    const escapedMessage = message.replace(/'/g, "''");
-    const escapedTitle = title.replace(/'/g, "''");
-
-    // Build the PowerShell script using single-quoted strings (safest)
-    const script = `Add-Type -AssemblyName System.Windows.Forms; $result = [System.Windows.Forms.MessageBox]::Show('${escapedMessage}', '${escapedTitle}', 'OKCancel', '${psIcon}'); exit ($result -eq 'OK' ? 0 : 1)`;
-
-    // SECURITY: Use -EncodedCommand for safe execution (Base64 encoding prevents injection)
-    // NOSONAR - Intentional: OS dialog via PowerShell, input Base64-encoded to prevent injection
-    const encodedScript = Buffer.from(script, 'utf16le').toString('base64');
-    execSync(`powershell -EncodedCommand ${encodedScript}`, {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    return {
-      success: true,
-      buttonClicked: buttons[0],
-    };
-  } catch {
-    return {
-      success: false,
-      error: 'Dialog cancelled',
-    };
-  }
-}
-
-/**
- * Check if dialogs are available on current platform
- */
+/** Whether a supported native dialog tool is installed. */
 export function isDialogAvailable(): boolean {
   try {
     const currentPlatform = platform();
-
-    if (currentPlatform === 'darwin') {
-      // macOS always has osascript
-      return true;
-    } else if (currentPlatform === 'linux') {
-      // Check for any Linux dialog tool
-      // NOSONAR - All execSync calls below are intentional tool detection with no user input
-      try {
-        execSync('which zenity', { stdio: 'pipe' });
-        return true;
-      } catch {
-        try {
-          execSync('which kdialog', { stdio: 'pipe' });
-          return true;
-        } catch {
-          try {
-            execSync('which xmessage', { stdio: 'pipe' });
-            return true;
-          } catch {
-            return false;
-          }
-        }
-      }
-    } else if (currentPlatform === 'win32') {
-      // Windows always has PowerShell
-      return true;
-    }
-
-    return false;
+    return currentPlatform === 'darwin' || currentPlatform === 'win32' ||
+      (currentPlatform === 'linux' && findLinuxDialog() !== undefined);
   } catch {
     return false;
   }

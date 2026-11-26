@@ -183,7 +183,7 @@ export class SecurityServiceRegistrar {
         const db = container.resolve<DatabaseInstance>('DatabaseInstance');
         const userId = container.resolve<string>('CurrentUserId');
         const DbStore = container.resolve<typeof DatabaseChallengeStore>('DatabaseChallengeStoreClass');
-        return new DbStore(db, userId, session.sessionId);
+        return new DbStore(db, userId, session.sessionId, container.resolve('AuditHmacResolver'));
       }
       return new InMemoryChallengeStore();
     });

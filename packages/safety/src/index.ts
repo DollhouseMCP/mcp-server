@@ -52,6 +52,7 @@ export { VerificationStore } from './VerificationStore.js';
 // Display service
 export {
   showVerificationDialog,
+  showVerificationDialogAsync,
   showBlockResetDialog,
   isDialogAvailable,
   type BlockResetDialogResult,
