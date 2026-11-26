@@ -1060,6 +1060,8 @@ On a running PostgreSQL deployment, an elevated security administrator can open 
 
 Review the account shown, then confirm the reset using your own authenticator or backup code. The approval expires after one minute. A changed snapshot calls for a new review. The reset saves the rejected rows as evidence and records the admin action in the same transaction. Replicas reload the repaired state and replay their queued blocks as they resume enforcement.
 
+Each administrator can submit five proof attempts in five minutes. The fifth attempt starts a 15-minute pause for further reset proofs, including when those attempts succeeded.
+
 ---
 
 ## Production checklist

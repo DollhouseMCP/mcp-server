@@ -132,7 +132,7 @@ export class AuthServiceRegistrar {
 
     // Web-console admin step-up (TOTP) dependencies. When present, the
     // embedded AS mounts the /auth/totp/* enrollment + step-up routes.
-    const adminStepUp = await this.createAdminStepUpDeps(database, authStorage);
+    const adminStepUp = await this.createAdminStepUpDeps(container, database, authStorage);
 
     const provider = await createAuthProvider({
       enabled: true,
@@ -169,8 +169,6 @@ export class AuthServiceRegistrar {
     if (!provider) return;
 
     container.register('AuthProvider', () => provider);
-    const { adminTotpService } = adminStepUp;
-    if (adminTotpService) container.register('AdminTotpService', () => adminTotpService);
     if (signInAllowlistAuthority) {
       container.register('SignInAllowlistAuthority', () => signInAllowlistAuthority);
       container.register('WebConsoleAccountAllowlistAuthorityCutoverComplete', () => true);
@@ -220,6 +218,7 @@ export class AuthServiceRegistrar {
    * Returns empty when any prerequisite is absent → routes stay unmounted.
    */
   private async createAdminStepUpDeps(
+    container: DiContainerFacade,
     database: DatabaseInstance | undefined,
     authStorage: IAuthStorageLayer | undefined,
   ): Promise<{ adminTotpService?: AdminTotpService; consoleIdentityResolver?: IConsoleIdentityResolver }> {
@@ -244,12 +243,14 @@ export class AuthServiceRegistrar {
       key: Buffer.from(encryptionKey, 'base64'),
     }, retainedDecryptKeys);
     logger.info('[AuthServiceRegistrar] Admin TOTP step-up routes enabled (embedded AS, DB mode)');
+    const adminTotpService = new AdminTotpService({
+      authStorage,
+      factorStore: new PostgresConsoleFactorStore(database),
+      secretEncryption,
+    });
+    container.register('AdminTotpService', () => adminTotpService);
     return {
-      adminTotpService: new AdminTotpService({
-        authStorage,
-        factorStore: new PostgresConsoleFactorStore(database),
-        secretEncryption,
-      }),
+      adminTotpService,
       consoleIdentityResolver: new PostgresConsoleIdentityResolver(database),
     };
   }

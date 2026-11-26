@@ -4,7 +4,7 @@ import type { IRateLimitStore } from '../../../auth/embedded-as/storage/IRateLim
 import { reserveAdminTotpAttempt } from '../../../auth/embedded-as/totp/AdminTotpRateLimit.js';
 import type { AdminTotpService } from '../../../auth/embedded-as/totp/AdminTotpService.js';
 import { DatabaseDangerZoneBlockStore } from '../../../state/DatabaseDangerZoneBlockStore.js';
-import type { IAdminAuditWriter } from '../../audit/IAdminAuditWriter.js';
+import type { ConsoleAdminAuditResult, IAdminAuditWriter } from '../../audit/IAdminAuditWriter.js';
 import { appendConsoleAdminAuditEventWithTx, type AdminAuditHmacKeyResolver } from '../../audit/PostgresAdminAuditWriter.js';
 import { buildConsoleAdminAuditEvent } from '../../middleware/ConsoleAdminAudit.js';
 import { requireConsoleAuthentication } from '../../middleware/ConsoleAuthentication.js';
@@ -81,7 +81,8 @@ class SecurityAdminBlockRecovery {
     const userId = targetUserId(req);
     const result = userId ? await this.applyReset(req, route, userId) : invalidTarget();
     if (result.status === 204) return result;
-    const auditResult = result.status === 409 ? 'conflict' : result.status >= 500 ? 'failed' : 'rejected';
+    let auditResult: ConsoleAdminAuditResult = result.status >= 500 ? 'failed' : 'rejected';
+    if (result.status === 409) auditResult = 'conflict';
     const code = bodyRecord(result.body)?.code;
     try {
       const event = buildConsoleAdminAuditEvent(route, RESET_OPERATION, req, auditResult, typeof code === 'string' ? code : null, this.now(), {
