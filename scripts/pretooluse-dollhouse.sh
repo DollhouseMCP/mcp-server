@@ -30,6 +30,7 @@ permission_hook_load_runtime_config
 DIAGNOSTICS_LOG="${DOLLHOUSE_HOOK_DIAGNOSTICS_LOG:-$RUN_DIR/permission-hook-diagnostics.jsonl}"
 INVOCATION_ID="$(date +%s)-$$-${RANDOM:-0}"
 OUTAGE_WARNING_MARKER="$RUN_DIR/permission-hook-outage-warning"
+readonly COMPLETE_EVENT="complete"
 
 INPUT=""
 TOOL_NAME=""
@@ -67,6 +68,7 @@ append_diagnostic_record() {
   # sharing this bridge. Keep that behavior until the safe schema is in use.
   case "$HOOK_PLATFORM" in
     vscode|windsurf) return 0 ;;
+    *) ;;
   esac
 
   mkdir -p "$(dirname "$DIAGNOSTICS_LOG")" 2>/dev/null || return 0
@@ -161,6 +163,7 @@ is_outage_high_risk() {
     gemini:write_file) name="write" ;;
     gemini:replace) name="edit" ;;
     gemini:web_fetch) name="webfetch" ;;
+    *) ;;
   esac
   read -r -a high_risk_tools <<< "$OUTAGE_HIGH_RISK_TOOLS"
   for configured_tool in "${high_risk_tools[@]}"; do
@@ -182,7 +185,7 @@ handle_outage() {
   debug "$reason"
 
   if ! is_outage_high_risk; then
-    append_diagnostic_record "complete" "$stage" "outage_deferred" "$failure"
+    append_diagnostic_record "$COMPLETE_EVENT" "$stage" "outage_deferred" "$failure"
     return 0
   fi
 
@@ -204,7 +207,7 @@ handle_outage() {
   esac
 
   if [[ "$HOOK_PLATFORM" == "windsurf" ]]; then
-    append_diagnostic_record "complete" "$stage" "outage_$decision" "$failure"
+    append_diagnostic_record "$COMPLETE_EVENT" "$stage" "outage_$decision" "$failure"
     printf '%s\n' "$reason" >&2
     return 2
   fi
@@ -213,7 +216,7 @@ handle_outage() {
     printf '%s\n' "$reason" >&2
     return 2
   fi
-  append_diagnostic_record "complete" "$stage" "outage_$decision" "$failure"
+  append_diagnostic_record "$COMPLETE_EVENT" "$stage" "outage_$decision" "$failure"
   emit_response "$EMITTED_RESPONSE"
 }
 
@@ -297,6 +300,7 @@ format_host_decision() {
 # Validate the response before treating no output as intentional. The Codex
 # adapter uses an empty object for evaluated allows.
 normalize_response() {
+  local response="$1"
   jq -ce --arg platform "$HOOK_PLATFORM" '
     def valid_decision: IN("allow", "deny", "ask");
     def optional_reason: . == null or type == "string";
@@ -345,7 +349,7 @@ normalize_response() {
           }}
         end
     end
-  ' 2>/dev/null <<< "$1"
+  ' 2>/dev/null <<< "$response"
 }
 
 normalize_tool_input() {
@@ -367,6 +371,7 @@ normalize_tool_input() {
     vscode:searchWorkspace|vscode:search_workspace|vscode:searchInFiles|vscode:grep_search) TOOL_NAME="Grep" ;;
     vscode:fetchWebPage|vscode:fetch_web_page|vscode:fetch_webpage) TOOL_NAME="WebFetch" ;;
     vscode:searchWeb|vscode:search_web) TOOL_NAME="WebSearch" ;;
+    *) ;;
   esac
 }
 
@@ -425,7 +430,7 @@ AUTHORITY_MODE=$(resolve_authority_mode "$AUTHORITY_HOST")
 debug "Authority mode for ${AUTHORITY_HOST:-unknown}: $AUTHORITY_MODE"
 
 if [[ "$AUTHORITY_MODE" == "off" ]]; then
-  append_diagnostic_record "complete" "authority_off" "no_decision"
+  append_diagnostic_record "$COMPLETE_EVENT" "authority_off" "no_decision"
   exit 0
 fi
 
@@ -542,9 +547,9 @@ while [[ $ATTEMPT -le $MAX_RETRIES ]]; do
     NORMALIZED_RESPONSE=$(jq -c '.output // empty' <<< "$result")
     EMITTED_RESPONSE="$NORMALIZED_RESPONSE"
     if [[ -n "$NORMALIZED_RESPONSE" ]]; then
-      append_diagnostic_record "complete" "response_normalized" "success"
+      append_diagnostic_record "$COMPLETE_EVENT" "response_normalized" "success"
     else
-      append_diagnostic_record "complete" "response_allowed_without_output" "success"
+      append_diagnostic_record "$COMPLETE_EVENT" "response_allowed_without_output" "success"
     fi
     emit_response "$NORMALIZED_RESPONSE"
     exit 0
