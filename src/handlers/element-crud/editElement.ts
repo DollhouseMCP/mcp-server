@@ -1,7 +1,9 @@
 import { ElementType } from '../../portfolio/PortfolioManager.js';
 import { Ensemble } from '../../elements/ensembles/Ensemble.js';
+import { ENSEMBLE_PATTERNS } from '../../elements/ensembles/constants.js';
 import type { EnsembleElementInput } from '../../elements/ensembles/types.js';
-import { resolveElementTypes } from '../../utils/elementTypeResolver.js';
+import { resolveElementTypes, rewriteMemberDependencies } from '../../utils/elementTypeResolver.js';
+import { visitSequentially } from '../../utils/visitSequentially.js';
 import type { ElementCrudContext } from './types.js';
 import { generateMemoryId } from '../../elements/memories/utils.js';
 import { MEMORY_CONSTANTS } from '../../elements/memories/constants.js';
@@ -439,12 +441,13 @@ function isEnsembleElementInput(value: unknown): value is EnsembleElementInput {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function applyEnsembleElementsUpdate(
+async function applyEnsembleElementsUpdate(
   elementsInput: unknown,
   element: unknown,
   updateObj: Record<string, unknown>,
-  collectionWarnings: string[]
-): string | null {
+  collectionWarnings: string[],
+  context: ElementCrudContext,
+): Promise<string | null> {
   const validated = validateAndNormalizeEnsembleElements(elementsInput);
   if (!validated.success) {
     return `Invalid 'elements' format: ${validated.error}`;
@@ -455,7 +458,22 @@ function applyEnsembleElementsUpdate(
   const existingTyped: EnsembleElementInput[] = Array.isArray(rawElements)
     ? rawElements.filter(isEnsembleElementInput).map(e => ({ ...e }))
     : [];
-  const mergeResult = mergeEnsembleElements(existingTyped, validated.elements);
+  // Resolve display names before matching incoming edits to the stored member keys.
+  const incoming: EnsembleElementInput[] = [];
+  const aliases = new Map<string, string>();
+  await visitSequentially(validated.elements.values(), async entry => {
+    const name = entry.element_name || entry.name;
+    if (name && !ENSEMBLE_PATTERNS.ELEMENT_NAME_PATTERN.test(name)) {
+      const resolution = await resolveElementTypes([entry], context);
+      const resolved: EnsembleElementInput = resolution.resolved[0] ?? entry;
+      const canonical = resolved.element_name;
+      if (canonical && canonical !== name) aliases.set(name, canonical);
+      incoming.push(resolved);
+    } else {
+      incoming.push(entry);
+    }
+  });
+  const mergeResult = mergeEnsembleElements(existingTyped, rewriteMemberDependencies(incoming, aliases));
   collectionWarnings.push(...mergeResult.warnings);
   if (!updateObj.metadata) {
     updateObj.metadata = {};
@@ -492,17 +510,7 @@ async function syncEnsembleElementsIfNeeded(
   if (hasElementsUpdate && element instanceof Ensemble) {
     // Issue #466: Resolve missing element_type via portfolio lookup before sync
     if (context && Array.isArray(element.metadata.elements)) {
-      const result = await resolveElementTypes(
-        element.metadata.elements,
-        {
-          skillManager: context.skillManager,
-          templateManager: context.templateManager,
-          agentManager: context.agentManager,
-          memoryManager: context.memoryManager,
-          personaManager: context.personaManager,
-          ensembleManager: context.ensembleManager,
-        }
-      );
+      const result = await resolveElementTypes(element.metadata.elements, context);
       element.metadata.elements = result.resolved;
       element.syncElementsFromMetadata();
       return result;
@@ -710,6 +718,7 @@ interface EditUpdatePlan {
 }
 
 interface EditRoutingState {
+  context: ElementCrudContext;
   normalizedType: ElementType;
   name: string;
   element: any;
@@ -719,12 +728,13 @@ interface EditRoutingState {
   collectionWarnings: string[];
 }
 
-function buildElementUpdate(
+async function buildElementUpdate(
   input: Record<string, unknown>,
   normalizedType: ElementType,
   name: string,
-  element: any
-): EditUpdatePlan {
+  element: any,
+  context: ElementCrudContext,
+): Promise<EditUpdatePlan> {
   const plan: EditUpdatePlan = {
     updateObject: {},
     unrecognizedFieldWarnings: [],
@@ -733,6 +743,7 @@ function buildElementUpdate(
     skippedFields: [],
   };
   const state: EditRoutingState = {
+    context,
     normalizedType,
     name,
     element,
@@ -752,7 +763,7 @@ function buildElementUpdate(
       plan.skippedFields.push(key);
       continue;
     }
-    const routeResult = routeEditField(key, value, state);
+    const routeResult = await routeEditField(key, value, state);
     if (routeResult.error) {
       plan.error = routeResult.error;
       return plan;
@@ -764,27 +775,28 @@ function buildElementUpdate(
   return plan;
 }
 
-function routeEditField(
+async function routeEditField(
   key: string,
   value: unknown,
   state: EditRoutingState
-): { applied: boolean; error?: string } {
+): Promise<{ applied: boolean; error?: string }> {
   if (state.metadataFields.has(key) && !SPECIAL_ROUTE_FIELDS.has(key)) {
     const metadata = ensureUpdateMetadata(state.updateObject);
     metadata[key] = value;
     return { applied: true };
   }
   if (key === 'elements' && state.normalizedType === ElementType.ENSEMBLE) {
-    const updateError = applyEnsembleElementsUpdate(
+    const updateError = await applyEnsembleElementsUpdate(
       value,
       state.element,
       state.updateObject,
-      state.collectionWarnings
+      state.collectionWarnings,
+      state.context,
     );
     return updateError ? { applied: true, error: updateError } : { applied: true };
   }
   if (key === 'metadata' && typeof value === 'object' && value !== null) {
-    const updateError = routeNestedMetadata(value as Record<string, unknown>, state);
+    const updateError = await routeNestedMetadata(value as Record<string, unknown>, state);
     return updateError ? { applied: true, error: updateError } : { applied: true };
   }
   if (key === 'instructions' && typeof value === 'string') {
@@ -818,10 +830,10 @@ function ensureUpdateMetadata(updateObject: Record<string, unknown>): Record<str
   return updateObject.metadata as Record<string, unknown>;
 }
 
-function routeNestedMetadata(
+async function routeNestedMetadata(
   metadataValue: Record<string, unknown>,
   state: EditRoutingState
-): string | undefined {
+): Promise<string | undefined> {
   if (state.normalizedType !== ElementType.ENSEMBLE || !hasOwnRecordProperty(metadataValue, 'elements')) {
     state.updateObject.metadata = deepMerge(
       (state.updateObject.metadata || {}) as Record<string, unknown>,
@@ -831,11 +843,12 @@ function routeNestedMetadata(
     return undefined;
   }
 
-  const updateError = applyEnsembleElementsUpdate(
+  const updateError = await applyEnsembleElementsUpdate(
     metadataValue.elements,
     state.element,
     state.updateObject,
-    state.collectionWarnings
+    state.collectionWarnings,
+    state.context,
   );
   if (updateError) {
     return updateError;
@@ -1052,7 +1065,7 @@ export async function editElement(
     return error(validationError);
   }
 
-  const updatePlan = buildElementUpdate(input, normalizedType, name, editableElement);
+  const updatePlan = await buildElementUpdate(input, normalizedType, name, editableElement, context);
   if (updatePlan.error) {
     return error(updatePlan.error);
   }

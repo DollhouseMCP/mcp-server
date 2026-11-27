@@ -819,6 +819,18 @@ elements:
       expect(result.ambiguous[0].found_in).toEqual(['skill', 'template']);
     });
 
+    it('preserves the invalid reference if the canonical name selects a different element', async () => {
+      const displayNamed = { id: 'display', metadata: { name: 'Review Code', description: '' } };
+      const canonicalNamed = { id: 'canonical', metadata: { name: 'review-code', description: '' } };
+      const skillManager = {
+        findByName: async (name: string) => name === 'Review Code' ? displayNamed : canonicalNamed,
+      };
+      const member = { element_name: 'Review Code', element_type: 'skill' };
+      const result = await resolveElementTypes([member], { skillManager });
+
+      expect(result.resolved).toEqual([member]);
+    });
+
     it('should report elements not found in any manager', async () => {
       const mockManagers = {
         skillManager: { findByName: jest.fn<(name: string) => Promise<any>>().mockReturnValue(Promise.resolve()) },

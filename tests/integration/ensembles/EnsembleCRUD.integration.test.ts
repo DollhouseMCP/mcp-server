@@ -17,6 +17,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+import { copyFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { DollhouseMCPServer } from '../../../src/index.js';
 import { ElementType } from '../../../src/portfolio/types.js';
 import { createIntegrationContainer, IntegrationContainer } from '../../helpers/integration-container.js';
@@ -190,6 +192,71 @@ describe('Ensemble CRUD Operations (Integration)', () => {
   // ====================================================================
 
   describe('createElement', () => {
+    it('stores a listed starter persona display name as a canonical member reference', async () => {
+      await copyFile(
+        new URL('../../../data/personas/technical-analyst.md', import.meta.url),
+        join(containerContext.portfolioDir, 'personas', 'technical-analyst.md'),
+      );
+      const personas = await server.listElements(ElementType.PERSONA);
+      expect(JSON.stringify(personas)).toContain('Technical Analyst');
+      await createTestSkill('test-skill-display-dependency');
+
+      const result = await server.createElement({
+        name: 'test-ensemble-display-name',
+        type: ElementType.ENSEMBLE,
+        description: 'Uses a persona by its display name.',
+        metadata: {
+          elements: [
+            { element_name: 'Technical Analyst', element_type: 'persona', role: 'primary' },
+            { element_name: 'test-skill-display-dependency', element_type: 'skill', dependencies: ['Technical Analyst'] },
+          ],
+        },
+      });
+      expect(result.content[0].text).toContain("Created ensemble 'test-ensemble-display-name'");
+
+      const stored = await ensembleManager.load('test-ensemble-display-name.md');
+      expect(stored.metadata.elements).toEqual([
+        expect.objectContaining({ element_name: 'technical-analyst', element_type: 'persona', role: 'primary' }),
+        expect.objectContaining({ element_name: 'test-skill-display-dependency', dependencies: ['technical-analyst'] }),
+      ]);
+
+      const edited = await server.editElement({
+        name: 'test-ensemble-display-name',
+        type: ElementType.ENSEMBLE,
+        input: {
+          elements: [
+            { element_name: 'Technical Analyst', priority: 85 },
+            { element_name: 'test-skill-display-dependency', dependencies: ['Technical Analyst'] },
+          ],
+        },
+      });
+      expect(edited.content[0].text).toContain('✅');
+      const reloaded = await ensembleManager.load('test-ensemble-display-name.md');
+      expect(reloaded.metadata.elements).toEqual([
+        expect.objectContaining({ element_name: 'technical-analyst', role: 'primary', priority: 85 }),
+        expect.objectContaining({ element_name: 'test-skill-display-dependency', dependencies: ['technical-analyst'] }),
+      ]);
+
+      const activated = await server.activateElement('test-ensemble-display-name', ElementType.ENSEMBLE);
+      expect(activated.content[0].text).toContain('activated');
+      const activePersonas = await server.getActiveElements(ElementType.PERSONA);
+      expect(JSON.stringify(activePersonas)).toContain('Technical Analyst');
+    });
+
+    it('gives the allowed member name pattern and an example when lookup misses', async () => {
+      const result = await server.createElement({
+        name: 'test-ensemble-missing-display-name',
+        type: ElementType.ENSEMBLE,
+        description: 'Uses a missing persona display name.',
+        metadata: {
+          elements: [{ element_name: 'Missing Persona', element_type: 'persona', role: 'primary' }],
+        },
+      });
+      expect(result.content[0].text).toContain('Invalid element name format: Missing Persona');
+      expect(result.content[0].text).toContain('^[a-zA-Z0-9_-]+$');
+      expect(result.content[0].text).toContain('technical-analyst');
+    });
+
     it('should create a basic ensemble with required fields', async () => {
       const result = await server.createElement({
         name: 'test-ensemble-basic',
