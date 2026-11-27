@@ -452,7 +452,7 @@ function formatVerificationPreview(text: string): string {
   // Show invisible characters explicitly so they cannot change how the action reads.
   for (const character of text) {
     const visible = containsUnsafeDisplayUnicode(character)
-      ? `\\u{${character.codePointAt(0)!.toString(16)}}`
+      ? String.raw`\u{${character.codePointAt(0)!.toString(16)}}`
       : character;
     if (preview.length + visible.length >= MAX_VERIFICATION_PREVIEW_LENGTH) return `${preview}…`;
     preview += visible;
