@@ -250,6 +250,33 @@ describe('Autonomy challenge verification end to end', () => {
       expect(nativeApproval).toHaveBeenCalledTimes(2);
     });
 
+    it.each([
+      {
+        nextActionHint: `Archive report | record output\n\u202e${'x'.repeat(150)}tail`,
+        expected: 'Archive report | record output\\u{a}\\u{202e}',
+      },
+      { nextActionHint: undefined, expected: 'Apply the reviewed configuration' },
+    ])('shows the proposed action in the verify-tier dialog ($expected)', async ({ nextActionHint, expected }) => {
+      const directive = evaluateAutonomy({
+        agentName: 'reviewed-agent', sessionId: OWNER, sessionTransport: 'stdio', stepCount: 1,
+        currentStepDescription: 'Apply the reviewed configuration', currentStepOutcome: 'success',
+        nextActionHint, riskScore: 70, verificationStore: store,
+      });
+      expect(directive.nextStepRisk).toBe('verify');
+      const challengeId = directive.verification!.verificationId;
+      const summary = store.get(challengeId)!.reason;
+      expect(summary).toContain(expected);
+      expect(summary).not.toMatch(/[\n\u202e]/u);
+      if (nextActionHint) {
+        expect(summary).toHaveLength("Verify action for 'reviewed-agent': ".length + 100);
+        expect(summary.endsWith('…')).toBe(true);
+      }
+
+      nativeApproval.mockResolvedValueOnce({ confirmed: true });
+      expect(await verifyLocal(challengeId)).toMatchObject({ success: true, data: { verified: true } });
+      expect(nativeApproval).toHaveBeenCalledWith(expect.objectContaining({ summary }), false, expect.any(Number));
+    });
+
     it('requires proof for enrolled action approval, refuses replay, and expires unused requests', async () => {
       const enrollment = tokenStore.beginTotpEnrollment();
       const totp = new TOTP({ secret: Secret.fromBase32(enrollment.secret), algorithm: 'SHA1', digits: 6, period: 30 });

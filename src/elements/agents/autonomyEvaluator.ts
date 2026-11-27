@@ -57,6 +57,7 @@
 
 import { logger } from '../../utils/logger.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
+import { containsUnsafeDisplayUnicode } from '../../security/validators/displayText.js';
 import { matchesPattern } from '../../utils/patternMatcher.js';
 import { DIALOG_APPROVAL_TTL_MS } from '../../web/console/consoleToken.js';
 import {
@@ -444,6 +445,21 @@ export function evaluateAutonomy(context: AutonomyContext): AutonomyDirective {
   return buildDirective(true, undefined, factors, { stepsRemaining });
 }
 
+const MAX_VERIFICATION_PREVIEW_LENGTH = 100;
+
+function formatVerificationPreview(text: string): string {
+  let preview = '';
+  // Show invisible characters explicitly so they cannot change how the action reads.
+  for (const character of text) {
+    const visible = containsUnsafeDisplayUnicode(character)
+      ? `\\u{${character.codePointAt(0)!.toString(16)}}`
+      : character;
+    if (preview.length + visible.length >= MAX_VERIFICATION_PREVIEW_LENGTH) return `${preview}…`;
+    preview += visible;
+  }
+  return preview;
+}
+
 /** Evaluate safety and produce a pause directive when the tier requires one. */
 function evaluateSafetyDirective(
   context: AutonomyContext,
@@ -452,8 +468,9 @@ function evaluateSafetyDirective(
 ): AutonomyDirective | undefined {
   if (!context.nextActionHint && context.riskScore === undefined) return undefined;
   const useDialog = context.sessionTransport === 'stdio';
+  const action = context.nextActionHint || context.currentStepDescription;
   const safetyResult = checkSafetyTier(
-    context.nextActionHint || context.currentStepDescription,
+    action,
     context.riskScore || 0,
     config.riskTolerance,
     config.verificationTimeoutMinutes,
@@ -464,7 +481,7 @@ function evaluateSafetyDirective(
   if (safetyResult.stopped) {
     // Issue #142: Create verification challenge for danger zone unblocking
     const dzChallenge = createVerificationChallenge(
-      `Danger zone verification: ${(context.nextActionHint || context.currentStepDescription).substring(0, 100)}`,
+      `Danger zone verification: ${action.substring(0, 100)}`,
       useDialog ? 'authenticator' : 'display_code',
       config.verificationTimeoutMinutes
     );
@@ -535,15 +552,16 @@ function evaluateSafetyDirective(
     let { expiresAt, prompt } = safetyResult.verification;
     if (useDialog) {
       const expiry = Math.min(Date.parse(expiresAt), Date.now() + DIALOG_APPROVAL_TTL_MS);
+      const reason = `Verify action for '${formatVerificationPreview(context.agentName)}': ${formatVerificationPreview(action)}`;
       context.verificationStore?.set(verificationId, {
-        dialog: 'action', expiresAt: expiry, reason: `Verify the next action for '${context.agentName}'?`,
+        dialog: 'action', expiresAt: expiry, reason,
       });
       expiresAt = new Date(expiry).toISOString();
       prompt = 'Call verify_challenge with this ID to request human approval.';
     } else {
       storeAndDisplayChallenge({
         challengeId: verificationId, displayCode, expiresAt,
-        reason: `Verify action: ${(context.nextActionHint || context.currentStepDescription).substring(0, 100)}`,
+        reason: `Verify action: ${action.substring(0, 100)}`,
       }, context);
     }
     autonomyMetrics.recordPause(safetyResult.reason || 'verification_required', context.stepCount);
