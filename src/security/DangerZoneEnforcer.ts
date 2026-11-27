@@ -704,6 +704,12 @@ export class DangerZoneEnforcer {
     return this.blockedContexts.size > 0;
   }
 
+  /** Overrides are unavailable while block state is unreadable or any agent is blocked. */
+  async permitsLocalPolicyOverride(): Promise<boolean> {
+    await this.refresh();
+    return this.readiness === 'ready' && !this.shuttingDown && this.blockedContexts.size === 0;
+  }
+
   /**
    * Get list of all blocked agents
    * Useful for admin/diagnostic purposes

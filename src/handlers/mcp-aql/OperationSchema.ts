@@ -1484,6 +1484,18 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
     returns: { name: 'BlockedAgentResetResult', kind: 'object', description: 'Recovery status with fields reset, status, and message' },
     examples: ['{ operation: "request_blocked_agent_reset" }'],
   },
+  request_policy_override: {
+    endpoint: 'CREATE',
+    handler: 'mcpAqlHandler',
+    method: 'dispatchGatekeeper',
+    category: CATEGORY.SECURITY,
+    description: 'Ask the local operator to review a refused action and approve one exact retry with an authenticator',
+    params: {
+      request_id: { type: 'string', required: true, description: 'Request ID from the original policy refusal. Enter proof only in the desktop dialog.' },
+    },
+    returns: { name: 'PolicyOverrideResult', kind: 'object', description: 'Whether a one-time retry was approved, with a status and message.' },
+    examples: ['{ operation: "request_policy_override", params: { request_id: "550e8400-e29b-41d4-a716-446655440000" } }'],
+  },
   beetlejuice_beetlejuice_beetlejuice: {
     endpoint: 'CREATE',
     handler: 'mcpAqlHandler',

@@ -171,6 +171,11 @@ export const OPERATION_ROUTES: Record<string, OperationRoute> = {
     handler: 'Gatekeeper.requestBlockedAgentReset',
     description: 'Request local recovery of unavailable blocked-agent state through a server-owned desktop prompt',
   },
+  request_policy_override: {
+    endpoint: 'CREATE',
+    handler: 'Gatekeeper.requestPolicyOverride',
+    description: 'Ask the local operator to approve one refused MCP-AQL action',
+  },
   // Issue #503: Beetlejuice safe-trigger for danger zone verification testing
   beetlejuice_beetlejuice_beetlejuice: {
     endpoint: 'CREATE',

@@ -103,6 +103,11 @@ export const OPERATION_POLICY_OVERRIDES: Record<string, OperationPolicy> = {
     rationale: 'Permit requesting the desktop prompt. The reset requires out-of-band approval in the local dialog.',
     canBeElevated: false,
   },
+  request_policy_override: {
+    defaultLevel: PermissionLevel.AUTO_APPROVE,
+    rationale: 'Permit requesting the desktop prompt. The one-time grant requires out-of-band authenticator approval.',
+    canBeElevated: false,
+  },
   beetlejuice_beetlejuice_beetlejuice: {
     defaultLevel: PermissionLevel.AUTO_APPROVE,
     rationale: 'Test fixture for danger zone verification — must be auto-approved to avoid requiring confirmation to test',

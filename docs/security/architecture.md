@@ -147,6 +147,14 @@ Approval records are stored in `GatekeeperSession` with:
 - Throttled expiry sweeps every 10 seconds
 - Two approval scopes: `single` (consumed after one use) and `tool_session` (all uses of that tool for the session)
 
+#### Local one-time policy overrides
+
+An authenticated stdio session with an enrolled authenticator can request one retry of an eligible local portfolio read. When a single active persona, skill, or ensemble explicitly denies the read, the refusal includes a request ID. Call `request_policy_override` on the CREATE endpoint with that ID. The desktop dialog shows the full action and collects the code. An approved request permits one exact retry within 60 seconds.
+
+The initial routes are `list_elements` with optional pagination or name filtering, `search_elements` with a query and optional pagination, and `query_elements` with the default query. Each requires an explicit element type for override eligibility. Scope restrictions, other applicable denies and confirmations, and blocked or unavailable agent state remain enforced. Permission-hook overrides are tracked separately in [#3344](https://github.com/DollhouseMCP/mcp-server/issues/3344).
+
+The grant binds to the session, actor, portfolio target, exact parameters, and effective policy. The server writes an audit event before spending the grant and rechecks the binding before dispatch. A failed operation still spends the grant.
+
 ### 1.8 Gatekeeper Configuration
 
 `GatekeeperConfig` (in `GatekeeperConfig.ts`) provides tunable settings:

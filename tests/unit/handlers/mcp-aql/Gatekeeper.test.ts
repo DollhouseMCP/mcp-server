@@ -110,6 +110,7 @@ record_execution_step: CREATE CONFIRM_SESSION
 release_deadlock: CREATE AUTO_APPROVE locked override
 render: READ AUTO_APPROVE
 request_blocked_agent_reset: CREATE AUTO_APPROVE locked override
+request_policy_override: CREATE AUTO_APPROVE locked override
 resume_from_handoff: EXECUTE CONFIRM_SINGLE_USE locked override
 search: READ AUTO_APPROVE
 search_all: READ AUTO_APPROVE
