@@ -251,6 +251,8 @@ describe('Permission Server Integration', () => {
       ['VS Code', VSCODE_HOOK_SCRIPT, { toolName: 'createFile', toolArgs: {} }, 0, 'ask'],
       ['Codex', CODEX_HOOK_SCRIPT, { tool_name: 'exec_command' }, 0, 'deny'],
       ['Cursor preToolUse', CURSOR_HOOK_SCRIPT, { hook_event_name: 'preToolUse', tool_name: 'Shell' }, 0, 'deny'],
+      ['Cursor Delete', CURSOR_HOOK_SCRIPT, { hook_event_name: 'preToolUse', tool_name: 'Delete' }, 0, 'deny'],
+      ['Cursor MCP: merge', CURSOR_HOOK_SCRIPT, { hook_event_name: 'preToolUse', tool_name: 'McP:Merge_Pull_Request' }, 0, 'deny'],
       ['Cursor beforeShellExecution', CURSOR_HOOK_SCRIPT, { hook_event_name: 'beforeShellExecution', command: 'pwd' }, 0, 'ask'],
       ['Gemini', GEMINI_HOOK_SCRIPT, { tool_name: 'run_shell_command' }, 0, 'deny'],
       ['Windsurf', WINDSURF_HOOK_SCRIPT, { agent_action_name: 'pre_mcp_tool_use', tool_info: { mcp_tool_name: 'create_issue' } }, 2, 'deny'],
@@ -293,10 +295,25 @@ describe('Permission Server Integration', () => {
       },
     );
 
+    itBash('defers a mixed-case MCP: read in Cursor', async () => {
+      const result = await runHookScript(
+        { hook_event_name: 'preToolUse', tool_name: 'McP:ReAd_File' }, {}, CURSOR_HOOK_SCRIPT,
+      );
+      expect(result).toEqual({ code: 0, stdout: '', stderr: '' });
+    });
+
     itBash.each([
       ['Bash', true], ['Write', true], ['Edit', true], ['MultiEdit', true], ['NotebookEdit', true], ['WebFetch', true],
+      ['BASH', true], ['PowerShell', true], ['Monitor', true],
       ['mcp__example__execute', true], ['mcp__example__create', true], ['mcp__example__update', true],
-      ['mcp__example__delete', true], ['mcp__example__send', true], ['mcp__example__read', false], ['Read', false],
+      ['mcp__example__delete', true], ['mcp__example__send', true],
+      ['mcp__X__Execute', true], ['mcp__Read_Server__push_files', true],
+      ['mcp__example__run_command', true], ['mcp__example__move_file', true], ['mcp__example__click', true],
+      ['mcp__example__fetch', true], ['mcp__example__reader', true],
+      ['mcp__example__read', false], ['MCP__Example__List_Files', false],
+      ['mcp__example__get_job', false], ['mcp__example__search', false], ['mcp__example__query', false],
+      ['mcp__example__find', false], ['mcp__example__view', false], ['mcp__example__describe', false],
+      ['mcp__example__fetch_without_side_effects', false], ['mcp__example__status', false], ['Read', false],
     ] as const)('classifies %s during an outage', async (toolName, shouldAsk) => {
       const { stdout } = await runHookScript({ tool_name: toolName });
       if (shouldAsk) expect(JSON.parse(stdout).hookSpecificOutput.permissionDecision).toBe('ask');
@@ -305,8 +322,8 @@ describe('Permission Server Integration', () => {
 
     itBash('supports configured high-risk tool names and MCP verbs', async () => {
       const env = {
-        DOLLHOUSE_HOOK_OUTAGE_HIGH_RISK_TOOLS: 'read',
-        DOLLHOUSE_HOOK_OUTAGE_MCP_HIGH_RISK_PATTERN: 'search',
+        DOLLHOUSE_HOOK_OUTAGE_HIGH_RISK_TOOLS: 'READ',
+        DOLLHOUSE_HOOK_OUTAGE_MCP_HIGH_RISK_PATTERN: 'SEARCH',
       };
       const read = await runHookScript({ tool_name: 'Read' }, env);
       const search = await runHookScript({ tool_name: 'mcp__example__search' }, env);
@@ -315,6 +332,32 @@ describe('Permission Server Integration', () => {
       expect(JSON.parse(search.stdout).hookSpecificOutput.permissionDecision).toBe('ask');
       expect(write.stdout).toBe('');
     });
+
+    itBash('defaults empty classification overrides and matches a configured read-only regex case-insensitively', async () => {
+      const defaults = {
+        DOLLHOUSE_HOOK_OUTAGE_HIGH_RISK_TOOLS: '',
+        DOLLHOUSE_HOOK_OUTAGE_MCP_HIGH_RISK_PATTERN: '',
+        DOLLHOUSE_HOOK_OUTAGE_MCP_READ_ONLY_PATTERN: '',
+      };
+      const bash = await runHookScript({ tool_name: 'Bash' }, defaults);
+      const merge = await runHookScript({ tool_name: 'mcp__example__merge' }, defaults);
+      const get = await runHookScript({ tool_name: 'mcp__example__get_file' }, defaults);
+      expect(JSON.parse(bash.stdout).hookSpecificOutput.permissionDecision).toBe('ask');
+      expect(JSON.parse(merge.stdout).hookSpecificOutput.permissionDecision).toBe('ask');
+      expect(get.stdout).toBe('');
+      const custom = await runHookScript({ tool_name: 'mcp__example__LOOKUP' }, {
+        DOLLHOUSE_HOOK_OUTAGE_MCP_READ_ONLY_PATTERN: '^LOOKUP$',
+      });
+      expect(custom.stdout).toBe('');
+    });
+
+    itBash.each(['DOLLHOUSE_HOOK_OUTAGE_MCP_HIGH_RISK_PATTERN', 'DOLLHOUSE_HOOK_OUTAGE_MCP_READ_ONLY_PATTERN'])(
+      'treats even a read as high-risk with an invalid %s',
+      async variable => {
+        const { stdout } = await runHookScript({ tool_name: 'mcp__example__read_file' }, { [variable]: '[' });
+        expect(JSON.parse(stdout).hookSpecificOutput.permissionDecision).toBe('ask');
+      },
+    );
 
     itBash.each([
       ['unparseable JSON', '{"tool_name":', true],
@@ -340,6 +383,7 @@ describe('Permission Server Integration', () => {
       ['malformed decision', '{"decision":"allow"}{"decision":"deny"}', 200],
       ['HTTP error', '{"decision":"allow"}', 503],
       ['reported that evaluation is unavailable', '{"status":"outage","decision":"allow"}', 503],
+      ['reported that evaluation is unavailable', '{"status":"outage","decision":"allow"}', 200],
     ] as const)('uses the outage path for %s responses', async (failure, response, status) => {
       const server = http.createServer((_req, res) => res.writeHead(status).end(response));
       const port = await listenOnLoopback(server);
@@ -357,12 +401,43 @@ describe('Permission Server Integration', () => {
       }
     });
 
+    itBash.each([
+      ['session_unavailable', 'no verified policy session', 'session authentication setup'],
+      ['rate_limited', 'rate-limited', 'Wait before retrying'],
+      ['invalid_decision', 'invalid decision', 'compatible versions'],
+    ] as const)('names %s and gives the corresponding outage advice', async (code, summary, advice) => {
+      const server = http.createServer((_req, res) => res.writeHead(503).end(JSON.stringify({
+        status: 'outage', code, reason: 'untrusted server text',
+      })));
+      const port = await listenOnLoopback(server);
+      await fs.writeFile(PORT_FILE, String(port));
+      try {
+        const { stdout } = await runHookScript({ tool_name: 'Bash' });
+        const response = JSON.parse(stdout).hookSpecificOutput;
+        expect(response.permissionDecision).toBe('ask');
+        expect(response.permissionDecisionReason).toContain('DollhouseMCP Gatekeeper');
+        expect(response.permissionDecisionReason).toContain(code);
+        expect(response.permissionDecisionReason).toContain(summary);
+        expect(response.permissionDecisionReason).toContain(advice);
+        expect(response.permissionDecisionReason).not.toContain('Restart the DollhouseMCP server');
+        expect(response.permissionDecisionReason).not.toContain('untrusted server text');
+        const subsequent = await runHookScript({ tool_name: 'Bash' });
+        expect(JSON.parse(subsequent.stdout).hookSpecificOutput.permissionDecisionReason).toContain(code);
+        expect(subsequent.stdout).not.toContain(advice);
+      } finally {
+        await new Promise<void>(resolve => server.close(() => resolve()));
+      }
+    });
+
     itBash('warns fully once per outage and resets after a valid server decision', async () => {
       const server = http.createServer((_req, res) => res.end('{"decision":"allow"}'));
       const port = await listenOnLoopback(server);
       const highRisk = { tool_name: 'Bash' };
       const warning = 'Restart the DollhouseMCP server';
       try {
+        const malformed = await runHookScript('{"tool_name":');
+        expect(malformed.stdout).toContain("Check the client's hook configuration");
+        expect(malformed.stdout).not.toContain(warning);
         expect((await runHookScript({ tool_name: 'Read' })).stdout).toBe('');
         const results = await Promise.all([runHookScript(highRisk), runHookScript(highRisk), runHookScript(highRisk)]);
         expect(results.filter(result => result.stdout.includes(warning))).toHaveLength(1);
@@ -370,6 +445,10 @@ describe('Permission Server Integration', () => {
 
         await fs.writeFile(PORT_FILE, String(port));
         expect(JSON.parse((await runHookScript(highRisk)).stdout).hookSpecificOutput.permissionDecision).toBe('allow');
+        for (const tool_name of ['mcp__example__read_file', 'mcp__example__run_command']) {
+          const evaluated = await runHookScript({ tool_name });
+          expect(JSON.parse(evaluated.stdout).hookSpecificOutput.permissionDecision).toBe('allow');
+        }
         await fs.unlink(PORT_FILE);
 
         expect((await runHookScript(highRisk)).stdout).toContain(warning);
@@ -655,7 +734,7 @@ describe('Permission Server Integration', () => {
       expect(bash.code).toBe(0);
       expect(JSON.parse(bash.stdout).hookSpecificOutput).toEqual(expect.objectContaining({
         permissionDecision: 'ask',
-        permissionDecisionReason: expect.stringContaining('attempts to reach the permission server failed'),
+        permissionDecisionReason: expect.stringContaining('the permission server is not responding (timed out)'),
       }));
     });
 
@@ -692,7 +771,10 @@ describe('Permission Server Integration', () => {
       expect(elapsedMs).toBeLessThan(20_000);
     }, 20000);
 
-    itBash('caps curl at the host-safe request budget and skips backoff that would exceed it', async () => {
+    itBash.each([
+      [7, 'the permission server is not running or is refusing connections'],
+      [28, 'the permission server is not responding (timed out)'],
+    ] as const)('caps curl and explains transport error %s when retry budget is exhausted', async (curlExit, failure) => {
       const binDir = path.join(RUN_DIR, 'bin');
       const calls = path.join(RUN_DIR, 'curl-args');
       const fixedClock = path.join(RUN_DIR, 'fixed-clock.sh');
@@ -702,7 +784,7 @@ describe('Permission Server Integration', () => {
         '#!/bin/bash',
         'printf "%s\\n" "$@" >> "$HOOK_TEST_CURL_ARGS"',
         'printf "\\n000"',
-        'exit 28',
+        `exit ${curlExit}`,
       ].join('\n'), { mode: 0o700 });
       await fs.writeFile(PORT_FILE, '41817');
 
@@ -719,10 +801,10 @@ describe('Permission Server Integration', () => {
       expect(args.filter(arg => arg === '--max-time')).toHaveLength(1);
       expect(args[args.indexOf('--max-time') + 1]).toBe('1');
       expect(code).toBe(0);
-      expect(JSON.parse(stdout).hookSpecificOutput).toMatchObject({
-        permissionDecision: 'ask',
-        permissionDecisionReason: expect.stringContaining("within the hook's request budget"),
-      });
+      const response = JSON.parse(stdout).hookSpecificOutput;
+      expect(response.permissionDecision).toBe('ask');
+      expect(response.permissionDecisionReason).toContain("within the hook's request budget");
+      expect(response.permissionDecisionReason).toContain(failure);
     });
 
     itBash('hook script should stay silent for Codex allow decisions', async () => {

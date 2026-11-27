@@ -94,18 +94,29 @@ require a native prompt. Their hooks block a high-risk operation during an
 outage. Cursor's dedicated shell and MCP events can request a prompt when those
 events are configured.
 
-The first high-risk call in an outage shows the failure, restart instructions,
-and port file and diagnostics paths. Calls within the same outage give the
-failure in a short reason. A valid evaluation clears the warning marker.
+The first high-risk call in an outage shows the failure and recovery steps.
+The warning distinguishes a missing port or refused connection from a
+timeout. A `session_unavailable` warning points to hook authentication, and
+hook input errors give configuration advice without using the outage warning
+marker. Later calls show the short reason. A valid evaluation clears the marker.
 
-The default high-risk tools are Bash, Write, Edit, MultiEdit, NotebookEdit,
-WebFetch, and MCP tools whose names contain `execute`, `create`, `update`,
-`delete`, or `send`. Set `DOLLHOUSE_HOOK_OUTAGE_HIGH_RISK_TOOLS` to override
-the space-separated tool names and `DOLLHOUSE_HOOK_OUTAGE_MCP_HIGH_RISK_PATTERN`
-to override the Bash extended regular expression for MCP names. Use lowercase
-in these settings. Native names, such as Gemini's `run_shell_command`, are
-classified by their equivalent tool. A call with no identifiable tool uses the
-high-risk outcome.
+The default high-risk tools include Bash, PowerShell, Monitor, Write, Edit,
+MultiEdit, NotebookEdit, WebFetch, and Cursor Delete. Native names such as
+Gemini's `run_shell_command` use their equivalent tool's classification. An
+unidentifiable call uses the high-risk outcome.
+
+During an outage, MCP calls are high-risk unless their tool name starts with
+a whole read-only verb (`get`, `list`, `read`, `search`, `query`, `find`,
+`view`, `describe`, or `status`) or is explicitly named
+`fetch-without-side-effects` (hyphens or underscores). The classifier uses
+the tool portion of both `mcp__server__tool` and Cursor `MCP:tool` names.
+
+`DOLLHOUSE_HOOK_OUTAGE_HIGH_RISK_TOOLS` overrides the space-separated
+high-risk tools. `DOLLHOUSE_HOOK_OUTAGE_MCP_READ_ONLY_PATTERN` overrides the
+read-only Bash extended regular expression. The existing
+`DOLLHOUSE_HOOK_OUTAGE_MCP_HIGH_RISK_PATTERN` can promote an MCP call to
+high risk. Matching ignores case. Empty values use the defaults, and an
+invalid expression keeps MCP calls high-risk.
 
 ## Runtime Configuration Bounds
 

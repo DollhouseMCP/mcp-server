@@ -152,15 +152,17 @@ emit_response() {
   return 0
 }
 
-is_outage_high_risk() {
-  local name configured_tool
+is_outage_high_risk() (
+  local name configured_tool mcp_name match_status
   local -a high_risk_tools
+  # Scope case-insensitive matching to this check, including user-supplied EREs.
+  shopt -s nocasematch
   # A payload with no usable tool name cannot be shown to be low-risk.
   [[ -n "${TOOL_NAME//[[:space:]]/}" ]] || return 0
   name=$(printf '%s' "$TOOL_NAME" | LC_ALL=C tr '[:upper:]' '[:lower:]')
   case "$HOOK_PLATFORM:$name" in
     cursor:shell|codex:exec_command|codex:shell_command|gemini:run_shell_command) name="bash" ;;
-    gemini:write_file) name="write" ;;
+    cursor:delete|gemini:write_file) name="write" ;;
     gemini:replace) name="edit" ;;
     gemini:web_fetch) name="webfetch" ;;
     *) ;;
@@ -171,16 +173,33 @@ is_outage_high_risk() {
   done
 
   case "$name" in
-    mcp__*|mcp_*|mcp:*|mcp/*) ;;
-    *) [[ "$MCP_TOOL" == "true" ]] || return 1 ;;
+    mcp__?*__*)
+      mcp_name="${name#mcp__}"
+      mcp_name="${mcp_name#*__}"
+      ;;
+    mcp:*) mcp_name="${name#mcp:}" ;;
+    # These spellings identify MCP, but do not reliably delimit the tool name.
+    mcp_*|mcp/*) return 0 ;;
+    *)
+      [[ "$MCP_TOOL" == "true" ]] || return 1
+      mcp_name="$name"
+      ;;
   esac
-  [[ -n "$OUTAGE_MCP_HIGH_RISK_PATTERN" && "$name" =~ $OUTAGE_MCP_HIGH_RISK_PATTERN ]]
-}
+  [[ -n "$mcp_name" ]] || return 0
+  if [[ -n "$OUTAGE_MCP_HIGH_RISK_PATTERN" ]]; then
+    [[ "$name" =~ $OUTAGE_MCP_HIGH_RISK_PATTERN ]]
+    match_status=$?
+    [[ "$match_status" == "1" ]] || return 0
+  fi
+  # A nonmatch or an invalid read-only expression both keep the call high-risk.
+  ! [[ "$mcp_name" =~ $OUTAGE_MCP_READ_ONLY_PATTERN ]]
+)
 
 handle_outage() {
   local stage="$1"
   local failure="$2"
-  local reason="DollhouseMCP permission check unavailable: $failure."
+  local advice="${3:-Restart the DollhouseMCP server and check the port file at $PORT_FILE.}"
+  local reason="DollhouseMCP Gatekeeper unavailable: $failure."
   local decision="ask"
   debug "$reason"
 
@@ -189,10 +208,12 @@ handle_outage() {
     return 0
   fi
 
+  if [[ "$stage" == "parse_tool_name_failed" ]]; then
+    reason="$reason Check the client's hook configuration and see diagnostics at $DIAGNOSTICS_LOG."
   # An atomic mkdir elects one full warning until a valid evaluation returns.
-  if mkdir -p "$RUN_DIR" 2>/dev/null &&
-     (umask 077; mkdir "$OUTAGE_WARNING_MARKER") 2>/dev/null; then
-    reason="$reason Restart the DollhouseMCP server, check the port file at $PORT_FILE, and see diagnostics at $DIAGNOSTICS_LOG."
+  elif mkdir -p "$RUN_DIR" 2>/dev/null &&
+       (umask 077; mkdir "$OUTAGE_WARNING_MARKER") 2>/dev/null; then
+    reason="$reason $advice See diagnostics at $DIAGNOSTICS_LOG."
   fi
 
   # These installed hooks cannot request a native prompt.
@@ -218,6 +239,38 @@ handle_outage() {
   fi
   append_diagnostic_record "$COMPLETE_EVENT" "$stage" "outage_$decision" "$failure"
   emit_response "$EMITTED_RESPONSE"
+}
+
+handle_server_outage() {
+  local code="$1"
+  local failure advice
+  case "$code" in
+    rate_limited)
+      failure="permission evaluation is rate-limited"
+      advice="Wait before retrying the action."
+      ;;
+    invalid_request)
+      failure="the permission server requires a valid tool name"
+      advice="Check the client's permission hook configuration."
+      ;;
+    evaluation_failed)
+      failure="permission evaluation could not complete"
+      advice="Check the server logs and restart the DollhouseMCP server if evaluation keeps failing."
+      ;;
+    invalid_decision)
+      failure="permission evaluation returned an invalid decision"
+      advice="Check that the hook and the DollhouseMCP server are on compatible versions."
+      ;;
+    session_unavailable)
+      failure="the hook connection has no verified policy session"
+      advice="Check the hook's session authentication setup. The outage policy applies until the hook can supply verified session credentials."
+      ;;
+    *)
+      handle_outage "server_outage" "the permission server reported that evaluation is unavailable"
+      return $?
+      ;;
+  esac
+  handle_outage "server_outage" "$failure ($code)" "$advice"
 }
 
 authority_host_for_platform() {
@@ -307,7 +360,7 @@ normalize_response() {
     if type != "object" then
       empty
     elif .status == "outage" then
-      {status: "outage"}
+      {status: "outage", code: (.code | strings // "")}
     elif $platform == "codex" and length == 0 then
       {status: "success"}
     else
@@ -441,7 +494,7 @@ if ! read_hook_input 2>/dev/null; then
 fi
 
 if ! PORT=$(resolve_permission_port); then
-  handle_outage "port_discovery_failed" "no usable permission server port file was found"
+  handle_outage "port_discovery_failed" "the permission server may not be running (no usable permission server port file was found)"
   exit $?
 fi
 
@@ -532,7 +585,7 @@ while [[ $ATTEMPT -le $MAX_RETRIES ]]; do
       exit $?
     fi
     if [[ $(jq -r '.status' <<< "$result") == "outage" ]]; then
-      handle_outage "server_outage" "the permission server reported that evaluation is unavailable"
+      handle_server_outage "$(jq -r '.code' <<< "$result")"
       exit $?
     fi
     if [[ "$HTTP_STATUS" != 2[0-9][0-9] ]]; then
@@ -570,5 +623,11 @@ while [[ $ATTEMPT -le $MAX_RETRIES ]]; do
   fi
 done
 
-handle_outage "curl_attempts_exhausted" "$((LAST_ATTEMPT + 1)) attempts to reach the permission server failed within the hook's request budget"
+case "$LAST_CURL_EXIT" in
+  7) transport_failure="the permission server is not running or is refusing connections" ;;
+  28) transport_failure="the permission server is not responding (timed out)" ;;
+  0) transport_failure="the permission server returned an empty response" ;;
+  *) transport_failure="the permission server could not be reached" ;;
+esac
+handle_outage "curl_attempts_exhausted" "$transport_failure. No policy decision arrived within the hook's request budget"
 exit $?
