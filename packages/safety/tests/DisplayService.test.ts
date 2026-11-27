@@ -183,6 +183,104 @@ describe('DisplayService', () => {
     });
   });
 
+  describe('native approval on a KDialog-only desktop', () => {
+    beforeEach(() => {
+      mockPlatform.mockReturnValue('linux');
+      process.env.DISPLAY = ':test';
+      mockExecSync.mockImplementation(command => {
+        if (command === 'which kdialog') return '/usr/bin/kdialog';
+        throw new Error('Dialog binary unavailable');
+      });
+    });
+
+    afterEach(() => {
+      mockExecSync.mockReset();
+    });
+
+    function stubReview() {
+      const end = jest.fn((_input: string, delivered: () => void) => delivered());
+      runNativeDialog.mockReturnValueOnce(Object.assign(
+        Promise.resolve({ stdout: '', stderr: '' }),
+        { child: { stdin: { once: jest.fn(), end } } },
+      ));
+      return end;
+    }
+
+    it('delivers the review on stdin and reads masked proof from the child', async () => {
+      const reviewInput = stubReview();
+      runNativeDialog
+        .mockResolvedValueOnce({ stdout: '123456\n', stderr: '' })
+        .mockResolvedValueOnce({ stdout: 'approve\n', stderr: '' });
+      const prompt = {
+        title: 'Review this private request',
+        summary: 'Review the proposed action',
+        approveLabel: 'Approve',
+        reviewDetails: 'Compare <draft> & final\nReview every line.',
+      };
+
+      await expect(showNativeApprovalDialog(prompt, true, 20_000)).resolves.toEqual({ confirmed: true, code: '123456' });
+      expect(runNativeDialog.mock.calls.map(([file]) => file)).toEqual(['kdialog', 'kdialog', 'kdialog']);
+      expect(runNativeDialog.mock.calls[0][1]).toEqual(expect.arrayContaining(['--textbox', '-']));
+      expect(reviewInput).toHaveBeenCalledWith(
+        expect.stringContaining('Compare &lt;draft&gt; &amp; final<br>Review every line.'), expect.any(Function),
+      );
+      expect(reviewInput.mock.calls[0][0]).toContain(prompt.summary);
+      expect(runNativeDialog.mock.calls[1][1]).toContain('--password');
+      expect(runNativeDialog.mock.calls[2][1].slice(-6)).toEqual(['cancel', 'Cancel', 'on', 'approve', 'Approve', 'off']);
+      const argv = runNativeDialog.mock.calls.flatMap(([, args]) => args).join(' ');
+      expect(argv).not.toContain(prompt.title);
+      expect(argv).not.toContain(prompt.summary);
+      expect(argv).not.toContain('Compare');
+      expect(argv).not.toContain('123456');
+    });
+
+    it.each([
+      ['approve', { confirmed: true }],
+      ['cancel', { confirmed: false, reason: 'cancelled' }],
+    ] as const)('handles the %s selection in basic mode', async (choice, expected) => {
+      stubReview();
+      runNativeDialog.mockResolvedValueOnce({ stdout: choice, stderr: '' });
+      await expect(showBlockResetDialog(false, 20_000)).resolves.toEqual(expected);
+      expect(runNativeDialog).toHaveBeenCalledTimes(2);
+      expect(runNativeDialog.mock.calls[1][1]).toContain('--radiolist');
+    });
+
+    it('ends the request when the operator closes the password dialog', async () => {
+      stubReview();
+      runNativeDialog.mockRejectedValueOnce({ code: 1, stderr: '' });
+      await expect(showBlockResetDialog(true, 20_000)).resolves.toEqual({ confirmed: false, reason: 'cancelled' });
+      expect(runNativeDialog).toHaveBeenCalledTimes(2);
+      expect(runNativeDialog.mock.calls[1][1]).toContain('--password');
+    });
+
+    it('requires delivery of the review before opening the next dialog', async () => {
+      runNativeDialog.mockResolvedValueOnce({ stdout: '', stderr: '' });
+      await expect(showBlockResetDialog(true, 20_000)).resolves.toEqual({ confirmed: false, reason: 'unavailable' });
+      expect(runNativeDialog).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses when neither approval binary is available', async () => {
+      mockExecSync.mockImplementation(() => { throw new Error('Dialog binary unavailable'); });
+      await expect(showBlockResetDialog(true, 20_000)).resolves.toEqual({ confirmed: false, reason: 'unavailable' });
+      expect(runNativeDialog).not.toHaveBeenCalled();
+    });
+
+    it('ends the request if review exhausts the shared deadline', async () => {
+      let now = 100;
+      const clock = jest.spyOn(performance, 'now').mockImplementation(() => now);
+      try {
+        stubReview().mockImplementationOnce((_input, delivered) => {
+          now += 5_000;
+          delivered();
+        });
+        await expect(showBlockResetDialog(true, 5_000)).resolves.toEqual({ confirmed: false, reason: 'timeout' });
+        expect(runNativeDialog).toHaveBeenCalledTimes(1);
+      } finally {
+        clock.mockRestore();
+      }
+    });
+  });
+
   it('keeps a Windows approval prompt on the input pipe and returns the masked proof', async () => {
     mockPlatform.mockReturnValue('win32');
     const input = jest.fn();

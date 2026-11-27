@@ -44,6 +44,7 @@ exit 1`;
 const runNativeDialog = promisify(execFile);
 const BASIC_TEXT = 'Basic approval protects against agents limited to MCP tools.';
 const PROOF_TEXT = 'Enter a current authenticator code or a backup code.';
+const KDIALOG_APPROVAL_TITLE = 'DollhouseMCP approval';
 const MACOS_APPROVAL_SCRIPT = `use framework "Foundation"
 use scripting additions
 on run argv
@@ -167,9 +168,21 @@ export function showBlockResetDialog(requireCode: boolean, timeoutMs: number): P
 
 function runApprovalDialogWithInput(
   command: string, args: string[], options: NativeApprovalDialogOptions, input: string,
+  requireDelivery = false,
 ) {
   const pending = runNativeDialog(command, args, options);
   const stdin = pending.child?.stdin;
+  if (requireDelivery) {
+    const delivered = new Promise<void>((resolve, reject) => {
+      if (!stdin) {
+        reject(new Error('Native dialog has no input pipe'));
+        return;
+      }
+      stdin.once('error', reject);
+      stdin.end(input, resolve);
+    });
+    return Promise.all([pending, delivered]).then(([result]) => result);
+  }
   // A cancellation or failed launch can close stdin before the write finishes.
   // The process result remains the authority on whether the dialog opened.
   stdin?.once('error', () => {});
@@ -193,7 +206,7 @@ export async function showNativeApprovalDialog(
       case 'darwin':
         return await showMacApproval(prompt, message, requireCode, options);
       case 'linux':
-        return await showZenityApproval(prompt, message, requireCode, options);
+        return await showLinuxApproval(prompt, message, requireCode, options);
       case 'win32': {
         const script = Buffer.from(WINDOWS_APPROVAL_SCRIPT, 'utf16le').toString('base64');
         const { stdout } = await runApprovalDialogWithInput('powershell.exe', [
@@ -236,10 +249,22 @@ async function showMacApproval(
   return parseApprovalResponse(stdout, requireCode);
 }
 
-async function showZenityApproval(
+async function showLinuxApproval(
   prompt: NativeApprovalPrompt, message: string, requireCode: boolean, options: NativeApprovalDialogOptions,
 ): Promise<NativeApprovalDialogResult> {
   if (!process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) return { confirmed: false, reason: 'unavailable' };
+  const deadline = performance.now() + options.timeout;
+  const file = findLinuxDialog(deadline);
+  const timeout = Math.floor(deadline - performance.now());
+  if (timeout <= 0) return { confirmed: false, reason: 'timeout' };
+  if (file === 'zenity') return showZenityApproval(prompt, message, requireCode, { ...options, timeout });
+  if (file === 'kdialog') return showKDialogApproval(prompt, message, requireCode, { ...options, timeout }, deadline);
+  return { confirmed: false, reason: 'unavailable' };
+}
+
+async function showZenityApproval(
+  prompt: NativeApprovalPrompt, message: string, requireCode: boolean, options: NativeApprovalDialogOptions,
+): Promise<NativeApprovalDialogResult> {
   const deadline = performance.now() + options.timeout;
   if (prompt.reviewDetails) {
     await runApprovalDialogWithInput('zenity', [
@@ -265,6 +290,41 @@ async function showZenityApproval(
   return code ? { confirmed: true, code } : { confirmed: true };
 }
 
+async function showKDialogApproval(
+  prompt: NativeApprovalPrompt, message: string, requireCode: boolean, options: NativeApprovalDialogOptions,
+  deadline: number,
+): Promise<NativeApprovalDialogResult> {
+  const review = [prompt.title, message, prompt.reviewDetails].filter(Boolean).join('\n\n');
+  // KDialog appends stdin to a rich-text widget. Render all review data as literal text.
+  const escaped = review.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+    .replaceAll(/\r?\n/gu, '<br>');
+  await runApprovalDialogWithInput('kdialog', [
+    '--title', KDIALOG_APPROVAL_TITLE, '--textbox', '-', '720', '420',
+  ], options, `<pre>${escaped}</pre>\n`, true);
+
+  let code: string | undefined;
+  if (requireCode) {
+    const timeout = Math.floor(deadline - performance.now());
+    if (timeout <= 0) return { confirmed: false, reason: 'timeout' };
+    const { stdout } = await runNativeDialog('kdialog', [
+      '--title', KDIALOG_APPROVAL_TITLE, '--password', PROOF_TEXT,
+    ], { ...options, timeout });
+    code = stdout.trim();
+    if (!code) return { confirmed: false, reason: 'cancelled' };
+  }
+
+  const timeout = Math.floor(deadline - performance.now());
+  if (timeout <= 0) return { confirmed: false, reason: 'timeout' };
+  // Accept only the positive tag. Pressing Enter on the default selection returns Cancel.
+  const { stdout } = await runNativeDialog('kdialog', [
+    '--title', KDIALOG_APPROVAL_TITLE, '--radiolist', 'Apply the reviewed action?',
+    'cancel', 'Cancel', 'on', 'approve', 'Approve', 'off',
+  ], { ...options, timeout });
+  if (performance.now() >= deadline) return { confirmed: false, reason: 'timeout' };
+  if (stdout.trim() !== 'approve') return { confirmed: false, reason: 'cancelled' };
+  return code ? { confirmed: true, code } : { confirmed: true };
+}
+
 export interface DialogOptions {
   title?: string;
   icon?: 'info' | 'warning' | 'error';
@@ -286,10 +346,12 @@ interface VerificationDialogCommand {
 
 const LINUX_DIALOGS = [['zenity', 'which zenity'], ['kdialog', 'which kdialog'], ['xmessage', 'which xmessage']] as const;
 
-function findLinuxDialog(): typeof LINUX_DIALOGS[number][0] | undefined {
+function findLinuxDialog(deadline?: number): typeof LINUX_DIALOGS[number][0] | undefined {
   for (const [file, probe] of LINUX_DIALOGS) {
+    const timeout = deadline === undefined ? undefined : Math.floor(deadline - performance.now());
+    if (timeout !== undefined && timeout <= 0) return undefined;
     try {
-      execSync(probe, { stdio: 'ignore' }); // NOSONAR - Only the fixed tool probes above.
+      execSync(probe, { stdio: 'ignore', ...(timeout === undefined ? {} : { timeout }) }); // NOSONAR - Fixed tool probes above.
       return file;
     } catch { /* Try the next installed dialog. */ }
   }

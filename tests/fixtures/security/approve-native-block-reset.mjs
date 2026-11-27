@@ -46,6 +46,8 @@ fixtureExecFile[promisify.custom] = (file, args, options) => {
 
 childProcess.execFile = fixtureExecFile;
 childProcess.execFileSync = guardedCommand(childProcess.execFileSync);
+const execSync = childProcess.execSync;
+childProcess.execSync = (command, ...args) => command === 'which zenity' ? Buffer.alloc(0) : execSync(command, ...args);
 childProcess.spawn = guardedCommand(childProcess.spawn);
 syncBuiltinESMExports();
 // Approval fixtures can opt in after the native binaries have been stubbed.
