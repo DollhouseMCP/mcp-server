@@ -21,8 +21,9 @@ function privateOwner(stat, mode) {
   return typeof process.getuid === 'function' && stat.uid === process.getuid() && (stat.mode & 0o7777) === mode;
 }
 
-function verifyLog(stat) {
-  if (!stat.isFile() || stat.nlink !== 1 || !privateOwner(stat, PRIVATE_FILE)) {
+function verifyLog(stat, requirePosixOwner = true) {
+  const checkOwner = requirePosixOwner || typeof process.getuid === 'function';
+  if (!stat.isFile() || stat.nlink !== 1 || (checkOwner && !privateOwner(stat, PRIVATE_FILE))) {
     throw new Error('Permission hook diagnostics require a private regular file');
   }
 }
@@ -80,9 +81,14 @@ export async function appendPermissionDiagnostic(path, diagnostic, limit = MAX_B
 export async function readLatestPermissionDiagnostic(path) {
   let file;
   try {
+    const entry = await lstat(path);
+    // The writer requires POSIX permissions. The reader only exposes the
+    // projected schema when Windows cannot report POSIX owners.
+    verifyLog(entry, false);
     file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const stat = await file.stat();
-    verifyLog(stat);
+    verifyLog(stat, false);
+    if (entry.dev !== stat.dev || entry.ino !== stat.ino) return null;
     const tail = Buffer.alloc(Math.min(stat.size, TAIL_BYTES));
     const { bytesRead } = await file.read(tail, 0, tail.length, stat.size - tail.length);
     const raw = tail.subarray(0, bytesRead).toString('utf8');

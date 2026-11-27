@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import {
   _resetPermissionHookStartupRepairSummaryForTests,
@@ -90,18 +90,18 @@ describe('permissionHooks repair flows', () => {
     await installPermissionHook('claude-code', { homeDir: tempHome });
     await installPermissionHook('codex', { homeDir: tempHome });
     await writeFile(getPermissionHookScriptPath(tempHome), '#!/bin/bash\necho stale-shared\n', 'utf-8');
+    const logPath = getPermissionHookDiagnosticsPath(tempHome);
+    await mkdir(dirname(logPath), { recursive: true, mode: 0o700 });
     await writeFile(
-      getPermissionHookDiagnosticsPath(tempHome),
+      logPath,
       `${JSON.stringify({
         timestamp: '2026-04-22T04:00:00.000Z',
-        invocationId: 'diag-1',
-        event: 'complete',
         platform: 'codex',
         stage: 'response_normalized',
         outcome: 'success',
         toolName: 'Bash',
       })}\n`,
-      'utf-8',
+      { encoding: 'utf8', mode: 0o600 },
     );
     await repairPermissionHooksOnStartup(tempHome);
 
@@ -113,7 +113,7 @@ describe('permissionHooks repair flows', () => {
     expect(summary.diagnosticsPath).toBe(getPermissionHookDiagnosticsPath(tempHome));
     expect(summary.lastDiagnostic).toEqual(
       expect.objectContaining({
-        invocationId: 'diag-1',
+        stage: 'response_normalized',
         platform: 'codex',
         outcome: 'success',
       }),
@@ -122,11 +122,12 @@ describe('permissionHooks repair flows', () => {
   });
 
   it('ignores malformed diagnostic JSON entries without throwing', async () => {
-    await mkdir(join(tempHome, '.dollhouse', 'run'), { recursive: true });
+    const logPath = getPermissionHookDiagnosticsPath(tempHome);
+    await mkdir(dirname(logPath), { recursive: true, mode: 0o700 });
     await writeFile(
-      getPermissionHookDiagnosticsPath(tempHome),
-      '{"timestamp":"2026-04-22T04:00:00.000Z","event":"complete"\n',
-      'utf-8',
+      logPath,
+      '{"timestamp":"2026-04-22T04:00:00.000Z","stage":"response_normalized"\n',
+      { encoding: 'utf8', mode: 0o600 },
     );
 
     await expect(readLastPermissionHookDiagnostic(tempHome)).resolves.toBeNull();
