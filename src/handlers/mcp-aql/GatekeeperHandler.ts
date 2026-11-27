@@ -7,7 +7,7 @@ import { generateDisplayCode, showBlockResetDialog, showNativeApprovalDialog, ty
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
 import type { BlockReleaseReason, DesktopApprovalResult, LocalBlockResetResult } from '../../security/DangerZoneEnforcer.js';
-import { redactToolInputForReview } from '../../security/toolRedaction.js';
+import { formatToolInputForReview } from '../../security/toolRedaction.js';
 import { formatDisplayPreview } from '../../security/validators/displayText.js';
 import { env } from '../../config/env.js';
 import type { ChallengeMetadata } from '../../state/IChallengeStore.js';
@@ -1256,9 +1256,10 @@ export class GatekeeperHandler {
     }
     const reviewedHash = pending.toolInputHash;
     const toolName = formatDisplayPreview(pending.toolName, MAX_CLI_REVIEW_TOOL_NAME_LENGTH);
-    const inputPreview = formatDisplayPreview(
-      redactToolInputForReview(pending.toolName, input), MAX_CLI_REVIEW_INPUT_LENGTH, true,
-    );
+    const inputPreview = formatToolInputForReview(pending.toolName, input, MAX_CLI_REVIEW_INPUT_LENGTH);
+    if (inputPreview === undefined) {
+      throw new Error(`The action exceeds the ${MAX_CLI_REVIEW_INPUT_LENGTH}-character local review limit. Resubmit a shorter request so the full action can be reviewed.`);
+    }
     const expiresAt = Date.parse(pending.requestedAt) + (pending.ttlMs ?? env.DOLLHOUSE_CLI_APPROVAL_TTL_MS);
     const request = localApprovalRequest(
       sessionId, ['approve_cli_permission', requestId, scope, reviewedHash],
@@ -1274,7 +1275,7 @@ export class GatekeeperHandler {
         `Risk: ${pending.riskLevel} (${pending.riskScore}/100)`,
         `Irreversible: ${pending.irreversible ? 'yes' : 'no'}`,
         '',
-        'Tool input (secrets redacted, … marks truncation):',
+        'Tool input for local review:',
         inputPreview,
       ].join('\n'),
       approveLabel: 'Approve',

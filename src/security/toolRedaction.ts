@@ -1,5 +1,6 @@
 import { isIntegrationRequestEnvelope, integrationRequestParams, normalizeMcpToolName } from './IntegrationRequestEnvelope.js';
 import { createHmac } from 'node:crypto';
+import { formatCompleteDisplayText, formatDisplayPreview } from './validators/displayText.js';
 
 import type { AuditHmacKeyMaterial } from './auditHmacKey.js';
 
@@ -112,13 +113,42 @@ export async function redactToolInput(
   return { digest: capDigest(digest), hash, detail: raw };
 }
 
-/** Keep operator-visible inputs readable while masking credential fields and recognized secrets. */
-export function redactToolInputForReview(toolName: string, input: Record<string, unknown>): string {
-  // Show the action-bearing fields before descriptions in a capped preview.
-  const fields = Object.entries(input);
-  const actionFields = new Set(TOOL_REDACTION[toolName]?.digestFields);
-  fields.sort(([left], [right]) => Number(actionFields.has(right)) - Number(actionFields.has(left)));
-  return JSON.stringify(redactReviewValue(Object.fromEntries(fields)), null, 2);
+const REVIEW_CONTEXT_FIELDS = new Set(['description', 'prompt']);
+const REVIEW_CONTEXT_HEADING = 'Additional input (redacted, … marks truncation):\n';
+
+/** Render every action field in the private dialog or refuse the whole review. */
+export function formatToolInputForReview(toolName: string, input: Record<string, unknown>, limit: number): string | undefined {
+  const normalizedName = normalizeMcpToolName(toolName);
+  const spec = TOOL_REDACTION[normalizedName];
+  const actionFields = normalizedName === 'mcp_aql' ? Object.keys(input) : [
+    ...(spec?.digestFields ?? []),
+    ...(spec?.keepFields ?? []).filter(key => !REVIEW_CONTEXT_FIELDS.has(key)),
+  ];
+  const actions = formatReviewActions(input, actionFields, limit);
+  if (actions === undefined) return undefined;
+
+  const actionKeys = new Set(actionFields);
+  const context = Object.entries(input).filter(([key]) => !actionKeys.has(key));
+  const remaining = limit - actions.length - REVIEW_CONTEXT_HEADING.length;
+  if (context.length === 0 || remaining <= 0) return actions;
+  const detail = JSON.stringify(redactReviewValue(Object.fromEntries(context)), null, 2);
+  return actions + REVIEW_CONTEXT_HEADING + formatDisplayPreview(detail, remaining, true);
+}
+
+function formatReviewActions(input: Record<string, unknown>, actionFields: readonly string[], limit: number): string | undefined {
+  let review = '';
+  for (const field of actionFields) {
+    if (!Object.hasOwn(input, field)) continue;
+    const value = input[field];
+    const available = limit - review.length - 3;
+    const label = formatCompleteDisplayText(field, available);
+    if (label === undefined) return undefined;
+    const raw = typeof value === 'string' ? value : JSON.stringify(value, null, 2) ?? 'null';
+    const escaped = formatCompleteDisplayText(raw, available - label.length, typeof value !== 'string');
+    if (escaped === undefined) return undefined;
+    review += `${label}:\n${escaped}\n`;
+  }
+  return review;
 }
 
 function redactReviewValue(value: unknown): unknown {
