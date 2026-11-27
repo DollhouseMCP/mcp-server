@@ -11,6 +11,7 @@ import { logger } from './logger.js';
 import { normalizeElementType, toSingularLabel } from './elementTypeNormalization.js';
 import { elementReadFailure } from '../elements/base/ElementReadError.js';
 import { ENSEMBLE_PATTERNS } from '../elements/ensembles/constants.js';
+import type { EnsembleElementInput } from '../elements/ensembles/types.js';
 import { foldedNameKey, slugNameKey } from '../storage/ElementNameKeys.js';
 import { ValidationError } from '../security/errors.js';
 import { ElementType } from '../portfolio/types.js';
@@ -72,6 +73,7 @@ export async function resolveElementTypes(
   const resolved: ResolveElementTypesResult['resolved'] = [];
   const ambiguous: Array<{ element_name: string; found_in: string[] }> = [];
   const notFound: string[] = [];
+  const aliases = new Map<string, string>();
   const lookups = new Map<ElementType, NameLookup | undefined>([
     [ElementType.SKILL, managers.skillManager?.findByName?.bind(managers.skillManager)],
     [ElementType.TEMPLATE, managers.templateManager?.findByName?.bind(managers.templateManager)],
@@ -108,7 +110,7 @@ export async function resolveElementTypes(
       const canonical = lookup && needsDisplayNameLookup(elementName)
         ? await resolveCanonicalMemberName(lookup, elementName, await readDefinition(lookup, elementName))
         : undefined;
-      resolved.push(canonical ? { ...elem, element_name: canonical } : elem);
+      resolved.push(useCanonicalMemberName(elem, elementName, canonical, aliases));
       return;
     }
 
@@ -122,11 +124,35 @@ export async function resolveElementTypes(
     const canonical = matches.length === 1 && needsDisplayNameLookup(elementName)
       ? await resolveCanonicalMemberName(match.lookup, elementName, match.definition)
       : undefined;
-    const member = canonical ? { ...elem, element_name: canonical } : elem;
+    const member = useCanonicalMemberName(elem, elementName, canonical, aliases);
     recordResolution(member, elementName, matches.map(({ type }) => toSingularLabel(type)), { resolved, ambiguous, notFound });
   });
 
-  return { resolved, ambiguous, notFound };
+  return { resolved: rewriteMemberDependencies(resolved, aliases), ambiguous, notFound };
+}
+
+function useCanonicalMemberName(
+  element: EnsembleElementInput,
+  name: string,
+  canonical: string | undefined,
+  aliases: Map<string, string>,
+): EnsembleElementInput {
+  if (!canonical) return element;
+  aliases.set(name, canonical);
+  return { ...element, element_name: canonical };
+}
+
+/** Dependency names use the same keys as the ensemble's members. */
+export function rewriteMemberDependencies(
+  elements: EnsembleElementInput[],
+  aliases: ReadonlyMap<string, string>,
+): EnsembleElementInput[] {
+  if (aliases.size === 0) return elements;
+  return elements.map(element =>
+    Array.isArray(element.dependencies)
+      ? { ...element, dependencies: element.dependencies.map(name => aliases.get(name) ?? name) }
+      : element
+  );
 }
 
 function needsDisplayNameLookup(name: unknown): name is string {

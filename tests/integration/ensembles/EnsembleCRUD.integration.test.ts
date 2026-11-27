@@ -199,13 +199,17 @@ describe('Ensemble CRUD Operations (Integration)', () => {
       );
       const personas = await server.listElements(ElementType.PERSONA);
       expect(JSON.stringify(personas)).toContain('Technical Analyst');
+      await createTestSkill('test-skill-display-dependency');
 
       const result = await server.createElement({
         name: 'test-ensemble-display-name',
         type: ElementType.ENSEMBLE,
         description: 'Uses a persona by its display name.',
         metadata: {
-          elements: [{ element_name: 'Technical Analyst', element_type: 'persona', role: 'primary' }],
+          elements: [
+            { element_name: 'Technical Analyst', element_type: 'persona', role: 'primary' },
+            { element_name: 'test-skill-display-dependency', element_type: 'skill', dependencies: ['Technical Analyst'] },
+          ],
         },
       });
       expect(result.content[0].text).toContain("Created ensemble 'test-ensemble-display-name'");
@@ -213,17 +217,24 @@ describe('Ensemble CRUD Operations (Integration)', () => {
       const stored = await ensembleManager.load('test-ensemble-display-name.md');
       expect(stored.metadata.elements).toEqual([
         expect.objectContaining({ element_name: 'technical-analyst', element_type: 'persona', role: 'primary' }),
+        expect.objectContaining({ element_name: 'test-skill-display-dependency', dependencies: ['technical-analyst'] }),
       ]);
 
       const edited = await server.editElement({
         name: 'test-ensemble-display-name',
         type: ElementType.ENSEMBLE,
-        input: { elements: [{ element_name: 'Technical Analyst', priority: 85 }] },
+        input: {
+          elements: [
+            { element_name: 'Technical Analyst', priority: 85 },
+            { element_name: 'test-skill-display-dependency', dependencies: ['Technical Analyst'] },
+          ],
+        },
       });
       expect(edited.content[0].text).toContain('✅');
       const reloaded = await ensembleManager.load('test-ensemble-display-name.md');
       expect(reloaded.metadata.elements).toEqual([
         expect.objectContaining({ element_name: 'technical-analyst', role: 'primary', priority: 85 }),
+        expect.objectContaining({ element_name: 'test-skill-display-dependency', dependencies: ['technical-analyst'] }),
       ]);
 
       const activated = await server.activateElement('test-ensemble-display-name', ElementType.ENSEMBLE);

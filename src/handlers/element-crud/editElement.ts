@@ -2,7 +2,8 @@ import { ElementType } from '../../portfolio/PortfolioManager.js';
 import { Ensemble } from '../../elements/ensembles/Ensemble.js';
 import { ENSEMBLE_PATTERNS } from '../../elements/ensembles/constants.js';
 import type { EnsembleElementInput } from '../../elements/ensembles/types.js';
-import { resolveElementTypes } from '../../utils/elementTypeResolver.js';
+import { resolveElementTypes, rewriteMemberDependencies } from '../../utils/elementTypeResolver.js';
+import { visitSequentially } from '../../utils/visitSequentially.js';
 import type { ElementCrudContext } from './types.js';
 import { generateMemoryId } from '../../elements/memories/utils.js';
 import { MEMORY_CONSTANTS } from '../../elements/memories/constants.js';
@@ -459,16 +460,20 @@ async function applyEnsembleElementsUpdate(
     : [];
   // Resolve display names before matching incoming edits to the stored member keys.
   const incoming: EnsembleElementInput[] = [];
-  for (const entry of validated.elements) {
+  const aliases = new Map<string, string>();
+  await visitSequentially(validated.elements.values(), async entry => {
     const name = entry.element_name || entry.name;
     if (name && !ENSEMBLE_PATTERNS.ELEMENT_NAME_PATTERN.test(name)) {
       const resolution = await resolveElementTypes([entry], context);
-      incoming.push(resolution.resolved[0] ?? entry);
+      const resolved: EnsembleElementInput = resolution.resolved[0] ?? entry;
+      const canonical = resolved.element_name;
+      if (canonical && canonical !== name) aliases.set(name, canonical);
+      incoming.push(resolved);
     } else {
       incoming.push(entry);
     }
-  }
-  const mergeResult = mergeEnsembleElements(existingTyped, incoming);
+  });
+  const mergeResult = mergeEnsembleElements(existingTyped, rewriteMemberDependencies(incoming, aliases));
   collectionWarnings.push(...mergeResult.warnings);
   if (!updateObj.metadata) {
     updateObj.metadata = {};
