@@ -113,33 +113,25 @@ export async function redactToolInput(
   return { digest: capDigest(digest), hash, detail: raw };
 }
 
-const REVIEW_CONTEXT_FIELDS = new Set(['description', 'prompt']);
 const REVIEW_CONTEXT_HEADING = 'Additional input (redacted, … marks truncation):\n';
 
 /** Render every action field in the private dialog or refuse the whole review. */
 export function formatToolInputForReview(toolName: string, input: Record<string, unknown>, limit: number): string | undefined {
-  const normalizedName = normalizeMcpToolName(toolName);
-  const spec = TOOL_REDACTION[normalizedName];
-  const actionFields = normalizedName === 'mcp_aql' ? Object.keys(input) : [
-    ...(spec?.digestFields ?? []),
-    ...(spec?.keepFields ?? []).filter(key => !REVIEW_CONTEXT_FIELDS.has(key)),
-  ];
-  const actions = formatReviewActions(input, actionFields, limit);
+  const contextKeys = new Set(toolName === 'WebFetch' ? ['description', 'prompt'] : ['description']);
+  const fields = Object.entries(input);
+  const actions = formatReviewActions(fields.filter(([key]) => !contextKeys.has(key)), limit);
   if (actions === undefined) return undefined;
 
-  const actionKeys = new Set(actionFields);
-  const context = Object.entries(input).filter(([key]) => !actionKeys.has(key));
+  const context = fields.filter(([key]) => contextKeys.has(key));
   const remaining = limit - actions.length - REVIEW_CONTEXT_HEADING.length;
   if (context.length === 0 || remaining <= 0) return actions;
   const detail = JSON.stringify(redactReviewValue(Object.fromEntries(context)), null, 2);
   return actions + REVIEW_CONTEXT_HEADING + formatDisplayPreview(detail, remaining, true);
 }
 
-function formatReviewActions(input: Record<string, unknown>, actionFields: readonly string[], limit: number): string | undefined {
+function formatReviewActions(actionFields: readonly [string, unknown][], limit: number): string | undefined {
   let review = '';
-  for (const field of actionFields) {
-    if (!Object.hasOwn(input, field)) continue;
-    const value = input[field];
+  for (const [field, value] of actionFields) {
     const available = limit - review.length - 3;
     const label = formatCompleteDisplayText(field, available);
     if (label === undefined) return undefined;
