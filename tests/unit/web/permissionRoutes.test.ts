@@ -150,7 +150,7 @@ describe('permissionRoutes', () => {
       });
     });
 
-    it('should fail open when tool_name is missing', async () => {
+    it('reports an outage when tool_name is missing', async () => {
       const handler = createMockHandler();
       const app = createApp(handler);
 
@@ -158,17 +158,16 @@ describe('permissionRoutes', () => {
         .post('/api/evaluate_permission')
         .send({ input: { command: 'test' } });
 
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(400);
       expect(res.body).toEqual({
-        hookSpecificOutput: {
-          hookEventName: 'PreToolUse',
-          permissionDecision: 'allow',
-        },
+        status: 'outage',
+        code: 'invalid_request',
+        reason: expect.any(String),
       });
       expect(handler.handleRead).not.toHaveBeenCalled();
     });
 
-    it('should fail open when handler returns error', async () => {
+    it('reports an outage when the handler returns an error', async () => {
       const handler = createMockHandler([{ success: false, error: 'Internal error' }]);
       const app = createApp(handler);
 
@@ -176,16 +175,15 @@ describe('permissionRoutes', () => {
         .post('/api/evaluate_permission')
         .send({ tool_name: 'Bash', input: { command: 'test' } });
 
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(503);
       expect(res.body).toEqual({
-        hookSpecificOutput: {
-          hookEventName: 'PreToolUse',
-          permissionDecision: 'allow',
-        },
+        status: 'outage',
+        code: 'evaluation_failed',
+        reason: expect.any(String),
       });
     });
 
-    it('should fail open when handler throws', async () => {
+    it('reports an outage when the handler throws', async () => {
       const handler = {
         handleRead: jest.fn().mockRejectedValue(new Error('Handler crashed')),
       } as any;
@@ -195,13 +193,44 @@ describe('permissionRoutes', () => {
         .post('/api/evaluate_permission')
         .send({ tool_name: 'Bash', input: { command: 'test' } });
 
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(503);
       expect(res.body).toEqual({
-        hookSpecificOutput: {
-          hookEventName: 'PreToolUse',
-          permissionDecision: 'allow',
-        },
+        status: 'outage',
+        code: 'evaluation_failed',
+        reason: expect.any(String),
       });
+    });
+
+    it.each([{ data: null }, { data: [] }, { data: { permission: 'unexpected' } }])('reports invalid successful handler data as an outage: $data', async ({ data }) => {
+      const handler = createMockHandler([{ success: true, data }]);
+      const res = await request(createApp(handler))
+        .post('/api/evaluate_permission')
+        .send({ tool_name: 'Bash' });
+
+      expect(res.status).toBe(503);
+      expect(res.body).toMatchObject({ status: 'outage', code: 'invalid_decision' });
+    });
+
+    it('reports and tracks rate-limit rejects as outages without recording tool input', async () => {
+      const handler = createMockHandler();
+      const app = createApp(handler, { homeDir: tempHome });
+      for (let i = 0; i < 120; i++) {
+        const res = await request(app).post('/api/evaluate_permission').send({ tool_name: 'Read' });
+        expect(res.status).toBe(200);
+      }
+
+      const res = await request(app)
+        .post('/api/evaluate_permission')
+        .send({ tool_name: 'Bash', input: { command: 'do not retain this rejected input' } });
+
+      expect(res.status).toBe(429);
+      expect(res.body).toMatchObject({ status: 'outage', code: 'rate_limited' });
+      expect(handler.handleRead).toHaveBeenCalledTimes(120);
+
+      const status = await request(app).get('/api/permissions/status');
+      expect(status.status).toBe(200);
+      expect(status.body.recentDecisions[0]).toMatchObject({ tool_name: 'Bash', decision: 'outage' });
+      expect(status.body.recentDecisions[0]).not.toHaveProperty('command');
     });
 
     it('should default platform to claude_code', async () => {

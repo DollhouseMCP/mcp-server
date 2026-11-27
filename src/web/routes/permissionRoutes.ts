@@ -7,7 +7,7 @@
  * - Decision tracking ring buffer for the live dashboard feed
  */
 
-import express, { Router } from 'express';
+import express, { Router, type Response } from 'express';
 import { homedir } from 'node:os';
 import { logger } from '../../utils/logger.js';
 import type { MCPAQLHandler } from '../../handlers/mcp-aql/MCPAQLHandler.js';
@@ -104,6 +104,13 @@ interface PermissionDecisionContext {
 const PERMISSION_ROUTE_RATE_LIMIT_REQUESTS = 120;
 const PERMISSION_ROUTE_RATE_LIMIT_WINDOW_MS = 60_000;
 const DECISION_BUFFER_SIZE = 200;
+const PERMISSION_OUTAGES = {
+  rate_limited: { status: 429, reason: 'Permission evaluation is rate-limited.' },
+  invalid_request: { status: 400, reason: 'A valid tool name is required.' },
+  evaluation_failed: { status: 503, reason: 'Permission evaluation could not complete.' },
+  invalid_decision: { status: 503, reason: 'Permission evaluation returned an invalid decision.' },
+} as const;
+type PermissionOutageCode = keyof typeof PERMISSION_OUTAGES;
 
 interface PermissionDecisionTracker {
   trackDecision(
@@ -117,8 +124,6 @@ interface PermissionDecisionTracker {
 }
 
 const CLAUDE_COMPATIBLE_HOOK_PLATFORMS = new Set(['claude_code', 'vscode']);
-const NORMALIZABLE_PERMISSION_DECISIONS = new Set(['allow', 'deny', 'ask']);
-type NormalizablePermissionDecision = 'allow' | 'deny' | 'ask';
 const CONTEXT_DETAIL_FIELDS: Array<{
   key: keyof PermissionDecisionContext;
   label: string;
@@ -146,6 +151,7 @@ function isEmptyObject(value: Record<string, unknown>): boolean {
 }
 
 function extractDecision(result: Record<string, unknown>, platform?: string): string {
+  if (result.status === 'outage') return 'outage';
   const nested = result.hookSpecificOutput;
   if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
     const nestedDecision = (nested as Record<string, unknown>).permissionDecision;
@@ -185,7 +191,9 @@ function normalizePermissionResponseForPlatform(
   platform: string,
   input: Record<string, unknown>,
   result: Record<string, unknown>,
-): Record<string, unknown> {
+): Record<string, unknown> | undefined {
+  const decision = extractDecision(result, platform);
+  if (decision !== 'allow' && decision !== 'deny' && decision !== 'ask') return undefined;
   if (!shouldNormalizeClaudeHook(platform)) {
     return result;
   }
@@ -193,22 +201,17 @@ function normalizePermissionResponseForPlatform(
   const nested = result.hookSpecificOutput;
   if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
     const nestedDecision = (nested as Record<string, unknown>).permissionDecision;
-    if (typeof nestedDecision === 'string') {
+    if (nestedDecision === decision) {
       return result;
     }
   }
 
-  const decision = extractDecision(result);
-  if (NORMALIZABLE_PERMISSION_DECISIONS.has(decision)) {
-    return formatPermissionResponse(
-      decision as NormalizablePermissionDecision,
-      platform,
-      input,
-      extractReason(result),
-    );
-  }
-
-  return formatPermissionResponse('allow', platform, input);
+  return formatPermissionResponse(
+    decision,
+    platform,
+    input,
+    extractReason(result),
+  );
 }
 
 function buildDecisionDetails(
@@ -422,6 +425,20 @@ export interface RegisterPermissionRoutesOptions {
   autoRepairHookAssets?: boolean;
 }
 
+function respondWithPermissionOutage(
+  res: Response,
+  tracker: PermissionDecisionTracker,
+  platform: string,
+  code: PermissionOutageCode,
+  context: PermissionDecisionContext,
+  toolName = '(unknown)',
+): void {
+  const { status, reason } = PERMISSION_OUTAGES[code];
+  const payload = { status: 'outage', code, reason };
+  tracker.trackDecision(context, toolName, {}, payload, platform);
+  res.status(status).json(payload);
+}
+
 export function registerPermissionRoutes(
   router: Router,
   handler: MCPAQLHandler,
@@ -434,7 +451,7 @@ export function registerPermissionRoutes(
    * POST /api/evaluate_permission
    * Permission evaluation endpoint for PreToolUse hooks.
    * Routes through evaluate_permission MCP-AQL READ operation.
-   * Fail-open: returns allow on any error to avoid blocking the user.
+   * Evaluation failures are reported to the hook as outages.
    */
   const permissionLimiter = new SlidingWindowRateLimiter(
     PERMISSION_ROUTE_RATE_LIMIT_REQUESTS,
@@ -443,7 +460,7 @@ export function registerPermissionRoutes(
   router.post('/evaluate_permission', express.json(), async (req, res) => {
     await selfHealLatestPermissionPortFile(req.socket.localPort);
 
-    const body = req.body as {
+    const body = (req.body ?? {}) as {
       tool_name?: string;
       input?: PermissionDecisionInput;
       platform?: string;
@@ -456,13 +473,8 @@ export function registerPermissionRoutes(
     };
     const platform = typeof body.platform === 'string' ? body.platform.normalize('NFC') : 'claude_code';
 
-    if (!permissionLimiter.tryAcquire()) {
-      res.json(formatPermissionResponse('allow', platform, {})); // fail open on rate limit
-      return;
-    }
-
     // Unicode normalization (NFC) on string inputs to prevent homograph attacks
-    const tool_name = typeof body.tool_name === 'string' ? body.tool_name.normalize('NFC') : undefined;
+    const tool_name = normalizeOptionalRequestString(body.tool_name)?.trim() || undefined;
     const context: PermissionDecisionContext = {
       session_id: normalizeOptionalRequestString(body.session_id),
       turn_id: normalizeOptionalRequestString(body.turn_id),
@@ -473,8 +485,12 @@ export function registerPermissionRoutes(
     };
     const input = body.input;
 
+    if (!permissionLimiter.tryAcquire()) {
+      respondWithPermissionOutage(res, decisionTracker, platform, 'rate_limited', context, tool_name);
+      return;
+    }
     if (!tool_name) {
-      res.json(formatPermissionResponse('allow', platform, input || {})); // fail open on bad input
+      respondWithPermissionOutage(res, decisionTracker, platform, 'invalid_request', context);
       return;
     }
 
@@ -493,17 +509,25 @@ export function registerPermissionRoutes(
       const elapsedMs = Date.now() - startMs;
 
       if (!opResult.success) {
-        logger.warn(`[WebUI/Gateway] evaluate_permission failed (${elapsedMs}ms): ${opResult.error}`);
-        res.json(formatPermissionResponse('allow', platform, input || {})); // fail open
+        logger.warn(`[WebUI/Gateway] evaluate_permission failed (${elapsedMs}ms)`);
+        respondWithPermissionOutage(res, decisionTracker, platform, 'evaluation_failed', context, tool_name);
         return;
       }
 
-      const rawResult = opResult.data as Record<string, unknown>;
+      const rawResult = opResult.data;
+      if (!rawResult || typeof rawResult !== 'object' || Array.isArray(rawResult)) {
+        respondWithPermissionOutage(res, decisionTracker, platform, 'invalid_decision', context, tool_name);
+        return;
+      }
       const responseData = normalizePermissionResponseForPlatform(
         platform,
         input || {},
-        rawResult,
+        rawResult as Record<string, unknown>,
       );
+      if (!responseData) {
+        respondWithPermissionOutage(res, decisionTracker, platform, 'invalid_decision', context, tool_name);
+        return;
+      }
       const trackedResult = { ...rawResult, ...responseData };
       const decision = extractDecision(trackedResult, platform);
       logger.debug(`[WebUI/Gateway] evaluate_permission: ${tool_name} → ${decision} (${elapsedMs}ms)`);
@@ -512,10 +536,10 @@ export function registerPermissionRoutes(
       decisionTracker.trackDecision(context, tool_name, input || {}, trackedResult, platform);
 
       res.json(responseData);
-    } catch (err) {
+    } catch {
       const elapsedMs = Date.now() - startMs;
-      logger.error(`[WebUI/Gateway] evaluate_permission error (${elapsedMs}ms):`, err);
-      res.json(formatPermissionResponse('allow', platform, input || {})); // fail open
+      logger.error(`[WebUI/Gateway] evaluate_permission error (${elapsedMs}ms)`);
+      respondWithPermissionOutage(res, decisionTracker, platform, 'evaluation_failed', context, tool_name);
     }
   });
 
