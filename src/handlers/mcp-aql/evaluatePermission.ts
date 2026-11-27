@@ -153,7 +153,8 @@ function warnOnUnknownPlatform(platform: string): void {
     })
     .catch((error) => {
       console.warn(
-        `[evaluatePermission] Failed to load logger while handling unknown platform "${platform}".`,
+        '[evaluatePermission] Failed to load logger while handling unknown platform "%s".',
+        platform,
         error,
       );
     });
