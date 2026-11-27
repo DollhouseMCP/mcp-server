@@ -404,17 +404,7 @@ async function createEnsemble(
   input: ValidatedCreateInput
 ): Promise<McpToolResponse> {
   try {
-    const resolutionResult = await resolveElementTypes(
-      input.sanitized.elements || [],
-      {
-        skillManager: context.skillManager,
-        templateManager: context.templateManager,
-        agentManager: context.agentManager,
-        memoryManager: context.memoryManager,
-        personaManager: context.personaManager,
-        ensembleManager: context.ensembleManager,
-      }
-    );
+    const resolutionResult = await resolveElementTypes(input.sanitized.elements || [], context);
     const resolutionWarningText = formatElementResolutionWarnings(resolutionResult);
     const ensemble = await context.ensembleManager.create({
       ...input.sanitized,

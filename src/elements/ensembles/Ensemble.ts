@@ -390,7 +390,11 @@ export class Ensemble extends BaseElement implements IElement {
 
       // Validate element name pattern
       if (!ENSEMBLE_PATTERNS.ELEMENT_NAME_PATTERN.test(sanitized.element_name)) {
-        throw new Error(`Invalid element name format: ${sanitized.element_name}`);
+        throw new Error(
+          `Invalid element name format: ${sanitized.element_name}. ` +
+          `Use a listed display name or a canonical name matching ${ENSEMBLE_PATTERNS.ELEMENT_NAME_PATTERN.source}, ` +
+          'for example technical-analyst.'
+        );
       }
 
       this.setElement(sanitized);
@@ -1382,11 +1386,14 @@ export class Ensemble extends BaseElement implements IElement {
       return persona as any;
     }
 
-    // Standard handling for other managers with list() method
-    const elements = await manager.list();
-    const foundElement = elements.find((el: any) =>
-      this.matchesElementName(el.metadata.name, elementName)
-    );
+    // Use the same name lookup that certified the canonical reference at authoring time.
+    const findByName = manager.findByName?.bind(manager);
+    const found = await findByName?.(elementName);
+    if (found) return found;
+
+    const elements: IElement[] = await manager.list();
+    const foundElement = findByName ? undefined : elements.find(element =>
+      this.matchesElementName(element.metadata.name, elementName));
 
     if (!foundElement) {
       const availableNames = elements.map((el: any) => el.metadata.name).join(', ');
