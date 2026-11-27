@@ -292,6 +292,8 @@ Auth & verification:
 On stdio, request approval with the challenge ID and enter any authenticator proof in the server-owned dialog. Legacy HTTP verification still takes the challenge ID and verification code.
 { operation: "release_deadlock" }
 { operation: "request_blocked_agent_reset" }
+{ operation: "request_policy_override", params: { request_id: "550e8400-e29b-41d4-a716-446655440000" } }
+Use the request ID from an eligible stdio refusal. The operator enters authenticator proof in the desktop dialog.
 { operation: "beetlejuice_beetlejuice_beetlejuice" }
 
 Batch operations: Use the operations array to execute multiple operations sequentially in a single request.
