@@ -113,18 +113,21 @@ export async function redactToolInput(
   return { digest: capDigest(digest), hash, detail: raw };
 }
 
+const REVIEW_CONTEXT_KEY_BY_TOOL = new Map([['Bash', 'description'], ['WebFetch', 'prompt']]);
 const REVIEW_CONTEXT_HEADING = 'Additional input (redacted, … marks truncation):\n';
 
 /** Render every action field in the private dialog or refuse the whole review. */
 export function formatToolInputForReview(toolName: string, input: Record<string, unknown>, limit: number): string | undefined {
-  const contextKeys = new Set(toolName === 'WebFetch' ? ['description', 'prompt'] : ['description']);
+  const contextKey = REVIEW_CONTEXT_KEY_BY_TOOL.get(toolName);
   const fields = Object.entries(input);
-  const actions = formatReviewActions(fields.filter(([key]) => !contextKeys.has(key)), limit);
+  const actions = formatReviewActions(fields.filter(([key]) => key !== contextKey), limit);
   if (actions === undefined) return undefined;
 
-  const context = fields.filter(([key]) => contextKeys.has(key));
+  const context = fields.filter(([key]) => key === contextKey);
+  if (context.length === 0) return actions;
   const remaining = limit - actions.length - REVIEW_CONTEXT_HEADING.length;
-  if (context.length === 0 || remaining <= 0) return actions;
+  // Keep the fixed notice visible even when the action uses the entire input budget.
+  if (remaining <= 1) return `${actions}(context omitted)`;
   const detail = JSON.stringify(redactReviewValue(Object.fromEntries(context)), null, 2);
   return actions + REVIEW_CONTEXT_HEADING + formatDisplayPreview(detail, remaining, true);
 }

@@ -479,9 +479,12 @@ describe('Autonomy challenge verification end to end', () => {
       expect(nativeApproval).toHaveBeenCalledTimes(expectedCalls);
     });
 
-    it('escapes the tool name and input in the CLI review dialog', async () => {
+    it.each([
+      { toolName: 'mcp__other__run', displayName: 'mcp__other__run' },
+      { toolName: 'mcp__other__run\u202e\n', displayName: 'mcp__other__run\\u{202e}\\u{a}' },
+    ])('shows the third-party description verbatim and escapes unsafe Unicode (%#)', async ({ toolName, displayName }) => {
       const requestId = await local(() => gatekeeper.createCliApprovalRequest({
-        toolName: 'Review\u202eTool\n',
+        toolName,
         toolInput: {
           params: { endpoint: 'https://example.test/report', token: 'nested-credential', note: 'Draft\u2066 review' },
           description: 'token=context-credential',
@@ -491,13 +494,39 @@ describe('Autonomy challenge verification end to end', () => {
       nativeApproval.mockResolvedValueOnce({ confirmed: true });
       expect(await approveCli(requestId)).toMatchObject({ success: true });
       const prompt = nativeApproval.mock.lastCall?.[0];
-      expect(prompt?.summary).toContain('Review\\u{202e}Tool\\u{a}');
-      expect(prompt?.reviewDetails).toContain('Review\\u{202e}Tool\\u{a}');
+      expect(prompt?.summary).toContain(displayName);
+      expect(prompt?.reviewDetails).toContain(displayName);
       expect(prompt?.reviewDetails).toContain('Draft\\u{2066} review');
       expect(prompt?.reviewDetails).toContain('"endpoint": "https://example.test/report"');
       expect(prompt?.reviewDetails).toContain('"token": "nested-credential"');
-      expect(prompt?.reviewDetails).toContain('token=[REDACTED]');
-      expect(prompt?.reviewDetails).not.toContain('context-credential');
+      expect(prompt?.reviewDetails).toContain('description:\ntoken=context-credential');
+    });
+
+    it.each(['mcp__other__run', 'WebFetch'])('refuses an oversized description for %s', async toolName => {
+      const requestId = await local(() => gatekeeper.createCliApprovalRequest({
+        toolName, toolInput: { description: 'x'.repeat(8_193), url: 'https://example.test/report' },
+        riskLevel: 'moderate', riskScore: 55, irreversible: false, denyReason: 'Review the input',
+      }));
+      expect(await approveCli(requestId)).toMatchObject({
+        success: false,
+        error: expect.stringContaining('Resubmit a shorter request so the full action can be reviewed'),
+      });
+      expect(nativeApproval).not.toHaveBeenCalled();
+    });
+
+    it('shows when Bash context was omitted to fit the complete command', async () => {
+      const command = 'x'.repeat(8_192 - 'command:\n\n'.length);
+      const description = 'The command consumes the full review budget';
+      const requestId = await local(() => gatekeeper.createCliApprovalRequest({
+        toolName: 'Bash', toolInput: { description, command }, riskLevel: 'moderate', riskScore: 55,
+        irreversible: false, denyReason: 'Review the command',
+      }));
+      nativeApproval.mockResolvedValueOnce({ confirmed: false, reason: 'cancelled' });
+      expect((await approveCli(requestId)).success).toBe(false);
+      const review = nativeApproval.mock.lastCall?.[0].reviewDetails;
+      expect(review).toContain(command);
+      expect(review).toContain('context omitted');
+      expect(review).not.toContain(description);
     });
   });
 });
