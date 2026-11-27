@@ -72,16 +72,17 @@ permission_hook_load_runtime_config() {
       "$PERMISSION_HOOK_MAX_REQUEST_BUDGET_SECONDS"
   )"
   local default_tools="bash powershell monitor write edit multiedit notebookedit webfetch"
-  local default_mcp_read_only='^(get|list|read|search|query|find|view|describe|status)([_.:/-]|$)|^fetch[-_]without[-_]side[-_]effects$'
+  local default_mcp_read_only='^(get|list|read|search|find|view|describe|fetch|status)$'
   OUTAGE_HIGH_RISK_TOOLS="${DOLLHOUSE_HOOK_OUTAGE_HIGH_RISK_TOOLS:-$default_tools}"
   if [[ -z "${OUTAGE_HIGH_RISK_TOOLS//[[:space:]]/}" ]]; then
     OUTAGE_HIGH_RISK_TOOLS="$default_tools"
   fi
   OUTAGE_MCP_READ_ONLY_PATTERN="${DOLLHOUSE_HOOK_OUTAGE_MCP_READ_ONLY_PATTERN:-$default_mcp_read_only}"
+  OUTAGE_MCP_BLOCKING_WORDS="create update delete remove write edit replace set put post send push merge move rename run exec execute install apply patch insert drop kill click type and or then"
   # The original override can still promote a read-only name to high risk.
   OUTAGE_MCP_HIGH_RISK_PATTERN="${DOLLHOUSE_HOOK_OUTAGE_MCP_HIGH_RISK_PATTERN:-}"
 
   export AUTHORITY_CACHE_TTL_SECONDS MAX_RETRIES INITIAL_TIMEOUT REQUEST_BUDGET_SECONDS
-  export OUTAGE_HIGH_RISK_TOOLS OUTAGE_MCP_READ_ONLY_PATTERN OUTAGE_MCP_HIGH_RISK_PATTERN
+  export OUTAGE_HIGH_RISK_TOOLS OUTAGE_MCP_READ_ONLY_PATTERN OUTAGE_MCP_HIGH_RISK_PATTERN OUTAGE_MCP_BLOCKING_WORDS
   return 0
 }

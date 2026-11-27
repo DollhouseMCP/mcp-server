@@ -152,6 +152,31 @@ emit_response() {
   return 0
 }
 
+is_read_only_mcp_name() {
+  local tool="$1"
+  local separated expanded word
+  local -a words camel_words
+  [[ "$tool" =~ ^[A-Za-z0-9][A-Za-z0-9_.:/-]*$ ]] || return 1
+  separated="${tool//[_.:\/-]/ }"
+  expanded=$(LC_ALL=C sed -E \
+    -e 's/([a-z0-9])([A-Z])/\1 \2/g' \
+    -e 's/([A-Z])([A-Z][a-z])/\1 \2/g' <<< "$separated") || return 1
+  read -r -a words <<< "$separated"
+  read -r -a camel_words <<< "$expanded"
+
+  # Check both forms so mixed-case delimited words such as dElEtE still match.
+  for word in "${words[@]}" "${camel_words[@]}"; do
+    [[ " $OUTAGE_MCP_BLOCKING_WORDS " == *" $word "* ]] && return 1
+  done
+  [[ "${words[0]}" != "query" && "${camel_words[0]}" != "query" ]] || return 1
+  if [[ "${words[0]}" == "fetch" || "${camel_words[0]}" == "fetch" ]]; then
+    [[ "${words[*]}" == "fetch without side effects" ||
+       "${camel_words[*]}" == "fetch without side effects" ]] || return 1
+  fi
+  [[ "${words[0]}" =~ $OUTAGE_MCP_READ_ONLY_PATTERN ||
+     "${camel_words[0]}" =~ $OUTAGE_MCP_READ_ONLY_PATTERN ]]
+}
+
 is_outage_high_risk() (
   local name configured_tool mcp_name match_status
   local -a high_risk_tools
@@ -159,7 +184,7 @@ is_outage_high_risk() (
   shopt -s nocasematch
   # A payload with no usable tool name cannot be shown to be low-risk.
   [[ -n "${TOOL_NAME//[[:space:]]/}" ]] || return 0
-  name=$(printf '%s' "$TOOL_NAME" | LC_ALL=C tr '[:upper:]' '[:lower:]')
+  name="$TOOL_NAME"
   case "$HOOK_PLATFORM:$name" in
     cursor:shell|codex:exec_command|codex:shell_command|gemini:run_shell_command) name="bash" ;;
     cursor:delete|gemini:write_file) name="write" ;;
@@ -174,10 +199,10 @@ is_outage_high_risk() (
 
   case "$name" in
     mcp__?*__*)
-      mcp_name="${name#mcp__}"
+      mcp_name="${name:5}"
       mcp_name="${mcp_name#*__}"
       ;;
-    mcp:*) mcp_name="${name#mcp:}" ;;
+    mcp:*) mcp_name="${name:4}" ;;
     # These spellings identify MCP, but do not reliably delimit the tool name.
     mcp_*|mcp/*) return 0 ;;
     *)
@@ -192,7 +217,7 @@ is_outage_high_risk() (
     [[ "$match_status" == "1" ]] || return 0
   fi
   # A nonmatch or an invalid read-only expression both keep the call high-risk.
-  ! [[ "$mcp_name" =~ $OUTAGE_MCP_READ_ONLY_PATTERN ]]
+  ! is_read_only_mcp_name "$mcp_name"
 )
 
 handle_outage() {

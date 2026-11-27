@@ -253,6 +253,7 @@ describe('Permission Server Integration', () => {
       ['Cursor preToolUse', CURSOR_HOOK_SCRIPT, { hook_event_name: 'preToolUse', tool_name: 'Shell' }, 0, 'deny'],
       ['Cursor Delete', CURSOR_HOOK_SCRIPT, { hook_event_name: 'preToolUse', tool_name: 'Delete' }, 0, 'deny'],
       ['Cursor MCP: merge', CURSOR_HOOK_SCRIPT, { hook_event_name: 'preToolUse', tool_name: 'McP:Merge_Pull_Request' }, 0, 'deny'],
+      ['Cursor MCP: compound name', CURSOR_HOOK_SCRIPT, { hook_event_name: 'preToolUse', tool_name: 'MCP:Get_And_Delete' }, 0, 'deny'],
       ['Cursor beforeShellExecution', CURSOR_HOOK_SCRIPT, { hook_event_name: 'beforeShellExecution', command: 'pwd' }, 0, 'ask'],
       ['Gemini', GEMINI_HOOK_SCRIPT, { tool_name: 'run_shell_command' }, 0, 'deny'],
       ['Windsurf', WINDSURF_HOOK_SCRIPT, { agent_action_name: 'pre_mcp_tool_use', tool_info: { mcp_tool_name: 'create_issue' } }, 2, 'deny'],
@@ -310,8 +311,16 @@ describe('Permission Server Integration', () => {
       ['mcp__X__Execute', true], ['mcp__Read_Server__push_files', true],
       ['mcp__example__run_command', true], ['mcp__example__move_file', true], ['mcp__example__click', true],
       ['mcp__example__fetch', true], ['mcp__example__reader', true],
+      ['mcp__example__get_and_delete', true], ['mcp__example__list_then_write', true],
+      ['mcp__example__get_or_create_issue', true], ['mcp__example__find_and_replace', true],
+      ['mcp__example__read_and_archive', true], ['mcp__example__Get-Delete', true],
+      ['mcp__example__get.delete', true], ['mcp__example__view:delete', true],
+      ['mcp__example__get/dElEtE', true], ['mcp__example__getAndDelete', true],
+      ['mcp__example__getURLThenDelete', true], ['mcp__example__query', true],
       ['mcp__example__read', false], ['MCP__Example__List_Files', false],
-      ['mcp__example__get_job', false], ['mcp__example__search', false], ['mcp__example__query', false],
+      ['mcp__example__get_job', false], ['mcp__example__search', false],
+      ['mcp__example__get_settings', false], ['mcp__example__list_assets', false],
+      ['mcp__example__getSettings', false], ['mcp__example__listAssets', false],
       ['mcp__example__find', false], ['mcp__example__view', false], ['mcp__example__describe', false],
       ['mcp__example__fetch_without_side_effects', false], ['mcp__example__status', false], ['Read', false],
     ] as const)('classifies %s during an outage', async (toolName, shouldAsk) => {
@@ -349,6 +358,14 @@ describe('Permission Server Integration', () => {
         DOLLHOUSE_HOOK_OUTAGE_MCP_READ_ONLY_PATTERN: '^LOOKUP$',
       });
       expect(custom.stdout).toBe('');
+    });
+
+    itBash('keeps write, joining, and query words high-risk with a read-only override', async () => {
+      const env = { DOLLHOUSE_HOOK_OUTAGE_MCP_READ_ONLY_PATTERN: '^(GET|QUERY)$' };
+      for (const tool_name of ['mcp__example__get_delete', 'mcp__example__get_then_file', 'mcp__example__query']) {
+        const { stdout } = await runHookScript({ tool_name }, env);
+        expect(JSON.parse(stdout).hookSpecificOutput.permissionDecision).toBe('ask');
+      }
     });
 
     itBash.each(['DOLLHOUSE_HOOK_OUTAGE_MCP_HIGH_RISK_PATTERN', 'DOLLHOUSE_HOOK_OUTAGE_MCP_READ_ONLY_PATTERN'])(

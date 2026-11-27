@@ -106,14 +106,17 @@ Gemini's `run_shell_command` use their equivalent tool's classification. An
 unidentifiable call uses the high-risk outcome.
 
 During an outage, MCP calls are high-risk unless their tool name starts with
-a whole read-only verb (`get`, `list`, `read`, `search`, `query`, `find`,
-`view`, `describe`, or `status`) or is explicitly named
-`fetch-without-side-effects` (hyphens or underscores). The classifier uses
-the tool portion of both `mcp__server__tool` and Cursor `MCP:tool` names.
+a whole read-only verb (`get`, `list`, `read`, `search`, `find`, `view`,
+`describe`, or `status`) and contains no write, execute, or joining word.
+The hook checks whole words separated by underscores, hyphens, periods,
+colons, slashes, or camel case. For example, `get_settings` defers, while
+`get_or_create_issue` is high-risk. `query` is high-risk. The explicit
+`fetch-without-side-effects` name also defers. Classification uses the tool
+portion of both `mcp__server__tool` and Cursor `MCP:tool` names.
 
 `DOLLHOUSE_HOOK_OUTAGE_HIGH_RISK_TOOLS` overrides the space-separated
 high-risk tools. `DOLLHOUSE_HOOK_OUTAGE_MCP_READ_ONLY_PATTERN` overrides the
-read-only Bash extended regular expression. The existing
+Bash extended regular expression for a leading read-only word. The existing
 `DOLLHOUSE_HOOK_OUTAGE_MCP_HIGH_RISK_PATTERN` can promote an MCP call to
 high risk. Matching ignores case. Empty values use the defaults, and an
 invalid expression keeps MCP calls high-risk.
