@@ -225,6 +225,7 @@ handle_outage() {
         *) decision="deny" ;;
       esac
       ;;
+    *) ;;
   esac
 
   if [[ "$HOOK_PLATFORM" == "windsurf" ]]; then
