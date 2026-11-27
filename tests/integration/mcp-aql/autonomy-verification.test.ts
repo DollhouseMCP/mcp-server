@@ -9,9 +9,11 @@ import type { VerificationStore } from '@dollhousemcp/safety';
 import { env as runtimeEnv } from '../../../src/config/env.js';
 import type { Gatekeeper } from '../../../src/handlers/mcp-aql/Gatekeeper.js';
 import type { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
+import { StaticAuditHmacKeyResolver } from '../../../src/security/auditHmacKey.js';
 import type { ContextTracker } from '../../../src/security/encryption/ContextTracker.js';
 import type { FileOperationsService } from '../../../src/services/FileOperationsService.js';
 import type { ChallengeInput } from '../../../src/state/IChallengeStore.js';
+import { FileConfirmationStore } from '../../../src/state/FileConfirmationStore.js';
 import { ConsoleTokenStore } from '../../../src/web/console/consoleToken.js';
 import { createPortfolioTestEnvironment, preConfirmAllOperations, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
 
@@ -31,6 +33,7 @@ jest.unstable_mockModule('../../../src/elements/agents/safetyTierService.js', ()
   showVerificationDialog: display,
 }));
 const { evaluateAutonomy } = await import('../../../src/elements/agents/autonomyEvaluator.js');
+const { GatekeeperSession } = await import('../../../src/handlers/mcp-aql/GatekeeperSession.js');
 const { DollhouseMCPServer } = await import('../../../src/index.js');
 const { DollhouseContainer } = await import('../../../src/di/Container.js');
 const { DangerZoneEnforcer } = await import('../../../src/security/DangerZoneEnforcer.js');
@@ -205,6 +208,12 @@ describe('Autonomy challenge verification end to end', () => {
         handler.handleCreate({ operation: 'verify_challenge', params: { challenge_id: challengeId, ...extraParams } }), sessionId);
     }
 
+    function approveCli(requestId: string, scope = 'single') {
+      return local(() => handler.handleExecute({
+        operation: 'approve_cli_permission', params: { request_id: requestId, scope },
+      }));
+    }
+
     it('releases only the reviewed block after a dialog decision and refuses replay', async () => {
       const directive = evaluateAutonomy({
         agentName: 'blocked-agent', sessionId: OWNER, sessionTransport: 'stdio', stepCount: 1,
@@ -334,9 +343,7 @@ describe('Autonomy challenge verification end to end', () => {
         toolName: 'Write', toolInput: { file_path: '/synthetic/note.md', content: rawContent },
         riskLevel: 'dangerous', riskScore: 88, irreversible: true, denyReason: 'Review the write', allowedScopes: ['single'],
       }));
-      const approve = (scope = 'single') => local(() => handler.handleExecute({
-        operation: 'approve_cli_permission', params: { request_id: requestId, scope },
-      }));
+      const approve = (scope = 'single') => approveCli(requestId, scope);
       expect(await approve('tool_session')).toMatchObject({
         success: false, error: expect.stringContaining('does not permit scope "tool_session"'),
       });
@@ -348,16 +355,90 @@ describe('Autonomy challenge verification end to end', () => {
         expect.objectContaining({ requestId }),
       ]));
       const preview = nativeApproval.mock.lastCall?.[0].reviewDetails;
-      expect(preview).toContain(JSON.stringify(pending[0].toolInputDigest, null, 2));
       expect(preview).toContain('/synthetic/note.md');
       expect(preview).toContain('Risk: dangerous (88/100)');
       expect(preview).toContain('Irreversible: yes');
-      expect(preview).not.toContain(rawContent);
+      expect(preview).toContain(rawContent);
+      expect(JSON.stringify(pending)).not.toContain(rawContent);
 
       nativeApproval.mockResolvedValueOnce({ confirmed: true });
       expect(await approve()).toMatchObject({ success: true, data: { approved: true, requestId, scope: 'single' } });
       expect((await approve()).success).toBe(false);
       expect(nativeApproval).toHaveBeenCalledTimes(2);
+    });
+
+    it('shows the Bash command while keeping its original input out of MCP and disk', async () => {
+      const auditResolver = new StaticAuditHmacKeyResolver('55'.repeat(32));
+      const stateDir = path.join(env.testDir, 'confirmation-state');
+      const backingStore = new FileConfirmationStore(fileOps, stateDir, OWNER, auditResolver);
+      gatekeeper.registerSession(OWNER, new GatekeeperSession(undefined, 100, 50, backingStore, OWNER, auditResolver));
+      const originalRetention = runtimeEnv.DOLLHOUSE_AUDIT_RETAIN_RAW_INPUT;
+      const command = "printf '%s' 'reviewable command'";
+      const secret = 'synthetic-approval-credential';
+      const toolInput = {
+        command: `DEPLOY_TOKEN="${secret}" ${command}`,
+        description: `${'x'.repeat(9_000)}unreviewable-tail`,
+      };
+      runtimeEnv.DOLLHOUSE_AUDIT_RETAIN_RAW_INPUT = true;
+      try {
+        const requestId = await local(() => gatekeeper.createCliApprovalRequest({
+          toolName: 'Bash', toolInput, riskLevel: 'moderate', riskScore: 55, irreversible: false, denyReason: 'Review the command',
+        }));
+        toolInput.command = 'changed after the request';
+        const pending = await local(() => handler.handleRead({ operation: 'get_pending_cli_approvals', params: {} }));
+        expect(pending).toMatchObject({ success: true, data: { pending: [expect.objectContaining({ requestId })] } });
+        const listed = JSON.stringify(pending);
+        expect(listed).not.toContain(command);
+        expect(listed).not.toContain(secret);
+        expect(listed).not.toContain('toolInputDetail');
+
+        await backingStore.persist();
+        const persisted = await fs.readFile(path.join(stateDir, `confirmations-${OWNER}.json`), 'utf8');
+        expect(persisted).toContain(requestId);
+        expect(persisted).not.toContain(command);
+        expect(persisted).not.toContain(secret);
+        expect(persisted).not.toContain('toolInputDetail');
+
+        nativeApproval.mockResolvedValueOnce({ confirmed: false, reason: 'cancelled' });
+        expect((await approveCli(requestId)).success).toBe(false);
+        const preview = nativeApproval.mock.lastCall?.[0].reviewDetails;
+        expect(preview).toContain(command);
+        expect(preview).toContain('DEPLOY_TOKEN=[REDACTED]');
+        expect(preview).not.toContain(secret);
+        expect(preview).not.toContain('changed after the request');
+        expect(preview).not.toContain('unreviewable-tail');
+        expect(preview?.endsWith('…')).toBe(true);
+        expect(preview?.length).toBeLessThan(8_500);
+
+        const restoredStore = new FileConfirmationStore(fileOps, stateDir, OWNER, auditResolver);
+        const restoredSession = new GatekeeperSession(undefined, 100, 50, restoredStore, OWNER, auditResolver);
+        await restoredSession.initialize();
+        gatekeeper.registerSession(OWNER, restoredSession);
+        expect(await approveCli(requestId)).toMatchObject({
+          success: false, error: expect.stringContaining('original tool input is unavailable'),
+        });
+        expect(restoredSession.getPendingCliApprovals()).toHaveLength(1);
+        expect(nativeApproval).toHaveBeenCalledTimes(1);
+      } finally {
+        runtimeEnv.DOLLHOUSE_AUDIT_RETAIN_RAW_INPUT = originalRetention;
+      }
+    });
+
+    it('escapes the tool name and input in the CLI review dialog', async () => {
+      const requestId = await local(() => gatekeeper.createCliApprovalRequest({
+        toolName: 'Review\u202eTool\n',
+        toolInput: { params: { endpoint: 'https://example.test/report', token: 'nested-credential', note: 'Draft\u2066 review' } },
+        riskLevel: 'moderate', riskScore: 55, irreversible: false, denyReason: 'Review the input',
+      }));
+      nativeApproval.mockResolvedValueOnce({ confirmed: true });
+      expect(await approveCli(requestId)).toMatchObject({ success: true });
+      const prompt = nativeApproval.mock.lastCall?.[0];
+      expect(prompt?.summary).toContain('Review\\u{202e}Tool\\u{a}');
+      expect(prompt?.reviewDetails).toContain('Review\\u{202e}Tool\\u{a}');
+      expect(prompt?.reviewDetails).toContain('Draft\\u{2066} review');
+      expect(prompt?.reviewDetails).toContain('"endpoint": "https://example.test/report"');
+      expect(prompt?.reviewDetails).toContain('"token": "[REDACTED]"');
+      expect(prompt?.reviewDetails).not.toContain('nested-credential');
     });
   });
 });

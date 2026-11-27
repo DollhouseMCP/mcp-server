@@ -458,7 +458,8 @@ export class Gatekeeper {
    */
   async createCliApprovalRequest(args: CreateCliApprovalArgs): Promise<string> {
     const session = this.resolveSession();
-    const requestId = await session.createCliApprovalRequest(args);
+    const localReview = this.contextTracker?.getSessionContext()?.transport === 'stdio';
+    const requestId = await session.createCliApprovalRequest(args, localReview);
 
     SecurityMonitor.logSecurityEvent({
       type: 'CLI_APPROVAL_REQUESTED',
@@ -558,6 +559,11 @@ export class Gatekeeper {
    */
   getPendingCliApprovals(): CliApprovalRecord[] {
     return this.resolveSession().getPendingCliApprovals();
+  }
+
+  /** Server-owned dialog access to input that never leaves the owning session. */
+  getLocalCliApprovalInput(record: CliApprovalRecord): Record<string, unknown> | undefined {
+    return this.resolveSession().getLocalCliApprovalInput(record);
   }
 
   /**

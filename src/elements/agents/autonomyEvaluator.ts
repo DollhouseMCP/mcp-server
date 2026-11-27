@@ -57,7 +57,7 @@
 
 import { logger } from '../../utils/logger.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
-import { containsUnsafeDisplayUnicode } from '../../security/validators/displayText.js';
+import { formatDisplayPreview } from '../../security/validators/displayText.js';
 import { matchesPattern } from '../../utils/patternMatcher.js';
 import { DIALOG_APPROVAL_TTL_MS } from '../../web/console/consoleToken.js';
 import {
@@ -447,19 +447,6 @@ export function evaluateAutonomy(context: AutonomyContext): AutonomyDirective {
 
 const MAX_VERIFICATION_PREVIEW_LENGTH = 100;
 
-function formatVerificationPreview(text: string): string {
-  let preview = '';
-  // Show invisible characters explicitly so they cannot change how the action reads.
-  for (const character of text) {
-    const visible = containsUnsafeDisplayUnicode(character)
-      ? String.raw`\u{${character.codePointAt(0)!.toString(16)}}`
-      : character;
-    if (preview.length + visible.length >= MAX_VERIFICATION_PREVIEW_LENGTH) return `${preview}…`;
-    preview += visible;
-  }
-  return preview;
-}
-
 /** Evaluate safety and produce a pause directive when the tier requires one. */
 function evaluateSafetyDirective(
   context: AutonomyContext,
@@ -552,7 +539,9 @@ function evaluateSafetyDirective(
     let { expiresAt, prompt } = safetyResult.verification;
     if (useDialog) {
       const expiry = Math.min(Date.parse(expiresAt), Date.now() + DIALOG_APPROVAL_TTL_MS);
-      const reason = `Verify action for '${formatVerificationPreview(context.agentName)}': ${formatVerificationPreview(action)}`;
+      const agentName = formatDisplayPreview(context.agentName, MAX_VERIFICATION_PREVIEW_LENGTH);
+      const actionPreview = formatDisplayPreview(action, MAX_VERIFICATION_PREVIEW_LENGTH);
+      const reason = `Verify action for '${agentName}': ${actionPreview}`;
       context.verificationStore?.set(verificationId, {
         dialog: 'action', expiresAt: expiry, reason,
       });

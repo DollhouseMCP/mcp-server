@@ -57,6 +57,7 @@ function isSecretKeyName(name: string): boolean {
  * length-only heuristics — those produce too many false positives on
  * identifiers, hashes, and content-addressed names.
  */
+const PEM_HEADER_PATTERN = /-----BEGIN [A-Z ]+-----/;
 const SECRET_VALUE_PATTERNS = [
   // Cloud providers
   /AKIA[0-9A-Z]{16}/,                              // AWS access key id
@@ -76,9 +77,15 @@ const SECRET_VALUE_PATTERNS = [
   // Standard formats
   /eyJ[\w-]+\.[\w-]+\.[\w-]+/,                     // JWT (base64url header.payload.signature)
   /Bearer\s+[\w.+/=-]{20,}/i,                      // Bearer-prefixed token
-  /-----BEGIN [A-Z ]+-----/,                       // PEM block header (private keys, certs)
+  PEM_HEADER_PATTERN,                             // PEM block header (private keys, certs)
   /\b[a-f0-9]{32,}\b/i,                            // Long hex (last-resort)
 ];
+const REVIEW_SECRET_PATTERNS = SECRET_VALUE_PATTERNS
+  .filter(pattern => pattern !== PEM_HEADER_PATTERN)
+  .map(pattern => new RegExp(pattern, `${pattern.flags}g`));
+const REVIEW_SECRET_KEYS = SECRET_KEY_KEYWORDS.filter(keyword => keyword !== 'sig' && keyword !== 'auth');
+const SECRET_HEADER = /\b((?:proxy-)?authorization|cookie)\b([ \t]*:[ \t]*)[^\r\n'"]+/gi;
+const INLINE_ASSIGNMENT = /(?<![\w-])([\w-]+)(['"]?[ \t]*[:=][ \t]*)("[^"\r\n]*"|'[^'\r\n]*'|[^\s'";&|]+)/gu;
 const SENSITIVE_QUERY_PARAMS = new Set([
   'access_token',
   'api_key',
@@ -101,6 +108,40 @@ export async function redactToolInput(
   const key = await resolver.resolve();
   const hash = `${key.keyId}:${createHmac('sha256', key.key).update(canonicalJSON(raw)).digest('hex')}`;
   return { digest: capDigest(digest), hash, detail: raw };
+}
+
+/** Keep operator-visible inputs readable while masking credential fields and recognized secrets. */
+export function redactToolInputForReview(toolName: string, input: Record<string, unknown>): string {
+  // Show the action-bearing fields before descriptions in a capped preview.
+  const fields = Object.entries(input);
+  const actionFields = new Set(TOOL_REDACTION[toolName]?.digestFields);
+  fields.sort(([left], [right]) => Number(actionFields.has(right)) - Number(actionFields.has(left)));
+  return JSON.stringify(redactReviewValue(Object.fromEntries(fields)), null, 2);
+}
+
+function redactReviewValue(value: unknown): unknown {
+  if (typeof value === 'string') return scrubReviewSecrets(value);
+  if (Array.isArray(value)) return value.map(redactReviewValue);
+  if (value == null || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).map(([key, field]) => [
+    scrubReviewSecrets(key),
+    isReviewSecretKey(key) ? '[REDACTED]' : redactReviewValue(field),
+  ]));
+}
+
+function isReviewSecretKey(key: string): boolean {
+  const name = key.toLowerCase().replaceAll('-', '').replaceAll('_', '');
+  return name === 'auth' || name === 'sig' || name.includes('authorization') || name.includes('passwd') ||
+    REVIEW_SECRET_KEYS.some(keyword => name.includes(keyword));
+}
+
+function scrubReviewSecrets(value: string): string {
+  if (PEM_HEADER_PATTERN.test(value)) return '[REDACTED]';
+  let scrubbed = value.replaceAll(EMBEDDED_URL_RE, match => scrubUrlLike(match, true));
+  scrubbed = scrubbed.replaceAll(SECRET_HEADER, '$1$2[REDACTED]');
+  scrubbed = scrubbed.replaceAll(INLINE_ASSIGNMENT, (match, key: string, separator: string) =>
+    isReviewSecretKey(key) ? `${key}${separator}[REDACTED]` : match);
+  return REVIEW_SECRET_PATTERNS.reduce((text, pattern) => text.replaceAll(pattern, '[REDACTED]'), scrubbed);
 }
 
 /** Digest the nested request, while the approval HMAC still binds the original envelope. */
@@ -339,18 +380,19 @@ function scrubEmbeddedUrls(value: string): string {
   return value.replaceAll(EMBEDDED_URL_RE, (match) => scrubUrlLike(match));
 }
 
-function scrubUrlLike(value: string): string {
+function scrubUrlLike(value: string, preserveOriginal = false): string {
   try {
     const url = new URL(value);
+    const original = url.href;
     // Clear HTTP-Basic userinfo before re-emitting.
     if (url.username !== '' || url.password !== '') {
       url.username = '';
       url.password = '';
     }
     scrubSearchParams(url.searchParams);
-    return url.toString();
+    return preserveOriginal && url.href === original ? value : url.href;
   } catch {
-    return scrubNonAbsoluteUrl(value);
+    return preserveOriginal ? value : scrubNonAbsoluteUrl(value);
   }
 }
 

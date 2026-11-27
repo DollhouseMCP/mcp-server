@@ -7,6 +7,8 @@ import { generateDisplayCode, showBlockResetDialog, showNativeApprovalDialog, ty
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
 import type { BlockReleaseReason, DesktopApprovalResult, LocalBlockResetResult } from '../../security/DangerZoneEnforcer.js';
+import { redactToolInputForReview } from '../../security/toolRedaction.js';
+import { formatDisplayPreview } from '../../security/validators/displayText.js';
 import { env } from '../../config/env.js';
 import type { ChallengeMetadata } from '../../state/IChallengeStore.js';
 import { ConsoleTokenStore, type DialogApprovalRequest } from '../../web/console/consoleToken.js';
@@ -62,6 +64,8 @@ const RELEASE_FAILURE_MESSAGES: Record<BlockReleaseReason, string> = {
 
 const BLOCK_RECOVERY_GUIDE = 'https://github.com/DollhouseMCP/mcp-server/blob/beta/docs/guides/dangerzone-offline-single-block-recovery.md';
 const DEADLOCK_RECOVERY_GUIDE = 'https://github.com/DollhouseMCP/mcp-server/blob/beta/docs/security/deadlock-relief-flow.md#headless-stdio';
+const MAX_CLI_REVIEW_INPUT_LENGTH = 8_192;
+const MAX_CLI_REVIEW_TOOL_NAME_LENGTH = 256;
 
 function desktopRecoveryMessage(status: string, guide: string): string | undefined {
   if (status === 'desktop_unavailable') return `No usable desktop is available. Ask the local operator to follow ${guide}.`;
@@ -1246,27 +1250,37 @@ export class GatekeeperHandler {
     const pending = findPending();
     if (!pending) return undefined;
     requireCliApprovalScope(pending, scope);
+    const input = this.deps.gatekeeper.getLocalCliApprovalInput(pending);
+    if (!input) {
+      throw new Error('The original tool input is unavailable for local approval. Retry the original operation to request a new approval.');
+    }
+    const reviewedHash = pending.toolInputHash;
+    const toolName = formatDisplayPreview(pending.toolName, MAX_CLI_REVIEW_TOOL_NAME_LENGTH);
+    const inputPreview = formatDisplayPreview(
+      redactToolInputForReview(pending.toolName, input), MAX_CLI_REVIEW_INPUT_LENGTH, true,
+    );
     const expiresAt = Date.parse(pending.requestedAt) + (pending.ttlMs ?? env.DOLLHOUSE_CLI_APPROVAL_TTL_MS);
     const request = localApprovalRequest(
-      sessionId, ['approve_cli_permission', requestId, scope, pending.toolInputHash],
+      sessionId, ['approve_cli_permission', requestId, scope, reviewedHash],
       requestId, Math.min(expiresAt, Date.now() + 60_000),
     );
     let approved: CliApprovalRecord | undefined;
     const status = await this.collectLocalApproval(request, {
       title: 'Confirm CLI permission',
-      summary: `Approve '${pending.toolName}' with scope '${scope}'?`,
+      summary: `Approve '${toolName}' with scope '${scope}'?`,
       reviewDetails: [
-        `Tool: ${pending.toolName}`,
+        `Tool: ${toolName}`,
         `Scope: ${scope}`,
         `Risk: ${pending.riskLevel} (${pending.riskScore}/100)`,
         `Irreversible: ${pending.irreversible ? 'yes' : 'no'}`,
         '',
-        'Tool input (redacted):',
-        JSON.stringify(pending.toolInputDigest, null, 2),
+        'Tool input (secrets redacted, … marks truncation):',
+        inputPreview,
       ].join('\n'),
       approveLabel: 'Approve',
     }, async () => {
-      if (findPending()?.toolInputHash !== pending.toolInputHash) return false;
+      const current = findPending();
+      if (current !== pending || current.toolInputHash !== reviewedHash) return false;
       approved = await this.deps.gatekeeper.approveCliRequest(requestId, scope);
       return approved !== undefined;
     });
@@ -1275,7 +1289,7 @@ export class GatekeeperHandler {
   }
 
   private getPendingCliApprovals(): unknown {
-    const pending = this.deps.gatekeeper.getPendingCliApprovals().map(record => ({
+    const pending = this.deps.gatekeeper.getPendingCliApprovals().map(({ toolInputDetail: _detail, ...record }) => ({
       ...record, allowedScopes: effectiveCliApprovalScopes(record),
     }));
     return {
