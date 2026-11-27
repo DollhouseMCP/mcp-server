@@ -1135,7 +1135,8 @@ export class MCPAQLHandler {
   private async handleLocalPolicyDenial(action: Omit<OverrideAction, 'portfolio'>, elements: ActiveElement[], handlers: HandlerRegistry) {
     const overrides = handlers.localPolicyOverrides;
     const actor = localOverrideActor(this.contextTracker?.getSessionContext?.());
-    if (!overrides || !actor || !isLocalOverrideOperation(action.operation)) return undefined;
+    if (!overrides || !actor || !isLocalOverrideOperation(action.operation) ||
+        !this.gatekeeper.allowsElementPolicyOverrides()) return undefined;
     const portfolio = await this.localOverridePortfolio(handlers);
     if (!portfolio) return undefined;
     const candidate = { ...action, portfolio };

@@ -359,6 +359,52 @@ describe('Autonomy challenge verification end to end', () => {
         expect((await list()).success).toBe(false);
       });
 
+      it('suppresses repeat requests for the declined binding until its cooldown expires', async () => {
+        await enroll();
+        await activateDenyPolicy();
+        const id = await deniedRequest();
+        nativeApproval.mockResolvedValueOnce({ confirmed: false, reason: 'cancelled' });
+        expect(await ask(id)).toMatchObject({ success: true, data: { approved: false } });
+        const auditAfterDecline = await fs.readFile(overrideAuditPath, 'utf8');
+        expect(auditAfterDecline).toContain('"result":"declined"');
+
+        expect(await list()).toMatchObject({ success: false, error: expect.not.stringContaining('request_policy_override') });
+        expect(await ask(id)).toMatchObject({ success: true, data: { approved: false, status: 'unavailable' } });
+        expect(nativeApproval).toHaveBeenCalledTimes(1);
+        expect(await fs.readFile(overrideAuditPath, 'utf8')).toBe(auditAfterDecline);
+
+        expect(await list({ pageSize: 4 })).toMatchObject({
+          success: false, error: expect.stringContaining('request_policy_override'),
+        });
+        const clock = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 30_001);
+        try {
+          expect(await deniedRequest()).not.toBe(id);
+          expect(nativeApproval).toHaveBeenCalledTimes(1);
+        } finally {
+          clock.mockRestore();
+        }
+      });
+
+      it('does not issue or audit an override for a denial when overrides are disabled', async () => {
+        await enroll();
+        await activateDenyPolicy();
+        const readAudit = () => fs.readFile(overrideAuditPath, 'utf8').catch((error: NodeJS.ErrnoException) => {
+          if (error.code === 'ENOENT') return '';
+          throw error;
+        });
+        const auditBefore = await readAudit();
+        // Model the operator switch being off when handling an already evaluated denial.
+        const allowOverrides = jest.spyOn(gatekeeper, 'allowsElementPolicyOverrides').mockReturnValue(false);
+        try {
+          expect(await list()).toMatchObject({ success: false, error: expect.not.stringContaining('request_policy_override') });
+          expect(nativeApproval).not.toHaveBeenCalled();
+          expect(await readAudit()).toBe(auditBefore);
+        } finally {
+          allowOverrides.mockRestore();
+        }
+        await deniedRequest();
+      });
+
       it.each(['expiry', 'changed policy', 'blocked agent', 'audit unavailable'])(
         'preserves the deny on retry after %s', async condition => {
           const totp = await enroll();

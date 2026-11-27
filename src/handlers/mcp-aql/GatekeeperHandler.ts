@@ -211,6 +211,7 @@ export class GatekeeperHandler {
     const review = overrides.beginReview(id, actor);
     if (!review) return { approved: false, status: 'unavailable', message: 'No pending override for this session. Retry the original operation.' };
     let status: DesktopApprovalResult = 'refused';
+    let declined = false;
     try {
       if (await overrides.isCurrent(review, currentRule)) {
         const { element, elementKind } = review.binding.rule;
@@ -224,11 +225,11 @@ export class GatekeeperHandler {
             approveLabel: 'Approve once',
           },
           async () => await overrides.isCurrent(review, currentRule) && await overrides.approve(review),
-          true,
+          { requireAuthenticator: true, onDecline: () => { declined = true; } },
         );
       }
     } finally {
-      if (status !== 'approved') await overrides.refuse(review, status);
+      if (status !== 'approved') await overrides.refuse(review, declined ? 'declined' : status);
     }
     return status === 'approved'
       ? { approved: true, status, message: 'Retry the exact action within 60 seconds. Approval can be used once.' }
@@ -655,19 +656,22 @@ export class GatekeeperHandler {
     request: DialogApprovalRequest,
     prompt: Parameters<typeof showNativeApprovalDialog>[0],
     commit: (request: DialogApprovalRequest) => Promise<boolean>,
-    requireAuthenticator = false,
+    options: { requireAuthenticator?: boolean; onDecline?: () => void } = {},
   ): Promise<DesktopApprovalResult> {
     const dialogState: { refusal?: Extract<BlockResetDialogResult, { confirmed: false }>['reason']; enrollmentRequired?: boolean } = {};
     const result = await ApprovalService.approveFromDialog({
       request,
       tokenStore: new ConsoleTokenStore(env.DOLLHOUSE_CONSOLE_TOKEN_FILE),
       dialog: async (pending, enrollment) => {
-        if (requireAuthenticator && enrollment !== 'enrolled') {
+        if (options.requireAuthenticator && enrollment !== 'enrolled') {
           dialogState.enrollmentRequired = true;
           return { confirmed: false };
         }
         const decision = await showNativeApprovalDialog(prompt, enrollment === 'enrolled', pending.expiresAt - Date.now());
-        if (!decision.confirmed) dialogState.refusal = decision.reason;
+        if (!decision.confirmed) {
+          dialogState.refusal = decision.reason;
+          if (decision.reason === 'cancelled') options.onDecline?.();
+        }
         return decision;
       },
       commit: pending => {
