@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { constants, realpathSync } from 'node:fs';
-import { lstat, mkdir, open, rename } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { lstat, mkdir, mkdtemp, open, rename } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { withRecoverableFileWriteLock } from './recoverable-file-write-lock.mjs';
 
@@ -62,10 +62,10 @@ export async function appendPermissionDiagnostic(path, diagnostic, limit = MAX_B
   await withRecoverableFileWriteLock(path + '.lock', async () => {
     const current = await existingLog(path);
     if (current && current.size + Buffer.byteLength(line) > limit) {
-      const first = path + '.1';
-      await existingLog(path + '.2');
-      if (await existingLog(first)) await rename(first, path + '.2');
-      await rename(path, first);
+      // A newly created directory gives rename a destination that cannot
+      // overwrite an earlier rotation. The validated file keeps its mode.
+      const segment = await mkdtemp(join(directory, `rotated-${Date.now()}-`));
+      await rename(path, join(segment, basename(path)));
     }
     const file = await open(path, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT |
       constants.O_NOFOLLOW | constants.O_NONBLOCK, PRIVATE_FILE);
