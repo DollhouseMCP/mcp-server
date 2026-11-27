@@ -537,47 +537,11 @@ export async function installHookAssetsForHost(
   homeDir: string,
   sourceScriptPath?: string,
 ): Promise<{ scriptPath: string }> {
-  const normalizedClient = normalizeHookHost(client);
-  const hooksDir = dirname(getPermissionHookScriptPath(homeDir));
-  const sharedTargetPath = getPermissionHookScriptPath(homeDir);
-  const sharedSourcePath = sourceScriptPath ?? join(repoRootFromModule(), 'scripts', 'pretooluse-dollhouse.sh');
-  const portHelperSourcePath = join(repoRootFromModule(), 'scripts', 'permission-port-discovery.sh');
-  const portHelperTargetPath = join(hooksDir, 'permission-port-discovery.sh');
-  const configHelperSourcePath = join(repoRootFromModule(), 'scripts', 'permission-hook-config.sh');
-  const configHelperTargetPath = join(hooksDir, 'permission-hook-config.sh');
-
-  const sharedStat = statSync(sharedSourcePath);
-  if (!sharedStat.isFile()) {
-    logger.warn(`[PermissionHooks] Shared hook bridge missing for ${normalizedClient}: ${sharedSourcePath}`);
-    throw new Error(`Permission hook source script not found: ${sharedSourcePath}`);
+  for (const asset of getManagedHookAssets(client, homeDir, sourceScriptPath)) {
+    if (!statSync(asset.sourcePath).isFile()) {
+      throw new Error(`Permission hook ${asset.kind} is not a file: ${asset.sourcePath}`);
+    }
+    await copyHookAsset(asset.sourcePath, asset.targetPath);
   }
-  await copyHookAsset(sharedSourcePath, sharedTargetPath);
-
-  const portHelperStat = statSync(portHelperSourcePath);
-  if (!portHelperStat.isFile()) {
-    logger.warn(`[PermissionHooks] Port discovery helper missing for ${normalizedClient}: ${portHelperSourcePath}`);
-    throw new Error(`Permission hook helper script not found: ${portHelperSourcePath}`);
-  }
-  await copyHookAsset(portHelperSourcePath, portHelperTargetPath);
-
-  const configHelperStat = statSync(configHelperSourcePath);
-  if (!configHelperStat.isFile()) {
-    logger.warn(`[PermissionHooks] Config helper missing for ${normalizedClient}: ${configHelperSourcePath}`);
-    throw new Error(`Permission hook config helper not found: ${configHelperSourcePath}`);
-  }
-  await copyHookAsset(configHelperSourcePath, configHelperTargetPath);
-
-  const wrapperTargetPath = getHookWrapperPath(normalizedClient, homeDir);
-  if (!wrapperTargetPath) {
-    return { scriptPath: sharedTargetPath };
-  }
-
-  const wrapperSourcePath = getHookSourcePath(normalizedClient);
-  const wrapperStat = statSync(wrapperSourcePath);
-  if (!wrapperStat.isFile()) {
-    logger.warn(`[PermissionHooks] Wrapper hook script missing for ${normalizedClient}: ${wrapperSourcePath}`);
-    throw new Error(`Permission hook wrapper script not found: ${wrapperSourcePath}`);
-  }
-  await copyHookAsset(wrapperSourcePath, wrapperTargetPath);
-  return { scriptPath: wrapperTargetPath };
+  return { scriptPath: getPrimaryHookScriptPath(client, homeDir) };
 }
