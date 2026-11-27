@@ -36,8 +36,18 @@ function createMockHandler(readResult?: unknown) {
   } as any;
 }
 
-function createApp(handler: any, options?: { homeDir?: string }) {
+const TEST_POLICY_SESSION_ID = 'session-from-connection';
+
+function createApp(handler: any, options?: { homeDir?: string; trustedSessionId?: string | null }) {
   const app = express();
+  const trustedSessionId = options?.trustedSessionId === undefined ? TEST_POLICY_SESSION_ID : options.trustedSessionId;
+  if (trustedSessionId !== null) {
+    app.use((_req, res, next) => {
+      // Stand in for transport middleware that verified the session binding.
+      res.locals.authenticatedPermissionSessionId = trustedSessionId;
+      next();
+    });
+  }
   const router = express.Router();
   registerPermissionRoutes(router, handler, options);
   app.use('/api', router);
@@ -96,11 +106,12 @@ describe('permissionRoutes', () => {
           tool_name: 'Bash',
           input: { command: 'npm test' },
           platform: 'claude_code',
+          session_id: TEST_POLICY_SESSION_ID,
         },
       });
     });
 
-    it('should pass session_id through to evaluate_permission when provided', async () => {
+    it('uses the verified policy session and ignores a competing request-body session', async () => {
       const handler = createMockHandler();
       const app = createApp(handler);
 
@@ -119,9 +130,38 @@ describe('permissionRoutes', () => {
           tool_name: 'Bash',
           input: { command: 'rm -rf /tmp/demo' },
           platform: 'claude_code',
-          session_id: 'session-follower-1',
+          session_id: TEST_POLICY_SESSION_ID,
         },
       });
+    });
+
+    it.each(['Bash', 'Read'])('reports an outage for an unbound %s request', async (toolName) => {
+      const handler = createMockHandler();
+      const app = createApp(handler, { homeDir: tempHome, trustedSessionId: null });
+
+      const res = await request(app)
+        .post('/api/evaluate_permission')
+        .set('Mcp-Session-Id', 'forged-header-session')
+        .send({ tool_name: toolName, session_id: 'forged-body-session' });
+
+      expect(res.status).toBe(503);
+      expect(res.body).toMatchObject({ status: 'outage', code: 'session_unavailable' });
+      expect(handler.handleRead).not.toHaveBeenCalled();
+
+      const status = await request(app).get('/api/permissions/status');
+      expect(status.body.recentDecisions[0]).toMatchObject({ tool_name: toolName, decision: 'outage' });
+      expect(status.body.recentDecisions[0]).not.toHaveProperty('session_id');
+    });
+
+    it('rejects an invalid session identifier from middleware', async () => {
+      const handler = createMockHandler();
+      const res = await request(createApp(handler, { trustedSessionId: '../invalid' }))
+        .post('/api/evaluate_permission')
+        .send({ tool_name: 'Bash' });
+
+      expect(res.status).toBe(503);
+      expect(res.body).toMatchObject({ status: 'outage', code: 'session_unavailable' });
+      expect(handler.handleRead).not.toHaveBeenCalled();
     });
 
     it('should pass cwd through to evaluate_permission for the ownership policy (Issue #3153)', async () => {
@@ -144,7 +184,7 @@ describe('permissionRoutes', () => {
           tool_name: 'Bash',
           input: { command: 'gh pr merge 42' },
           platform: 'claude_code',
-          session_id: 'session-follower-1',
+          session_id: TEST_POLICY_SESSION_ID,
           cwd: '/work/repo',
         },
       });
@@ -779,7 +819,7 @@ describe('permissionRoutes', () => {
             },
           }]),
       } as any;
-      const app = createApp(handler);
+      const app = createApp(handler, { trustedSessionId: 'session-a' });
 
       await request(app)
         .post('/api/evaluate_permission')
@@ -787,7 +827,7 @@ describe('permissionRoutes', () => {
           tool_name: 'Bash',
           input: { command: 'rm -rf /tmp/demo' },
           platform: 'claude_code',
-          session_id: 'session-a',
+          session_id: 'untrusted-client-session',
         });
 
       const status = await request(app).get('/api/permissions/status');
@@ -818,7 +858,7 @@ describe('permissionRoutes', () => {
             },
           }]),
       } as any;
-      const app = createApp(handler);
+      const app = createApp(handler, { trustedSessionId: 'session-codex' });
 
       const response = await request(app)
         .post('/api/evaluate_permission')
@@ -826,7 +866,7 @@ describe('permissionRoutes', () => {
           tool_name: 'Bash',
           input: { command: 'pwd' },
           platform: 'codex',
-          session_id: 'session-codex',
+          session_id: 'untrusted-client-session',
           turn_id: 'turn-42',
           tool_use_id: 'tool-use-99',
           transcript_path: '/Users/codex/.codex/transcripts/session.jsonl',

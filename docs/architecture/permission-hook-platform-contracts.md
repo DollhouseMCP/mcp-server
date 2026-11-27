@@ -37,10 +37,13 @@ The wrappers normalize each client's native payload into the shared `/api/evalua
   "tool_name": "Bash",
   "input": { "command": "git status" },
   "platform": "cursor",
-  "session_id": "optional",
   "cwd": "optional"
 }
 ```
+
+The permission route takes the policy session from verified connection
+metadata. Requests without a verified binding return a `session_unavailable`
+outage. Existing hooks use this path until session credentials are available.
 
 `cwd` is forwarded verbatim when the client supplies it. The ownership policy
 (below) uses it so `gh` can infer the repository and current branch.
