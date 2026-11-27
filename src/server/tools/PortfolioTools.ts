@@ -75,7 +75,7 @@ export function getPortfolioTools(server: PortfolioHandler): Array<{ tool: ToolD
     {
       tool: {
         name: "init_portfolio",
-        description: "Initialize a new GitHub portfolio repository for storing your DollhouseMCP elements. Creates the repository structure with proper directories and README.",
+        description: "Initialize a GitHub portfolio repository for sharing DollhouseMCP elements. New repositories are public by default. Creates the portfolio directories and README.",
         inputSchema: {
           type: "object",
           properties: {

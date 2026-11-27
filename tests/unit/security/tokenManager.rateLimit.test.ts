@@ -84,6 +84,12 @@ describe('TokenManager Rate Limiting', () => {
       expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
+    it('accepts a token with repo scope for a public_repo requirement', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, headers: new Map([['x-oauth-scopes', 'repo']]) } as unknown as Response);
+      await expect(tokenManager.validateTokenScopes(validToken, requiredScopes))
+        .resolves.toMatchObject({ isValid: true, scopes: ['repo'] });
+    });
+
     it('should throw SecurityError when rate limit exceeded', async () => {
       // Exhaust the rate limit by making multiple validation calls
       // The first call will succeed, subsequent ones should fail due to minimum delay

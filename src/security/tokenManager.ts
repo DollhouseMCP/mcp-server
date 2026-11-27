@@ -312,15 +312,11 @@ export class TokenManager {
       const tokenScopes = scopesHeader.split(',').map(s => s.trim()).filter(s => s);
 
       // Check if required scopes are present
-      const hasRequiredScopes = requiredScopes.required.every(scope => 
-        tokenScopes.includes(scope)
+      const missingScopes = requiredScopes.required.filter(scope =>
+        !tokenScopes.includes(scope) && !(scope === 'public_repo' && tokenScopes.includes('repo'))
       );
 
-      if (!hasRequiredScopes) {
-        const missingScopes = requiredScopes.required.filter(scope => 
-          !tokenScopes.includes(scope)
-        );
-        
+      if (missingScopes.length > 0) {
         logger.warn('Token missing required scopes', {
           tokenPrefix: this.getTokenPrefix(token),
           missingScopes: missingScopes,

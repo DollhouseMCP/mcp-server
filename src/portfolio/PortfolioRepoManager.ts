@@ -17,8 +17,10 @@ import { SecurityMonitor } from '../security/securityMonitor.js';
 import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
 import { env } from '../config/env.js';
 import { getElementFileExtension } from './PortfolioManager.js';
+import { validateRepositoryName } from '../config/portfolioConfig.js';
 
 export interface PortfolioRepoOptions {
+  repositoryName?: string;
   description?: string;
   private?: boolean;
   auto_init?: boolean;
@@ -225,6 +227,14 @@ export class PortfolioRepoManager {
    * @throws Error if user declines consent or if consent is not provided
    */
   async createPortfolio(username: string, consent: boolean | undefined): Promise<string> {
+    return (await this.ensurePortfolio(username, consent)).url;
+  }
+
+  async ensurePortfolio(
+    username: string,
+    consent: boolean | undefined,
+    options: PortfolioRepoOptions = {},
+  ): Promise<{ url: string; created: boolean }> {
     // MEDIUM FIX: Normalize username to prevent Unicode attacks (DMCP-SEC-004)
     const normalizedUsername = UnicodeValidator.normalize(username).normalizedContent;
     
@@ -250,59 +260,58 @@ export class PortfolioRepoManager {
       metadata: { username: normalizedUsername }
     });
 
-    // Check if portfolio already exists
-    // Construct repository path (repositoryName is always just the repo name)
-    const repoPath = `${normalizedUsername}/${this.repositoryName}`;
+    const repositoryName = options.repositoryName === undefined
+      ? this.repositoryName
+      : validateRepositoryName(options.repositoryName);
+    if (repositoryName === '.' || repositoryName === '..') throw new Error('Invalid portfolio repository name.');
+    if (options.private !== undefined && typeof options.private !== 'boolean') {
+      throw new TypeError('Portfolio repository privacy must be a boolean.');
+    }
+    const repoPath = `${normalizedUsername}/${repositoryName}`;
 
-    const existingRepo = await this.githubRequest(
-      `/repos/${repoPath}`
-    );
-
-    if (existingRepo && existingRepo.html_url) {
+    const existingRepo = await this.githubRequest(`/repos/${repoPath}`);
+    if (existingRepo?.html_url) {
+      this.assertVisibility(existingRepo, options.private);
       logger.info(`Portfolio already exists for ${normalizedUsername}`);
-      return existingRepo.html_url;
+      return { url: existingRepo.html_url, created: false };
     }
 
-    // Create the portfolio repository
+    let repo;
     try {
-      const repo = await this.githubRequest(
+      repo = await this.githubRequest(
         '/user/repos',
         'POST',
         {
-          name: this.repositoryName,
-          description: PortfolioRepoManager.DEFAULT_DESCRIPTION,
-          private: false,
+          name: repositoryName,
+          description: options.description ?? PortfolioRepoManager.DEFAULT_DESCRIPTION,
+          private: options.private ?? false,
           auto_init: true
         }
       );
 
-      // Initialize portfolio structure
-      await this.generatePortfolioStructure(normalizedUsername);
-
-      return repo.html_url;
     } catch (error: any) {
-      // Handle race condition: if repository was created between our check and creation attempt
-      if (error.message && error.message.includes('name already exists')) {
-        logger.info(`Portfolio repository already exists for ${normalizedUsername} (race condition handled)`);
-        
-        // Re-check for the existing repository and return its URL
-        try {
-          const existingRepo = await this.githubRequest(
-            `/repos/${repoPath}`
-          );
-          if (existingRepo && existingRepo.html_url) {
-            return existingRepo.html_url;
-          }
-        } catch (recheckError) {
-          ErrorHandler.logError('PortfolioRepoManager.recheckExistingRepo', recheckError, { username: normalizedUsername });
+      // A concurrent initialization can create the repository after the first lookup.
+      if (error.status === 422) {
+        const concurrentRepo = await this.githubRequest(`/repos/${repoPath}`);
+        if (concurrentRepo?.html_url) {
+          this.assertVisibility(concurrentRepo, options.private);
+          return { url: concurrentRepo.html_url, created: false };
         }
-        
-        // If we can't get the existing repo, throw a more specific error
-        throw new Error(`Portfolio repository already exists for ${normalizedUsername}. Please check your GitHub account.`);
       }
       
       ErrorHandler.logError('PortfolioRepoManager.createPortfolioRepo', error, { username: normalizedUsername });
       throw ErrorHandler.wrapError(error, `Failed to create portfolio repository for ${normalizedUsername}. ${error.message || 'Unknown error occurred.'}`, ErrorCategory.NETWORK_ERROR);
+    }
+    if (!repo?.html_url) throw new Error('GitHub did not return the created portfolio repository.');
+    this.assertVisibility(repo, options.private);
+    await this.generatePortfolioStructure(normalizedUsername, repositoryName);
+    return { url: repo.html_url, created: true };
+  }
+
+  private assertVisibility(repo: { private?: boolean }, requested: boolean | undefined): void {
+    if (requested !== undefined && repo.private !== requested) {
+      const visibility = requested ? 'private' : 'public';
+      throw new Error(`GitHub did not confirm that the portfolio repository is ${visibility}. Choose a different name or check its visibility on GitHub.`);
     }
   }
 
@@ -557,7 +566,7 @@ export class PortfolioRepoManager {
    * Generate initial portfolio structure with README and directories
    * SECURITY: Username already normalized by calling methods
    */
-  async generatePortfolioStructure(username: string): Promise<void> {
+  async generatePortfolioStructure(username: string, repositoryName = this.repositoryName): Promise<void> {
     // Create README.md
     const readmeContent = `# DollhouseMCP Portfolio
 
@@ -581,14 +590,18 @@ These elements can be imported into your DollhouseMCP installation.
 `;
 
     // Construct repository path (repositoryName is always just the repo name)
-    const repoPath = `${username}/${this.repositoryName}`;
+    const repoPath = `${username}/${repositoryName}`;
 
+    const readmePath = `/repos/${repoPath}/contents/README.md`;
+    // GitHub seeds a minimal README when auto_init is enabled. Updating it requires its SHA.
+    const readme = await this.githubRequest(readmePath);
     await this.githubRequest(
-      `/repos/${repoPath}/contents/README.md`,
+      readmePath,
       'PUT',
       {
         message: 'Initialize portfolio structure',
-        content: Buffer.from(readmeContent).toString('base64')
+        content: Buffer.from(readmeContent).toString('base64'),
+        ...(readme?.sha ? { sha: readme.sha } : {}),
       }
     );
 
