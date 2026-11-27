@@ -122,7 +122,7 @@ describe('evaluatePermission', () => {
 
   describe('evaluatePermission pipeline', () => {
     it('should report an outage without evaluating policy when rate limited', async () => {
-      const classifyTool = jest.fn();
+      const classifyTool = jest.fn<EvaluatePermissionDeps['classifyTool']>();
       const deps = createMockDeps({
         classifyTool,
         permissionPromptLimiter: {
