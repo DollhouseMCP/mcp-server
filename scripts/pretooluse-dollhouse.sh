@@ -506,11 +506,14 @@ fi
 # Retry on transient failures (connection refused, timeout) but not on HTTP errors.
 ATTEMPT=0
 TIMEOUT=$INITIAL_TIMEOUT
+REQUEST_DEADLINE=$((SECONDS + REQUEST_BUDGET_SECONDS))
 
 while [[ $ATTEMPT -le $MAX_RETRIES ]]; do
+  REMAINING=$((REQUEST_DEADLINE - SECONDS))
+  (( REMAINING > 0 )) || break
   LAST_ATTEMPT="$ATTEMPT"
-  CURRENT_TIMEOUT="$TIMEOUT"
-  CURL_OUTPUT=$(curl -s --max-time "$TIMEOUT" --write-out '\n%{http_code}' -X POST "$ENDPOINT" \
+  CURRENT_TIMEOUT=$((TIMEOUT < REMAINING ? TIMEOUT : REMAINING))
+  CURL_OUTPUT=$(curl -s --max-time "$CURRENT_TIMEOUT" --write-out '\n%{http_code}' -X POST "$ENDPOINT" \
     -H "Content-Type: application/json" \
     -d "$PAYLOAD" \
     2>/dev/null)
@@ -557,8 +560,9 @@ while [[ $ATTEMPT -le $MAX_RETRIES ]]; do
 
   ATTEMPT=$((ATTEMPT + 1))
   if [[ $ATTEMPT -le $MAX_RETRIES ]]; then
-    BACKOFF=$((TIMEOUT * ATTEMPT))
-    RETRY_MESSAGE="Attempt $ATTEMPT failed (curl exit $CURL_EXIT) — retrying in ${BACKOFF}s (timeout ${TIMEOUT}s → $((TIMEOUT * 2))s)"
+    BACKOFF=$((1 << (ATTEMPT - 1)))
+    (( BACKOFF < REQUEST_DEADLINE - SECONDS )) || break
+    RETRY_MESSAGE="Attempt $ATTEMPT failed (curl exit $CURL_EXIT) — retrying in ${BACKOFF}s"
     debug "$RETRY_MESSAGE"
     append_diagnostic_record "retry" "curl_retry" "retrying" "$RETRY_MESSAGE"
     sleep "$BACKOFF"
@@ -566,5 +570,5 @@ while [[ $ATTEMPT -le $MAX_RETRIES ]]; do
   fi
 done
 
-handle_outage "curl_attempts_exhausted" "all $((MAX_RETRIES + 1)) attempts to reach the permission server failed"
+handle_outage "curl_attempts_exhausted" "$((LAST_ATTEMPT + 1)) attempts to reach the permission server failed within the hook's request budget"
 exit $?

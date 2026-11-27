@@ -116,8 +116,11 @@ The shared shell configuration helper (`scripts/permission-hook-config.sh`) vali
 | `DOLLHOUSE_HOOK_AUTHORITY_CACHE_TTL_SECONDS` | `2` | `0` | `30` | Controls how long hook wrappers reuse the authority-mode cache before rereading `permission-authority.json` |
 | `DOLLHOUSE_HOOK_MAX_RETRIES` | `2` | `0` | `5` | Caps transient retry loops for the HTTP permission call |
 | `DOLLHOUSE_HOOK_INITIAL_TIMEOUT` | `5` | `1` | `30` | Initial curl timeout in seconds before exponential backoff doubles it |
+| `DOLLHOUSE_HOOK_REQUEST_BUDGET_SECONDS` | `15` | `1` | `20` | Total network retry budget in seconds, including backoff |
 
 Invalid or out-of-range values are clamped or reset to the defaults.
+Each attempt is capped at the time remaining in the budget. Keeping the budget
+below the host's hook timeout leaves time to emit the outage decision.
 
 ## Platform-Specific Behavior Notes
 

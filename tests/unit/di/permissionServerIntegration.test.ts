@@ -692,6 +692,39 @@ describe('Permission Server Integration', () => {
       expect(elapsedMs).toBeLessThan(20_000);
     }, 20000);
 
+    itBash('caps curl at the host-safe request budget and skips backoff that would exceed it', async () => {
+      const binDir = path.join(RUN_DIR, 'bin');
+      const calls = path.join(RUN_DIR, 'curl-args');
+      const fixedClock = path.join(RUN_DIR, 'fixed-clock.sh');
+      await fs.mkdir(binDir);
+      await fs.writeFile(fixedClock, 'unset SECONDS\nSECONDS=0\n');
+      await fs.writeFile(path.join(binDir, 'curl'), [
+        '#!/bin/bash',
+        'printf "%s\\n" "$@" >> "$HOOK_TEST_CURL_ARGS"',
+        'printf "\\n000"',
+        'exit 28',
+      ].join('\n'), { mode: 0o700 });
+      await fs.writeFile(PORT_FILE, '41817');
+
+      const { code, stdout } = await runHookScript({ tool_name: 'Bash' }, {
+        PATH: [binDir, SAFE_TEST_PATH].join(path.delimiter),
+        BASH_ENV: fixedClock,
+        HOOK_TEST_CURL_ARGS: calls,
+        DOLLHOUSE_HOOK_INITIAL_TIMEOUT: '30',
+        DOLLHOUSE_HOOK_MAX_RETRIES: '5',
+        DOLLHOUSE_HOOK_REQUEST_BUDGET_SECONDS: '1',
+      });
+
+      const args = (await fs.readFile(calls, 'utf8')).split('\n');
+      expect(args.filter(arg => arg === '--max-time')).toHaveLength(1);
+      expect(args[args.indexOf('--max-time') + 1]).toBe('1');
+      expect(code).toBe(0);
+      expect(JSON.parse(stdout).hookSpecificOutput).toMatchObject({
+        permissionDecision: 'ask',
+        permissionDecisionReason: expect.stringContaining("within the hook's request budget"),
+      });
+    });
+
     itBash('hook script should stay silent for Codex allow decisions', async () => {
       let testPort = 0;
       let capturedBody: Record<string, unknown> | null = null;
