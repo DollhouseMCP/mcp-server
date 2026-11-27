@@ -878,7 +878,15 @@ describe('Permission Server Integration', () => {
       const sharedScript = path.join(tempHome, 'pretooluse-dollhouse.sh');
       const portHelper = path.join(tempHome, 'permission-port-discovery.sh');
       const configHelper = path.join(tempHome, 'permission-hook-config.sh');
-      const diagnosticsLog = path.join(tempHome, '.dollhouse', 'run', 'permission-hook-diagnostics.jsonl');
+      const runDir = path.join(tempHome, '.dollhouse', 'run');
+      const diagnosticsLog = path.join(runDir, 'permission-hook-diagnostics', 'permission-hook-diagnostics.jsonl');
+      const legacyLog = path.join(runDir, 'permission-hook-diagnostics.jsonl');
+      const secretInput = 'fixture-private-command';
+      await fs.mkdir(runDir, { recursive: true });
+      await fs.writeFile(legacyLog, 'legacy evidence', { mode: 0o644 });
+      for (const asset of ['permission-hook-diagnostics.mjs', 'recoverable-file-write-lock.mjs']) {
+        await fs.copyFile(path.join(process.cwd(), 'scripts', asset), path.join(tempHome, asset));
+      }
 
       await fs.copyFile(path.join(process.cwd(), 'scripts', 'pretooluse-codex.sh'), codexScript);
       await fs.copyFile(path.join(process.cwd(), 'scripts', 'pretooluse-dollhouse.sh'), sharedScript);
@@ -889,8 +897,7 @@ describe('Permission Server Integration', () => {
         const hookProc = spawn(BASH_BINARY, [codexScript], {
           env: isolatedServerEnv(tempHome, {
             HOME: tempHome,
-            PATH: SAFE_TEST_PATH,
-            DOLLHOUSE_HOOK_DIAGNOSTICS_LOG: diagnosticsLog,
+            PATH: [path.dirname(process.execPath), SAFE_TEST_PATH].join(path.delimiter),
           }),
           stdio: ['pipe', 'pipe', 'pipe'],
         });
@@ -899,7 +906,7 @@ describe('Permission Server Integration', () => {
         hookProc.on('close', (c: number) => resolve({ code: c, stdout: out }));
         hookProc.stdin.write(JSON.stringify({
           toolName: 'Bash',
-          toolInput: { command: 'pwd' },
+          toolInput: { command: secretInput },
         }));
         hookProc.stdin.end();
       });
@@ -912,31 +919,21 @@ describe('Permission Server Integration', () => {
           permissionDecisionReason: expect.stringContaining('no usable permission server port file was found'),
         },
       });
-      const diagnosticLines = (await fs.readFile(diagnosticsLog, 'utf-8'))
-        .trim()
-        .split('\n')
-        .map((line) => JSON.parse(line));
-      expect(diagnosticLines).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            event: 'received_input',
-            platform: 'codex',
-            rawInput: JSON.stringify({
-              toolName: 'Bash',
-              toolInput: { command: 'pwd' },
-            }),
-          }),
-          expect.objectContaining({
-            event: 'complete',
-            outcome: 'outage_deny',
-            stage: 'port_discovery_failed',
-            platform: 'codex',
-            toolName: 'Bash',
-            normalizedResponseLength: 0,
-            emittedResponseLength: stdout.trimEnd().length,
-          }),
-        ]),
-      );
+      const diagnostics = await fs.readFile(diagnosticsLog, 'utf8');
+      expect(diagnostics).not.toContain(secretInput);
+      expect(JSON.parse(diagnostics)).toEqual({
+        timestamp: expect.any(String),
+        platform: 'codex',
+        stage: 'port_discovery_failed',
+        outcome: 'outage_deny',
+        toolName: 'Bash',
+        elapsedMs: expect.any(Number),
+        attempt: 0,
+        timeoutSeconds: 5,
+      });
+      expect((await fs.stat(diagnosticsLog)).mode & 0o777).toBe(0o600);
+      expect(await fs.readFile(legacyLog, 'utf8')).toBe('legacy evidence');
+      expect((await fs.stat(legacyLog)).mode & 0o777).toBe(0o644);
 
       await fs.rm(tempHome, { recursive: true, force: true });
     });

@@ -334,18 +334,15 @@ export class BuildInfoService {
 
       if (info.permissionHooks.lastDiagnostic) {
         const lastDiagnostic = info.permissionHooks.lastDiagnostic;
-        const diagnosticOutcome = lastDiagnostic.outcome
-          ? `${lastDiagnostic.event} / ${lastDiagnostic.outcome}`
-          : lastDiagnostic.event;
         lines.push(
-          `- **Last Diagnostic Event**: ${lastDiagnostic.timestamp} (${diagnosticOutcome})`,
+          `- **Last Diagnostic Event**: ${lastDiagnostic.timestamp} (${lastDiagnostic.outcome})`,
           `- **Last Diagnostic Stage**: ${lastDiagnostic.stage}`,
-          `- **Last Diagnostic Input Bytes**: ${lastDiagnostic.rawInputLength ?? 0}`,
-          `- **Last Diagnostic Normalized Bytes**: ${lastDiagnostic.normalizedResponseLength ?? 0}`,
-          `- **Last Diagnostic Emitted Bytes**: ${lastDiagnostic.emittedResponseLength ?? 0}`,
         );
-        if (lastDiagnostic.reason) {
-          lines.push(`- **Last Diagnostic Reason**: ${lastDiagnostic.reason}`);
+        if (lastDiagnostic.elapsedMs !== undefined) {
+          lines.push(`- **Last Diagnostic Elapsed Time**: ${lastDiagnostic.elapsedMs}ms`);
+        }
+        if (lastDiagnostic.curlExit !== undefined) {
+          lines.push(`- **Last Diagnostic Curl Exit**: ${lastDiagnostic.curlExit}`);
         }
       }
     }

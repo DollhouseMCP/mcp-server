@@ -58,6 +58,7 @@ COPY --from=builder /build/data ./data
 COPY --from=builder /build/packages ./packages
 COPY --from=builder /build/oauth-state-coordinator.mjs ./oauth-state-coordinator.mjs
 COPY oauth-helper.mjs ./oauth-helper.mjs
+COPY scripts/permission-hook-diagnostics.mjs scripts/recoverable-file-write-lock.mjs ./scripts/
 
 # Create MCP configuration template
 RUN echo '{\n\

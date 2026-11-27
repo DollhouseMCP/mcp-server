@@ -9,7 +9,7 @@ import express from 'express';
 import request from 'supertest';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { registerPermissionRoutes } from '../../../src/web/routes/permissionRoutes.js';
 import {
@@ -270,18 +270,18 @@ describe('permissionRoutes', () => {
     it('should return policy status', async () => {
       await installPermissionHook('codex', { homeDir: tempHome });
       await repairPermissionHooksOnStartup(tempHome);
+      const diagnosticPath = getPermissionHookDiagnosticsPath(tempHome);
+      await mkdir(dirname(diagnosticPath), { recursive: true, mode: 0o700 });
       await writeFile(
-        getPermissionHookDiagnosticsPath(tempHome),
+        diagnosticPath,
         `${JSON.stringify({
           timestamp: '2026-04-22T04:00:00.000Z',
-          invocationId: 'diag-1',
-          event: 'complete',
           platform: 'codex',
           stage: 'response_normalized',
           outcome: 'success',
           toolName: 'Bash',
         })}\n`,
-        'utf-8',
+        { encoding: 'utf8', mode: 0o600 },
       );
 
       const handler = {
@@ -355,7 +355,7 @@ describe('permissionRoutes', () => {
       expect(res.body.hookDiagnostics).toEqual({
         logPath: getPermissionHookDiagnosticsPath(tempHome),
         lastEvent: expect.objectContaining({
-          invocationId: 'diag-1',
+          stage: 'response_normalized',
           outcome: 'success',
           platform: 'codex',
         }),

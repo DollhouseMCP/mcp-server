@@ -27,10 +27,9 @@ PORT_FILE="$RUN_DIR/permission-server.port"
 AUTHORITY_FILE="$RUN_DIR/permission-authority.json"
 HOOK_PLATFORM="${DOLLHOUSE_HOOK_PLATFORM:-claude_code}"
 permission_hook_load_runtime_config
-DIAGNOSTICS_LOG="${DOLLHOUSE_HOOK_DIAGNOSTICS_LOG:-$RUN_DIR/permission-hook-diagnostics.jsonl}"
-INVOCATION_ID="$(date +%s)-$$-${RANDOM:-0}"
+LEGACY_DIAGNOSTICS_LOG="$RUN_DIR/permission-hook-diagnostics.jsonl"
+DIAGNOSTICS_LOG="${DOLLHOUSE_HOOK_DIAGNOSTICS_LOG:-$RUN_DIR/permission-hook-diagnostics/permission-hook-diagnostics.jsonl}"
 OUTAGE_WARNING_MARKER="$RUN_DIR/permission-hook-outage-warning"
-readonly COMPLETE_EVENT="complete"
 
 INPUT=""
 TOOL_NAME=""
@@ -58,87 +57,21 @@ debug() {
 }
 
 append_diagnostic_record() {
-  local event="$1"
-  local stage="$2"
-  local outcome="${3:-}"
-  local reason="${4:-}"
-  local diagnostic_json
+  local stage="$1"
+  local outcome="$2"
+  local diagnostic_tool=""
+  local tool_pattern='^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,159}$'
 
-  # These adapters did not record detailed invocation diagnostics before
-  # sharing this bridge. Keep that behavior until the safe schema is in use.
-  case "$HOOK_PLATFORM" in
-    vscode|windsurf) return 0 ;;
-    *) ;;
-  esac
-
-  mkdir -p "$(dirname "$DIAGNOSTICS_LOG")" 2>/dev/null || return 0
-
-  diagnostic_json=$(
-    jq -cn \
-      --arg timestamp "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
-      --arg invocationId "$INVOCATION_ID" \
-      --arg event "$event" \
-      --arg platform "$HOOK_PLATFORM" \
-      --arg stage "$stage" \
-      --arg outcome "$outcome" \
-      --arg reason "$reason" \
-      --arg hookPath "$0" \
-      --arg diagnosticsLogPath "$DIAGNOSTICS_LOG" \
-      --arg sessionId "${DOLLHOUSE_SESSION_ID:-}" \
-      --arg toolName "${TOOL_NAME:-}" \
-      --arg toolInput "${TOOL_INPUT:-}" \
-      --arg rawInput "${INPUT:-}" \
-      --arg authorityHost "${AUTHORITY_HOST:-}" \
-      --arg authorityMode "${AUTHORITY_MODE:-}" \
-      --arg endpoint "${ENDPOINT:-}" \
-      --arg port "${PORT:-}" \
-      --arg payload "${PAYLOAD:-}" \
-      --arg response "${RESPONSE:-}" \
-      --arg normalizedResponse "${NORMALIZED_RESPONSE:-}" \
-      --arg emittedResponse "${EMITTED_RESPONSE:-}" \
-      --arg attempt "${LAST_ATTEMPT:-}" \
-      --arg maxRetries "${MAX_RETRIES:-}" \
-      --arg timeoutSeconds "${CURRENT_TIMEOUT:-}" \
-      --arg curlExit "${LAST_CURL_EXIT:-}" \
-      --argjson rawInputLength "${#INPUT}" \
-      --argjson normalizedResponseLength "${#NORMALIZED_RESPONSE}" \
-      --argjson emittedResponseLength "${#EMITTED_RESPONSE}" \
-      --argjson responseLength "${#RESPONSE}" \
-      '{
-        timestamp: $timestamp,
-        invocationId: $invocationId,
-        event: $event,
-        platform: $platform,
-        stage: $stage,
-        rawInputLength: $rawInputLength,
-        normalizedResponseLength: $normalizedResponseLength,
-        emittedResponseLength: $emittedResponseLength,
-        responseLength: $responseLength
-      }
-      + (if $outcome != "" then { outcome: $outcome } else {} end)
-      + (if $reason != "" then { reason: $reason } else {} end)
-      + (if $hookPath != "" then { hookPath: $hookPath } else {} end)
-      + (if $diagnosticsLogPath != "" then { diagnosticsLogPath: $diagnosticsLogPath } else {} end)
-      + (if $sessionId != "" then { sessionId: $sessionId } else {} end)
-      + (if $toolName != "" then { toolName: $toolName } else {} end)
-      + (if $toolInput != "" then { toolInput: $toolInput } else {} end)
-      + (if $rawInput != "" then { rawInput: $rawInput } else {} end)
-      + (if $authorityHost != "" then { authorityHost: $authorityHost } else {} end)
-      + (if $authorityMode != "" then { authorityMode: $authorityMode } else {} end)
-      + (if $endpoint != "" then { endpoint: $endpoint } else {} end)
-      + (if $port != "" then { port: $port } else {} end)
-      + (if $payload != "" then { payload: $payload } else {} end)
-      + (if $response != "" then { response: $response } else {} end)
-      + (if $normalizedResponse != "" then { normalizedResponse: $normalizedResponse } else {} end)
-      + (if $emittedResponse != "" then { emittedResponse: $emittedResponse } else {} end)
-      + (if $attempt != "" then { attempt: $attempt } else {} end)
-      + (if $maxRetries != "" then { maxRetries: $maxRetries } else {} end)
-      + (if $timeoutSeconds != "" then { timeoutSeconds: $timeoutSeconds } else {} end)
-      + (if $curlExit != "" then { curlExit: $curlExit } else {} end)'
-  ) || return 0
-
-  printf '%s\n' "$diagnostic_json" >> "$DIAGNOSTICS_LOG" 2>/dev/null || true
-  return 0
+  if [[ "$DIAGNOSTICS_LOG" == "$LEGACY_DIAGNOSTICS_LOG" || "$DIAGNOSTICS_LOG" -ef "$LEGACY_DIAGNOSTICS_LOG" ]]; then
+    return 0
+  fi
+  if [[ "$TOOL_NAME" =~ $tool_pattern ]]; then
+    diagnostic_tool="$TOOL_NAME"
+  fi
+  node "$SCRIPT_DIR/permission-hook-diagnostics.mjs" "$DIAGNOSTICS_LOG" \
+    "$HOOK_PLATFORM" "$stage" "$outcome" "$diagnostic_tool" \
+    "$((SECONDS * 1000))" "$LAST_ATTEMPT" "$CURRENT_TIMEOUT" "$LAST_CURL_EXIT" \
+    >/dev/null 2>&1 || true
 }
 
 emit_response() {
@@ -229,7 +162,7 @@ handle_outage() {
   debug "$reason"
 
   if ! is_outage_high_risk; then
-    append_diagnostic_record "$COMPLETE_EVENT" "$stage" "outage_deferred" "$failure"
+    append_diagnostic_record "$stage" "outage_deferred"
     return 0
   fi
 
@@ -254,7 +187,7 @@ handle_outage() {
   esac
 
   if [[ "$HOOK_PLATFORM" == "windsurf" ]]; then
-    append_diagnostic_record "$COMPLETE_EVENT" "$stage" "outage_$decision" "$failure"
+    append_diagnostic_record "$stage" "outage_$decision"
     printf '%s\n' "$reason" >&2
     return 2
   fi
@@ -263,7 +196,7 @@ handle_outage() {
     printf '%s\n' "$reason" >&2
     return 2
   fi
-  append_diagnostic_record "$COMPLETE_EVENT" "$stage" "outage_$decision" "$failure"
+  append_diagnostic_record "$stage" "outage_$decision"
   emit_response "$EMITTED_RESPONSE"
 }
 
@@ -509,11 +442,10 @@ AUTHORITY_MODE=$(resolve_authority_mode "$AUTHORITY_HOST")
 debug "Authority mode for ${AUTHORITY_HOST:-unknown}: $AUTHORITY_MODE"
 
 if [[ "$AUTHORITY_MODE" == "off" ]]; then
-  append_diagnostic_record "$COMPLETE_EVENT" "authority_off" "no_decision"
+  append_diagnostic_record "authority_off" "no_decision"
   exit 0
 fi
 
-append_diagnostic_record "received_input" "received_input"
 if ! read_hook_input 2>/dev/null; then
   handle_outage "parse_tool_name_failed" "could not parse the hook tool name or input"
   exit $?
@@ -629,9 +561,9 @@ while [[ $ATTEMPT -le $MAX_RETRIES ]]; do
     NORMALIZED_RESPONSE=$(jq -c '.output // empty' <<< "$result")
     EMITTED_RESPONSE="$NORMALIZED_RESPONSE"
     if [[ -n "$NORMALIZED_RESPONSE" ]]; then
-      append_diagnostic_record "$COMPLETE_EVENT" "response_normalized" "success"
+      append_diagnostic_record "response_normalized" "success"
     else
-      append_diagnostic_record "$COMPLETE_EVENT" "response_allowed_without_output" "success"
+      append_diagnostic_record "response_allowed_without_output" "success"
     fi
     emit_response "$NORMALIZED_RESPONSE"
     exit 0
@@ -643,7 +575,7 @@ while [[ $ATTEMPT -le $MAX_RETRIES ]]; do
     (( BACKOFF < REQUEST_DEADLINE - SECONDS )) || break
     RETRY_MESSAGE="Attempt $ATTEMPT failed (curl exit $CURL_EXIT) — retrying in ${BACKOFF}s"
     debug "$RETRY_MESSAGE"
-    append_diagnostic_record "retry" "curl_retry" "retrying" "$RETRY_MESSAGE"
+    append_diagnostic_record "curl_retry" "retrying"
     sleep "$BACKOFF"
     TIMEOUT=$((TIMEOUT * 2))
   fi

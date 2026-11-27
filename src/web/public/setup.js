@@ -1415,7 +1415,7 @@ codex_hooks = true`;
         <summary>Manual fallback</summary>
         <div class="setup-manual-fallback-body">
           <h4>1. Copy the hook scripts from your installed DollhouseMCP version</h4>
-          <p>Copy <code>pretooluse-dollhouse.sh</code>, <code>permission-hook-config.sh</code>, and <code>permission-port-discovery.sh</code> from the package's <code>scripts</code> directory into <code>${HOOKS_DIR}</code>.</p>
+          <p>Copy <code>pretooluse-dollhouse.sh</code>, <code>permission-hook-config.sh</code>, <code>permission-port-discovery.sh</code>, <code>permission-hook-diagnostics.mjs</code>, and <code>recoverable-file-write-lock.mjs</code> from the package's <code>scripts</code> directory into <code>${HOOKS_DIR}</code>.</p>
           <h4>2. Add the ${verified.label} hook settings</h4>
           <p>Add this block to ${verified.configPath} so ${verified.label} can call the hook bridge before tool use.</p>
           <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(verified.settingsBlock)}' aria-label="Copy ${verified.label} hook settings">Copy</button>
@@ -1456,7 +1456,7 @@ codex_hooks = true`;
         <summary>Manual fallback</summary>
         <div class="setup-manual-fallback-body">
           <h4>1. Copy the hook scripts from your installed DollhouseMCP version</h4>
-          <p>Copy <code>pretooluse-dollhouse.sh</code>, <code>permission-hook-config.sh</code>, and <code>permission-port-discovery.sh</code> from the package's <code>scripts</code> directory into <code>${HOOKS_DIR}</code>.</p>
+          <p>Copy <code>pretooluse-dollhouse.sh</code>, <code>permission-hook-config.sh</code>, <code>permission-port-discovery.sh</code>, <code>permission-hook-diagnostics.mjs</code>, and <code>recoverable-file-write-lock.mjs</code> from the package's <code>scripts</code> directory into <code>${HOOKS_DIR}</code>.</p>
           <p>Copy the client wrapper into the same directory at <code>${partial.scriptPath}</code>.</p>
           ${featureSection}
           <h4>${stepNumber}. Add the ${partial.label} hook settings in ${partial.configPath}</h4>

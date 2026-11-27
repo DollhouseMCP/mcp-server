@@ -23,6 +23,8 @@ const REQUIRED_PACKAGE_ENTRIES = [
   'scripts/pretooluse-dollhouse.sh',
   'scripts/permission-port-discovery.sh',
   'scripts/permission-hook-config.sh',
+  'scripts/permission-hook-diagnostics.mjs',
+  'scripts/recoverable-file-write-lock.mjs',
   'server.json',
   'oauth-helper.mjs',
   'oauth-state-coordinator.mjs',
