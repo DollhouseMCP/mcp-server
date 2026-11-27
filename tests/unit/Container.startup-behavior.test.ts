@@ -68,53 +68,47 @@ describe('Container Startup - Behavior (Non-Flaky)', () => {
       const migrationManager = container.resolve<any>('MigrationManager');
       const portfolioManager = container.resolve<any>('PortfolioManager');
 
-      // Track call order using a shared array
-      const callOrder: string[] = [];
-      let migrationResolve: () => void;
-      let portfolioResolve: () => void;
+      function deferred() {
+        let resolve!: () => void;
+        const promise = new Promise<void>(complete => { resolve = complete; });
+        return { promise, resolve };
+      }
 
-      // Create controlled promises
-      const migrationPromise = new Promise<void>(resolve => {
-        migrationResolve = resolve;
-      });
-      const portfolioPromise = new Promise<void>(resolve => {
-        portfolioResolve = resolve;
-      });
+      const callOrder: string[] = [];
+      const migrationStarted = deferred();
+      const portfolioStarted = deferred();
+      const releaseChecks = deferred();
 
       jest.spyOn(migrationManager, 'needsMigration').mockImplementation(async () => {
         callOrder.push('migration-start');
-        await migrationPromise;
+        migrationStarted.resolve();
+        await releaseChecks.promise;
         callOrder.push('migration-end');
         return false;
       });
 
       jest.spyOn(portfolioManager, 'exists').mockImplementation(async () => {
         callOrder.push('portfolio-start');
-        await portfolioPromise;
+        portfolioStarted.resolve();
+        await releaseChecks.promise;
         callOrder.push('portfolio-end');
         return true;
       });
 
-      // Start preparePortfolio (don't await yet)
       const preparePromise = container.preparePortfolio();
-
-      // Wait for PathsServiceRegistrar bootstrap (disk detection) + both
-      // starts to register. Multiple ticks needed because preparePortfolio
-      // now awaits PathsServiceRegistrar.bootstrapAndRegister before the
-      // parallel config checks.
-      await new Promise(resolve => setTimeout(resolve, 50));
-
-      // VERIFY: Both checks should have started before either completed
-      expect(callOrder).toContain('migration-start');
-      expect(callOrder).toContain('portfolio-start');
-      expect(callOrder).not.toContain('migration-end');
-      expect(callOrder).not.toContain('portfolio-end');
-
-      // Complete both checks
-      migrationResolve!();
-      portfolioResolve!();
-
-      await preparePromise;
+      try {
+        await Promise.race([
+          Promise.all([migrationStarted.promise, portfolioStarted.promise]),
+          preparePromise.then(() => { throw new Error('Bootstrap finished before both checks started'); }),
+        ]);
+        expect(callOrder).toContain('migration-start');
+        expect(callOrder).toContain('portfolio-start');
+        expect(callOrder).not.toContain('migration-end');
+        expect(callOrder).not.toContain('portfolio-end');
+      } finally {
+        releaseChecks.resolve();
+        await preparePromise;
+      }
 
       // Both should have completed
       expect(callOrder).toContain('migration-end');

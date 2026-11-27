@@ -300,10 +300,17 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
         if (path.basename(filePath) === 'My.Agent.md') return AGENT_CONTENT_STANDARD.replace('name: my-agent', 'name: My.Agent');
         throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
       });
+      const loader = agentManager as unknown as { loadElementDefinition(reference: string): Promise<Agent> };
+      const loadDefinition = jest.spyOn(loader, 'loadElementDefinition');
       const identity = await agentManager.resolveExecutionIdentity('My.Agent');
       expect(identity.value).toBe('My.Agent.md');
-      const reads = fileOperationsService.readFile.mock.calls.map(([filePath]) => path.basename(filePath as string));
-      expect(reads.indexOf('my-agent.md')).toBeLessThan(reads.indexOf('My.Agent.md'));
+      expect(loadDefinition.mock.calls).toEqual([['my-agent.md'], ['My.Agent.md']]);
+
+      // Both candidates are started together, so filesystem preparation can reorder the reads.
+      const reads = fileOperationsService.readFile.mock.calls
+        .map(([filePath]) => path.basename(filePath as string).toLowerCase())
+        .sort();
+      expect(reads).toEqual(['my-agent.md', 'my.agent.md']);
     });
 
     it('guards a database lifecycle save with the name the row is stored under, for names the sanitiser would change', () => {
