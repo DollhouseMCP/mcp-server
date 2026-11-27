@@ -121,8 +121,10 @@ describe('evaluatePermission', () => {
   });
 
   describe('evaluatePermission pipeline', () => {
-    it('should deny when rate limited', async () => {
+    it('should report an outage without evaluating policy when rate limited', async () => {
+      const classifyTool = jest.fn<EvaluatePermissionDeps['classifyTool']>();
       const deps = createMockDeps({
+        classifyTool,
         permissionPromptLimiter: {
           checkLimit: () => ({ allowed: false, remainingTokens: 0, resetTime: new Date(), retryAfterMs: 1000 }),
           consumeToken: jest.fn(),
@@ -135,12 +137,11 @@ describe('evaluatePermission', () => {
       );
 
       expect(result).toEqual({
-        hookSpecificOutput: {
-          hookEventName: 'PreToolUse',
-          permissionDecision: 'deny',
-          permissionDecisionReason: 'Rate limit exceeded',
-        },
+        status: 'outage',
+        code: 'rate_limited',
+        reason: 'Permission evaluation is rate-limited.',
       });
+      expect(classifyTool).not.toHaveBeenCalled();
     });
 
     it('should allow when static classification allows', async () => {
