@@ -1,0 +1,4 @@
+Distro: Ubuntu 22.04.5 LTS
+kdialog	4:21.12.3-0ubuntu1
+aarch64
+kdialog 21.12.3

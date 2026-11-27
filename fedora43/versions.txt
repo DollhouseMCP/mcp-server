@@ -1,0 +1,5 @@
+Distro: Fedora Linux 43 (Container Image)
+kdialog-26.04.3-1.fc43.aarch64
+aarch64
+kdialog 26.04.3
+Node child runner: v22.22.2

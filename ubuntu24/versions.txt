@@ -1,0 +1,5 @@
+Distro: Ubuntu 24.04.5 LTS
+kdialog	4:23.08.5-0ubuntu4
+aarch64
+kdialog 23.08.5
+Node child runner: v18.19.1

@@ -1,0 +1,4 @@
+Distro: Fedora Linux 45 (Container Image)
+kdialog-26.08.3-1.fc45.aarch64
+aarch64
+kdialog 26.08.3
