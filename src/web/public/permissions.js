@@ -259,11 +259,9 @@
     const allowed = decisions.filter(d => d.decision === 'allow').length;
     const denied = decisions.filter(d => d.decision === 'deny').length;
     const asked = decisions.filter(d => d.decision === 'ask').length;
-    const outages = decisions.filter(d => d.decision === 'outage').length;
     setText('perm-stat-allowed', allowed);
     setText('perm-stat-denied', denied);
     setText('perm-stat-asked', asked);
-    setText('perm-stat-outages', outages);
   }
 
   function renderAuthorityMode(data) {
@@ -840,10 +838,6 @@
               <div class="perm-stat">
                 <div class="perm-stat-value perm-stat-value--ask" id="perm-stat-asked">0</div>
                 <div class="perm-stat-label">Asked</div>
-              </div>
-              <div class="perm-stat">
-                <div class="perm-stat-value" id="perm-stat-outages">0</div>
-                <div class="perm-stat-label">Outages</div>
               </div>
             </div>
           </div>

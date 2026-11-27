@@ -23,7 +23,6 @@ import {
 } from '../../utils/permissionHooks.js';
 
 import { SlidingWindowRateLimiter } from '../../utils/SlidingWindowRateLimiter.js';
-import { SESSION_ID_PATTERN } from '../../services/sessionIdentity.js';
 import {
   type PermissionAuthorityHost,
   type PermissionAuthorityMode,
@@ -105,13 +104,11 @@ interface PermissionDecisionContext {
 const PERMISSION_ROUTE_RATE_LIMIT_REQUESTS = 120;
 const PERMISSION_ROUTE_RATE_LIMIT_WINDOW_MS = 60_000;
 const DECISION_BUFFER_SIZE = 200;
-const PERMISSION_OUTAGE_STATUS = 'outage';
 const PERMISSION_OUTAGES = {
   rate_limited: { status: 429, reason: 'Permission evaluation is rate-limited.' },
   invalid_request: { status: 400, reason: 'A valid tool name is required.' },
   evaluation_failed: { status: 503, reason: 'Permission evaluation could not complete.' },
   invalid_decision: { status: 503, reason: 'Permission evaluation returned an invalid decision.' },
-  session_unavailable: { status: 503, reason: 'The hook connection has no verified policy session.' },
 } as const;
 type PermissionOutageCode = keyof typeof PERMISSION_OUTAGES;
 
@@ -124,11 +121,6 @@ interface PermissionDecisionTracker {
     platform: string,
   ): void;
   getRecentDecisions(): PermissionDecision[];
-}
-
-interface PermissionRequestLocals {
-  /** Set only by middleware that verified a binding to a Dollhouse policy session. */
-  authenticatedPermissionSessionId?: string;
 }
 
 const CLAUDE_COMPATIBLE_HOOK_PLATFORMS = new Set(['claude_code', 'vscode']);
@@ -159,7 +151,7 @@ function isEmptyObject(value: Record<string, unknown>): boolean {
 }
 
 function extractDecision(result: Record<string, unknown>, platform?: string): string {
-  if (result.status === PERMISSION_OUTAGE_STATUS) return PERMISSION_OUTAGE_STATUS;
+  if (result.status === 'outage') return 'outage';
   const nested = result.hookSpecificOutput;
   if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
     const nestedDecision = (nested as Record<string, unknown>).permissionDecision;
@@ -442,7 +434,7 @@ function respondWithPermissionOutage(
   toolName = '(unknown)',
 ): void {
   const { status, reason } = PERMISSION_OUTAGES[code];
-  const payload = { status: PERMISSION_OUTAGE_STATUS, code, reason };
+  const payload = { status: 'outage', code, reason };
   tracker.trackDecision(context, toolName, {}, payload, platform);
   res.status(status).json(payload);
 }
@@ -465,13 +457,14 @@ export function registerPermissionRoutes(
     PERMISSION_ROUTE_RATE_LIMIT_REQUESTS,
     PERMISSION_ROUTE_RATE_LIMIT_WINDOW_MS,
   );
-  router.post('/evaluate_permission', express.json(), async (req, res: Response<unknown, PermissionRequestLocals>) => {
+  router.post('/evaluate_permission', express.json(), async (req, res) => {
     await selfHealLatestPermissionPortFile(req.socket.localPort);
 
     const body = (req.body ?? {}) as {
       tool_name?: string;
       input?: PermissionDecisionInput;
       platform?: string;
+      session_id?: string;
       turn_id?: string;
       tool_use_id?: string;
       transcript_path?: string;
@@ -482,19 +475,15 @@ export function registerPermissionRoutes(
 
     // Unicode normalization (NFC) on string inputs to prevent homograph attacks
     const tool_name = normalizeOptionalRequestString(body.tool_name)?.trim() || undefined;
-    const boundSessionId = res.locals.authenticatedPermissionSessionId;
-    const sessionId = typeof boundSessionId === 'string' && SESSION_ID_PATTERN.test(boundSessionId)
-      ? boundSessionId
-      : undefined;
     const context: PermissionDecisionContext = {
-      session_id: sessionId,
+      session_id: normalizeOptionalRequestString(body.session_id),
       turn_id: normalizeOptionalRequestString(body.turn_id),
       tool_use_id: normalizeOptionalRequestString(body.tool_use_id),
       transcript_path: normalizeOptionalRequestString(body.transcript_path),
       cwd: normalizeOptionalRequestString(body.cwd),
       model: normalizeOptionalRequestString(body.model),
     };
-    const input = body.input ?? {};
+    const input = body.input;
 
     if (!permissionLimiter.tryAcquire()) {
       respondWithPermissionOutage(res, decisionTracker, platform, 'rate_limited', context, tool_name);
@@ -504,10 +493,6 @@ export function registerPermissionRoutes(
       respondWithPermissionOutage(res, decisionTracker, platform, 'invalid_request', context);
       return;
     }
-    if (!sessionId) {
-      respondWithPermissionOutage(res, decisionTracker, platform, 'session_unavailable', context, tool_name);
-      return;
-    }
 
     const startMs = Date.now();
     try {
@@ -515,9 +500,9 @@ export function registerPermissionRoutes(
         operation: 'evaluate_permission',
         params: {
           tool_name,
-          input,
+          input: input || {},
           platform,
-          session_id: sessionId,
+          ...(context.session_id ? { session_id: context.session_id } : {}),
           ...(context.cwd ? { cwd: context.cwd } : {}),
         },
       }));
@@ -536,7 +521,7 @@ export function registerPermissionRoutes(
       }
       const responseData = normalizePermissionResponseForPlatform(
         platform,
-        input,
+        input || {},
         rawResult as Record<string, unknown>,
       );
       if (!responseData) {
@@ -548,7 +533,7 @@ export function registerPermissionRoutes(
       logger.debug(`[WebUI/Gateway] evaluate_permission: ${tool_name} → ${decision} (${elapsedMs}ms)`);
 
       // Track decision for live dashboard feed
-      decisionTracker.trackDecision(context, tool_name, input, trackedResult, platform);
+      decisionTracker.trackDecision(context, tool_name, input || {}, trackedResult, platform);
 
       res.json(responseData);
     } catch {
