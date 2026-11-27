@@ -5,6 +5,10 @@ import { PolicyUnavailableError } from '../../services/policy/PolicyUnavailableE
 import { integrationOperationError } from './IntegrationOperationResult.js';
 import { integrationInvocationContext, type IntegrationInvocationContext } from '../../security/IntegrationEntryPoint.js';
 import { isIntegrationPolicyOperation } from './IntegrationManagementOperations.js';
+import type { SessionContext } from '../../context/SessionContext.js';
+import { realpath } from 'node:fs/promises';
+import { ConsoleTokenStore } from '../../web/console/consoleToken.js';
+import { isLocalOverrideOperation, localOverrideActor, resolveOverrideRule, type LocalPolicyOverrides, type OverrideAction } from './LocalPolicyOverrides.js';
 /**
  * MCPAQLHandler - Unified handler for all MCP-AQL operations
  *
@@ -409,6 +413,7 @@ export interface HandlerRegistry {
   buildInfoService?: BuildInfoService;
   cacheMemoryBudget?: CacheMemoryBudget;
   gatekeeper: Gatekeeper;
+  localPolicyOverrides?: LocalPolicyOverrides;
   // Issue #402: DI-injected danger zone enforcer (replaces singleton import)
   dangerZoneEnforcer?: DangerZoneEnforcer;
   // Issue #142: Server-side verification store for challenge codes
@@ -443,7 +448,7 @@ export interface HandlerRegistry {
  */
 export interface CorrelationIdProvider extends SaveContextScope {
   getCorrelationId(): string | undefined;
-  getSessionContext?(): { sessionId: string; transport?: 'stdio' | 'http' } | undefined;
+  getSessionContext?(): (Pick<SessionContext, 'sessionId'> & Partial<SessionContext>) | undefined;
 }
 
 interface MemoryCallerView {
@@ -625,6 +630,7 @@ export class MCPAQLHandler {
       resolveVerificationRateLimiter: () => this.resolveVerificationRateLimiter(),
       resolvePermissionPromptLimiter: () => this.resolvePermissionPromptLimiter(),
       resolveCliApprovalLimiter: () => this.resolveCliApprovalLimiter(),
+      currentOverrideRule: action => this.currentOverrideRule(action, handlers),
       ownershipPolicy: createOwnershipPolicyServiceFromEnv(),
       buildRateLimitDeny: (limiterName, toolName, status, riskLevel, reason) =>
         this.buildRateLimitDeny(limiterName, toolName, status, riskLevel, reason),
@@ -739,6 +745,7 @@ export class MCPAQLHandler {
     this.deadlockReliefIssuanceLimiters.delete(sessionId);
     this.permissionPromptLimiters.delete(sessionId);
     this.cliApprovalLimiters.delete(sessionId);
+    this.handlers.localPolicyOverrides?.disposeSession(sessionId);
   }
 
   /**
@@ -1107,11 +1114,59 @@ export class MCPAQLHandler {
     }, this.operations);
 
     this.recordGatekeeperDecision(decision);
+    if (endpoint === 'READ' && decision.errorCode === GatekeeperErrorCode.ELEMENT_POLICY_VIOLATION) {
+      const action = { operation, elementType, params: params ?? {} };
+      const override = await this.handleLocalPolicyDenial(action, policies.elements, handlers);
+      if (override?.status === 'consumed') return {};
+      if (override?.status === 'pending') {
+        return { failure: this.failure(
+          `[Gatekeeper] ${decision.reason}. To ask the local operator to approve this action once, call request_policy_override with request_id "${override.requestId}".`,
+          startTime,
+        ) };
+      }
+    }
     this.handleDeniedGatekeeperDecision(decision, operation, endpoint, elementType, params, handlers);
     return {
       failure: this.blockGatekeeperPolicyEdit(decision, operation, elementType, params, startTime) ?? undefined,
       recovery: policies.recovery,
     };
+  }
+
+  private async handleLocalPolicyDenial(action: Omit<OverrideAction, 'portfolio'>, elements: ActiveElement[], handlers: HandlerRegistry) {
+    const overrides = handlers.localPolicyOverrides;
+    const actor = localOverrideActor(this.contextTracker?.getSessionContext?.());
+    if (!overrides || !actor || !isLocalOverrideOperation(action.operation)) return undefined;
+    const portfolio = await this.localOverridePortfolio(handlers);
+    if (!portfolio) return undefined;
+    const candidate = { ...action, portfolio };
+    const rule = resolveOverrideRule(candidate, elements, this.operations);
+    if (!rule || !await this.canOverrideLocalPolicy(handlers)) return undefined;
+    return overrides.handleDenial(
+      actor, structuredClone(candidate), rule, this.resolveCliApprovalLimiter(),
+      pending => this.currentOverrideRule(pending, handlers),
+    );
+  }
+
+  private async currentOverrideRule(action: OverrideAction, handlers: HandlerRegistry) {
+    if (!env.DOLLHOUSE_GATEKEEPER_ENABLED || !this.gatekeeper.allowsElementPolicyOverrides() ||
+        !await this.canOverrideLocalPolicy(handlers) ||
+        await this.localOverridePortfolio(handlers) !== action.portfolio) return undefined;
+    const elements = await this.getActiveElements(undefined, handlers);
+    return resolveOverrideRule(action, elements, this.operations);
+  }
+
+  private async canOverrideLocalPolicy(handlers: HandlerRegistry): Promise<boolean> {
+    if (!await handlers.dangerZoneEnforcer?.permitsLocalPolicyOverride()) return false;
+    const tokenStore = new ConsoleTokenStore(env.DOLLHOUSE_CONSOLE_TOKEN_FILE);
+    return await tokenStore.lookupApprovalEnrollment() === 'enrolled';
+  }
+
+  private async localOverridePortfolio(handlers: HandlerRegistry): Promise<string | undefined> {
+    try {
+      return await realpath(handlers.portfolioManager.getBaseDir());
+    } catch {
+      return undefined;
+    }
   }
 
 

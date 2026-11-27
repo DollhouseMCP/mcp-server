@@ -641,7 +641,8 @@ describe('OperationSchema', () => {
 
     describe('GATEKEEPER_SCHEMAS', () => {
       it('should define 11 gatekeeper operations', () => {
-        expect(Object.keys(GATEKEEPER_SCHEMAS)).toHaveLength(11);
+        expect(Object.keys(GATEKEEPER_SCHEMAS)).toHaveLength(12);
+        expect(GATEKEEPER_SCHEMAS.request_policy_override.endpoint).toBe('CREATE');
         expect(GATEKEEPER_SCHEMAS.confirm_operation).toBeDefined();
         expect(GATEKEEPER_SCHEMAS.verify_challenge).toBeDefined();
         expect(GATEKEEPER_SCHEMAS.release_deadlock).toBeDefined();

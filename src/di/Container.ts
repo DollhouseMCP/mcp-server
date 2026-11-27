@@ -20,6 +20,8 @@ import { MCPAQLHandler, type HandlerRegistry, type TenantHandlerRegistry } from 
 import { Gatekeeper } from "../handlers/mcp-aql/Gatekeeper.js";
 import { GatekeeperSession } from "../handlers/mcp-aql/GatekeeperSession.js";
 import type { AuditHmacResolver } from "../security/toolRedaction.js";
+import { FileAuditSink } from "../security/auditSink.js";
+import { LocalPolicyOverrides } from "../handlers/mcp-aql/LocalPolicyOverrides.js";
 import type { SkillManager } from "../elements/skills/index.js";
 import type { AgentManager } from "../elements/agents/AgentManager.js";
 import { Memory } from "../elements/memories/Memory.js";
@@ -1336,6 +1338,11 @@ export class DollhouseContainer {
       buildInfoService: this.resolve('BuildInfoService'),
       cacheMemoryBudget: this.resolve('CacheMemoryBudget'),
       gatekeeper,  // Issue #452: Policy engine for enforce()
+      localPolicyOverrides: gatekeeperAuditResolver && !this.hasRegistration('DatabaseInstance')
+        ? new LocalPolicyOverrides(gatekeeperAuditResolver, new FileAuditSink(path.join(
+          this.resolve<PathService>('PathService').resolveDataDir('state'), 'audit', 'security_events.jsonl',
+        )))
+        : undefined,
       verificationNotifier: this.resolve('VerificationNotifier'),  // Issue #522: OS dialog for codes
       memorySink: this.resolve<MemoryLogSink>('MemoryLogSink'),  // Issue #528: CRUDE-routed query_logs
       performanceMonitor: this.resolve<PerformanceMonitor>('PerformanceMonitor'),

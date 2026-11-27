@@ -9,6 +9,8 @@ import type { VerificationStore } from '@dollhousemcp/safety';
 import { env as runtimeEnv } from '../../../src/config/env.js';
 import type { Gatekeeper } from '../../../src/handlers/mcp-aql/Gatekeeper.js';
 import type { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
+import type { PathService } from '../../../src/paths/PathService.js';
+import type { SessionContext } from '../../../src/context/SessionContext.js';
 import { StaticAuditHmacKeyResolver } from '../../../src/security/auditHmacKey.js';
 import type { ContextTracker } from '../../../src/security/encryption/ContextTracker.js';
 import type { FileOperationsService } from '../../../src/services/FileOperationsService.js';
@@ -53,6 +55,8 @@ describe('Autonomy challenge verification end to end', () => {
   let tracker: ContextTracker;
   let fileOps: FileOperationsService;
   let persistPath: string;
+  let overrideAuditPath: string;
+  let stdioSession: SessionContext;
   let originalSuppress: string | undefined;
 
   async function persistedAgents(expected: string[]): Promise<void> {
@@ -85,6 +89,8 @@ describe('Autonomy challenge verification end to end', () => {
     container.register('DangerZoneEnforcer', () => enforcer, { override: true });
     server = new DollhouseMCPServer(container);
     await server.listPersonas();
+    overrideAuditPath = path.join(container.resolve<PathService>('PathService').resolveDataDir('state'), 'audit', 'security_events.jsonl');
+    stdioSession = container.resolve<SessionContext>('StdioSession');
     preConfirmAllOperations(container);
     handler = container.resolve<MCPAQLHandler>('mcpAqlHandler');
     gatekeeper = container.resolve<Gatekeeper>('gatekeeper');
@@ -213,6 +219,171 @@ describe('Autonomy challenge verification end to end', () => {
         operation: 'approve_cli_permission', params: { request_id: requestId, scope },
       }));
     }
+
+    describe('one-time MCP-AQL policy overrides', () => {
+      const originalParams = { pageSize: 3 };
+
+      function runOverride<T>(work: () => Promise<T>, sessionId = stdioSession.sessionId) {
+        return tracker.runAsync({ type: 'test', timestamp: Date.now(), session: { ...stdioSession, sessionId } }, work);
+      }
+
+      function list(params = originalParams, sessionId = stdioSession.sessionId) {
+        return runOverride(() => handler.handleRead({
+          operation: 'list_elements', element_type: 'persona', params,
+        }), sessionId);
+      }
+
+      function ask(requestId: string, sessionId = stdioSession.sessionId, extra: Record<string, unknown> = {}) {
+        return runOverride(() => handler.handleCreate({
+          operation: 'request_policy_override', params: { request_id: requestId, ...extra },
+        }), sessionId);
+      }
+
+      async function enroll() {
+        const enrollment = tokenStore.beginTotpEnrollment();
+        const totp = new TOTP({ secret: Secret.fromBase32(enrollment.secret), algorithm: 'SHA1', digits: 6, period: 30 });
+        await tokenStore.confirmTotpEnrollment(enrollment.pendingId, totp.generate());
+        return totp;
+      }
+
+      async function activateDenyPolicy(gatekeeper: Record<string, unknown> = { deny: ['list_elements'] },
+        elementName = 'override-policy') {
+        const created = await runOverride(() => handler.handleCreate({
+          operation: 'create_element',
+          params: {
+            element_name: elementName, element_type: 'personas', description: 'Local override test policy',
+            content: '# Test policy\n\nReview the local policy override.', metadata: { gatekeeper },
+          },
+        }));
+        expect(created).toMatchObject({ success: true });
+        expect(await runOverride(() => handler.handleRead({
+          operation: 'activate_element', params: { element_name: elementName, element_type: 'personas' },
+        }))).toMatchObject({ success: true });
+        expect(await runOverride(() => handler.getActiveElementsForGatekeeperPolicy())).toEqual(expect.arrayContaining([
+          expect.objectContaining({ metadata: expect.objectContaining({ gatekeeper: expect.objectContaining(gatekeeper) }) }),
+        ]));
+      }
+
+      async function deniedRequest() {
+        const denial = await list();
+        expect(denial).toMatchObject({ success: false, error: expect.stringContaining('request_policy_override') });
+        const id = 'error' in denial ? denial.error?.match(/request_id "([^"]+)"/u)?.[1] : undefined;
+        expect(id).toMatch(UUID_V4);
+        return id!;
+      }
+
+      it('prompts only on request and permits one exact retry under concurrency', async () => {
+        expect(await list()).toMatchObject({ success: true });
+        expect(nativeApproval).not.toHaveBeenCalled();
+        const totp = await enroll();
+        await activateDenyPolicy();
+        const id = await deniedRequest();
+        expect((await ask(id, 'other-session'))).toMatchObject({ success: true, data: { approved: false } });
+        expect(await tracker.runAsync({
+          type: 'test', timestamp: Date.now(), session: { ...stdioSession, transport: 'http' },
+        }, () => handler.handleCreate({
+          operation: 'request_policy_override', params: { request_id: id },
+        }))).toMatchObject({ success: true, data: { approved: false } });
+        expect((await ask(id, stdioSession.sessionId, { code: 'not-a-proof' })).success).toBe(false);
+        expect(nativeApproval).not.toHaveBeenCalled();
+
+        const proof = totp.generate();
+        nativeApproval.mockResolvedValueOnce({ confirmed: true, code: proof });
+        expect(await ask(id)).toMatchObject({ success: true, data: { approved: true } });
+        expect(nativeApproval).toHaveBeenCalledWith(expect.objectContaining({
+          title: 'Approve this action once',
+          reviewDetails: expect.stringContaining('"pageSize": 3'),
+        }), true, expect.any(Number));
+        expect((await list({ pageSize: 4 })).success).toBe(false);
+        expect(await runOverride(() => handler.handleRead({
+          operation: 'activate_element', params: { element_name: 'override-policy', element_type: 'persona' },
+        }), 'other-session')).toMatchObject({ success: true });
+        expect((await list(originalParams, 'other-session')).success).toBe(false);
+        const results = await Promise.all([list(), list()]);
+        expect(results.filter(result => result.success)).toHaveLength(1);
+        expect((await list()).success).toBe(false);
+
+        const auditText = await fs.readFile(overrideAuditPath, 'utf8');
+        const events = auditText.trim().split('\n').map(line => JSON.parse(line));
+        const reviewed = events.filter(event => event.targetId === id);
+        expect(reviewed.map(event => event.eventType.split('.').at(-1))).toEqual(['requested', 'decision', 'consumed']);
+        expect(reviewed[2]).toMatchObject({
+          actorId: stdioSession.userId,
+          metadata: { operation: 'list_elements', sessionId: stdioSession.sessionId, parameterDigest: expect.any(String) },
+        });
+        expect(auditText).not.toContain('"pageSize":');
+        expect(auditText).not.toContain(`"${proof}"`);
+      });
+
+      it('offers no override in the basic tier or while an independent scope rule applies', async () => {
+        await activateDenyPolicy();
+        expect(await list()).toMatchObject({ success: false, error: expect.not.stringContaining('request_policy_override') });
+        await enroll();
+        expect(await list({ pageSize: 0 })).toMatchObject({ success: false, error: expect.not.stringContaining('request_policy_override') });
+        await activateDenyPolicy({ scopeRestrictions: { blockedTypes: ['persona'] } }, 'absolute-scope');
+        expect(await list()).toMatchObject({ success: false, error: expect.not.stringContaining('request_policy_override') });
+        expect(nativeApproval).not.toHaveBeenCalled();
+      });
+
+      it('keeps the deny when the active policy disables human confirmations', async () => {
+        await enroll();
+        await activateDenyPolicy({ deny: ['list_elements', 'confirm_operation'] });
+        expect(await list()).toMatchObject({ success: false, error: expect.not.stringContaining('request_policy_override') });
+        expect(nativeApproval).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        { operation: 'search_elements', params: { query: 'synthetic-private-filter' } },
+        { operation: 'query_elements', params: {} },
+      ])('binds a $operation grant to the reviewed local query', async ({ operation, params }) => {
+        const totp = await enroll();
+        await activateDenyPolicy({ deny: [operation] });
+        const read = () => runOverride(() => handler.handleRead({ operation, element_type: 'persona', params }));
+        const refusal = await read();
+        const id = 'error' in refusal ? refusal.error?.match(/request_id "([^"]+)"/u)?.[1] : undefined;
+        expect(id).toMatch(UUID_V4);
+        nativeApproval.mockResolvedValueOnce({ confirmed: true, code: totp.generate() });
+        expect(await ask(id!)).toMatchObject({ success: true, data: { approved: true } });
+        expect((await read()).success).toBe(true);
+        expect((await read()).success).toBe(false);
+        const auditText = await fs.readFile(overrideAuditPath, 'utf8');
+        expect(auditText).not.toContain('synthetic-private-filter');
+      });
+
+      it.each(['cancelled', 'unavailable'] as const)('keeps the deny after the dialog is %s', async reason => {
+        await enroll();
+        await activateDenyPolicy();
+        const id = await deniedRequest();
+        nativeApproval.mockResolvedValueOnce({ confirmed: false, reason });
+        expect(await ask(id)).toMatchObject({ success: true, data: { approved: false } });
+        expect((await list()).success).toBe(false);
+      });
+
+      it.each(['expiry', 'changed policy', 'blocked agent', 'audit unavailable'])(
+        'preserves the deny on retry after %s', async condition => {
+          const totp = await enroll();
+          await activateDenyPolicy();
+          const id = await deniedRequest();
+          nativeApproval.mockResolvedValueOnce({ confirmed: true, code: totp.generate() });
+          expect(await ask(id)).toMatchObject({ success: true, data: { approved: true } });
+          const now = Date.now();
+          const clock = condition === 'expiry' ? jest.spyOn(Date, 'now').mockReturnValue(now + 60_001) : undefined;
+          try {
+            if (condition === 'changed policy') await activateDenyPolicy({ confirm: ['search_elements'] }, 'changed-policy');
+            if (condition === 'blocked agent') {
+              await enforcer.block('blocked-operator-test', 'Hard safety block', [], randomUUID(), undefined, OWNER);
+            }
+            if (condition === 'audit unavailable') {
+              await fs.rename(overrideAuditPath, `${overrideAuditPath}.old`);
+              await fs.mkdir(overrideAuditPath);
+            }
+            expect((await list()).success).toBe(false);
+          } finally {
+            clock?.mockRestore();
+          }
+        },
+      );
+    });
 
     it('releases only the reviewed block after a dialog decision and refuses replay', async () => {
       const directive = evaluateAutonomy({

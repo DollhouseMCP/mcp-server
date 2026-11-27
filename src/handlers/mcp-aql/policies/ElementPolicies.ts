@@ -694,6 +694,7 @@ function checkToolPrefix(
 const UNGATABLE_OPERATIONS = new Set([
   'verify_challenge',
   'release_deadlock',
+  'request_policy_override',
   'request_blocked_agent_reset',
   'abort_execution',
   'approve_cli_permission',

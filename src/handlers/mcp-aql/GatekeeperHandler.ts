@@ -13,6 +13,7 @@ import { env } from '../../config/env.js';
 import type { ChallengeMetadata } from '../../state/IChallengeStore.js';
 import { ConsoleTokenStore, type DialogApprovalRequest } from '../../web/console/consoleToken.js';
 import { ApprovalService } from '../../web-console/modules/approvals/ApprovalService.js';
+import { localOverrideActor, type OverrideAction, type resolveOverrideRule } from './LocalPolicyOverrides.js';
 import { getPermissionHookStatus } from '../../utils/permissionHooks.js';
 import {
   PERMISSION_AUTHORITY_HOSTS,
@@ -66,6 +67,16 @@ const BLOCK_RECOVERY_GUIDE = 'https://github.com/DollhouseMCP/mcp-server/blob/be
 const DEADLOCK_RECOVERY_GUIDE = 'https://github.com/DollhouseMCP/mcp-server/blob/beta/docs/security/deadlock-relief-flow.md#headless-stdio';
 const MAX_CLI_REVIEW_INPUT_LENGTH = 8_192;
 const MAX_CLI_REVIEW_TOOL_NAME_LENGTH = 256;
+
+const OVERRIDE_REFUSALS: Record<Exclude<DesktopApprovalResult, 'approved'>, string> = {
+  refused: 'The policy override was declined, proof was refused, or the reviewed policy changed.',
+  unavailable: 'An enrolled authenticator and available approval state are required.',
+  rate_limited: 'Too many authenticator attempts. Wait before asking again.',
+  spent: 'The approval request has already been used.',
+  expired: 'The approval request expired. Retry the original operation.',
+  desktop_unavailable: 'No supported desktop is available for this approval.',
+  desktop_timeout: 'The desktop approval timed out.',
+};
 
 function desktopRecoveryMessage(status: string, guide: string): string | undefined {
   if (status === 'desktop_unavailable') return `No usable desktop is available. Ask the local operator to follow ${guide}.`;
@@ -122,6 +133,7 @@ export interface GatekeeperHandlerDeps {
   resolveVerificationRateLimiter(): VerificationLimiter;
   resolvePermissionPromptLimiter(): RateLimiter;
   resolveCliApprovalLimiter(): RateLimiter;
+  currentOverrideRule?(action: OverrideAction): Promise<ReturnType<typeof resolveOverrideRule>>;
   /** Authorship-aware GitHub ownership policy (Issue #3153). Optional: absent = stage skipped. */
   ownershipPolicy?: OwnershipPolicyEvaluator;
   buildRateLimitDeny(
@@ -169,6 +181,7 @@ export class GatekeeperHandler {
       verify: () => this.verify(params),
       releaseDeadlock: () => this.releaseDeadlock(params),
       requestBlockedAgentReset: () => this.requestBlockedAgentReset(params),
+      requestPolicyOverride: () => this.requestPolicyOverride(params),
       beetlejuice: () => this.beetlejuice(params),
       permissionPrompt: () => this.permissionPrompt(params),
       evaluatePermission: () => this.evaluatePermission(params),
@@ -182,6 +195,44 @@ export class GatekeeperHandler {
       throw new Error(`Unknown Gatekeeper method: ${method}`);
     }
     return await handler();
+  }
+
+  private async requestPolicyOverride(params: Record<string, unknown>) {
+    if (Object.keys(params).some(key => key !== 'request_id')) {
+      throw new Error('Policy override requests accept only a request_id. Enter proof in the desktop dialog.');
+    }
+    const id = validateRequiredString(params, 'request_id', 'the request ID from the policy refusal');
+    const actor = localOverrideActor(this.deps.contextTracker?.getSessionContext?.());
+    const overrides = this.deps.handlers.localPolicyOverrides;
+    const currentRule = this.deps.currentOverrideRule;
+    if (!actor || !overrides || !currentRule) {
+      return { approved: false, status: 'unavailable', message: 'Policy overrides require an authenticated local stdio session.' };
+    }
+    const review = overrides.beginReview(id, actor);
+    if (!review) return { approved: false, status: 'unavailable', message: 'No pending override for this session. Retry the original operation.' };
+    let status: DesktopApprovalResult = 'refused';
+    try {
+      if (await overrides.isCurrent(review, currentRule)) {
+        const { element, elementKind } = review.binding.rule;
+        const rule = formatDisplayPreview(`${elementKind} ${element}`, MAX_CLI_REVIEW_TOOL_NAME_LENGTH);
+        status = await this.collectLocalApproval(
+          localApprovalRequest(actor.sessionId, ['policy_override', review.binding.digest], review.id, review.expiresAt),
+          {
+            title: 'Approve this action once',
+            summary: `Override the deny rule from '${rule}' for this action once?`,
+            reviewDetails: review.reviewDetails,
+            approveLabel: 'Approve once',
+          },
+          async () => await overrides.isCurrent(review, currentRule) && await overrides.approve(review),
+          true,
+        );
+      }
+    } finally {
+      if (status !== 'approved') await overrides.refuse(review, status);
+    }
+    return status === 'approved'
+      ? { approved: true, status, message: 'Retry the exact action within 60 seconds. Approval can be used once.' }
+      : { approved: false, status, message: `The action remains denied. ${OVERRIDE_REFUSALS[status]}` };
   }
 
   private async requestBlockedAgentReset(params: Record<string, unknown> = {}): Promise<unknown> {
@@ -604,12 +655,17 @@ export class GatekeeperHandler {
     request: DialogApprovalRequest,
     prompt: Parameters<typeof showNativeApprovalDialog>[0],
     commit: (request: DialogApprovalRequest) => Promise<boolean>,
+    requireAuthenticator = false,
   ): Promise<DesktopApprovalResult> {
-    const dialogState: { refusal?: Extract<BlockResetDialogResult, { confirmed: false }>['reason'] } = {};
+    const dialogState: { refusal?: Extract<BlockResetDialogResult, { confirmed: false }>['reason']; enrollmentRequired?: boolean } = {};
     const result = await ApprovalService.approveFromDialog({
       request,
       tokenStore: new ConsoleTokenStore(env.DOLLHOUSE_CONSOLE_TOKEN_FILE),
       dialog: async (pending, enrollment) => {
+        if (requireAuthenticator && enrollment !== 'enrolled') {
+          dialogState.enrollmentRequired = true;
+          return { confirmed: false };
+        }
         const decision = await showNativeApprovalDialog(prompt, enrollment === 'enrolled', pending.expiresAt - Date.now());
         if (!decision.confirmed) dialogState.refusal = decision.reason;
         return decision;
@@ -620,6 +676,7 @@ export class GatekeeperHandler {
           ? commit(pending) : Promise.resolve(false);
       },
     });
+    if (dialogState.enrollmentRequired) return 'unavailable';
     if (result === 'refused' && dialogState.refusal === 'unavailable') return 'desktop_unavailable';
     if (result === 'refused' && dialogState.refusal === 'timeout') return 'desktop_timeout';
     return result;
