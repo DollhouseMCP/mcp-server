@@ -13,6 +13,9 @@ PERMISSION_HOOK_MAX_MAX_RETRIES=5
 PERMISSION_HOOK_DEFAULT_INITIAL_TIMEOUT=5
 PERMISSION_HOOK_MIN_INITIAL_TIMEOUT=1
 PERMISSION_HOOK_MAX_INITIAL_TIMEOUT=30
+PERMISSION_HOOK_DEFAULT_REQUEST_BUDGET_SECONDS=15
+PERMISSION_HOOK_MIN_REQUEST_BUDGET_SECONDS=1
+PERMISSION_HOOK_MAX_REQUEST_BUDGET_SECONDS=20
 
 permission_hook_resolve_bounded_int() {
   local raw_value="$1"
@@ -61,7 +64,25 @@ permission_hook_load_runtime_config() {
       "$PERMISSION_HOOK_MIN_INITIAL_TIMEOUT" \
       "$PERMISSION_HOOK_MAX_INITIAL_TIMEOUT"
   )"
+  REQUEST_BUDGET_SECONDS="$(
+    permission_hook_resolve_bounded_int \
+      "${DOLLHOUSE_HOOK_REQUEST_BUDGET_SECONDS:-$PERMISSION_HOOK_DEFAULT_REQUEST_BUDGET_SECONDS}" \
+      "$PERMISSION_HOOK_DEFAULT_REQUEST_BUDGET_SECONDS" \
+      "$PERMISSION_HOOK_MIN_REQUEST_BUDGET_SECONDS" \
+      "$PERMISSION_HOOK_MAX_REQUEST_BUDGET_SECONDS"
+  )"
+  local default_tools="bash powershell monitor write edit multiedit notebookedit webfetch"
+  local default_mcp_read_only='^(get|list|read|search|find|view|describe|fetch|status)$'
+  OUTAGE_HIGH_RISK_TOOLS="${DOLLHOUSE_HOOK_OUTAGE_HIGH_RISK_TOOLS:-$default_tools}"
+  if [[ -z "${OUTAGE_HIGH_RISK_TOOLS//[[:space:]]/}" ]]; then
+    OUTAGE_HIGH_RISK_TOOLS="$default_tools"
+  fi
+  OUTAGE_MCP_READ_ONLY_PATTERN="${DOLLHOUSE_HOOK_OUTAGE_MCP_READ_ONLY_PATTERN:-$default_mcp_read_only}"
+  OUTAGE_MCP_BLOCKING_WORDS="create update delete remove write edit replace set put post send push merge move rename run exec execute install apply patch insert drop kill click type and or then"
+  # The original override can still promote a read-only name to high risk.
+  OUTAGE_MCP_HIGH_RISK_PATTERN="${DOLLHOUSE_HOOK_OUTAGE_MCP_HIGH_RISK_PATTERN:-}"
 
-  export AUTHORITY_CACHE_TTL_SECONDS MAX_RETRIES INITIAL_TIMEOUT
+  export AUTHORITY_CACHE_TTL_SECONDS MAX_RETRIES INITIAL_TIMEOUT REQUEST_BUDGET_SECONDS
+  export OUTAGE_HIGH_RISK_TOOLS OUTAGE_MCP_READ_ONLY_PATTERN OUTAGE_MCP_HIGH_RISK_PATTERN OUTAGE_MCP_BLOCKING_WORDS
   return 0
 }

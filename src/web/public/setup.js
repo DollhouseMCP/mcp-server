@@ -32,95 +32,6 @@
     { id: 'lmstudio',  rootKey: 'mcpServers', installClient: 'lmstudio',   openClient: 'lmstudio',   configPath: '<code>~/.lmstudio/mcp.json</code> (or open via Program tab &gt; Install &gt; Edit mcp.json)', hint: 'Restart LM Studio after saving.' },
   ];
 
-  const HOOK_BASE_SCRIPT = `#!/bin/bash
-# pretooluse-dollhouse.sh — shared hook bridge for DollhouseMCP
-
-RUN_DIR="$HOME/.dollhouse/run"
-PORT_FILE="$RUN_DIR/permission-server.port"
-HOOK_PLATFORM="\${DOLLHOUSE_HOOK_PLATFORM:-claude_code}"
-
-read_port_from_file() {
-  local file_path="$1"
-  local port_value
-
-  [[ -f "$file_path" ]] || return 1
-  port_value=$(cat "$file_path" 2>/dev/null)
-  [[ "$port_value" =~ ^[0-9]+$ ]] || return 1
-  printf '%s\\n' "$port_value"
-}
-
-restore_latest_port_file() {
-  local port_value="$1"
-
-  [[ "$port_value" =~ ^[0-9]+$ ]] || return 1
-  mkdir -p "$RUN_DIR" 2>/dev/null || return 1
-  printf '%s' "$port_value" > "$PORT_FILE" 2>/dev/null || return 1
-}
-
-find_latest_live_pid_port_file() {
-  local candidate
-  local file_name
-  local pid
-
-  while IFS= read -r candidate; do
-    [[ -e "$candidate" ]] || continue
-    file_name="\${candidate##*/}"
-    pid="\${file_name#permission-server-}"
-    pid="\${pid%.port}"
-
-    if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
-      printf '%s\\n' "$candidate"
-      return 0
-    fi
-  done < <(ls -1t "$RUN_DIR"/permission-server-*.port 2>/dev/null || true)
-
-  return 1
-}
-
-resolve_permission_port() {
-  local candidate_file
-  local port_value
-
-  if port_value=$(read_port_from_file "$PORT_FILE"); then
-    printf '%s\\n' "$port_value"
-    return 0
-  fi
-
-  candidate_file=$(find_latest_live_pid_port_file) || return 1
-  port_value=$(read_port_from_file "$candidate_file") || return 1
-  restore_latest_port_file "$port_value" >/dev/null 2>&1 || true
-  printf '%s\\n' "$port_value"
-}
-
-PORT=$(resolve_permission_port) || exit 0
-
-INPUT=$(cat)
-TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // .toolName // .tool // .name // empty' 2>/dev/null)
-TOOL_INPUT=$(echo "$INPUT" | jq -c '.tool_input // .toolInput // .input // {}' 2>/dev/null)
-[[ -n "$TOOL_NAME" ]] || exit 0
-
-PAYLOAD=$(jq -cn \\
-  --arg tool_name "$TOOL_NAME" \\
-  --arg platform "$HOOK_PLATFORM" \\
-  --arg session_id "\${DOLLHOUSE_SESSION_ID:-}" \\
-  --argjson input "$TOOL_INPUT" \\
-  '{ tool_name: $tool_name, input: $input, platform: $platform }
-   + (if ($session_id | length) > 0 then { session_id: $session_id } else {} end)')
-
-RESPONSE=$(curl -s --max-time 5 -X POST "http://127.0.0.1:$PORT/api/evaluate_permission" \\
-  -H "Content-Type: application/json" \\
-  -d "$PAYLOAD" 2>/dev/null)
-
-[[ -n "$RESPONSE" ]] && echo "$RESPONSE"
-exit 0`;
-
-  const buildHookWrapperScript = (platform) => `#!/bin/bash
-# pretooluse-${platform}.sh — manual hook wrapper for DollhouseMCP
-
-export DOLLHOUSE_HOOK_PLATFORM="${platform}"
-SCRIPT_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
-exec bash "$SCRIPT_DIR/pretooluse-dollhouse.sh"`;
-
   const CLAUDE_CODE_HOOK_SETTINGS = `{
   "hooks": {
     "PreToolUse": [
@@ -1503,11 +1414,8 @@ codex_hooks = true`;
       <details class="setup-manual-fallback">
         <summary>Manual fallback</summary>
         <div class="setup-manual-fallback-body">
-          <h4>1. Save the shared hook bridge once</h4>
-          <p>Save this file as <code>${HOOK_BASE_SCRIPT_PATH}</code>, then make it executable with <code>chmod +x ${HOOK_BASE_SCRIPT_PATH}</code>.</p>
-          <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(HOOK_BASE_SCRIPT)}' aria-label="Copy shared hook bridge">Copy</button>
-            <pre><code>${escapeHtml(HOOK_BASE_SCRIPT)}</code></pre>
-          </div>
+          <h4>1. Copy the hook scripts from your installed DollhouseMCP version</h4>
+          <p>Copy <code>pretooluse-dollhouse.sh</code>, <code>permission-hook-config.sh</code>, and <code>permission-port-discovery.sh</code> from the package's <code>scripts</code> directory into <code>${HOOKS_DIR}</code>.</p>
           <h4>2. Add the ${verified.label} hook settings</h4>
           <p>Add this block to ${verified.configPath} so ${verified.label} can call the hook bridge before tool use.</p>
           <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(verified.settingsBlock)}' aria-label="Copy ${verified.label} hook settings">Copy</button>
@@ -1547,11 +1455,9 @@ codex_hooks = true`;
       <details class="setup-manual-fallback">
         <summary>Manual fallback</summary>
         <div class="setup-manual-fallback-body">
-          <h4>1. Save the shared hook bridge once</h4>
-          <p>Save this file as <code>${HOOK_BASE_SCRIPT_PATH}</code>, then make it executable with <code>chmod +x ${HOOK_BASE_SCRIPT_PATH}</code>.</p>
-          <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(HOOK_BASE_SCRIPT)}' aria-label="Copy shared hook bridge">Copy</button>
-            <pre><code>${escapeHtml(HOOK_BASE_SCRIPT)}</code></pre>
-          </div>
+          <h4>1. Copy the hook scripts from your installed DollhouseMCP version</h4>
+          <p>Copy <code>pretooluse-dollhouse.sh</code>, <code>permission-hook-config.sh</code>, and <code>permission-port-discovery.sh</code> from the package's <code>scripts</code> directory into <code>${HOOKS_DIR}</code>.</p>
+          <p>Copy the client wrapper into the same directory at <code>${partial.scriptPath}</code>.</p>
           ${featureSection}
           <h4>${stepNumber}. Add the ${partial.label} hook settings in ${partial.configPath}</h4>
           <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(partial.settingsBlock)}' aria-label="Copy ${partial.label} hook settings">Copy</button>
