@@ -72,6 +72,37 @@ describe('DisplayService', () => {
     expect(runNativeDialog).not.toHaveBeenCalled();
   });
 
+  it.each(['darwin', 'linux', 'win32'] as const)('shows private CLI review details on %s', async currentPlatform => {
+    mockPlatform.mockReturnValue(currentPlatform);
+    process.env.DISPLAY = ':test';
+    const reviewDetails = 'Risk: dangerous (88/100)\nTool input (redacted):\n{"file_path":"/synthetic/note.md"}';
+    const end = jest.fn();
+    const initialOutput = { darwin: 'reviewed', linux: '', win32: 'reset' }[currentPlatform];
+    runNativeDialog.mockReturnValueOnce(Object.assign(Promise.resolve({ stdout: initialOutput, stderr: '' }), {
+      child: { stdin: { once: jest.fn(), end } },
+    }));
+    if (currentPlatform !== 'win32') {
+      runNativeDialog.mockResolvedValueOnce({ stdout: currentPlatform === 'darwin' ? 'reset' : '', stderr: '' });
+    }
+
+    await expect(showNativeApprovalDialog({
+      title: 'Confirm CLI permission', summary: "Approve 'Write' once?", approveLabel: 'Approve', reviewDetails,
+    }, false, 20_000)).resolves.toEqual({ confirmed: true });
+
+    expect(end).toHaveBeenCalledWith(expect.stringContaining('/synthetic/note.md'));
+    expect(end).toHaveBeenCalledWith(expect.stringContaining('Risk: dangerous (88/100)'));
+    expect(JSON.stringify(runNativeDialog.mock.calls)).not.toContain('/synthetic/note.md');
+    if (currentPlatform === 'win32') {
+      const script = Buffer.from(runNativeDialog.mock.calls[0][1].at(-1)!, 'base64').toString('utf16le');
+      expect(script).toContain("$review.ScrollBars = 'Vertical'");
+      expect(script).toContain('$form.AcceptButton = $cancel');
+    } else {
+      const [preview, approval] = runNativeDialog.mock.calls;
+      expect(preview[1].join(' ')).toContain(currentPlatform === 'darwin' ? 'choose from list' : '--text-info');
+      expect(approval[1].join(' ')).toContain(currentPlatform === 'darwin' ? 'default button "Cancel"' : '--default-cancel');
+    }
+  });
+
   describe('showBlockResetDialog', () => {
     it('uses Cancel as the macOS default and receives masked proof only from the child output', async () => {
       mockPlatform.mockReturnValue('darwin');

@@ -1,6 +1,6 @@
 import { integrationRetryGuidance } from '../../security/IntegrationEntryPoint.js';
 import type { PolicyReport } from '../../services/policy/PolicyReport.js';
-import { effectiveCliApprovalScopes } from './CliApprovalScopes.js';
+import { effectiveCliApprovalScopes, requireCliApprovalScope } from './CliApprovalScopes.js';
 import type { OperationRegistry } from './OperationRegistry.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { generateDisplayCode, showBlockResetDialog, showNativeApprovalDialog, type BlockResetDialogResult } from '@dollhousemcp/safety';
@@ -1245,6 +1245,7 @@ export class GatekeeperHandler {
     const findPending = () => this.deps.gatekeeper.getPendingCliApprovals().find(record => record.requestId === requestId);
     const pending = findPending();
     if (!pending) return undefined;
+    requireCliApprovalScope(pending, scope);
     const expiresAt = Date.parse(pending.requestedAt) + (pending.ttlMs ?? env.DOLLHOUSE_CLI_APPROVAL_TTL_MS);
     const request = localApprovalRequest(
       sessionId, ['approve_cli_permission', requestId, scope, pending.toolInputHash],
@@ -1254,6 +1255,15 @@ export class GatekeeperHandler {
     const status = await this.collectLocalApproval(request, {
       title: 'Confirm CLI permission',
       summary: `Approve '${pending.toolName}' with scope '${scope}'?`,
+      reviewDetails: [
+        `Tool: ${pending.toolName}`,
+        `Scope: ${scope}`,
+        `Risk: ${pending.riskLevel} (${pending.riskScore}/100)`,
+        `Irreversible: ${pending.irreversible ? 'yes' : 'no'}`,
+        '',
+        'Tool input (redacted):',
+        JSON.stringify(pending.toolInputDigest, null, 2),
+      ].join('\n'),
       approveLabel: 'Approve',
     }, async () => {
       if (findPending()?.toolInputHash !== pending.toolInputHash) return false;

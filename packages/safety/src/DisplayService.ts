@@ -64,6 +64,18 @@ on run argv
   return "reset"
 end run`;
 
+const MACOS_APPROVAL_REVIEW_SCRIPT = `use framework "Foundation"
+use scripting additions
+on run argv
+  set dialogTitle to item 1 of argv
+  set inputFile to current application's NSFileHandle's fileHandleWithStandardInput()
+  set inputData to inputFile's readDataToEndOfFile()
+  set reviewText to (current application's NSString's alloc()'s initWithData:inputData encoding:(current application's NSUTF8StringEncoding)) as text
+  set reviewChoice to choose from list (paragraphs of reviewText) with title dialogTitle with prompt "Review the request details before continuing." OK button name "Continue" with empty selection allowed
+  if reviewChoice is false then return "cancel"
+  return "reviewed"
+end run`;
+
 const WINDOWS_APPROVAL_SCRIPT = `$ErrorActionPreference = 'Stop'
 if (-not [Environment]::UserInteractive) { exit 2 }
 [Console]::InputEncoding = [System.Text.Encoding]::UTF8
@@ -83,10 +95,23 @@ $label.Location = New-Object Drawing.Point(14, 12)
 $label.Size = New-Object Drawing.Size(422, 58)
 $label.Text = $dialog.message
 $form.Controls.Add($label)
+$controlsOffset = 0
+if ($dialog.reviewDetails) {
+  $controlsOffset = 230
+  $form.ClientSize = New-Object Drawing.Size(450, 385)
+  $review = New-Object Windows.Forms.TextBox
+  $review.Location = New-Object Drawing.Point(14, 75)
+  $review.Size = New-Object Drawing.Size(422, 220)
+  $review.Multiline = $true
+  $review.ReadOnly = $true
+  $review.ScrollBars = 'Vertical'
+  $review.Text = $dialog.reviewDetails
+  $form.Controls.Add($review)
+}
 $proof = $dialog.requireCode -eq $true
 $inputBox = New-Object Windows.Forms.TextBox
 if ($proof) {
-  $inputBox.Location = New-Object Drawing.Point(14, 75)
+  $inputBox.Location = New-Object Drawing.Point(14, (75 + $controlsOffset))
   $inputBox.Width = 422
   $inputBox.MaxLength = 64
   $inputBox.UseSystemPasswordChar = $true
@@ -94,12 +119,12 @@ if ($proof) {
 }
 $cancel = New-Object Windows.Forms.Button
 $cancel.Text = 'Cancel'
-$cancel.Location = New-Object Drawing.Point(270, 115)
+$cancel.Location = New-Object Drawing.Point(270, (115 + $controlsOffset))
 $cancel.DialogResult = 'Cancel'
 $form.Controls.Add($cancel)
 $reset = New-Object Windows.Forms.Button
 $reset.Text = $dialog.approveLabel
-$reset.Location = New-Object Drawing.Point(353, 115)
+$reset.Location = New-Object Drawing.Point(353, (115 + $controlsOffset))
 $reset.DialogResult = 'OK'
 $form.Controls.Add($reset)
 $form.AcceptButton = $cancel
@@ -119,6 +144,7 @@ interface NativeApprovalPrompt {
   title: string;
   summary: string;
   approveLabel: string;
+  reviewDetails?: string;
 }
 
 type NativeApprovalDialogOptions = { encoding: 'utf8'; timeout: number; maxBuffer: number; windowsHide: boolean };
@@ -159,25 +185,20 @@ export async function showNativeApprovalDialog(
     return { confirmed: false, reason: 'unavailable' };
   }
   if (timeoutMs <= 0) return { confirmed: false, reason: 'timeout' };
-  const timeout = Math.ceil(timeoutMs / 1000);
-  const { title, approveLabel, summary } = prompt;
+  const { title, approveLabel, summary, reviewDetails } = prompt;
   const message = `${summary}\n\n${requireCode ? PROOF_TEXT : BASIC_TEXT}`;
   const options: NativeApprovalDialogOptions = { encoding: 'utf8', timeout: timeoutMs, maxBuffer: 4096, windowsHide: true };
   try {
     switch (platform()) {
-      case 'darwin': {
-        const { stdout } = await runApprovalDialogWithInput('/usr/bin/osascript', [
-          '-e', MACOS_APPROVAL_SCRIPT, '--', title, approveLabel, String(timeout), requireCode ? 'proof' : 'basic',
-        ], options, message);
-        return parseApprovalResponse(stdout, requireCode);
-      }
+      case 'darwin':
+        return await showMacApproval(prompt, message, requireCode, options);
       case 'linux':
         return await showZenityApproval(prompt, message, requireCode, options);
       case 'win32': {
         const script = Buffer.from(WINDOWS_APPROVAL_SCRIPT, 'utf16le').toString('base64');
         const { stdout } = await runApprovalDialogWithInput('powershell.exe', [
           '-NoProfile', '-NonInteractive', '-STA', '-EncodedCommand', script,
-        ], options, JSON.stringify({ title, message, approveLabel, requireCode }));
+        ], options, JSON.stringify({ title, message, approveLabel, requireCode, reviewDetails }));
         return parseApprovalResponse(stdout, requireCode);
       }
       default:
@@ -194,16 +215,44 @@ export async function showNativeApprovalDialog(
   }
 }
 
+async function showMacApproval(
+  prompt: NativeApprovalPrompt, message: string, requireCode: boolean, options: NativeApprovalDialogOptions,
+): Promise<NativeApprovalDialogResult> {
+  let remaining = options.timeout;
+  if (prompt.reviewDetails) {
+    const deadline = performance.now() + options.timeout;
+    const lines = prompt.reviewDetails.split(/\r?\n/u).flatMap(line => line.match(/.{1,72}/gu) ?? ['']);
+    const { stdout } = await runApprovalDialogWithInput(
+      '/usr/bin/osascript', ['-e', MACOS_APPROVAL_REVIEW_SCRIPT, '--', prompt.title], options, lines.join('\n'),
+    );
+    if (stdout.trim() !== 'reviewed') return { confirmed: false, reason: 'cancelled' };
+    remaining = Math.floor(deadline - performance.now());
+  }
+  if (remaining <= 0) return { confirmed: false, reason: 'timeout' };
+  const { stdout } = await runApprovalDialogWithInput('/usr/bin/osascript', [
+    '-e', MACOS_APPROVAL_SCRIPT, '--', prompt.title, prompt.approveLabel,
+    String(Math.ceil(remaining / 1000)), requireCode ? 'proof' : 'basic',
+  ], { ...options, timeout: remaining }, message);
+  return parseApprovalResponse(stdout, requireCode);
+}
+
 async function showZenityApproval(
   prompt: NativeApprovalPrompt, message: string, requireCode: boolean, options: NativeApprovalDialogOptions,
 ): Promise<NativeApprovalDialogResult> {
   if (!process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) return { confirmed: false, reason: 'unavailable' };
   const deadline = performance.now() + options.timeout;
+  if (prompt.reviewDetails) {
+    await runApprovalDialogWithInput('zenity', [
+      '--text-info', '--title', prompt.title, '--width=720', '--height=420', '--ok-label=Continue', '--cancel-label=Cancel',
+    ], options, prompt.reviewDetails);
+  }
   let code: string | undefined;
   if (requireCode) {
+    const beforeProof = Math.floor(deadline - performance.now());
+    if (beforeProof <= 0) return { confirmed: false, reason: 'timeout' };
     const { stdout } = await runNativeDialog('zenity', [
       '--entry', '--hide-text', '--title', prompt.title, '--text', PROOF_TEXT,
-    ], options);
+    ], { ...options, timeout: beforeProof });
     code = stdout.trim();
     if (!code) return { confirmed: false, reason: 'cancelled' };
   }

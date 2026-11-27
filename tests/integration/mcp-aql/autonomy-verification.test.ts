@@ -302,18 +302,30 @@ describe('Autonomy challenge verification end to end', () => {
     });
 
     it('requires a dialog decision for a pending CLI approval and rejects a second approval', async () => {
+      const rawContent = 'Synthetic unredacted file content';
       const requestId = await local(() => gatekeeper.createCliApprovalRequest({
-        toolName: 'Write', toolInput: { path: '/synthetic/note.md' }, riskLevel: 'moderate', riskScore: 40,
-        irreversible: false, denyReason: 'Review the write', allowedScopes: ['single'],
+        toolName: 'Write', toolInput: { file_path: '/synthetic/note.md', content: rawContent },
+        riskLevel: 'dangerous', riskScore: 88, irreversible: true, denyReason: 'Review the write', allowedScopes: ['single'],
       }));
-      const approve = () => local(() => handler.handleExecute({
-        operation: 'approve_cli_permission', params: { request_id: requestId, scope: 'single' },
+      const approve = (scope = 'single') => local(() => handler.handleExecute({
+        operation: 'approve_cli_permission', params: { request_id: requestId, scope },
       }));
+      expect(await approve('tool_session')).toMatchObject({
+        success: false, error: expect.stringContaining('does not permit scope "tool_session"'),
+      });
+      expect(nativeApproval).not.toHaveBeenCalled();
       nativeApproval.mockResolvedValueOnce({ confirmed: false, reason: 'cancelled' });
       expect((await approve()).success).toBe(false);
-      expect(await local(async () => gatekeeper.getPendingCliApprovals())).toEqual(expect.arrayContaining([
+      const pending = await local(async () => gatekeeper.getPendingCliApprovals());
+      expect(pending).toEqual(expect.arrayContaining([
         expect.objectContaining({ requestId }),
       ]));
+      const preview = nativeApproval.mock.lastCall?.[0].reviewDetails;
+      expect(preview).toContain(JSON.stringify(pending[0].toolInputDigest, null, 2));
+      expect(preview).toContain('/synthetic/note.md');
+      expect(preview).toContain('Risk: dangerous (88/100)');
+      expect(preview).toContain('Irreversible: yes');
+      expect(preview).not.toContain(rawContent);
 
       nativeApproval.mockResolvedValueOnce({ confirmed: true });
       expect(await approve()).toMatchObject({ success: true, data: { approved: true, requestId, scope: 'single' } });
