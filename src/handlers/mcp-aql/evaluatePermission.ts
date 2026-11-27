@@ -20,6 +20,12 @@ import type { ToolClassificationResult, CliToolPolicyResult } from './policies/T
 import type { ActiveElement } from './policies/ElementPolicies.js';
 import type { OwnershipDecision } from './policies/OwnershipPolicy.js';
 
+export const PERMISSION_RATE_LIMIT_OUTAGE = {
+  status: 'outage',
+  code: 'rate_limited',
+  reason: 'Permission evaluation is rate-limited.',
+} as const;
+
 /** Context handed to the ownership policy for cache scoping and `gh` repo inference. */
 export interface OwnershipEvaluationInput {
   sessionId?: string;
@@ -190,7 +196,7 @@ export function formatPermissionResponse(
  *
  * @param params - Tool name, input, and target platform
  * @param deps - Injected dependencies from MCPAQLHandler
- * @returns Platform-formatted permission decision
+ * @returns Platform-formatted permission decision or a rate-limit outage
  */
 export async function evaluatePermission(
   params: { tool_name?: unknown; input?: unknown; platform?: unknown; session_id?: unknown; cwd?: unknown },
@@ -210,7 +216,7 @@ export async function evaluatePermission(
   // Rate limit
   const rateStatus = deps.permissionPromptLimiter.checkLimit();
   if (!rateStatus.allowed) {
-    return formatPermissionResponse('deny', platform, input, 'Rate limit exceeded');
+    return { ...PERMISSION_RATE_LIMIT_OUTAGE };
   }
   deps.permissionPromptLimiter.consumeToken();
 

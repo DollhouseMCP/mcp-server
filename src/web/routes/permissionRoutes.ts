@@ -11,7 +11,10 @@ import express, { Router, type Response } from 'express';
 import { homedir } from 'node:os';
 import { logger } from '../../utils/logger.js';
 import type { MCPAQLHandler } from '../../handlers/mcp-aql/MCPAQLHandler.js';
-import { formatPermissionResponse } from '../../handlers/mcp-aql/evaluatePermission.js';
+import {
+  formatPermissionResponse,
+  PERMISSION_RATE_LIMIT_OUTAGE,
+} from '../../handlers/mcp-aql/evaluatePermission.js';
 import { ensureLatestPortFile } from '../portDiscovery.js';
 import {
   getLastPermissionHookStartupRepairSummary,
@@ -105,7 +108,7 @@ const PERMISSION_ROUTE_RATE_LIMIT_REQUESTS = 120;
 const PERMISSION_ROUTE_RATE_LIMIT_WINDOW_MS = 60_000;
 const DECISION_BUFFER_SIZE = 200;
 const PERMISSION_OUTAGES = {
-  rate_limited: { status: 429, reason: 'Permission evaluation is rate-limited.' },
+  rate_limited: { status: 429, reason: PERMISSION_RATE_LIMIT_OUTAGE.reason },
   invalid_request: { status: 400, reason: 'A valid tool name is required.' },
   evaluation_failed: { status: 503, reason: 'Permission evaluation could not complete.' },
   invalid_decision: { status: 503, reason: 'Permission evaluation returned an invalid decision.' },
@@ -519,16 +522,17 @@ export function registerPermissionRoutes(
         respondWithPermissionOutage(res, decisionTracker, platform, 'invalid_decision', context, tool_name);
         return;
       }
-      const responseData = normalizePermissionResponseForPlatform(
-        platform,
-        input || {},
-        rawResult as Record<string, unknown>,
-      );
+      const result = rawResult as Record<string, unknown>;
+      if (result.status === PERMISSION_RATE_LIMIT_OUTAGE.status && result.code === PERMISSION_RATE_LIMIT_OUTAGE.code) {
+        respondWithPermissionOutage(res, decisionTracker, platform, 'rate_limited', context, tool_name);
+        return;
+      }
+      const responseData = normalizePermissionResponseForPlatform(platform, input || {}, result);
       if (!responseData) {
         respondWithPermissionOutage(res, decisionTracker, platform, 'invalid_decision', context, tool_name);
         return;
       }
-      const trackedResult = { ...rawResult, ...responseData };
+      const trackedResult = { ...result, ...responseData };
       const decision = extractDecision(trackedResult, platform);
       logger.debug(`[WebUI/Gateway] evaluate_permission: ${tool_name} → ${decision} (${elapsedMs}ms)`);
 

@@ -233,6 +233,30 @@ describe('permissionRoutes', () => {
       expect(status.body.recentDecisions[0]).not.toHaveProperty('command');
     });
 
+    it('reports evaluator rate limits through the same outage path', async () => {
+      const handler = createMockHandler([{
+        success: true,
+        data: { status: 'outage', code: 'rate_limited', reason: 'internal details' },
+      }]);
+      const app = createApp(handler, { homeDir: tempHome });
+      const response = await request(app)
+        .post('/api/evaluate_permission')
+        .send({ tool_name: 'Bash', input: { command: 'do not retain this rejected input' } });
+
+      expect(response.status).toBe(429);
+      expect(response.body).toEqual({
+        status: 'outage',
+        code: 'rate_limited',
+        reason: 'Permission evaluation is rate-limited.',
+      });
+      expect(handler.handleRead).toHaveBeenCalledTimes(1);
+      const status = await request(app).get('/api/permissions/status');
+      expect(status.body.recentDecisions[0]).toMatchObject({ tool_name: 'Bash', decision: 'outage' });
+      expect(status.body.recentDecisions[0]).not.toHaveProperty('command');
+      expect(status.text).not.toContain('internal details');
+      expect(status.text).not.toContain('do not retain this rejected input');
+    });
+
     it('should default platform to claude_code', async () => {
       const handler = createMockHandler();
       const app = createApp(handler);
