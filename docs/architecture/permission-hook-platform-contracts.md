@@ -12,7 +12,7 @@ Keep this file in sync with:
 ## Principles
 
 - Every supported hook client has one explicit, documented stdout contract.
-- Shared shell wrappers may normalize server output, but they must not invent undocumented fail-open shapes.
+- Shared shell wrappers normalize server output to the installed host's hook contract.
 - If a client expects structured JSON, DollhouseMCP should emit that structure explicitly for supported decision paths.
 - Windsurf is the exception: its hook contract is exit-code based instead of stdout-JSON based.
 - Hook installation assets must point each client to the wrapper script that matches its contract.
@@ -73,18 +73,39 @@ element policies, applied identically to `evaluate_permission` (hooks) and
   `deny` → `deny`). A failed lookup, an unknown owner identity or an
   unidentifiable target always yields `ask` (fail closed). An element
   `denyPatterns` match still wins over an ownership `ask`.
-- The hook wrappers' fail-open rules below are unchanged: they describe
-  transport failures, not policy decisions.
 
-## Fail-Open Rules
+## Outage Behavior
 
-- Missing permission server port file: allow / no-op
-- Connection failure or timeout: allow / no-op
-- Malformed server response:
-  - JSON-based clients: allow with an explicit valid allow payload for that platform, except Codex `PreToolUse`
-  - Codex `PreToolUse`: allow with zero stdout bytes
-  - Windsurf: allow with exit `0`
-- Legacy Codex bare `{}` allow responses stay empty on stdout because current Codex `PreToolUse` only supports explicit deny/block responses
+Missing port discovery, malformed hook input, exhausted connection retries,
+unexpected HTTP replies, and responses with `{"status":"outage"}` all use the
+same outage rules.
+
+| Client or hook event | High risk or unclassifiable | Low risk or authority off |
+| --- | --- | --- |
+| Claude Code and VS Code | `hookSpecificOutput.permissionDecision: "ask"` | No output |
+| Cursor `preToolUse` | `permission: "deny"` with `user_message` | No output |
+| Cursor `beforeShellExecution` and `beforeMCPExecution` | `permission: "ask"` with `user_message` | No output |
+| Codex | `hookSpecificOutput.permissionDecision: "deny"` | No output |
+| Gemini CLI | `decision: "deny"` with `reason` | No output |
+| Windsurf | Exit `2` with the reason on stderr | Exit `0`, no output |
+
+Codex, Gemini CLI, Windsurf, and Cursor's installed `preToolUse` event cannot
+require a native prompt. Their hooks block a high-risk operation during an
+outage. Cursor's dedicated shell and MCP events can request a prompt when those
+events are configured.
+
+The first high-risk call in an outage shows the failure, restart instructions,
+and port file and diagnostics paths. Calls within the same outage give the
+failure in a short reason. A valid evaluation clears the warning marker.
+
+The default high-risk tools are Bash, Write, Edit, MultiEdit, NotebookEdit,
+WebFetch, and MCP tools whose names contain `execute`, `create`, `update`,
+`delete`, or `send`. Set `DOLLHOUSE_HOOK_OUTAGE_HIGH_RISK_TOOLS` to override
+the space-separated tool names and `DOLLHOUSE_HOOK_OUTAGE_MCP_HIGH_RISK_PATTERN`
+to override the Bash extended regular expression for MCP names. Use lowercase
+in these settings. Native names, such as Gemini's `run_shell_command`, are
+classified by their equivalent tool. A call with no identifiable tool uses the
+high-risk outcome.
 
 ## Runtime Configuration Bounds
 
@@ -96,14 +117,13 @@ The shared shell configuration helper (`scripts/permission-hook-config.sh`) vali
 | `DOLLHOUSE_HOOK_MAX_RETRIES` | `2` | `0` | `5` | Caps transient retry loops for the HTTP permission call |
 | `DOLLHOUSE_HOOK_INITIAL_TIMEOUT` | `5` | `1` | `30` | Initial curl timeout in seconds before exponential backoff doubles it |
 
-Invalid or out-of-range values are clamped or reset to safe defaults so local overrides cannot accidentally produce malformed fail-open behavior.
+Invalid or out-of-range values are clamped or reset to the defaults.
 
 ## Platform-Specific Behavior Notes
 
-- Claude Code and VS Code require structured JSON on stdout even when the hook is failing open.
 - Codex `PreToolUse` currently supports deny/block only; explicit `permissionDecision: "allow"` and `"ask"` are parsed by Codex but not supported, so DollhouseMCP leaves the allow path as zero stdout bytes.
 - Codex allow/no-op tests must assert exact empty stdout, not `trim() === ""`, because even a lone newline is still hook output.
-- Cursor and Gemini CLI preserve their native stdout contracts, but still pass through the shared port discovery and HTTP retry logic.
+- All platform wrappers use the shared port discovery, HTTP retry, and outage logic.
 - Windsurf is intentionally different: it never emits a JSON allow/deny envelope. It returns exit code `0` to allow and `2` to block.
 - Startup hook asset repair runs sequentially because several hosts share `~/.dollhouse/hooks/pretooluse-dollhouse.sh` and `permission-port-discovery.sh`; concurrent rewrites were flaky on Windows.
 - Startup repair results are surfaced through:

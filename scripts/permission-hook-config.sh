@@ -61,7 +61,12 @@ permission_hook_load_runtime_config() {
       "$PERMISSION_HOOK_MIN_INITIAL_TIMEOUT" \
       "$PERMISSION_HOOK_MAX_INITIAL_TIMEOUT"
   )"
+  # Tool names are space-separated; the MCP pattern is a Bash ERE. Use
+  # lowercase in both settings because names are matched case-insensitively.
+  OUTAGE_HIGH_RISK_TOOLS="${DOLLHOUSE_HOOK_OUTAGE_HIGH_RISK_TOOLS-bash write edit multiedit notebookedit webfetch}"
+  OUTAGE_MCP_HIGH_RISK_PATTERN="${DOLLHOUSE_HOOK_OUTAGE_MCP_HIGH_RISK_PATTERN-execute|create|update|delete|send}"
 
   export AUTHORITY_CACHE_TTL_SECONDS MAX_RETRIES INITIAL_TIMEOUT
+  export OUTAGE_HIGH_RISK_TOOLS OUTAGE_MCP_HIGH_RISK_PATTERN
   return 0
 }

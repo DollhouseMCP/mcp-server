@@ -20,6 +20,7 @@ import { randomUUID } from 'node:crypto';
 
 // Hook script lives in the repo at scripts/ — works on both dev machines and CI
 const HOOK_SCRIPT = path.join(process.cwd(), 'scripts', 'pretooluse-dollhouse.sh');
+const CODEX_HOOK_SCRIPT = path.join(process.cwd(), 'scripts', 'pretooluse-codex.sh');
 const CURSOR_HOOK_SCRIPT = path.join(process.cwd(), 'scripts', 'pretooluse-cursor.sh');
 const GEMINI_HOOK_SCRIPT = path.join(process.cwd(), 'scripts', 'pretooluse-gemini.sh');
 const VSCODE_HOOK_SCRIPT = path.join(process.cwd(), 'scripts', 'pretooluse-vscode.sh');
@@ -181,7 +182,7 @@ describe('Permission Server Integration', () => {
       expect(exists).toBe(true);
     });
 
-    itBash('hook script should fail open when port file is missing', async () => {
+    itBash('hook script should defer a read when the port file is missing', async () => {
       const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'dollhouse-hook-home-'));
       const { code, stdout } = await new Promise<{ code: number; stdout: string }>((resolve) => {
         const hookProc = spawn(BASH_BINARY, [HOOK_SCRIPT], {
@@ -201,12 +202,7 @@ describe('Permission Server Integration', () => {
       await fs.rm(tempHome, { recursive: true, force: true });
 
       expect(code).toBe(0);
-      expect(JSON.parse(stdout.trim())).toEqual({
-        hookSpecificOutput: {
-          hookEventName: 'PreToolUse',
-          permissionDecision: 'allow',
-        },
-      });
+      expect(stdout).toBe('');
     });
 
     itBash('hook script should no-op when authority mode is off for Claude Code', async () => {
@@ -238,8 +234,8 @@ describe('Permission Server Integration', () => {
         hookProc.stdout.on('data', (data: Buffer) => { out += data.toString(); });
         hookProc.on('close', (c: number) => resolve({ code: c, stdout: out }));
         hookProc.stdin.write(JSON.stringify({
-          tool_name: 'Read',
-          tool_input: { file_path: './test-fixture.txt' },
+          tool_name: 'Bash',
+          tool_input: { command: 'pwd' },
         }));
         hookProc.stdin.end();
       });
@@ -247,12 +243,140 @@ describe('Permission Server Integration', () => {
       await fs.rm(tempHome, { recursive: true, force: true });
 
       expect(code).toBe(0);
-      expect(JSON.parse(stdout.trim())).toEqual({
-        hookSpecificOutput: {
-          hookEventName: 'PreToolUse',
-          permissionDecision: 'allow',
-        },
-      });
+      expect(stdout).toBe('');
+    });
+
+    itBash.each([
+      ['Claude Code', HOOK_SCRIPT, { tool_name: 'MultiEdit' }, 0, 'ask'],
+      ['VS Code', VSCODE_HOOK_SCRIPT, { toolName: 'createFile', toolArgs: {} }, 0, 'ask'],
+      ['Codex', CODEX_HOOK_SCRIPT, { tool_name: 'exec_command' }, 0, 'deny'],
+      ['Cursor preToolUse', CURSOR_HOOK_SCRIPT, { hook_event_name: 'preToolUse', tool_name: 'Shell' }, 0, 'deny'],
+      ['Cursor beforeShellExecution', CURSOR_HOOK_SCRIPT, { hook_event_name: 'beforeShellExecution', command: 'pwd' }, 0, 'ask'],
+      ['Gemini', GEMINI_HOOK_SCRIPT, { tool_name: 'run_shell_command' }, 0, 'deny'],
+      ['Windsurf', WINDSURF_HOOK_SCRIPT, { agent_action_name: 'pre_mcp_tool_use', tool_info: { mcp_tool_name: 'create_issue' } }, 2, 'deny'],
+    ] as const)('%s applies its supported outcome during an outage', async (_client, script, input, code, decision) => {
+      const result = await runHookScript(input, {}, script);
+      expect(result.code).toBe(code);
+      if (code === 2) {
+        expect(result.stdout).toBe('');
+        expect(result.stderr).toContain('Restart the DollhouseMCP server');
+        return;
+      }
+      const output = JSON.parse(result.stdout);
+      expect(output.hookSpecificOutput?.permissionDecision ?? output.permission ?? output.decision).toBe(decision);
+      const reason = output.hookSpecificOutput?.permissionDecisionReason ?? output.user_message ?? output.reason;
+      expect(reason).toContain('Restart the DollhouseMCP server');
+      expect(reason).toContain(PORT_FILE);
+      expect(reason).toContain('diagnostics at');
+    });
+
+    itBash('identifies unprefixed MCP tools from the native Cursor and Windsurf events', async () => {
+      const cursor = await runHookScript({
+        hook_event_name: 'beforeMCPExecution',
+        tool_name: 'send_message',
+        tool_input: '{"message":"hello"}',
+        mcp_server_name: 'example',
+      }, {}, CURSOR_HOOK_SCRIPT);
+      expect(JSON.parse(cursor.stdout)).toEqual(expect.objectContaining({ permission: 'ask' }));
+
+      const windsurf = await runHookScript({
+        agent_action_name: 'pre_mcp_tool_use',
+        tool_info: { mcp_tool_name: 'read_issue', mcp_tool_arguments: { number: 1 } },
+      }, {}, WINDSURF_HOOK_SCRIPT);
+      expect(windsurf).toEqual({ code: 0, stdout: '', stderr: '' });
+    });
+
+    itBash.each([HOOK_SCRIPT, VSCODE_HOOK_SCRIPT, CODEX_HOOK_SCRIPT, CURSOR_HOOK_SCRIPT, GEMINI_HOOK_SCRIPT, WINDSURF_HOOK_SCRIPT])(
+      '%s emits no decision for a read during an outage',
+      async (script) => {
+        expect(await runHookScript({ tool_name: 'Read' }, {}, script)).toEqual({ code: 0, stdout: '', stderr: '' });
+      },
+    );
+
+    itBash.each([
+      ['Bash', true], ['Write', true], ['Edit', true], ['MultiEdit', true], ['NotebookEdit', true], ['WebFetch', true],
+      ['mcp__example__execute', true], ['mcp__example__create', true], ['mcp__example__update', true],
+      ['mcp__example__delete', true], ['mcp__example__send', true], ['mcp__example__read', false], ['Read', false],
+    ] as const)('classifies %s during an outage', async (toolName, shouldAsk) => {
+      const { stdout } = await runHookScript({ tool_name: toolName });
+      if (shouldAsk) expect(JSON.parse(stdout).hookSpecificOutput.permissionDecision).toBe('ask');
+      else expect(stdout).toBe('');
+    });
+
+    itBash('supports configured high-risk tool names and MCP verbs', async () => {
+      const env = {
+        DOLLHOUSE_HOOK_OUTAGE_HIGH_RISK_TOOLS: 'read',
+        DOLLHOUSE_HOOK_OUTAGE_MCP_HIGH_RISK_PATTERN: 'search',
+      };
+      const read = await runHookScript({ tool_name: 'Read' }, env);
+      const search = await runHookScript({ tool_name: 'mcp__example__search' }, env);
+      const write = await runHookScript({ tool_name: 'Write' }, env);
+      expect(JSON.parse(read.stdout).hookSpecificOutput.permissionDecision).toBe('ask');
+      expect(JSON.parse(search.stdout).hookSpecificOutput.permissionDecision).toBe('ask');
+      expect(write.stdout).toBe('');
+    });
+
+    itBash.each([
+      ['unparseable JSON', '{"tool_name":', true],
+      ['missing name', '{}', true],
+      ['invalid Bash input', '{"tool_name":"Bash","tool_input":[]}', true],
+      ['invalid Read input', '{"tool_name":"Read","tool_input":[]}', false],
+    ] as const)('handles %s as an outage', async (_title, input, shouldAsk) => {
+      const { stdout } = await runHookScript(input);
+      if (shouldAsk) {
+        expect(JSON.parse(stdout).hookSpecificOutput).toEqual(expect.objectContaining({
+          permissionDecision: 'ask',
+          permissionDecisionReason: expect.stringContaining('could not parse the hook tool name or input'),
+        }));
+      } else {
+        expect(stdout).toBe('');
+      }
+    });
+
+    itBash.each([
+      ['non-JSON', '<html>503</html>', 200],
+      ['malformed decision', '{"hookSpecificOutput":{"permissionDecision":"maybe"}}', 200],
+      ['malformed decision', '{}', 200],
+      ['malformed decision', '{"decision":"allow"}{"decision":"deny"}', 200],
+      ['HTTP error', '{"decision":"allow"}', 503],
+      ['reported that evaluation is unavailable', '{"status":"outage","decision":"allow"}', 503],
+    ] as const)('uses the outage path for %s responses', async (failure, response, status) => {
+      const server = http.createServer((_req, res) => res.writeHead(status).end(response));
+      const port = await listenOnLoopback(server);
+      await fs.writeFile(PORT_FILE, String(port));
+      try {
+        const highRisk = await runHookScript({ tool_name: 'Bash' });
+        const lowRisk = await runHookScript({ tool_name: 'Read' });
+        expect(JSON.parse(highRisk.stdout).hookSpecificOutput).toEqual(expect.objectContaining({
+          permissionDecision: 'ask',
+          permissionDecisionReason: expect.stringContaining(failure),
+        }));
+        expect(lowRisk.stdout).toBe('');
+      } finally {
+        await new Promise<void>(resolve => server.close(() => resolve()));
+      }
+    });
+
+    itBash('warns fully once per outage and resets after a valid server decision', async () => {
+      const server = http.createServer((_req, res) => res.end('{"decision":"allow"}'));
+      const port = await listenOnLoopback(server);
+      const highRisk = { tool_name: 'Bash' };
+      const warning = 'Restart the DollhouseMCP server';
+      try {
+        expect((await runHookScript({ tool_name: 'Read' })).stdout).toBe('');
+        const results = await Promise.all([runHookScript(highRisk), runHookScript(highRisk), runHookScript(highRisk)]);
+        expect(results.filter(result => result.stdout.includes(warning))).toHaveLength(1);
+        expect(results.map(result => JSON.parse(result.stdout).hookSpecificOutput.permissionDecision)).toEqual(['ask', 'ask', 'ask']);
+
+        await fs.writeFile(PORT_FILE, String(port));
+        expect(JSON.parse((await runHookScript(highRisk)).stdout).hookSpecificOutput.permissionDecision).toBe('allow');
+        await fs.unlink(PORT_FILE);
+
+        expect((await runHookScript(highRisk)).stdout).toContain(warning);
+        expect((await runHookScript(highRisk)).stdout).not.toContain(warning);
+      } finally {
+        await new Promise<void>(resolve => server.close(() => resolve()));
+      }
     });
 
     itBash('hook script should discover server via port file and get a response', async () => {
@@ -475,7 +599,7 @@ describe('Permission Server Integration', () => {
       expect(JSON.parse(stdout.trim())).toEqual(wrappedResponse);
     });
 
-    itBash('hook script should fail open silently on malformed Claude responses', async () => {
+    itBash('hook script should defer a read on a malformed Claude response', async () => {
       let testPort = 0;
       const mockServer = http.createServer((req, res) => {
         if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
@@ -501,15 +625,10 @@ describe('Permission Server Integration', () => {
       await fs.unlink(PID_PORT_FILE).catch(() => {});
 
       expect(code).toBe(0);
-      expect(JSON.parse(stdout.trim())).toEqual({
-        hookSpecificOutput: {
-          hookEventName: 'PreToolUse',
-          permissionDecision: 'allow',
-        },
-      });
+      expect(stdout).toBe('');
     });
 
-    itBash('hook script should fail open when permission requests time out', async () => {
+    itBash('hook script should ask for Bash and defer reads when permission requests time out', async () => {
       let testPort = 0;
       const mockServer = http.createServer((_req, _res) => {
         // Intentionally never respond so curl hits its max-time window.
@@ -519,28 +638,25 @@ describe('Permission Server Integration', () => {
       await fs.mkdir(RUN_DIR, { recursive: true });
       await fs.writeFile(PORT_FILE, String(testPort), 'utf-8');
 
-      const { code, stdout } = await runHookScript(
-        {
-          tool_name: 'Read',
-          tool_input: { file_path: './test-fixture.txt' },
-        },
-        {
-          DOLLHOUSE_HOOK_INITIAL_TIMEOUT: '1',
-          DOLLHOUSE_HOOK_MAX_RETRIES: '0',
-        },
-      );
+      const env = {
+        DOLLHOUSE_HOOK_INITIAL_TIMEOUT: '1',
+        DOLLHOUSE_HOOK_MAX_RETRIES: '0',
+      };
+      const [read, bash] = await Promise.all([
+        runHookScript({ tool_name: 'Read', tool_input: { file_path: './test-fixture.txt' } }, env),
+        runHookScript({ tool_name: 'Bash', tool_input: { command: 'pwd' } }, env),
+      ]);
 
       await new Promise<void>(resolve => mockServer.close(() => resolve()));
       await fs.unlink(PORT_FILE).catch(() => {});
       await fs.unlink(PID_PORT_FILE).catch(() => {});
 
-      expect(code).toBe(0);
-      expect(JSON.parse(stdout.trim())).toEqual({
-        hookSpecificOutput: {
-          hookEventName: 'PreToolUse',
-          permissionDecision: 'allow',
-        },
-      });
+      expect(read).toEqual({ code: 0, stdout: '', stderr: '' });
+      expect(bash.code).toBe(0);
+      expect(JSON.parse(bash.stdout).hookSpecificOutput).toEqual(expect.objectContaining({
+        permissionDecision: 'ask',
+        permissionDecisionReason: expect.stringContaining('attempts to reach the permission server failed'),
+      }));
     });
 
     itBash('hook script should clamp invalid timeout and retry overrides to safe bounds', async () => {
@@ -572,12 +688,7 @@ describe('Permission Server Integration', () => {
       await fs.unlink(PID_PORT_FILE).catch(() => {});
 
       expect(code).toBe(0);
-      expect(JSON.parse(stdout.trim())).toEqual({
-        hookSpecificOutput: {
-          hookEventName: 'PreToolUse',
-          permissionDecision: 'allow',
-        },
-      });
+      expect(stdout).toBe('');
       expect(elapsedMs).toBeLessThan(20_000);
     }, 20000);
 
@@ -629,7 +740,7 @@ describe('Permission Server Integration', () => {
       expect(stdout).toBe('');
     });
 
-    itBash('codex hook wrapper should fail open silently when the server is not ready', async () => {
+    itBash('codex hook wrapper should block Bash when the server is not ready and record the outage', async () => {
       const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'dollhouse-hook-home-'));
       const codexScript = path.join(tempHome, 'pretooluse-codex.sh');
       const sharedScript = path.join(tempHome, 'pretooluse-dollhouse.sh');
@@ -662,7 +773,13 @@ describe('Permission Server Integration', () => {
       });
 
       expect(code).toBe(0);
-      expect(stdout).toBe('');
+      expect(JSON.parse(stdout)).toEqual({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason: expect.stringContaining('no usable permission server port file was found'),
+        },
+      });
       const diagnosticLines = (await fs.readFile(diagnosticsLog, 'utf-8'))
         .trim()
         .split('\n')
@@ -679,12 +796,12 @@ describe('Permission Server Integration', () => {
           }),
           expect.objectContaining({
             event: 'complete',
-            outcome: 'fail_open',
+            outcome: 'outage_deny',
             stage: 'port_discovery_failed',
             platform: 'codex',
             toolName: 'Bash',
             normalizedResponseLength: 0,
-            emittedResponseLength: 0,
+            emittedResponseLength: stdout.trimEnd().length,
           }),
         ]),
       );
@@ -885,7 +1002,7 @@ describe('Permission Server Integration', () => {
       });
     });
 
-    itBash('vscode hook wrapper should fail open silently on malformed responses', async () => {
+    itBash('vscode hook wrapper should request approval on malformed responses', async () => {
       let testPort = 0;
       let capturedBody: Record<string, unknown> | null = null;
       const mockServer = http.createServer((req, res) => {
@@ -921,10 +1038,11 @@ describe('Permission Server Integration', () => {
       await fs.unlink(PID_PORT_FILE).catch(() => {});
 
       expect(code).toBe(0);
-      expect(JSON.parse(stdout.trim())).toEqual({
+      expect(JSON.parse(stdout)).toEqual({
         hookSpecificOutput: {
           hookEventName: 'PreToolUse',
-          permissionDecision: 'allow',
+          permissionDecision: 'ask',
+          permissionDecisionReason: expect.stringContaining('the permission server returned a malformed decision'),
         },
       });
       expect(capturedBody).toEqual({
@@ -1147,21 +1265,22 @@ async function reserveUnusedLoopbackPort(): Promise<number> {
 }
 
 function runHookScript(
-  payload: Record<string, unknown>,
+  payload: Record<string, unknown> | string,
   envOverrides: Record<string, string> = {},
   scriptPath = HOOK_SCRIPT,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
+  const fixture = process.env.DOLLHOUSE_RUN_DIR!;
   return new Promise((resolve) => {
     const hookProc = spawn(BASH_BINARY, [scriptPath], {
-      env: isolatedServerEnv(os.homedir(), {
-        HOME: os.homedir(),
+      env: isolatedServerEnv(fixture, {
+        DOLLHOUSE_PORTFOLIO_DIR: path.join(fixture, 'portfolio'),
         PATH: SAFE_TEST_PATH,
         DOLLHOUSE_SESSION_ID: 'session-hook-test',
         DOLLHOUSE_HOOK_DIAGNOSTICS_LOG: path.join(
-          os.tmpdir(),
+          fixture,
           `permission-hook-test-${process.pid}-${Date.now()}-${randomUUID()}.jsonl`,
         ),
-        DOLLHOUSE_RUN_DIR: process.env.DOLLHOUSE_RUN_DIR ?? '',
+        DOLLHOUSE_RUN_DIR: fixture,
         ...envOverrides,
       }),
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -1171,7 +1290,6 @@ function runHookScript(
     hookProc.stdout.on('data', (data: Buffer) => { out += data.toString(); });
     hookProc.stderr.on('data', (data: Buffer) => { err += data.toString(); });
     hookProc.on('close', (c: number) => resolve({ code: c, stdout: out, stderr: err }));
-    hookProc.stdin.write(JSON.stringify(payload));
-    hookProc.stdin.end();
+    hookProc.stdin.end(typeof payload === 'string' ? payload : JSON.stringify(payload));
   });
 }
