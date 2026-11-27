@@ -2,7 +2,7 @@
  * Tests for input length validation (Issue #165)
  */
 
-import { describe, test, expect } from '@jest/globals';
+import { describe, test, expect, jest } from '@jest/globals';
 import { 
   validateInputLengths, 
   validateContentSize,
@@ -13,6 +13,7 @@ import { SecureYamlParser } from '../../src/security/secureYamlParser.js';
 import { YamlValidator } from '../../src/security/yamlValidator.js';
 import { SECURITY_LIMITS } from '../../src/security/constants.js';
 import { SecurityError } from '../../src/security/errors.js';
+import { RegexValidator } from '../../src/security/regexValidator.js';
 
 describe('Input Length Validation', () => {
   describe('validateInputLengths', () => {
@@ -202,20 +203,14 @@ This is the content of the persona.`;
   describe('Performance considerations', () => {
     test('length checks happen before expensive operations', () => {
       const largeContent = 'a'.repeat(SECURITY_LIMITS.MAX_CONTENT_LENGTH + 1);
-      
-      // These should fail fast without running regex patterns
-      const start = performance.now();
-
+      const scanPattern = jest.spyOn(RegexValidator, 'validate');
       try {
-        ContentValidator.validateAndSanitize(largeContent);
-      } catch {
-        // Expected
+        expect(() => ContentValidator.validateAndSanitize(largeContent))
+          .toThrow(/Content exceeds maximum length/);
+        expect(scanPattern).not.toHaveBeenCalled();
+      } finally {
+        scanPattern.mockRestore();
       }
-
-      const elapsed = performance.now() - start;
-      
-      // Should fail very quickly — use generous threshold to avoid flaky results on loaded CI runners
-      expect(elapsed).toBeLessThan(100);
     });
   });
 });
