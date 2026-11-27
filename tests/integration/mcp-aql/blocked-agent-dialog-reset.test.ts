@@ -30,7 +30,7 @@ function consoleIsListening(port: number): Promise<boolean> {
 }
 
 function approvalTransport(
-  home: string, portfolio: string, tokenFile: string, port: number, desktop: 'local' | 'ssh' = 'local',
+  home: string, portfolio: string, tokenFile: string, port: number, desktop: 'local' | 'ssh' | 'suppressed' = 'local',
 ): StdioClientTransport {
   const childEnv = Object.fromEntries(Object.entries(process.env)
     .filter(([, value]) => value !== undefined)) as Record<string, string>;
@@ -53,9 +53,10 @@ function approvalTransport(
       DOLLHOUSE_HTTP_WEB_CONSOLE: 'false',
       DOLLHOUSE_PERMISSION_SERVER: 'false',
       DOLLHOUSE_WEB_CONSOLE_PORT: String(port),
-      DISPLAY: desktop === 'local' ? ':fixture' : '',
+      DISPLAY: desktop === 'ssh' ? '' : ':fixture',
       WAYLAND_DISPLAY: '',
       SSH_CONNECTION: desktop === 'ssh' ? '192.0.2.1 51500 192.0.2.2 22' : '',
+      DOLLHOUSE_TEST_STUB_APPROVALS: String(desktop !== 'suppressed'),
       GITHUB_TOKEN: '',
     }),
     stderr: 'pipe',
@@ -101,6 +102,32 @@ it.each(['malformed', 'oversized'] as const)('provisions basic approval with the
     expect(backups).toHaveLength(1);
     expect((await readFile(path.join(state, backups[0]))).equals(bytes)).toBe(true);
     expect(await consoleIsListening(port)).toBe(false);
+  } finally {
+    await client.close();
+    await transport.close();
+    await rm(home, { recursive: true, force: true });
+  }
+}, 40_000);
+
+it('refuses a blocked-agent reset with native dialogs suppressed by the integration environment', async () => {
+  const home = await mkdtemp(path.join(tmpdir(), 'stdio-suppressed-block-reset-'));
+  const state = path.join(home, '.dollhouse', 'security');
+  const portfolio = path.join(home, 'portfolio');
+  const snapshot = path.join(state, 'blocked-agents.json');
+  const transport = approvalTransport(home, portfolio, path.join(home, 'console-token.json'), await reservePort(), 'suppressed');
+  const client = new Client({ name: 'suppressed-block-reset-fixture', version: '1.0.0' });
+  try {
+    await Promise.all([mkdir(state, { recursive: true }), mkdir(portfolio)]);
+    await writeFile(snapshot, '{');
+    await client.connect(transport);
+
+    // If suppression is bypassed, the dialog fixture would approve the reset.
+    expect(await request(client, 'request_blocked_agent_reset', {}, 5_000))
+      .toMatchObject({ success: true, data: { reset: false, status: 'desktop_unavailable' } });
+    expect(await readFile(snapshot, 'utf8')).toBe('{');
+    const evidence = (await readdir(state)).filter(name => name.endsWith('.backup'));
+    expect(evidence).toHaveLength(1);
+    expect(await readFile(path.join(state, evidence[0]), 'utf8')).toBe('{');
   } finally {
     await client.close();
     await transport.close();
