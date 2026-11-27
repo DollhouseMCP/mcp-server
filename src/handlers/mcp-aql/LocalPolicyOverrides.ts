@@ -10,7 +10,8 @@ import { getDefaultPermissionLevel } from './policies/OperationPolicies.js';
 import { ElementType, normalizeMCPAQLElementType } from './types.js';
 
 const OVERRIDE_TTL_MS = 60_000;
-const MAX_PENDING_REQUESTS = 50;
+const DECLINE_COOLDOWN_MS = 30_000;
+const MAX_TRACKED_BINDINGS = 50;
 const REVIEW_LIMIT = 8_192;
 
 // These routes operate on a local portfolio query, with no mutable named target.
@@ -131,6 +132,7 @@ type DenialOutcome = { status: 'consumed' } | { status: 'pending'; requestId: st
 /** Pending reviews and grants are owned by this local server process. */
 export class LocalPolicyOverrides {
   private readonly records = new Map<string, RecordState>();
+  private readonly declinedBindings = new Map<string, { sessionId: string; expiresAt: number }>();
 
   constructor(private readonly hmac: AuditHmacResolver, private readonly audit: AuditSink) {}
 
@@ -144,6 +146,7 @@ export class LocalPolicyOverrides {
     if (!binding) return { status: 'unavailable' };
 
     this.prune();
+    if (this.declinedBindings.has(binding.digest)) return { status: 'unavailable' };
     const existing = [...this.records.values()].find(record => record.review.binding.digest === binding.digest);
     if (existing?.phase === 'approved') {
       return this.consume(existing, currentRule);
@@ -152,7 +155,8 @@ export class LocalPolicyOverrides {
       return existing.phase === 'pending' || existing.phase === 'reviewing'
         ? { status: 'pending', requestId: existing.review.id } : { status: 'unavailable' };
     }
-    if (this.records.size >= MAX_PENDING_REQUESTS || !limiter.checkLimit().allowed) return { status: 'unavailable' };
+    if (this.records.size + this.declinedBindings.size >= MAX_TRACKED_BINDINGS ||
+        !limiter.checkLimit().allowed) return { status: 'unavailable' };
     limiter.consumeToken();
     const review = { id: randomUUID(), actor, action, binding, reviewDetails, expiresAt: Date.now() + OVERRIDE_TTL_MS };
     const record: RecordState = { review, phase: 'issuing', expiresAt: review.expiresAt };
@@ -212,6 +216,11 @@ export class LocalPolicyOverrides {
     const record = this.records.get(review.id);
     if (record?.phase !== 'reviewing' || record.review !== review) return;
     this.records.delete(review.id);
+    if (reason === 'declined') {
+      this.declinedBindings.set(review.binding.digest, {
+        sessionId: review.actor.sessionId, expiresAt: Date.now() + DECLINE_COOLDOWN_MS,
+      });
+    }
     await this.writeAudit('decision', review, reason);
   }
 
@@ -219,12 +228,18 @@ export class LocalPolicyOverrides {
     for (const [id, record] of this.records) {
       if (record.review.actor.sessionId === sessionId) this.records.delete(id);
     }
+    for (const [digest, declined] of this.declinedBindings) {
+      if (declined.sessionId === sessionId) this.declinedBindings.delete(digest);
+    }
   }
 
   private prune(): void {
     const now = Date.now();
     for (const [id, record] of this.records) {
       if (record.expiresAt <= now) this.records.delete(id);
+    }
+    for (const [digest, declined] of this.declinedBindings) {
+      if (declined.expiresAt <= now) this.declinedBindings.delete(digest);
     }
   }
 
