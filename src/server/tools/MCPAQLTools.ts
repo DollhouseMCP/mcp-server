@@ -281,7 +281,7 @@ Import & portfolio:
 { operation: "import_persona", params: { source: "/path/to/persona.md" } }
 { operation: "install_collection_content", params: { element_type: "persona", element_name: "Creative-Writer" } }
 { operation: "submit_collection_content", params: { element_type: "skill", element_name: "code-formatter" } }
-{ operation: "init_portfolio" }
+{ operation: "init_portfolio" }  // New GitHub portfolio repositories are public by default
 { operation: "sync_portfolio" }
 { operation: "portfolio_element_manager", params: { action: "push", element_type: "persona", element_name: "Tech-Writer" } }
 

@@ -721,7 +721,7 @@ describe('SchemaDispatcher', () => {
     it('should handle init_portfolio with snake_case params', async () => {
       await SchemaDispatcher.dispatch(
         'init_portfolio',
-        { repository_name: 'my-portfolio', private: true },
+        { repository_name: 'my-portfolio', private: true, description: 'My notes' },
         registryWithPortfolio, undefined, BASE_OPERATION_REGISTRY
       );
 
@@ -729,6 +729,7 @@ describe('SchemaDispatcher', () => {
         expect.objectContaining({
           repositoryName: 'my-portfolio',
           private: true,
+          description: 'My notes',
         })
       );
     });

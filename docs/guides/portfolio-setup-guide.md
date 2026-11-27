@@ -53,7 +53,15 @@ mcp_aql_create { "operation": "init_portfolio" }
 mcp_aql_read { "operation": "portfolio_status" }
 ```
 
-> **Expected result:** A new repository named `dollhouse-portfolio` is created in your GitHub account. `portfolio_status` shows the repository URL and element counts (initially 0).
+> **Expected result:** A public repository named `dollhouse-portfolio` is created in your GitHub account for sharing elements. `portfolio_status` shows the repository URL and element counts (initially 0).
+
+Pass `repository_name` and `description` to customize creation. To create a private repository, pass `private: true` and authenticate with a GitHub token that permits private repository creation (for example, a classic personal access token with the `repo` scope). To change an existing repository's visibility, use its settings on GitHub.
+
+```json
+mcp_aql_create { "operation": "init_portfolio", "params": { "repository_name": "my-portfolio", "private": true, "description": "My private element portfolio" } }
+```
+
+For later status and sync calls to use a custom repository name, set `PORTFOLIO_REPOSITORY_NAME` to the same name.
 
 ### Step 3 — Install a Community Element
 

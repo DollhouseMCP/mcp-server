@@ -201,6 +201,7 @@ describe('PortfolioRepoManager', () => {
       } as Response);
       
       // Mock calls for generatePortfolioStructure (README + 6 directories)
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 404 } as Response);
       for (let i = 0; i < 7; i++) {
         mockFetch.mockResolvedValueOnce({
           ok: true,
@@ -218,8 +219,91 @@ describe('PortfolioRepoManager', () => {
         'https://api.github.com/user/repos',
         expect.objectContaining({
           method: 'POST',
-          body: expect.stringContaining('dollhouse-portfolio')
+          body: JSON.stringify({
+            name: 'dollhouse-portfolio', description: 'My DollhouseMCP element portfolio', private: false, auto_init: true,
+          })
         })
+      );
+    });
+
+    it('creates and seeds the requested private repository with its description', async () => {
+      const repoPath = 'https://api.github.com/repos/testuser/private-notes';
+      const url = 'https://github.com/testuser/private-notes';
+      mockFetch
+        .mockResolvedValue({ ok: true, status: 201, json: async () => ({}) } as Response)
+        .mockResolvedValueOnce({ ok: false, status: 404 } as Response)
+        .mockResolvedValueOnce({ ok: true, status: 201, json: async () => ({ html_url: url, private: true }) } as Response)
+        .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ sha: 'initial-readme' }) } as Response);
+
+      await expect(manager.ensurePortfolio('testuser', true, {
+        repositoryName: 'private-notes', private: true, description: 'My private portfolio',
+      })).resolves.toEqual({ url, created: true });
+
+      const calls = mockFetch.mock.calls;
+      expect(calls[0]?.[0]).toBe(repoPath);
+      expect(calls[1]).toEqual(['https://api.github.com/user/repos', expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          name: 'private-notes', description: 'My private portfolio', private: true, auto_init: true,
+        }),
+      })]);
+      expect(calls[2]).toEqual([`${repoPath}/contents/README.md`, expect.objectContaining({ method: 'GET' })]);
+      expect(calls[3]).toEqual([`${repoPath}/contents/README.md`, expect.objectContaining({
+        method: 'PUT', body: expect.stringContaining('"sha":"initial-readme"'),
+      })]);
+      expect(calls.slice(4).map(([target]) => target)).toEqual(
+        ['personas', 'skills', 'templates', 'agents', 'memories', 'ensembles'].map(dir => `${repoPath}/contents/${dir}/.gitkeep`),
+      );
+      expect(manager.getRepositoryName()).toBe('dollhouse-portfolio');
+    });
+
+    it('refuses an existing public repository when private was requested', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true, status: 200, json: async () => ({
+          html_url: 'https://github.com/testuser/custom-portfolio', private: false,
+        }),
+      } as Response);
+      await expect(manager.ensurePortfolio('testuser', true, { repositoryName: 'custom-portfolio', private: true }))
+        .rejects.toThrow('did not confirm that the portfolio repository is private');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://api.github.com/repos/testuser/custom-portfolio',
+        expect.objectContaining({ method: 'GET' }),
+      );
+    });
+
+    it('reports a permission failure for private creation after one private request', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: false, status: 404 } as Response)
+        .mockResolvedValueOnce({
+          ok: false, status: 403, headers: { get: () => 'application/json' },
+          json: async () => ({ message: 'insufficient permissions' }),
+        } as unknown as Response);
+
+      await expect(manager.ensurePortfolio('testuser', true, { private: true }))
+        .rejects.toThrow('insufficient permissions');
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch).toHaveBeenLastCalledWith('https://api.github.com/user/repos', expect.objectContaining({
+        method: 'POST', body: expect.stringContaining('"private":true'),
+      }));
+    });
+
+    it('rechecks the requested name and visibility if repository creation races', async () => {
+      const url = 'https://github.com/testuser/custom-private';
+      mockFetch
+        .mockResolvedValueOnce({ ok: false, status: 404 } as Response)
+        .mockResolvedValueOnce({
+          ok: false, status: 422, headers: { get: () => 'application/json' },
+          json: async () => ({ message: 'Repository creation failed.' }),
+        } as unknown as Response)
+        .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ html_url: url, private: true }) } as Response);
+
+      await expect(manager.ensurePortfolio('testuser', true, { repositoryName: 'custom-private', private: true }))
+        .resolves.toEqual({ url, created: false });
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+      expect(mockFetch).toHaveBeenLastCalledWith(
+        'https://api.github.com/repos/testuser/custom-private',
+        expect.objectContaining({ method: 'GET' }),
       );
     });
 
@@ -389,6 +473,7 @@ describe('PortfolioRepoManager', () => {
       const username = 'testuser';
       
       // Mock successful file creations (README + 6 directories)
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 404 } as Response);
       for (let i = 0; i < 7; i++) {
         mockFetch.mockResolvedValueOnce({
           ok: true,
@@ -404,7 +489,7 @@ describe('PortfolioRepoManager', () => {
       // Should create README.md
       const readmeCall = mockFetch.mock.calls.find(call => {
         const url = typeof call[0] === 'string' ? call[0] : call[0].toString();
-        return url.includes('README.md');
+        return url.includes('README.md') && call[1]?.method === 'PUT';
       });
       expect(readmeCall).toBeDefined();
       expect(readmeCall![1]?.method).toBe('PUT');
@@ -564,6 +649,7 @@ describe('PortfolioRepoManager', () => {
       } as Response);
       
       // Mock structure creation (7 files)
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 404 } as Response);
       for (let i = 0; i < 7; i++) {
         mockFetch.mockResolvedValueOnce({
           ok: true,

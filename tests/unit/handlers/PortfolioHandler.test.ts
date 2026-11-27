@@ -75,6 +75,7 @@ describe('PortfolioHandler', () => {
       checkPortfolioExists: jest.fn(),
       getRepositoryName: jest.fn().mockReturnValue('dollhouse-portfolio'),
       createPortfolio: jest.fn(),
+      ensurePortfolio: jest.fn(),
       setToken: jest.fn(),
       saveElement: jest.fn()
     };
@@ -180,13 +181,26 @@ describe('PortfolioHandler', () => {
 
     it('returns success when portfolio created', async () => {
       authManager.getAuthStatus.mockResolvedValue({ isAuthenticated: true, username: 'tester' });
-      mockRepoManagerInstance.checkPortfolioExists.mockResolvedValue(false);
-      mockRepoManagerInstance.createPortfolio.mockResolvedValue(undefined);
+      const url = 'https://github.com/tester/dollhouse-portfolio';
+      mockRepoManagerInstance.ensurePortfolio.mockResolvedValue({ url, created: true });
 
       const result = await handler.initPortfolio({});
 
-      expect(mockRepoManagerInstance.createPortfolio).toHaveBeenCalledWith('tester', true);
+      expect(mockRepoManagerInstance.ensurePortfolio).toHaveBeenCalledWith('tester', true, {});
       expect(result.content[0].text).toContain('Portfolio Created Successfully');
+      expect(result.content[0].text).toContain(url);
+    });
+
+    it('forwards all creation options and reports the selected existing repository', async () => {
+      authManager.getAuthStatus.mockResolvedValue({ isAuthenticated: true, username: 'tester' });
+      const url = 'https://github.com/tester/private-portfolio';
+      mockRepoManagerInstance.ensurePortfolio.mockResolvedValue({ url, created: false });
+      const options = { repositoryName: 'private-portfolio', private: true, description: 'My notes' };
+
+      const result = await handler.initPortfolio(options);
+
+      expect(mockRepoManagerInstance.ensurePortfolio).toHaveBeenCalledWith('tester', true, options);
+      expect(result.content[0].text).toContain(`Portfolio already exists at ${url}`);
     });
   });
 

@@ -8,7 +8,7 @@ import { PortfolioManager, ElementType } from '../portfolio/PortfolioManager.js'
 import { ConfigManager } from '../config/ConfigManager.js';
 import { SecureErrorHandler } from '../security/errorHandler.js';
 import { validateUsername } from '../security/InputValidator.js';
-import { PortfolioRepoManager } from '../portfolio/PortfolioRepoManager.js';
+import { PortfolioRepoManager, type PortfolioRepoOptions } from '../portfolio/PortfolioRepoManager.js';
 import { getPortfolioRepositoryName } from '../config/portfolioConfig.js';
 import { TokenManager } from '../security/tokenManager.js';
 import { PortfolioPullHandler } from './PortfolioPullHandler.js';
@@ -424,11 +424,11 @@ export class PortfolioHandler {
         }
     }
 
-    initPortfolio(_options: {repositoryName?: string; private?: boolean; description?: string}): ReturnType<PortfolioHandler['initPortfolioBody']> {
-        return this.withMemoryOperation(bound => bound.initPortfolioBody(_options));
+    initPortfolio(options: PortfolioRepoOptions): ReturnType<PortfolioHandler['initPortfolioBody']> {
+        return this.withMemoryOperation(bound => bound.initPortfolioBody(options));
     }
 
-    private async initPortfolioBody(_options: {repositoryName?: string; private?: boolean; description?: string}) {
+    private async initPortfolioBody(options: PortfolioRepoOptions) {
         this.assertMemoryOperation();
         try {
           // Check authentication
@@ -453,22 +453,20 @@ export class PortfolioHandler {
     
           const username = authStatus.username;
 
-          // Check if portfolio already exists
-          const portfolioExists = await this.portfolioRepoManager.checkPortfolioExists(username);
+          const { url, created } = await this.portfolioRepoManager.ensurePortfolio(username, true, options);
           this.assertMemoryOperation();
 
-          if (portfolioExists) {
+          const nextStep = options.repositoryName === undefined
+            ? 'Use portfolio_status to see details or sync_portfolio to upload elements.'
+            : 'For future status and sync calls, configure PORTFOLIO_REPOSITORY_NAME with this repository name.';
+          if (!created) {
             return {
               content: [{
                 type: "text",
-                text: `${this.indicatorService.getPersonaIndicator()}✅ Portfolio already exists at https://github.com/${username}/${this.portfolioRepoManager.getRepositoryName()}\n\nUse portfolio_status to see details or sync_portfolio to update it.`
+                text: `${this.indicatorService.getPersonaIndicator()}✅ Portfolio already exists at ${url}\n\n${nextStep}`
               }]
             };
           }
-
-          // Create portfolio with explicit consent
-          await this.portfolioRepoManager.createPortfolio(username, true);
-          this.assertMemoryOperation();
 
           // FIX: DMCP-SEC-006 - Add security audit logging for portfolio initialization
           SecurityMonitor.logSecurityEvent({
@@ -483,11 +481,10 @@ export class PortfolioHandler {
             content: [{
               type: "text",
               text: `${this.indicatorService.getPersonaIndicator()}🎉 **Portfolio Created Successfully!**\n\n` +
-                    `✅ **Repository**: https://github.com/${username}/${this.portfolioRepoManager.getRepositoryName()}\n` +
+                    `✅ **Repository**: ${url}\n` +
                     `📁 **Structure**: Organized folders for all element types\n` +
-                    `📝 **README**: Usage instructions included\n` +
-                    `🔄 **Next Step**: Use sync_portfolio to upload your elements\n\n` +
-                    `Your portfolio is ready for sharing your DollhouseMCP creations!`
+                    `📝 **README**: Usage instructions included\n\n` +
+                    nextStep
             }]
           };
     
