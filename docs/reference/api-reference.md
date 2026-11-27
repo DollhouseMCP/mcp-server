@@ -190,12 +190,18 @@ Import a persona from a file path or JSON string.
 
 ### verify_challenge
 
-Submit verification code to unblock a danger zone operation.
+Request approval to unblock an agent or verify an action. In a local stdio session, call with the challenge ID and approve in the server-owned desktop dialog. If an authenticator is enrolled, enter its current code or a backup code in that dialog.
+
+When desktop approval is unavailable, the block stays in place. See the [offline single-block recovery runbook](../guides/dangerzone-offline-single-block-recovery.md).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `challenge_id` | string | Yes | UUID challenge ID from danger zone trigger |
-| `code` | string | Yes | Verification code displayed to the user |
+| `code` | string | Legacy HTTP only | Verification code displayed to the user. Omit this parameter on stdio. |
+
+### release_deadlock
+
+Request approval to deactivate the active elements and clear saved activation state for the current session. On stdio, call without parameters and approve in the desktop dialog. See [deadlock recovery for headless stdio](../security/deadlock-relief-flow.md#headless-stdio) when the dialog is unavailable. The legacy HTTP flow returns a challenge ID and accepts that ID and its verification code on a second call.
 
 ### beetlejuice_beetlejuice_beetlejuice
 
@@ -800,7 +806,7 @@ Confirm a pending operation that requires user approval (Gatekeeper flow).
 
 ### approve_cli_permission
 
-Approve a pending CLI tool permission request. Used by bridges to relay human approval.
+Request approval for a pending CLI tool permission. On stdio, the desktop dialog asks the user to approve the requested scope. HTTP bridges can relay human approval through their existing flow.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|

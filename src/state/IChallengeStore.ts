@@ -18,7 +18,9 @@
 
 import type { StoredChallenge } from '@dollhousemcp/safety';
 
-export type ChallengeMetadata = Pick<StoredChallenge, 'expiresAt' | 'reason'>;
+type DialogChallengeKind = 'block' | 'action';
+export type ChallengeMetadata = Pick<StoredChallenge, 'expiresAt' | 'reason'> & { dialog?: DialogChallengeKind };
+export type ChallengeInput = StoredChallenge | (ChallengeMetadata & { dialog: DialogChallengeKind; code?: never });
 
 /**
  * Persistence-only contract for verification challenges.
@@ -35,7 +37,7 @@ export interface IChallengeStore {
    * @param challengeId - Unique challenge identifier (UUID v4)
    * @param challenge - The challenge to store
    */
-  set(challengeId: string, challenge: StoredChallenge): void;
+  set(challengeId: string, challenge: ChallengeInput): void;
 
   /**
    * Retrieve a verification challenge.

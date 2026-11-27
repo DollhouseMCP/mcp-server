@@ -37,6 +37,7 @@ function fixture(decision: OwnershipDecision | undefined | Error, policy?: Gatek
     resolveVerificationRateLimiter: () => ({ isLimited: () => false, recordFailure: () => false }),
     verificationMetrics: { recordAttempt() {}, recordSuccess() {}, recordFailure() {}, recordExpired() {}, recordInvalidFormat() {}, recordRateLimited() {} },
     issueDeadlockReliefChallenge: () => undefined, completeDeadlockRelief: async () => undefined,
+    reserveDeadlockReliefRequest: () => undefined, performApprovedDeadlockRelief: async () => undefined,
     buildRateLimitDeny: () => ({ behavior: 'deny' }),
     ownershipPolicy: policy ?? { evaluate },
   });

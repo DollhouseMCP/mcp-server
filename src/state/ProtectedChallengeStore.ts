@@ -1,8 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import type { StoredChallenge } from '@dollhousemcp/safety';
 import type { AuditHmacKeyMaterial } from '../security/auditHmacKey.js';
 import type { AuditHmacResolver } from '../security/toolRedaction.js';
-import type { ChallengeMetadata, IChallengeStore } from './IChallengeStore.js';
+import type { ChallengeInput, ChallengeMetadata, IChallengeStore } from './IChallengeStore.js';
 import { isStateObject } from './persistence-utils.js';
 
 export interface ChallengeKeyResolver extends AuditHmacResolver {
@@ -32,10 +31,10 @@ class ChallengeVerifier {
     this.current = current;
   }
 
-  seal(id: string, challenge: StoredChallenge): PersistedChallenge {
+  seal(id: string, challenge: ChallengeInput): PersistedChallenge {
     if (!this.current) throw new Error('Verification challenge storage is unavailable.');
     const { expiresAt, reason } = challenge;
-    const metadata = { expiresAt, reason };
+    const metadata: ChallengeMetadata = { expiresAt, reason, ...('dialog' in challenge ? { dialog: challenge.dialog } : {}) };
     return {
       ...metadata,
       keyId: this.current.keyId,
@@ -47,8 +46,8 @@ class ChallengeVerifier {
     if (!isStateObject(value) || typeof value.reason !== 'string' || typeof value.expiresAt !== 'number' ||
         !Number.isFinite(value.expiresAt) || Date.now() > value.expiresAt ||
         typeof value.keyId !== 'string' || typeof value.verifier !== 'string' || !VERIFIER.test(value.verifier)) return undefined;
-    const { expiresAt, reason, keyId, verifier } = value;
-    return { expiresAt, reason, keyId, verifier };
+    const { expiresAt, reason, keyId, verifier, dialog } = value;
+    return { expiresAt, reason, keyId, verifier, ...(dialog === 'block' || dialog === 'action' ? { dialog } : {}) };
   }
 
   async loadEntries(rows: readonly unknown[], allowLegacy = false): Promise<Map<string, PersistedChallenge>> {
@@ -78,14 +77,15 @@ class ChallengeVerifier {
     return this.seal(id, { code, expiresAt, reason });
   }
 
-  matches(id: string, challenge: PersistedChallenge, code: string): boolean {
+  matches(id: string, challenge: PersistedChallenge, code?: string): boolean {
     const key = this.keys.get(challenge.keyId);
     if (!key) return false;
     return timingSafeEqual(Buffer.from(challenge.verifier, 'hex'), this.digest(key, id, challenge, code));
   }
 
-  private digest(key: Buffer, id: string, challenge: ChallengeMetadata, code: string): Buffer {
-    const input = JSON.stringify(['danger-zone-challenge:v1', this.scope, id, challenge.expiresAt, challenge.reason, code]);
+  private digest(key: Buffer, id: string, challenge: ChallengeMetadata, code?: string): Buffer {
+    const domain = challenge.dialog ? `danger-zone-dialog:${challenge.dialog}:v1` : 'danger-zone-challenge:v1';
+    const input = JSON.stringify([domain, this.scope, id, challenge.expiresAt, challenge.reason, code]);
     return createHmac('sha256', key).update(input).digest();
   }
 }
@@ -114,14 +114,16 @@ export abstract class ProtectedChallengeStore implements IChallengeStore {
     return Array.from(this.challenges);
   }
 
-  set(challengeId: string, challenge: StoredChallenge): void {
+  set(challengeId: string, challenge: ChallengeInput): void {
     this.challenges.set(challengeId, this.verifier.seal(challengeId, challenge));
     this.persistAsync();
   }
 
   get(challengeId: string): ChallengeMetadata | undefined {
     const challenge = this.lookup(challengeId);
-    return challenge && { expiresAt: challenge.expiresAt, reason: challenge.reason };
+    if (!challenge || (challenge.dialog && !this.verifier.matches(challengeId, challenge))) return undefined;
+    const { expiresAt, reason, dialog } = challenge;
+    return { expiresAt, reason, ...(dialog ? { dialog } : {}) };
   }
 
   private lookup(challengeId: string): PersistedChallenge | undefined {
@@ -134,7 +136,7 @@ export abstract class ProtectedChallengeStore implements IChallengeStore {
 
   verify(challengeId: string, code: string): boolean {
     const challenge = this.lookup(challengeId);
-    if (!challenge) return false;
+    if (!challenge || challenge.dialog) return false;
     this.challenges.delete(challengeId);
     this.persistAsync();
     return this.verifier.matches(challengeId, challenge, code);

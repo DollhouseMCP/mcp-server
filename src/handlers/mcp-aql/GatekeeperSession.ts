@@ -1,4 +1,4 @@
-import { effectiveCliApprovalScopes } from './CliApprovalScopes.js';
+import { requireCliApprovalScope } from './CliApprovalScopes.js';
 /**
  * Gatekeeper Session Management
  *
@@ -98,6 +98,8 @@ const TERMINAL_APPROVAL_RETENTION_MS = 86_400_000;
 
 export class GatekeeperSession {
   private readonly state: GatekeeperSessionState;
+  // Keep review input separate from records shared with the store and MCP.
+  private readonly localCliInputs = new WeakMap<CliApprovalRecord, Record<string, unknown>>();
   private readonly maxConfirmations: number;
   private readonly maxCliApprovals: number;
   private readonly confirmationStore?: IConfirmationStore;
@@ -383,7 +385,7 @@ export class GatekeeperSession {
    * Create a CLI approval request.
    * Returns a unique request ID (format: cli-<UUIDv4>).
    */
-  async createCliApprovalRequest(args: CreateCliApprovalArgs): Promise<string> {
+  async createCliApprovalRequest(args: CreateCliApprovalArgs, localReview = false): Promise<string> {
     const {
       toolName,
       toolInput,
@@ -395,6 +397,7 @@ export class GatekeeperSession {
       ttlMs,
       allowedScopes,
     } = args;
+    const reviewInput = localReview ? structuredClone(toolInput) : undefined;
     this.touch();
     this.expireStaleApprovals(true); // Force sweep on write path to ensure capacity
     await this.evictOldestCliApprovalIfAtCapacity();
@@ -408,7 +411,7 @@ export class GatekeeperSession {
     }
     let redacted: Awaited<ReturnType<typeof redactToolInput>>;
     try {
-      redacted = await redactToolInput(toolName, toolInput, this.auditHmacResolver);
+      redacted = await redactToolInput(toolName, reviewInput ?? toolInput, this.auditHmacResolver);
     } catch (cause) {
       // The resolver fails closed on missing/corrupt keys, DB unavailability,
       // or filesystem errors. Re-wrap so the operator sees an audit-prefixed
@@ -429,7 +432,7 @@ export class GatekeeperSession {
       toolName,
       toolInputDigest: redacted.digest,
       toolInputHash: redacted.hash,
-      toolInputDetail: env.DOLLHOUSE_AUDIT_RETAIN_RAW_INPUT ? redacted.detail : undefined,
+      toolInputDetail: !localReview && env.DOLLHOUSE_AUDIT_RETAIN_RAW_INPUT ? redacted.detail : undefined,
       riskLevel,
       riskScore,
       irreversible,
@@ -441,6 +444,7 @@ export class GatekeeperSession {
       policySource,
       ttlMs: clampedTtl,
     };
+    if (reviewInput) this.localCliInputs.set(record, reviewInput);
     this.state.cliApprovals.set(requestId, record);
 
     if (this.confirmationStore) {
@@ -491,18 +495,10 @@ export class GatekeeperSession {
     if (!record || !isPendingCliApproval(record)) {
       return undefined;
     }
-    const allowedScopes = effectiveCliApprovalScopes(record);
-    if ((allowedScopes && !allowedScopes.includes(scope)) ||
-      (scope === 'input_session' && !allowedScopes?.includes(scope))) {
-      throw new Error(
-        `Approval request "${requestId}" does not permit scope "${scope}". ` +
-        `Allowed scopes: ${(allowedScopes ?? ['single', 'tool_session']).join(', ')}.`,
-      );
-    }
-
-    record.allowedScopes = allowedScopes;
+    record.allowedScopes = requireCliApprovalScope(record, scope);
     record.approvedAt = approvedAt;
     record.scope = scope;
+    this.localCliInputs.delete(record);
 
     // Promote to session approvals if tool_session scope
     if (scope === 'tool_session') {
@@ -539,6 +535,7 @@ export class GatekeeperSession {
     }
 
     record.deniedAt = deniedAt;
+    this.localCliInputs.delete(record);
 
     if (this.confirmationStore) {
       this.confirmationStore.saveCliApproval(requestId, record);
@@ -688,6 +685,12 @@ export class GatekeeperSession {
     return pending;
   }
 
+  /** Read the in-process input for a specific pending record in this session. */
+  getLocalCliApprovalInput(record: CliApprovalRecord): Record<string, unknown> | undefined {
+    if (this.state.cliApprovals.get(record.requestId) !== record || !isPendingCliApproval(record)) return undefined;
+    return this.localCliInputs.get(record);
+  }
+
   /**
    * Mark all pending CLI approvals cancelled because the owning session ended.
    * Awaits the store persist so the cancellation decisions are durable.
@@ -698,6 +701,7 @@ export class GatekeeperSession {
     for (const record of this.state.cliApprovals.values()) {
       if (!isPendingCliApproval(record)) continue;
       record.cancelledAt = cancelledAt;
+      this.localCliInputs.delete(record);
       cancelledCount++;
       if (this.confirmationStore) {
         this.confirmationStore.saveCliApproval(record.requestId, record);
@@ -728,6 +732,7 @@ export class GatekeeperSession {
   private markExpiredIfStale(record: CliApprovalRecord, now: number): boolean {
     if (!isPendingCliApproval(record) || approvalAge(record, now) <= approvalTtl(record)) return false;
     record.expiredAt = new Date(recordedExpiryTime(record)).toISOString();
+    this.localCliInputs.delete(record);
     if (this.confirmationStore) {
       this.confirmationStore.saveCliApproval(record.requestId, record);
       this.persistToStore();

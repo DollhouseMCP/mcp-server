@@ -177,13 +177,12 @@ The `DangerZoneEnforcer` provides programmatic blocking for the highest-risk saf
 
 ### 2.1 How It Works
 
-1. The Autonomy Evaluator detects a `DANGER_ZONE` safety tier.
-2. A verification challenge is created with a display code and UUID challenge ID.
-3. `DangerZoneEnforcer.block()` adds the agent to the blocked list with the challenge ID.
-4. The server sends the display code to a native dialog through the child's stdin. The LLM-facing response contains the challenge ID.
-5. The human reads the code from the dialog and tells the LLM.
-6. The LLM calls `verify_challenge` with the challenge ID and code.
-7. On successful verification, `DangerZoneEnforcer.unblock()` removes the block.
+1. The Autonomy Evaluator detects a `DANGER_ZONE` safety tier and assigns a challenge ID.
+2. `DangerZoneEnforcer.block()` adds the agent to the blocked list with the challenge ID.
+3. In a local stdio session, the agent calls `verify_challenge` with the ID. The desktop dialog asks the user to approve the release and collects their current authenticator or backup code if they enrolled.
+4. The server rechecks the session and the reviewed block before removing it.
+
+The legacy HTTP flow uses a display code delivered to a native dialog through the child's stdin. The bridge submits that code with the challenge ID to `verify_challenge`.
 
 ### 2.2 Persistence
 

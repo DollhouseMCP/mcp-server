@@ -5,3 +5,29 @@ const DEFAULT_IGNORABLE_CHARACTER = /\p{Default_Ignorable_Code_Point}/u;
 export function containsUnsafeDisplayUnicode(value: string): boolean {
   return NON_PRINTING_CHARACTER.test(value) || DEFAULT_IGNORABLE_CHARACTER.test(value);
 }
+
+/** Bound a review preview and make invisible characters visible without splitting escapes. */
+export function formatDisplayPreview(text: string, maximumLength: number, preserveNewlines = false): string {
+  const result = renderDisplayText(text, maximumLength - 1, preserveNewlines);
+  return result.truncated ? `${result.text}…` : result.text;
+}
+
+/** Escape unsafe characters and refuse an incomplete display. */
+export function formatCompleteDisplayText(text: string, maximumLength: number, preserveNewlines = false): string | undefined {
+  if (maximumLength < 0) return undefined;
+  const result = renderDisplayText(text, maximumLength, preserveNewlines);
+  return result.truncated ? undefined : result.text;
+}
+
+function renderDisplayText(text: string, maximumLength: number, preserveNewlines: boolean) {
+  let preview = '';
+  for (const character of text) {
+    const keepNewline = preserveNewlines && character === '\n';
+    const visible = !keepNewline && containsUnsafeDisplayUnicode(character)
+      ? String.raw`\u{${character.codePointAt(0)!.toString(16)}}`
+      : character;
+    if (preview.length + visible.length > maximumLength) return { text: preview, truncated: true };
+    preview += visible;
+  }
+  return { text: preview, truncated: false };
+}

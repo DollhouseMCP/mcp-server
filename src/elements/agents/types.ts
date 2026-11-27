@@ -6,6 +6,7 @@ import type { ElementType } from '../../portfolio/types.js';
 // ElementType is used in AgentMetadataV2
 import type { IElementMetadata } from '../../types/elements/index.js';
 import type { ElementGatekeeperPolicy } from '../../handlers/mcp-aql/GatekeeperTypes.js';
+import type { IChallengeStore } from '../../state/IChallengeStore.js';
 import type {
   DecisionFramework,
   RiskTolerance,
@@ -566,11 +567,11 @@ export interface AutonomyContext {
   /** DI-injected danger zone enforcer for blocking agents (Issue #402) */
   dangerZoneEnforcer?: DangerZoneBlocker;
   /** Server-side verification store for challenge codes (Issue #142) */
-  verificationStore?: {
-    set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void;
-  };
-  /** Active HTTP session that owns any challenge/block created during evaluation. */
+  verificationStore?: Pick<IChallengeStore, 'set'>;
+  /** Active session that owns any challenge/block created during evaluation. */
   sessionId?: string;
+  /** Only trusted local stdio can collect approval in a desktop dialog. */
+  sessionTransport?: 'stdio' | 'http';
   /** Active goal description (Issue #404: forwarded for audit context) */
   goalDescription?: string;
   /** Active goal ID (Issue #404: forwarded for audit context) */

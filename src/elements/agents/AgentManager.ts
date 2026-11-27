@@ -40,6 +40,7 @@ import type {
   AgentGoal,
   ExecutionContext,
   AutonomyDirective,
+  AutonomyContext,
   DangerZoneBlocker,
 } from './types.js';
 import {
@@ -105,7 +106,7 @@ export interface AgentManagerDeps extends ElementManagerDeps {
   /** Issue #1948: DangerZoneEnforcer for autonomy evaluation. */
   dangerZoneEnforcer?: DangerZoneBlocker;
   /** Issue #1948: VerificationStore/ChallengeStore for danger zone verification codes. */
-  verificationStore?: { set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void };
+  verificationStore?: NonNullable<AutonomyContext['verificationStore']>;
 }
 
 interface AgentExecutionInvocationContext {
@@ -221,7 +222,7 @@ export class AgentManager extends BaseElementManager<Agent> {
   private readonly memoryRegistry?: DatabaseTenantMemoryRegistry;
   private _elementManagerResolver?: (managerName: string) => ResolvedElementManager | null;
   private _dangerZoneEnforcer?: DangerZoneBlocker;
-  private _verificationStore?: { set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void };
+  private _verificationStore: AutonomyContext['verificationStore'];
   private static warnedDbModeOrphanedStateFiles = false;
 
   constructor(deps: AgentManagerDeps) {
@@ -349,7 +350,7 @@ export class AgentManager extends BaseElementManager<Agent> {
   }
 
   /** Issue #1948: Set VerificationStore on this instance. */
-  setVerificationStoreInstance(store: { set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void }): void {
+  setVerificationStoreInstance(store: AutonomyContext['verificationStore']): void {
     this._verificationStore = store;
   }
 
@@ -3511,6 +3512,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       ? agentMetadata.autonomy
       : { ...agentMetadata.autonomy, maxAutonomousSteps: params.maxStepsOverride };
 
+    const session = this.contextTracker?.getSessionContext();
     const autonomyDirective = evaluateAutonomy({
       agentName: params.agentName,
       autonomyConfig,
@@ -3521,7 +3523,8 @@ export class AgentManager extends BaseElementManager<Agent> {
       riskScore: params.riskScore,
       dangerZoneEnforcer: this._dangerZoneEnforcer,
       verificationStore: this._verificationStore,
-      sessionId: this.contextTracker?.getSessionContext()?.sessionId,
+      sessionId: session?.sessionId,
+      sessionTransport: session?.transport,
       goalDescription: activeGoal.description,
       goalId: activeGoal.id,
     });

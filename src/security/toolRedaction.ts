@@ -1,5 +1,6 @@
 import { isIntegrationRequestEnvelope, integrationRequestParams, normalizeMcpToolName } from './IntegrationRequestEnvelope.js';
 import { createHmac } from 'node:crypto';
+import { formatCompleteDisplayText, formatDisplayPreview } from './validators/displayText.js';
 
 import type { AuditHmacKeyMaterial } from './auditHmacKey.js';
 
@@ -57,6 +58,7 @@ function isSecretKeyName(name: string): boolean {
  * length-only heuristics — those produce too many false positives on
  * identifiers, hashes, and content-addressed names.
  */
+const PEM_HEADER_PATTERN = /-----BEGIN [A-Z ]+-----/;
 const SECRET_VALUE_PATTERNS = [
   // Cloud providers
   /AKIA[0-9A-Z]{16}/,                              // AWS access key id
@@ -76,9 +78,17 @@ const SECRET_VALUE_PATTERNS = [
   // Standard formats
   /eyJ[\w-]+\.[\w-]+\.[\w-]+/,                     // JWT (base64url header.payload.signature)
   /Bearer\s+[\w.+/=-]{20,}/i,                      // Bearer-prefixed token
-  /-----BEGIN [A-Z ]+-----/,                       // PEM block header (private keys, certs)
+  PEM_HEADER_PATTERN,                             // PEM block header (private keys, certs)
   /\b[a-f0-9]{32,}\b/i,                            // Long hex (last-resort)
 ];
+const REVIEW_SECRET_PATTERNS = SECRET_VALUE_PATTERNS
+  .filter(pattern => pattern !== PEM_HEADER_PATTERN)
+  .map(pattern => new RegExp(pattern, `${pattern.flags}g`));
+const REVIEW_SECRET_KEYS = SECRET_KEY_KEYWORDS.filter(keyword => keyword !== 'sig' && keyword !== 'auth');
+const SECRET_HEADER = /\b((?:proxy-)?authorization|cookie)\b([ \t]*:[ \t]*)[^\r\n'"]+/gi;
+const INLINE_ASSIGNMENT = /\b([\w-]{1,128})['"]?[ \t]*[:=][ \t]*/gu;
+const COMMAND_OPTION = /(--[\w-]{1,128})[ \t]+/gu;
+const BARE_VALUE_END = /[\s'";&|]/u;
 const SENSITIVE_QUERY_PARAMS = new Set([
   'access_token',
   'api_key',
@@ -101,6 +111,93 @@ export async function redactToolInput(
   const key = await resolver.resolve();
   const hash = `${key.keyId}:${createHmac('sha256', key.key).update(canonicalJSON(raw)).digest('hex')}`;
   return { digest: capDigest(digest), hash, detail: raw };
+}
+
+const REVIEW_CONTEXT_KEY_BY_TOOL = new Map([['Bash', 'description'], ['WebFetch', 'prompt']]);
+const REVIEW_CONTEXT_HEADING = 'Additional input (redacted, … marks truncation):\n';
+
+/** Render every action field in the private dialog or refuse the whole review. */
+export function formatToolInputForReview(toolName: string, input: Record<string, unknown>, limit: number): string | undefined {
+  const contextKey = REVIEW_CONTEXT_KEY_BY_TOOL.get(toolName);
+  const fields = Object.entries(input);
+  const actions = formatReviewActions(fields.filter(([key]) => key !== contextKey), limit);
+  if (actions === undefined) return undefined;
+
+  const context = fields.filter(([key]) => key === contextKey);
+  if (context.length === 0) return actions;
+  const remaining = limit - actions.length - REVIEW_CONTEXT_HEADING.length;
+  // Keep the fixed notice visible even when the action uses the entire input budget.
+  if (remaining <= 1) return `${actions}(context omitted)`;
+  const detail = JSON.stringify(redactReviewValue(Object.fromEntries(context)), null, 2);
+  return actions + REVIEW_CONTEXT_HEADING + formatDisplayPreview(detail, remaining, true);
+}
+
+function formatReviewActions(actionFields: readonly [string, unknown][], limit: number): string | undefined {
+  let review = '';
+  for (const [field, value] of actionFields) {
+    const available = limit - review.length - 3;
+    const label = formatCompleteDisplayText(field, available);
+    if (label === undefined) return undefined;
+    const raw = typeof value === 'string' ? value : JSON.stringify(value, null, 2) ?? 'null';
+    const escaped = formatCompleteDisplayText(raw, available - label.length, typeof value !== 'string');
+    if (escaped === undefined) return undefined;
+    review += `${label}:\n${escaped}\n`;
+  }
+  return review;
+}
+
+function redactReviewValue(value: unknown): unknown {
+  if (typeof value === 'string') return scrubReviewSecrets(value);
+  if (Array.isArray(value)) return value.map(redactReviewValue);
+  if (value == null || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).map(([key, field]) => [
+    scrubReviewSecrets(key),
+    isReviewSecretKey(key) ? '[REDACTED]' : redactReviewValue(field),
+  ]));
+}
+
+function isReviewSecretKey(key: string): boolean {
+  const name = key.toLowerCase().replaceAll('-', '').replaceAll('_', '');
+  return name === 'auth' || name === 'sig' || name.includes('authorization') || name.includes('passwd') ||
+    REVIEW_SECRET_KEYS.some(keyword => name.includes(keyword));
+}
+
+function scrubReviewSecrets(value: string): string {
+  if (PEM_HEADER_PATTERN.test(value)) return '[REDACTED]';
+  let scrubbed = value.replaceAll(EMBEDDED_URL_RE, match => scrubUrlLike(match, true));
+  scrubbed = scrubbed.replaceAll(SECRET_HEADER, '$1$2[REDACTED]');
+  scrubbed = redactLabelledValues(scrubbed, INLINE_ASSIGNMENT);
+  scrubbed = redactLabelledValues(scrubbed, COMMAND_OPTION);
+  return REVIEW_SECRET_PATTERNS.reduce((text, pattern) => text.replaceAll(pattern, '[REDACTED]'), scrubbed);
+}
+
+function redactLabelledValues(text: string, labels: RegExp): string {
+  let result = '';
+  let cursor = 0;
+  for (const match of text.matchAll(labels)) {
+    if (match.index < cursor || !isReviewSecretKey(match[1])) continue;
+    const start = match.index + match[0].length;
+    const end = labelledValueEnd(text, start);
+    if (end === start) continue;
+    result += text.slice(cursor, start) + '[REDACTED]';
+    cursor = end;
+  }
+  return result + text.slice(cursor);
+}
+
+function labelledValueEnd(text: string, start: number): number {
+  const first = text[start];
+  const quote = first === '"' || first === "'" ? first : undefined;
+  for (let index = start + Number(quote !== undefined); index < text.length; index++) {
+    const character = text[index];
+    if (character === '\\' && quote !== "'") {
+      index++;
+      continue;
+    }
+    if (quote && character === quote) return index + 1;
+    if (!quote && BARE_VALUE_END.test(character)) return index;
+  }
+  return text.length;
 }
 
 /** Digest the nested request, while the approval HMAC still binds the original envelope. */
@@ -339,18 +436,19 @@ function scrubEmbeddedUrls(value: string): string {
   return value.replaceAll(EMBEDDED_URL_RE, (match) => scrubUrlLike(match));
 }
 
-function scrubUrlLike(value: string): string {
+function scrubUrlLike(value: string, preserveOriginal = false): string {
   try {
     const url = new URL(value);
+    const original = url.href;
     // Clear HTTP-Basic userinfo before re-emitting.
     if (url.username !== '' || url.password !== '') {
       url.username = '';
       url.password = '';
     }
     scrubSearchParams(url.searchParams);
-    return url.toString();
+    return preserveOriginal && url.href === original ? value : url.href;
   } catch {
-    return scrubNonAbsoluteUrl(value);
+    return preserveOriginal ? value : scrubNonAbsoluteUrl(value);
   }
 }
 

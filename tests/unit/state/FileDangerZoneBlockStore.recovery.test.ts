@@ -7,6 +7,7 @@ import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { Secret, TOTP } from 'otpauth';
 import { DangerZoneEnforcer } from '../../../src/security/DangerZoneEnforcer.js';
 import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
 import { FileLockManager } from '../../../src/security/fileLockManager.js';
@@ -52,6 +53,44 @@ function requestLocalReset(tokenStore: ConsoleTokenStore, dialog: ApprovalDialog
   return enforcer.requestLocalReset('stdio-session', (request, commit) =>
     ApprovalService.approveFromDialog({ request, commit, tokenStore, dialog }));
 }
+
+function requestLocalRelease(tokenStore: ConsoleTokenStore, dialog: ApprovalDialog, session = 'stdio-session') {
+  return enforcer.requestLocalRelease('block-challenge', session, Date.now() + 60_000, (_agentName, request, commit) =>
+    ApprovalService.approveFromDialog({ request, commit, tokenStore, dialog }));
+}
+
+it('keeps the block until the owning session supplies authenticator proof in the dialog', async () => {
+  const tokenStore = new ConsoleTokenStore(path.join(directory, 'console-token'));
+  await tokenStore.ensureInitialized('Stdio', { onlyIfBothAbsent: true });
+  const pending = tokenStore.beginTotpEnrollment();
+  const authenticator = new TOTP({ secret: Secret.fromBase32(pending.secret), algorithm: 'SHA1', digits: 6, period: 30 });
+  await tokenStore.confirmTotpEnrollment(pending.pendingId, authenticator.generate());
+  await enforcer.initialize();
+  expect(await enforcer.block('agent', 'Review required', [], 'block-challenge', undefined, 'stdio-session')).toBe(true);
+
+  const foreignDialog = jest.fn<ApprovalDialog>();
+  await expect(requestLocalRelease(tokenStore, foreignDialog, 'different-session')).resolves.toEqual({ status: 'session' });
+  expect(foreignDialog).not.toHaveBeenCalled();
+  await expect(requestLocalRelease(tokenStore, async () => ({ confirmed: true }))).resolves.toEqual({ status: 'refused' });
+  expect((await enforcer.check('agent')).blocked).toBe(true);
+  await expect(requestLocalRelease(tokenStore, async (_request, enrollment) => {
+    expect(enrollment).toBe('enrolled');
+    return { confirmed: true, code: authenticator.generate() };
+  })).resolves.toEqual({ status: 'approved', agentName: 'agent' });
+  expect(await enforcer.check('agent')).toEqual({ blocked: false });
+});
+
+it('keeps a replacement block when approval is for the previous event', async () => {
+  const tokenStore = new ConsoleTokenStore(path.join(directory, 'console-token'));
+  await tokenStore.ensureInitialized('Stdio', { onlyIfBothAbsent: true });
+  await enforcer.initialize();
+  await enforcer.block('agent', 'First block', [], 'block-challenge', undefined, 'stdio-session');
+  await expect(requestLocalRelease(tokenStore, async () => {
+    await enforcer.block('agent', 'Replacement block', [], 'block-challenge', undefined, 'stdio-session');
+    return { confirmed: true };
+  })).resolves.toEqual({ status: 'changed' });
+  expect(await enforcer.check('agent')).toMatchObject({ blocked: true, reason: 'Replacement block' });
+});
 
 it.each(['malformed', 'oversized'] as const)('resets the %s snapshot after basic approval and atomically retains queued blocks', async kind => {
   const tokenStore = new ConsoleTokenStore(path.join(directory, 'console-token'));

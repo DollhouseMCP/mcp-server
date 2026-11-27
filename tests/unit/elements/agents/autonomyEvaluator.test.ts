@@ -84,6 +84,15 @@ const { evaluateAutonomy, wouldAutoApprove, DEFAULT_AUTONOMY_CONFIG, getAutonomy
   '../../../../src/elements/agents/autonomyEvaluator.js'
 );
 
+function evaluateWithMockedDialog(context: AutonomyContext) {
+  const environment = jest.replaceProperty(process, 'env', { ...process.env, DOLLHOUSE_SUPPRESS_VERIFICATION_DIALOG: 'false' });
+  try {
+    return evaluateAutonomy(context);
+  } finally {
+    environment.restore();
+  }
+}
+
 describe('AutonomyEvaluator', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -528,6 +537,24 @@ describe('AutonomyEvaluator', () => {
     // Issue #142: Verification Store + DisplayService integration tests
     // =========================================================================
     describe('Verification flow (Issue #142)', () => {
+      it('records a dialog-only verification request on stdio', () => {
+        mockDetermineSafetyTier.mockReturnValue({ tier: 'verify', factors: ['High risk action'] });
+        const set = jest.fn();
+        const result = evaluateAutonomy({
+          ...baseContext,
+          nextActionHint: 'execute dangerous query',
+          riskScore: 70,
+          sessionTransport: 'stdio',
+          verificationStore: { set },
+        });
+        const [, record] = set.mock.calls[0];
+        expect(record).toMatchObject({ dialog: 'action' });
+        expect(record).not.toHaveProperty('code');
+        expect(mockCreateVerificationChallenge).toHaveBeenCalledWith(expect.any(String), 'authenticator', expect.any(Number));
+        expect(mockShowVerificationDialog).not.toHaveBeenCalled();
+        expect(result.verification?.prompt).toContain('verify_challenge');
+      });
+
       it('should store verification code server-side when verify tier triggers', () => {
         mockDetermineSafetyTier.mockReturnValue({
           tier: 'verify',
@@ -567,7 +594,7 @@ describe('AutonomyEvaluator', () => {
           riskScore: 70,
         };
 
-        evaluateAutonomy(context);
+        evaluateWithMockedDialog(context);
 
         expect(mockShowVerificationDialog).toHaveBeenCalledWith(
           'ABC123',
@@ -610,7 +637,7 @@ describe('AutonomyEvaluator', () => {
           dangerZoneEnforcer: { block: jest.fn() },
         };
 
-        evaluateAutonomy(context);
+        evaluateWithMockedDialog(context);
 
         // Should store challenge code server-side
         expect(mockStoreSet).toHaveBeenCalledWith(
@@ -681,7 +708,7 @@ describe('AutonomyEvaluator', () => {
         };
 
         // Should not throw — dialog failure is non-fatal
-        const result = evaluateAutonomy(context);
+        const result = evaluateWithMockedDialog(context);
         expect(result.continue).toBe(false);
         expect(result.verification).toBeDefined();
       });

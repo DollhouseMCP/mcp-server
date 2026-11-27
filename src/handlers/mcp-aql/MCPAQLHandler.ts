@@ -620,6 +620,8 @@ export class MCPAQLHandler {
       getEndpointForOperation: (operation: string) => this.getEndpointForOperation(operation),
       issueDeadlockReliefChallenge: () => this.issueDeadlockReliefChallenge(),
       completeDeadlockRelief: (challengeId: string, code: string) => this.completeDeadlockRelief(challengeId, code, handlers),
+      reserveDeadlockReliefRequest: () => this.reserveDeadlockReliefRequest(),
+      performApprovedDeadlockRelief: (requestId: string) => this.performDeadlockRelief(requestId, handlers),
       resolveVerificationRateLimiter: () => this.resolveVerificationRateLimiter(),
       resolvePermissionPromptLimiter: () => this.resolvePermissionPromptLimiter(),
       resolveCliApprovalLimiter: () => this.resolveCliApprovalLimiter(),
@@ -1946,17 +1948,7 @@ export class MCPAQLHandler {
     return typeof challenge?.reason === 'string' && challenge.reason.startsWith(DEADLOCK_RELIEF_REASON);
   }
 
-  private issueDeadlockReliefChallenge(): {
-    pending: true;
-    challenge_id: string;
-    message: string;
-    warning: string;
-  } {
-    const store = this.handlers.verificationStore;
-    if (!store) {
-      throw new Error('Verification system not available. Ensure the server is properly configured.');
-    }
-
+  private reserveDeadlockReliefRequest(): void {
     this.checkDeadlockReliefVerificationLimit(
       'challenge issuance',
       'MCPAQLHandler.issueDeadlockReliefChallenge',
@@ -1982,6 +1974,19 @@ export class MCPAQLHandler {
         'Too many deadlock relief challenges requested. Please wait before requesting another code.',
       );
     }
+  }
+
+  private issueDeadlockReliefChallenge(): {
+    pending: true;
+    challenge_id: string;
+    message: string;
+    warning: string;
+  } {
+    const store = this.handlers.verificationStore;
+    if (!store) {
+      throw new Error('Verification system not available. Ensure the server is properly configured.');
+    }
+    this.reserveDeadlockReliefRequest();
     const challengeId = randomUUID();
     const code = generateDisplayCode();
     store.set(challengeId, {
@@ -2011,21 +2016,7 @@ export class MCPAQLHandler {
     };
   }
 
-  private async completeDeadlockRelief(challengeId: string, code: string, handlers: HandlerRegistry = this.fixedHandlers): Promise<{
-    released: true;
-    challenge_id: string;
-    sessionId?: string;
-    activeBeforeReset: Array<{ type: string; name: string }>;
-    deactivated: Array<{ type: string; name: string }>;
-    failed: Array<{ type: string; name: string; error: string }>;
-    persistedStateCleared: boolean;
-    likelyDeadlockCause: {
-      sandboxingElement?: { type: string; name: string };
-      advisoryElements: Array<{ type: string; name: string }>;
-    };
-    snapshotFile?: string;
-    message: string;
-  }> {
+  private async completeDeadlockRelief(challengeId: string, code: string, handlers: HandlerRegistry = this.fixedHandlers) {
     this.verificationMetrics.recordAttempt();
     const attemptTimestamp = Date.now();
     this.checkDeadlockReliefVerificationLimit(
@@ -2080,6 +2071,10 @@ export class MCPAQLHandler {
     const verifyDurationMs = attemptTimestamp - (challenge.expiresAt - DEADLOCK_RELIEF_TIMEOUT_MS);
     this.verificationMetrics.recordSuccess(verifyDurationMs > 0 ? verifyDurationMs : undefined);
 
+    return this.performDeadlockRelief(challengeId, handlers);
+  }
+
+  private async performDeadlockRelief(challengeId: string, handlers: HandlerRegistry) {
     const reset = await handlers.elementCRUD.releaseDeadlock();
 
     SecurityMonitor.logSecurityEvent({
@@ -2103,7 +2098,7 @@ export class MCPAQLHandler {
       : `Deadlock relief completed. All active elements for this session were deactivated and persisted activation state was cleared.${snapshotSuffix}`;
 
     return {
-      released: true,
+      released: true as const,
       challenge_id: challengeId,
       ...reset,
       message,

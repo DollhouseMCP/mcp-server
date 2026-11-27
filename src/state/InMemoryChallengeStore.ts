@@ -11,21 +11,20 @@
  */
 
 import { VerificationStore } from '@dollhousemcp/safety';
-import type { StoredChallenge } from '@dollhousemcp/safety';
-import type { IChallengeStore } from './IChallengeStore.js';
+import type { ChallengeInput, IChallengeStore } from './IChallengeStore.js';
 
 export class InMemoryChallengeStore implements IChallengeStore {
-  private readonly inner: VerificationStore;
+  private readonly inner: VerificationStore<ChallengeInput>;
 
   constructor(autoCleanupIntervalMs?: number) {
-    this.inner = new VerificationStore(autoCleanupIntervalMs);
+    this.inner = new VerificationStore<ChallengeInput>(autoCleanupIntervalMs);
   }
 
-  set(challengeId: string, challenge: StoredChallenge): void {
+  set(challengeId: string, challenge: ChallengeInput): void {
     this.inner.set(challengeId, challenge);
   }
 
-  get(challengeId: string): StoredChallenge | undefined {
+  get(challengeId: string): ChallengeInput | undefined {
     return this.inner.get(challengeId);
   }
 

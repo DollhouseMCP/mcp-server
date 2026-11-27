@@ -288,7 +288,8 @@ Import & portfolio:
 Auth & verification:
 { operation: "setup_github_auth" }
 { operation: "configure_oauth", params: { client_id: "your-client-id" } }
-{ operation: "verify_challenge", params: { code: "ABC123" } }
+{ operation: "verify_challenge", params: { challenge_id: "550e8400-e29b-41d4-a716-446655440000" } }
+On stdio, request approval with the challenge ID and enter any authenticator proof in the server-owned dialog. Legacy HTTP verification still takes the challenge ID and verification code.
 { operation: "release_deadlock" }
 { operation: "request_blocked_agent_reset" }
 { operation: "beetlejuice_beetlejuice_beetlejuice" }
