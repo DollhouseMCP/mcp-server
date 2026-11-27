@@ -48,4 +48,7 @@ childProcess.execFile = fixtureExecFile;
 childProcess.execFileSync = guardedCommand(childProcess.execFileSync);
 childProcess.spawn = guardedCommand(childProcess.spawn);
 syncBuiltinESMExports();
-process.env.DOLLHOUSE_SUPPRESS_VERIFICATION_DIALOG = 'false';
+// Approval fixtures can opt in after the native binaries have been stubbed.
+if (process.env.DOLLHOUSE_TEST_STUB_APPROVALS === 'true') {
+  process.env.DOLLHOUSE_SUPPRESS_VERIFICATION_DIALOG = 'false';
+}
