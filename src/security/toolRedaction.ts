@@ -85,7 +85,9 @@ const REVIEW_SECRET_PATTERNS = SECRET_VALUE_PATTERNS
   .map(pattern => new RegExp(pattern, `${pattern.flags}g`));
 const REVIEW_SECRET_KEYS = SECRET_KEY_KEYWORDS.filter(keyword => keyword !== 'sig' && keyword !== 'auth');
 const SECRET_HEADER = /\b((?:proxy-)?authorization|cookie)\b([ \t]*:[ \t]*)[^\r\n'"]+/gi;
-const INLINE_ASSIGNMENT = /(?<![\w-])([\w-]+)(['"]?[ \t]*[:=][ \t]*)("[^"\r\n]*"|'[^'\r\n]*'|[^\s'";&|]+)/gu;
+const INLINE_ASSIGNMENT = /\b([\w-]{1,128})['"]?[ \t]*[:=][ \t]*/gu;
+const COMMAND_OPTION = /(--[\w-]{1,128})[ \t]+/gu;
+const BARE_VALUE_END = /[\s'";&|]/u;
 const SENSITIVE_QUERY_PARAMS = new Set([
   'access_token',
   'api_key',
@@ -139,9 +141,38 @@ function scrubReviewSecrets(value: string): string {
   if (PEM_HEADER_PATTERN.test(value)) return '[REDACTED]';
   let scrubbed = value.replaceAll(EMBEDDED_URL_RE, match => scrubUrlLike(match, true));
   scrubbed = scrubbed.replaceAll(SECRET_HEADER, '$1$2[REDACTED]');
-  scrubbed = scrubbed.replaceAll(INLINE_ASSIGNMENT, (match, key: string, separator: string) =>
-    isReviewSecretKey(key) ? `${key}${separator}[REDACTED]` : match);
+  scrubbed = redactLabelledValues(scrubbed, INLINE_ASSIGNMENT);
+  scrubbed = redactLabelledValues(scrubbed, COMMAND_OPTION);
   return REVIEW_SECRET_PATTERNS.reduce((text, pattern) => text.replaceAll(pattern, '[REDACTED]'), scrubbed);
+}
+
+function redactLabelledValues(text: string, labels: RegExp): string {
+  let result = '';
+  let cursor = 0;
+  for (const match of text.matchAll(labels)) {
+    if (match.index < cursor || !isReviewSecretKey(match[1])) continue;
+    const start = match.index + match[0].length;
+    const end = labelledValueEnd(text, start);
+    if (end === start) continue;
+    result += text.slice(cursor, start) + '[REDACTED]';
+    cursor = end;
+  }
+  return result + text.slice(cursor);
+}
+
+function labelledValueEnd(text: string, start: number): number {
+  const first = text[start];
+  const quote = first === '"' || first === "'" ? first : undefined;
+  for (let index = start + Number(quote !== undefined); index < text.length; index++) {
+    const character = text[index];
+    if (character === '\\' && quote !== "'") {
+      index++;
+      continue;
+    }
+    if (quote && character === quote) return index + 1;
+    if (!quote && BARE_VALUE_END.test(character)) return index;
+  }
+  return text.length;
 }
 
 /** Digest the nested request, while the approval HMAC still binds the original envelope. */

@@ -376,7 +376,7 @@ describe('Autonomy challenge verification end to end', () => {
       const command = "printf '%s' 'reviewable command'";
       const secret = 'synthetic-approval-credential';
       const toolInput = {
-        command: `DEPLOY_TOKEN="${secret}" ${command}`,
+        command: String.raw`DEPLOY_TOKEN="${secret}" ${command} --password "synthetic\"quoted-credential"`,
         description: `${'x'.repeat(9_000)}unreviewable-tail`,
       };
       runtimeEnv.DOLLHOUSE_AUDIT_RETAIN_RAW_INPUT = true;
@@ -404,6 +404,8 @@ describe('Autonomy challenge verification end to end', () => {
         const preview = nativeApproval.mock.lastCall?.[0].reviewDetails;
         expect(preview).toContain(command);
         expect(preview).toContain('DEPLOY_TOKEN=[REDACTED]');
+        expect(preview).toContain('--password [REDACTED]');
+        expect(preview).not.toContain('quoted-credential');
         expect(preview).not.toContain(secret);
         expect(preview).not.toContain('changed after the request');
         expect(preview).not.toContain('unreviewable-tail');
