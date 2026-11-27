@@ -45,6 +45,7 @@ COPY --from=runtime-dependencies /app/node_modules ./node_modules
 COPY dist ./dist
 COPY data/personas ./data/personas
 COPY oauth-helper.mjs oauth-state-coordinator.mjs ./
+COPY scripts/permission-hook-diagnostics.mjs scripts/recoverable-file-write-lock.mjs ./scripts/
 RUN rm -rf ./dist/test ./dist/__tests__ ./dist/**/*.test.js ./dist/**/*.spec.js \
     && mkdir -p /app/tmp /app/logs /app/.memory-upgrade-control /home/dollhouse \
     && chmod -R 750 /app \

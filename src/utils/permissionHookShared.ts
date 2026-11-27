@@ -5,6 +5,11 @@ import { fileURLToPath } from 'node:url';
 import { homedir, platform } from 'node:os';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { logger } from './logger.js';
+import {
+  getPermissionDiagnosticPath, readLatestPermissionDiagnostic, type PermissionHookDiagnosticRecord,
+} from '../../scripts/permission-hook-diagnostics.mjs';
+
+export type { PermissionHookDiagnosticRecord } from '../../scripts/permission-hook-diagnostics.mjs';
 
 export interface PermissionHookMarker {
   host: string;
@@ -28,39 +33,6 @@ export interface PermissionHookStatus {
   scriptPath?: string;
   settingsPath?: string;
   additionalPaths?: string[];
-}
-
-/** Latest JSONL diagnostic event emitted by a local permission hook wrapper. */
-export interface PermissionHookDiagnosticRecord {
-  timestamp: string;
-  invocationId: string;
-  event: string;
-  platform: string;
-  stage: string;
-  outcome?: string;
-  reason?: string;
-  hookPath?: string;
-  diagnosticsLogPath?: string;
-  sessionId?: string;
-  toolName?: string;
-  toolInput?: string;
-  rawInput?: string;
-  authorityHost?: string;
-  authorityMode?: string;
-  endpoint?: string;
-  port?: string;
-  payload?: string;
-  response?: string;
-  normalizedResponse?: string;
-  emittedResponse?: string;
-  attempt?: string;
-  maxRetries?: string;
-  timeoutSeconds?: string;
-  curlExit?: string;
-  rawInputLength?: number;
-  normalizedResponseLength?: number;
-  emittedResponseLength?: number;
-  responseLength?: number;
 }
 
 export interface InstallPermissionHookResult {
@@ -125,7 +97,7 @@ export interface PermissionHookStartupRepairSummary {
 }
 
 export interface HookAssetDescriptor {
-  kind: 'bridge' | 'port-helper' | 'config-helper' | 'wrapper';
+  kind: 'bridge' | 'port-helper' | 'config-helper' | 'diagnostics-helper' | 'lock-helper' | 'wrapper';
   sourcePath: string;
   targetPath: string;
 }
@@ -183,7 +155,7 @@ function getPermissionHookRunDir(homeDir = homedir()): string {
 }
 
 export function getPermissionHookDiagnosticsPath(homeDir = homedir()): string {
-  return join(getPermissionHookRunDir(homeDir), 'permission-hook-diagnostics.jsonl');
+  return getPermissionDiagnosticPath(getPermissionHookRunDir(homeDir));
 }
 
 export function normalizeHookHost(host: string): string {
@@ -274,51 +246,7 @@ export function getPrimaryHookScriptPath(host: string, homeDir = homedir()): str
 export async function readLastPermissionHookDiagnostic(
   homeDir = homedir(),
 ): Promise<PermissionHookDiagnosticRecord | null> {
-  const diagnosticsPath = getPermissionHookDiagnosticsPath(homeDir);
-
-  try {
-    const raw = await readFile(diagnosticsPath, 'utf-8');
-    const lines = raw
-      .split('\n')
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0);
-    const lastLine = lines.at(-1);
-    if (!lastLine) {
-      return null;
-    }
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(lastLine) as unknown;
-    } catch (error) {
-      logger.warn(
-        `[PermissionHooks] Failed to parse hook diagnostics JSON from ${diagnosticsPath}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      return null;
-    }
-
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      logger.warn(
-        `[PermissionHooks] Ignoring malformed hook diagnostics entry from ${diagnosticsPath}: expected JSON object.`,
-      );
-      return null;
-    }
-
-    return parsed as PermissionHookDiagnosticRecord;
-  } catch (error) {
-    if (isMissingFileError(error)) {
-      return null;
-    }
-
-    logger.warn(
-      `[PermissionHooks] Failed to read hook diagnostics from ${diagnosticsPath}: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
-    return null;
-  }
+  return readLatestPermissionDiagnostic(getPermissionHookDiagnosticsPath(homeDir));
 }
 
 export function getManagedHookAssets(
@@ -343,6 +271,16 @@ export function getManagedHookAssets(
       kind: 'config-helper',
       sourcePath: join(repoRootFromModule(), 'scripts', 'permission-hook-config.sh'),
       targetPath: join(hooksDir, 'permission-hook-config.sh'),
+    },
+    {
+      kind: 'diagnostics-helper',
+      sourcePath: join(repoRootFromModule(), 'scripts', 'permission-hook-diagnostics.mjs'),
+      targetPath: join(hooksDir, 'permission-hook-diagnostics.mjs'),
+    },
+    {
+      kind: 'lock-helper',
+      sourcePath: join(repoRootFromModule(), 'scripts', 'recoverable-file-write-lock.mjs'),
+      targetPath: join(hooksDir, 'recoverable-file-write-lock.mjs'),
     },
   ];
 
@@ -599,47 +537,11 @@ export async function installHookAssetsForHost(
   homeDir: string,
   sourceScriptPath?: string,
 ): Promise<{ scriptPath: string }> {
-  const normalizedClient = normalizeHookHost(client);
-  const hooksDir = dirname(getPermissionHookScriptPath(homeDir));
-  const sharedTargetPath = getPermissionHookScriptPath(homeDir);
-  const sharedSourcePath = sourceScriptPath ?? join(repoRootFromModule(), 'scripts', 'pretooluse-dollhouse.sh');
-  const portHelperSourcePath = join(repoRootFromModule(), 'scripts', 'permission-port-discovery.sh');
-  const portHelperTargetPath = join(hooksDir, 'permission-port-discovery.sh');
-  const configHelperSourcePath = join(repoRootFromModule(), 'scripts', 'permission-hook-config.sh');
-  const configHelperTargetPath = join(hooksDir, 'permission-hook-config.sh');
-
-  const sharedStat = statSync(sharedSourcePath);
-  if (!sharedStat.isFile()) {
-    logger.warn(`[PermissionHooks] Shared hook bridge missing for ${normalizedClient}: ${sharedSourcePath}`);
-    throw new Error(`Permission hook source script not found: ${sharedSourcePath}`);
+  for (const asset of getManagedHookAssets(client, homeDir, sourceScriptPath)) {
+    if (!statSync(asset.sourcePath).isFile()) {
+      throw new Error(`Permission hook ${asset.kind} is not a file: ${asset.sourcePath}`);
+    }
+    await copyHookAsset(asset.sourcePath, asset.targetPath);
   }
-  await copyHookAsset(sharedSourcePath, sharedTargetPath);
-
-  const portHelperStat = statSync(portHelperSourcePath);
-  if (!portHelperStat.isFile()) {
-    logger.warn(`[PermissionHooks] Port discovery helper missing for ${normalizedClient}: ${portHelperSourcePath}`);
-    throw new Error(`Permission hook helper script not found: ${portHelperSourcePath}`);
-  }
-  await copyHookAsset(portHelperSourcePath, portHelperTargetPath);
-
-  const configHelperStat = statSync(configHelperSourcePath);
-  if (!configHelperStat.isFile()) {
-    logger.warn(`[PermissionHooks] Config helper missing for ${normalizedClient}: ${configHelperSourcePath}`);
-    throw new Error(`Permission hook config helper not found: ${configHelperSourcePath}`);
-  }
-  await copyHookAsset(configHelperSourcePath, configHelperTargetPath);
-
-  const wrapperTargetPath = getHookWrapperPath(normalizedClient, homeDir);
-  if (!wrapperTargetPath) {
-    return { scriptPath: sharedTargetPath };
-  }
-
-  const wrapperSourcePath = getHookSourcePath(normalizedClient);
-  const wrapperStat = statSync(wrapperSourcePath);
-  if (!wrapperStat.isFile()) {
-    logger.warn(`[PermissionHooks] Wrapper hook script missing for ${normalizedClient}: ${wrapperSourcePath}`);
-    throw new Error(`Permission hook wrapper script not found: ${wrapperSourcePath}`);
-  }
-  await copyHookAsset(wrapperSourcePath, wrapperTargetPath);
-  return { scriptPath: wrapperTargetPath };
+  return { scriptPath: getPrimaryHookScriptPath(client, homeDir) };
 }

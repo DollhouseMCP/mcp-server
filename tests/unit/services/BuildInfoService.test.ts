@@ -254,15 +254,11 @@ describe('BuildInfoService', () => {
           diagnosticsPath: '/Users/test/.dollhouse/run/permission-hook-diagnostics.jsonl',
           lastDiagnostic: {
             timestamp: '2024-01-01T10:00:01.000Z',
-            invocationId: 'diag-1',
-            event: 'complete',
             platform: 'codex',
             stage: 'response_normalized',
             outcome: 'success',
-            reason: 'Allowed by policy',
-            rawInputLength: 118,
-            normalizedResponseLength: 0,
-            emittedResponseLength: 0,
+            elapsedMs: 118,
+            curlExit: 0,
           },
           lastStartupRepair: {
             startedAt: '2024-01-01T09:59:58.000Z',
@@ -338,12 +334,10 @@ describe('BuildInfoService', () => {
       expect(formatted).toContain('**Last Startup Audit**: 2024-01-01T10:00:00.000Z (2000ms)');
       expect(formatted).toContain('**Startup Repairs Applied**: 1');
       expect(formatted).toContain('**Startup Repair Issues**: vscode (ENOENT: missing shared script)');
-      expect(formatted).toContain('**Last Diagnostic Event**: 2024-01-01T10:00:01.000Z (complete / success)');
+      expect(formatted).toContain('**Last Diagnostic Event**: 2024-01-01T10:00:01.000Z (success)');
       expect(formatted).toContain('**Last Diagnostic Stage**: response_normalized');
-      expect(formatted).toContain('**Last Diagnostic Input Bytes**: 118');
-      expect(formatted).toContain('**Last Diagnostic Normalized Bytes**: 0');
-      expect(formatted).toContain('**Last Diagnostic Emitted Bytes**: 0');
-      expect(formatted).toContain('**Last Diagnostic Reason**: Allowed by policy');
+      expect(formatted).toContain('**Last Diagnostic Elapsed Time**: 118ms');
+      expect(formatted).toContain('**Last Diagnostic Curl Exit**: 0');
     });
 
     it('should handle missing optional fields gracefully', () => {

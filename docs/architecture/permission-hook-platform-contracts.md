@@ -147,7 +147,7 @@ below the host's hook timeout leaves time to emit the outage decision.
   - `get_build_info`
   - `/api/permissions/status`
   - `/api/health`
-- Shared hook diagnostics are appended to `~/.dollhouse/run/permission-hook-diagnostics.jsonl`, and the latest record is surfaced through the same runtime health/status endpoints. The JSONL record includes raw input, normalized/emitted response lengths, retry data, and the final stage so silent Codex allow paths are still inspectable.
+- Shared hook diagnostics use `~/.dollhouse/run/permission-hook-diagnostics/permission-hook-diagnostics.jsonl`. At 50 MiB, the active log rolls into a separate `rotated-*` directory beside it. Every log is owner-only (0600), and every segment is retained for the owner to manage. Records contain tool name, stage, outcome, platform, timestamp, retry timing, and curl exit status. The runtime health and status endpoints show the latest record. Earlier logs at `~/.dollhouse/run/permission-hook-diagnostics.jsonl` and any owner-managed archive remain untouched.
 
 ## Example Payloads
 
