@@ -2,7 +2,7 @@
 
 > **Status:** Authenticated console — `DOLLHOUSE_WEB_AUTH_ENABLED` is **off by default** during rollout.
 > **Current capabilities:** TOTP enrollment, token rotation with TOTP confirmation, structured error codes, isolated port (41715) and state files, legacy console detection.
-> **Roadmap:** Flipping the auth default to **on** once consumer updates (DollhouseBridge, browser helpers) have landed. The Auth tab UI and the CLI rotation command are already available (see below).
+> **Roadmap:** Flipping the auth default to **on** once consumer updates (DollhouseBridge, browser helpers) have landed. The Auth tab UI and the CLI rotation command (`dollhouse-console-token rotate`) are already available (see below).
 
 DollhouseMCP's web management console on port `41715` protects its API with a session token. The token is generated automatically on first run, persists across restarts, and is required on every protected endpoint when the `DOLLHOUSE_WEB_AUTH_ENABLED` environment variable is `true`.
 
@@ -93,10 +93,10 @@ Port 41715 binds to `127.0.0.1` only, so it is not reachable from the network. B
 
 **Field notes:**
 
-- `id` / `name` — stable identifiers. The `name` defaults to a randomly chosen puppet plus your hostname and is shown in the Auth tab. To change it, hand-edit the token file (the server keeps custom names on rotation).
+- `id` / `name` — stable identifiers. The `name` defaults to a randomly chosen puppet plus your hostname and is shown in the Auth tab. To change it, stop the server, edit `name` in the token file, then start it again (the server keeps custom names on rotation).
 - `token` — the 64-hex-character (256-bit) Bearer value. This is what you send on requests.
 - `scopes`, `elementBoundaries`, `tenant`, `platform`, `labels` — forward-compatible fields for enterprise deployments. Phase 1 treats every token as admin-scoped. Phase 2 and 3 will begin enforcing these.
-- `lastUsedAt` — updated in memory every time the token is verified. Persisted to disk on rotation.
+- `lastUsedAt` — updated in memory every time the token is verified. Reset to `null` on rotation.
 - `totp` — TOTP enrollment state. Populated once you enroll, in the Auth tab or via the API (see below).
 
 ---
