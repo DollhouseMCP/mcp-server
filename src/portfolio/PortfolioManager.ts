@@ -66,7 +66,7 @@ export interface PortfolioManagerOptions {
 }
 
 export class PortfolioManager {
-  private initializationPromise: Promise<void> | null = null;
+  private readonly initializing = new Map<string, Promise<void>>();
   private readonly baseDir: string;
   private readonly fileOperations: FileOperationsService;
   private readonly pathService?: PathService;
@@ -191,37 +191,39 @@ export class PortfolioManager {
    * Uses locking to prevent race conditions during concurrent initialization
    */
   public async initialize(): Promise<void> {
-    // If already initializing, wait for the existing initialization
-    if (this.initializationPromise) {
-      return this.initializationPromise;
-    }
+    return this.initializeAt(this.baseDir);
+  }
 
-    // Check if portfolio is fully initialized (base dir + all subdirectories exist)
-    if (await this.isFullyInitialized()) {
+  /** Initialize the local user's element directories when they live under the layout root. */
+  public async initializeLocalUser(userId: string): Promise<void> {
+    const directory = this.pathService?.getUserPortfolioDir(userId);
+    if (directory?.startsWith(this.baseDir + path.sep)) await this.initializeAt(directory);
+  }
+
+  private async initializeAt(directory: string): Promise<void> {
+    const pending = this.initializing.get(directory);
+    if (pending) return pending;
+
+    const initialization = this.performInitializationIfNeeded(directory);
+    this.initializing.set(directory, initialization);
+    try {
+      await initialization;
+    } finally {
+      this.initializing.delete(directory);
+    }
+  }
+
+  private async performInitializationIfNeeded(directory: string): Promise<void> {
+    if (await this.isFullyInitialized(directory)) {
       logger.debug('[PortfolioManager] Portfolio already fully initialized');
       return;
     }
 
-    // Create initialization promise to prevent concurrent initialization
-    this.initializationPromise = this.performInitialization();
-
-    try {
-      await this.initializationPromise;
-    } finally {
-      // Clear the promise after completion
-      this.initializationPromise = null;
-    }
-  }
-  
-  /**
-   * Perform the actual initialization - should only be called once
-   */
-  private async performInitialization(): Promise<void> {
     logger.info('[PortfolioManager] Initializing portfolio directory structure');
     
     // Create base directory
     try {
-      await this.fileOperations.createDirectory(this.baseDir);
+      await this.fileOperations.createDirectory(directory);
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       // In read-only environments (like Docker), we can't create directories
@@ -236,26 +238,24 @@ export class PortfolioManager {
     
     // Create subdirectories for each element type
     await visitSequentially(Object.values(ElementType).values(), async elementType => {
-      const elementDir = path.join(this.baseDir, elementType);
+      const elementDir = path.join(directory, elementType);
       await this.fileOperations.createDirectory(elementDir);
       logger.debug(`[PortfolioManager] Created directory: ${elementDir}`);
     });
     
-    // Create special directories for stateful elements
-    const agentStateDir = path.join(this.baseDir, ElementType.AGENT, '.state');
-    await this.fileOperations.createDirectory(agentStateDir);
-    
-    logger.info('[PortfolioManager] Portfolio directory structure initialized');
-    
-    // Migration for v1.4.2 users: rename singular directories to plural
-    await this.migrateFromSingularDirectories();
+    const agentStateDir = path.join(directory, ElementType.AGENT, '.state');
+    if (directory === this.baseDir) {
+      await this.fileOperations.createDirectory(agentStateDir);
+      // Migration for v1.4.2 users: rename singular directories to plural.
+      await this.migrateFromSingularDirectories();
+    }
     
     // Populate with default elements if this is a new installation
     // Skip during tests to avoid interference
     if (process.env.NODE_ENV !== 'test') {
       try {
         const defaultProvider = new DefaultElementProvider();
-        await defaultProvider.populateDefaults(this.baseDir);
+        await defaultProvider.populateDefaults(directory);
       } catch (error) {
         logger.error('[PortfolioManager] Error populating default elements:', error);
         // Log to stderr for MCP client visibility
@@ -263,6 +263,11 @@ export class PortfolioManager {
         // Continue anyway - empty portfolio is valid
       }
     }
+
+    // For the local user, create the final directory after copying defaults so
+    // startup still checks an interrupted population on the next run.
+    if (directory !== this.baseDir) await this.fileOperations.createDirectory(agentStateDir);
+    logger.info('[PortfolioManager] Portfolio directory structure initialized');
   }
   
   /**
@@ -282,11 +287,11 @@ export class PortfolioManager {
   }
 
   /** Check the base, element directories and agent state directory without assuming failed probes are absent. */
-  private async isFullyInitialized(): Promise<boolean> {
-    if (!await this.exists()) return false;
+  private async isFullyInitialized(directory = this.baseDir): Promise<boolean> {
+    if (!await this.probeDirectory('portfolio directory', () => this.fileOperations.directoryExists(directory))) return false;
     const directories = [
-      ...Object.values(ElementType).map(elementType => path.join(this.baseDir, elementType)),
-      path.join(this.baseDir, ElementType.AGENT, '.state'),
+      ...Object.values(ElementType).map(elementType => path.join(directory, elementType)),
+      path.join(directory, ElementType.AGENT, '.state'),
     ];
     for (const directory of directories) {
       if (!await this.probeDirectory('portfolio element directory', () => this.fileOperations.directoryExists(directory))) return false;
