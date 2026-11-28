@@ -2,7 +2,7 @@
 
 > **Status:** Authenticated console — `DOLLHOUSE_WEB_AUTH_ENABLED` is **off by default** during rollout.
 > **Current capabilities:** TOTP enrollment, token rotation with TOTP confirmation, structured error codes, isolated port (41715) and state files, legacy console detection.
-> **Roadmap:** CLI rotation command, Security tab UI, then flipping the auth default to **on** once consumer updates (DollhouseBridge, browser helpers) have landed.
+> **Roadmap:** Flipping the auth default to **on** once consumer updates (DollhouseBridge, browser helpers) have landed. The Auth tab UI and the CLI rotation command (`dollhouse-console-token rotate`) are already available (see below).
 
 DollhouseMCP's web management console on port `41715` protects its API with a session token. The token is generated automatically on first run, persists across restarts, and is required on every protected endpoint when the `DOLLHOUSE_WEB_AUTH_ENABLED` environment variable is `true`.
 
@@ -93,11 +93,11 @@ Port 41715 binds to `127.0.0.1` only, so it is not reachable from the network. B
 
 **Field notes:**
 
-- `id` / `name` — stable identifiers. The `name` defaults to a randomly chosen puppet plus your hostname and is editable in the Security tab (Phase 2).
+- `id` / `name` — stable identifiers. The `name` defaults to a randomly chosen puppet plus your hostname and is shown in the Auth tab. To change it, stop the server, edit `name` in the token file, then start it again (the server keeps custom names on rotation).
 - `token` — the 64-hex-character (256-bit) Bearer value. This is what you send on requests.
 - `scopes`, `elementBoundaries`, `tenant`, `platform`, `labels` — forward-compatible fields for enterprise deployments. Phase 1 treats every token as admin-scoped. Phase 2 and 3 will begin enforcing these.
-- `lastUsedAt` — updated in memory every time the token is verified. Persisted to disk on rotation (Phase 2).
-- `totp` — TOTP enrollment state. Populated in Phase 2.
+- `lastUsedAt` — updated in memory every time the token is verified. Reset to `null` on rotation.
+- `totp` — TOTP enrollment state. Populated once you enroll, in the Auth tab or via the API (see below).
 
 ---
 
@@ -261,9 +261,19 @@ rm ~/.dollhouse/run/console-token.auth.json
 
 ---
 
-## TOTP (authenticator) enrollment — Phase 2
+## TOTP (authenticator) enrollment
 
-Phase 2 adds a second factor: a time-based one-time password (TOTP) that pairs with any standard authenticator app (Google Authenticator, 1Password, Authy, Bitwarden, etc.). Enrollment is optional in Phase 2 and becomes required for privileged operations like token rotation once the rotation endpoint lands.
+A second factor: a time-based one-time password (TOTP) that pairs with any standard authenticator app (Google Authenticator, 1Password, Authy, Bitwarden, etc.). Enrollment is optional, and it is required for privileged operations like token rotation.
+
+### Enroll in the Auth tab
+
+1. Open the console and click the **Auth** tab.
+2. In the **Authenticator (TOTP)** panel, click **Enroll Authenticator**.
+3. Scan the QR code with your authenticator app (or enter the secret by hand).
+4. Enter the 6-digit code from your app and confirm.
+5. Save the 10 backup codes shown — you will never see them again.
+
+The panel shows your enrollment status and how many backup codes remain. To turn TOTP off later, click **Disable TOTP** in the same panel and confirm with a live code or a backup code.
 
 **What enrollment gives you:**
 
@@ -290,7 +300,7 @@ Phase 2 adds a second factor: a time-based one-time password (TOTP) that pairs w
 | `ALREADY_ENROLLED` | 409 | `/enroll/begin` called while TOTP is already enrolled |
 | `RATE_LIMITED` | 429 | Too many code-verification attempts; back off and retry |
 
-**CLI walkthrough (until the Security tab UI lands):**
+**CLI walkthrough (alternative to the Auth tab):**
 
 ```bash
 TOKEN=$(jq -r '.tokens[0].token' ~/.dollhouse/run/console-token.auth.json)
@@ -347,6 +357,8 @@ If you consistently see invalid-code errors, especially over a chat bridge:
 ## Token rotation
 
 The rotation endpoint lets you invalidate the current console token and get a fresh one in a single request — no restart, no file editing. Rotation requires TOTP confirmation (you must be enrolled first; see [TOTP enrollment](#totp-authenticator-enrollment) above).
+
+**In the Auth tab:** open the console, click the **Auth** tab, and click **Rotate Token** in the Console Token panel. The button stays disabled until you enroll TOTP. Enter the live 6-digit code from your authenticator when asked; the tab switches to the new token on its own, and the old token keeps working for 15 seconds.
 
 **Rotation flow:**
 
